@@ -4,7 +4,7 @@ use tauri::State;
 use crate::state::AppState;
 use crate::state::providers::{
     CustomProviderData, ModelInfo, ModelSlotConfig, ProviderDefinition, ProviderInfo,
-    ProviderSettings,
+    ProviderPlugin, ProviderSettings, ProviderTemplate,
 };
 
 #[derive(Serialize)]
@@ -335,4 +335,84 @@ pub async fn set_active_llm(
         provider_id: Some(provider_id),
         model: Some(model),
     })
+}
+
+// ── Provider Plugin Commands ────────────────────────────────────────
+
+#[tauri::command]
+pub async fn list_provider_templates() -> Result<Vec<ProviderTemplate>, String> {
+    Ok(crate::state::providers::builtin_templates())
+}
+
+#[tauri::command]
+pub async fn import_provider_plugin(
+    state: State<'_, AppState>,
+    plugin: ProviderPlugin,
+) -> Result<ProviderInfo, String> {
+    let mut providers = state.providers.write().await;
+    providers.import_plugin(&state.working_dir, plugin)
+}
+
+#[tauri::command]
+pub async fn export_provider_config(
+    state: State<'_, AppState>,
+    provider_id: String,
+) -> Result<ProviderPlugin, String> {
+    let providers = state.providers.read().await;
+
+    // Try custom providers first
+    if let Some(custom) = providers.custom_providers.get(&provider_id) {
+        let def = &custom.definition;
+        return Ok(ProviderPlugin {
+            id: def.id.clone(),
+            name: def.name.clone(),
+            default_base_url: def.default_base_url.clone(),
+            api_key_env: def.api_key_prefix.clone(),
+            api_compat: "openai".into(),
+            is_local: def.is_local,
+            models: def.models.clone(),
+            description: None,
+        });
+    }
+
+    // Try built-in providers
+    let builtins = crate::state::providers::builtin_providers();
+    if let Some(def) = builtins.iter().find(|b| b.id == provider_id) {
+        return Ok(ProviderPlugin {
+            id: def.id.clone(),
+            name: def.name.clone(),
+            default_base_url: def.default_base_url.clone(),
+            api_key_env: def.api_key_prefix.clone(),
+            api_compat: "openai".into(),
+            is_local: def.is_local,
+            models: def.models.clone(),
+            description: None,
+        });
+    }
+
+    Err(format!("Provider '{}' not found", provider_id))
+}
+
+#[tauri::command]
+pub async fn scan_provider_plugins(
+    state: State<'_, AppState>,
+) -> Result<Vec<ProviderInfo>, String> {
+    let mut providers = state.providers.write().await;
+    providers.load_plugins(&state.working_dir);
+    Ok(providers.get_all_providers())
+}
+
+#[tauri::command]
+pub async fn import_provider_from_template(
+    state: State<'_, AppState>,
+    template_id: String,
+) -> Result<ProviderInfo, String> {
+    let templates = crate::state::providers::builtin_templates();
+    let template = templates
+        .iter()
+        .find(|t| t.id == template_id)
+        .ok_or_else(|| format!("Template '{}' not found", template_id))?;
+
+    let mut providers = state.providers.write().await;
+    providers.import_plugin(&state.working_dir, template.plugin.clone())
 }

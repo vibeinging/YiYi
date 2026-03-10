@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, RwLock};
@@ -14,6 +15,20 @@ pub struct MCPTool {
     pub name: String,
     pub description: String,
     pub input_schema: serde_json::Value,
+    /// Server key that owns this tool.
+    #[serde(default)]
+    pub server_key: String,
+    /// Priority for sorting (inherited from MCPClientConfig). Higher = first.
+    #[serde(default)]
+    pub priority: i32,
+}
+
+/// Connection status for an MCP server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MCPStatus {
+    Connected,
+    Disconnected,
+    Error(String),
 }
 
 /// Transport type for MCP connections
@@ -33,16 +48,30 @@ enum MCPTransport {
 struct MCPProcess {
     transport: MCPTransport,
     tools: Vec<MCPTool>,
+    status: MCPStatus,
+    priority: i32,
 }
+
+/// Cached tool call result with expiration.
+struct CachedResult {
+    value: String,
+    expires_at: Instant,
+}
+
+/// Default cache TTL: 30 seconds.
+const CACHE_TTL_SECS: u64 = 30;
 
 pub struct MCPRuntime {
     processes: Arc<RwLock<HashMap<String, MCPProcess>>>,
+    /// Short-lived cache for tool call results. Key: "server_key:tool_name:args_hash".
+    cache: Arc<Mutex<HashMap<String, CachedResult>>>,
 }
 
 impl MCPRuntime {
     pub fn new() -> Self {
         Self {
             processes: Arc::new(RwLock::new(HashMap::new())),
+            cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -97,16 +126,26 @@ impl MCPRuntime {
         let pending: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
-        // Spawn stdout reader that routes responses to pending waiters
+        // Spawn stdout reader that routes responses to pending waiters.
+        // Also detects EOF to mark the server as disconnected.
         let pending_clone = pending.clone();
         let key_clone = key.to_string();
+        let processes_ref = self.processes.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
             let mut line = String::new();
             loop {
                 line.clear();
                 match reader.read_line(&mut line).await {
-                    Ok(0) => break, // EOF
+                    Ok(0) => {
+                        // EOF — server process exited
+                        log::warn!("MCP '{}' process exited (EOF)", key_clone);
+                        let mut procs = processes_ref.write().await;
+                        if let Some(proc) = procs.get_mut(&key_clone) {
+                            proc.status = MCPStatus::Disconnected;
+                        }
+                        break;
+                    }
                     Ok(_) => {
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(line.trim()) {
                             // Extract id to route response
@@ -125,6 +164,10 @@ impl MCPRuntime {
                     }
                     Err(e) => {
                         log::warn!("MCP '{}' stdout read error: {}", key_clone, e);
+                        let mut procs = processes_ref.write().await;
+                        if let Some(proc) = procs.get_mut(&key_clone) {
+                            proc.status = MCPStatus::Error(e.to_string());
+                        }
                         break;
                     }
                 }
@@ -195,10 +238,16 @@ impl MCPRuntime {
             "params": {}
         });
 
-        let tools = match send_and_wait(&tx, &pending, tools_req, 10).await {
+        let mut tools = match send_and_wait(&tx, &pending, tools_req, 10).await {
             Some(json) => parse_tools_from_json(&json),
             None => Vec::new(),
         };
+
+        // Tag tools with server key and priority
+        for t in &mut tools {
+            t.server_key = key.to_string();
+            t.priority = config.priority;
+        }
 
         let process = MCPProcess {
             transport: MCPTransport::Stdio {
@@ -207,6 +256,8 @@ impl MCPRuntime {
                 pending,
             },
             tools: tools.clone(),
+            status: MCPStatus::Connected,
+            priority: config.priority,
         };
 
         let mut processes = self.processes.write().await;
@@ -280,7 +331,7 @@ impl MCPRuntime {
             req2 = req2.header(k, v);
         }
 
-        let tools = match req2
+        let mut tools = match req2
             .timeout(std::time::Duration::from_secs(10))
             .send()
             .await
@@ -295,12 +346,20 @@ impl MCPRuntime {
             Err(_) => Vec::new(),
         };
 
+        // Tag tools with server key and priority
+        for t in &mut tools {
+            t.server_key = key.to_string();
+            t.priority = config.priority;
+        }
+
         let process = MCPProcess {
             transport: MCPTransport::Http {
                 url: url.clone(),
                 headers: config.headers.clone(),
             },
             tools: tools.clone(),
+            status: MCPStatus::Connected,
+            priority: config.priority,
         };
 
         let mut processes = self.processes.write().await;
@@ -321,18 +380,134 @@ impl MCPRuntime {
         processes.keys().cloned().collect()
     }
 
-    /// Get all tools from all connected clients
+    /// Get connection status for a specific client.
+    pub async fn get_status(&self, key: &str) -> MCPStatus {
+        let processes = self.processes.read().await;
+        processes
+            .get(key)
+            .map(|p| p.status.clone())
+            .unwrap_or(MCPStatus::Disconnected)
+    }
+
+    /// Check if a specific client is connected and healthy.
+    pub async fn is_available(&self, key: &str) -> bool {
+        let processes = self.processes.read().await;
+        processes
+            .get(key)
+            .map(|p| p.status == MCPStatus::Connected)
+            .unwrap_or(false)
+    }
+
+    /// Get all tools from all connected clients, sorted by priority (descending).
+    /// Skips tools from servers that are disconnected or in error state.
     pub async fn get_all_tools(&self) -> Vec<MCPTool> {
         let processes = self.processes.read().await;
         let mut all_tools = Vec::new();
         for process in processes.values() {
-            all_tools.extend(process.tools.clone());
+            if process.status == MCPStatus::Connected {
+                all_tools.extend(process.tools.clone());
+            }
         }
+        // Sort by priority descending (higher priority first)
+        all_tools.sort_by(|a, b| b.priority.cmp(&a.priority));
         all_tools
     }
 
-    /// Call a tool on a connected MCP server
+    /// Get all tools including status info (for diagnostics / system prompt).
+    /// Returns (available_tools, unavailable_server_names).
+    pub async fn get_all_tools_with_status(&self) -> (Vec<MCPTool>, Vec<String>) {
+        let processes = self.processes.read().await;
+        let mut available = Vec::new();
+        let mut unavailable = Vec::new();
+        for (key, process) in processes.iter() {
+            if process.status == MCPStatus::Connected {
+                available.extend(process.tools.clone());
+            } else {
+                unavailable.push(key.clone());
+            }
+        }
+        available.sort_by(|a, b| b.priority.cmp(&a.priority));
+        (available, unavailable)
+    }
+
+    /// Call a tool on a connected MCP server.
+    /// Uses short-lived caching to avoid redundant calls within the TTL window.
     pub async fn call_tool(
+        &self,
+        key: &str,
+        tool_name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<String, String> {
+        // Check if server is available (graceful degradation)
+        {
+            let processes = self.processes.read().await;
+            if let Some(process) = processes.get(key) {
+                match &process.status {
+                    MCPStatus::Disconnected => {
+                        return Err(format!(
+                            "MCP server '{}' is disconnected. The tool '{}' is currently unavailable.",
+                            key, tool_name
+                        ));
+                    }
+                    MCPStatus::Error(e) => {
+                        return Err(format!(
+                            "MCP server '{}' is in error state ({}). The tool '{}' is currently unavailable.",
+                            key, e, tool_name
+                        ));
+                    }
+                    MCPStatus::Connected => {}
+                }
+            }
+        }
+
+        // Check cache
+        let cache_key = build_cache_key(key, tool_name, &arguments);
+        {
+            let cache = self.cache.lock().await;
+            if let Some(entry) = cache.get(&cache_key) {
+                if entry.expires_at > Instant::now() {
+                    log::debug!("MCP cache hit: {}:{}", key, tool_name);
+                    return Ok(entry.value.clone());
+                }
+            }
+        }
+
+        // Perform the actual call
+        let result = self.call_tool_uncached(key, tool_name, arguments).await;
+
+        // On success, store in cache
+        if let Ok(ref value) = result {
+            let mut cache = self.cache.lock().await;
+            cache.insert(
+                cache_key,
+                CachedResult {
+                    value: value.clone(),
+                    expires_at: Instant::now() + Duration::from_secs(CACHE_TTL_SECS),
+                },
+            );
+            // Evict expired entries periodically (when cache grows large)
+            if cache.len() > 200 {
+                let now = Instant::now();
+                cache.retain(|_, v| v.expires_at > now);
+            }
+        }
+
+        // If call failed due to send error, mark server as disconnected
+        if let Err(ref e) = result {
+            if e.contains("Failed to send to MCP") || e.contains("channel closed") {
+                let mut processes = self.processes.write().await;
+                if let Some(proc) = processes.get_mut(key) {
+                    proc.status = MCPStatus::Disconnected;
+                    log::warn!("Marked MCP server '{}' as disconnected after call failure", key);
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Internal uncached tool call.
+    async fn call_tool_uncached(
         &self,
         key: &str,
         tool_name: &str,
@@ -414,6 +589,13 @@ impl MCPRuntime {
         }
     }
 
+    /// Invalidate all cached results for a specific server.
+    pub async fn invalidate_cache(&self, key: &str) {
+        let prefix = format!("{}:", key);
+        let mut cache = self.cache.lock().await;
+        cache.retain(|k, _| !k.starts_with(&prefix));
+    }
+
     /// Disconnect a client
     pub async fn disconnect(&self, key: &str) {
         let mut processes = self.processes.write().await;
@@ -422,6 +604,10 @@ impl MCPRuntime {
                 child.kill().await.ok();
             }
         }
+        // Also clear cache for this server
+        let prefix = format!("{}:", key);
+        let mut cache = self.cache.lock().await;
+        cache.retain(|k, _| !k.starts_with(&prefix));
     }
 
     /// Disconnect all clients
@@ -432,7 +618,19 @@ impl MCPRuntime {
                 child.kill().await.ok();
             }
         }
+        self.cache.lock().await.clear();
     }
+}
+
+/// Build a cache key from server key, tool name, and arguments.
+fn build_cache_key(server_key: &str, tool_name: &str, args: &serde_json::Value) -> String {
+    // Use a simple hash of the arguments JSON for the cache key
+    use std::hash::{Hash, Hasher};
+    let args_str = args.to_string();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    args_str.hash(&mut hasher);
+    let hash = hasher.finish();
+    format!("{}:{}:{:x}", server_key, tool_name, hash)
 }
 
 /// Extract tool result content from a JSON-RPC response.
@@ -484,6 +682,8 @@ fn parse_tools_from_json(json: &serde_json::Value) -> Vec<MCPTool> {
                             .get("inputSchema")
                             .cloned()
                             .unwrap_or(serde_json::json!({})),
+                        server_key: String::new(),
+                        priority: 0,
                     });
                 }
             }

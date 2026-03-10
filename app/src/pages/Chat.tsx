@@ -27,9 +27,17 @@ import {
   ZoomIn,
   Paperclip,
   FileText,
+  Mic,
+  CheckCircle2,
 } from 'lucide-react';
 import {
   chat,
+  chatStreamStart,
+  chatStreamStop,
+  onChatChunk,
+  onChatComplete,
+  onChatError,
+  onToolStatus,
   listSessions,
   createSession,
   deleteSession,
@@ -47,9 +55,16 @@ import {
   sessionUnbindBot,
   type BotInfo,
 } from '../api/bots';
-import { loadWorkspaceFile } from '../api/workspace';
-import { listen } from '@tauri-apps/api/event';
+import { listWorkspaceFiles, loadWorkspaceFile, getWorkspacePath, type WorkspaceFile } from '../api/workspace';
+import { getActiveLlm } from '../api/models';
+import { listSkills } from '../api/skills';
+import { createCronJob } from '../api/cronjobs';
+import { MentionPicker, buildMentionList } from '../components/MentionPicker';
+import { MentionInput, type MentionInputHandle, type MentionTag } from '../components/MentionInput';
+import { SlashCommandPicker, filterCommands, SLASH_COMMANDS, type SlashCommand } from '../components/SlashCommandPicker';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useDragRegion } from '../hooks/useDragRegion';
+import { useVoiceInput } from '../hooks/useVoiceInput';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -61,15 +76,21 @@ interface ChatPageProps {
 export function ChatPage({ consumeNotifContext }: ChatPageProps) {
   const { t } = useTranslation();
   const drag = useDragRegion();
+  // Voice input — disabled pending fixes (Whisper WASM + WKWebView compat)
+  // const handleVoiceResult = useCallback((text: string) => {
+  //   inputRef.current?.insertText(text);
+  // }, []);
+  // const { status: voiceStatus, modelProgress, toggleRecording, error: voiceError } = useVoiceInput(handleVoiceResult);
   const [sessions, setSessions] = useState<ApiChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
+  const [activeTools, setActiveTools] = useState<{ name: string; status: 'running' | 'done'; preview?: string }[]>([]);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const inputRef = useRef<MentionInputHandle>(null);
   const [aiName, setAiName] = useState('YiClaw');
   const [boundBots, setBoundBots] = useState<BotInfo[]>([]);
   const [allBots, setAllBots] = useState<BotInfo[]>([]);
@@ -79,6 +100,19 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
   const [pendingImages, setPendingImages] = useState<Attachment[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [expandedAction, setExpandedAction] = useState<number | null>(null);
+
+  // @-mention state
+  const [showFilePicker, setShowFilePicker] = useState(false);
+  const [filePickerQuery, setFilePickerQuery] = useState('');
+  const [filePickerIndex, setFilePickerIndex] = useState(0);
+  const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceFile[]>([]);
+  const [workspaceBasePath, setWorkspaceBasePath] = useState('');
+
+  // /slash-command state
+  const [showCommandPicker, setShowCommandPicker] = useState(false);
+  const [commandQuery, setCommandQuery] = useState('');
+  const [commandPickerIndex, setCommandPickerIndex] = useState(0);
 
   // Close lightbox on Escape
   useEffect(() => {
@@ -174,6 +208,43 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
     setPendingImages((prev) => prev.filter((_, i) => i !== idx));
   };
 
+  // Load all available bots on mount and when popover opens
+  const refreshAllBots = useCallback(() => {
+    listBots().then(setAllBots).catch(() => setAllBots([]));
+  }, []);
+
+  // Fetch workspace files for @-mention picker (cached, refreshed on open)
+  const fetchWorkspaceFiles = useCallback(async () => {
+    try {
+      const [files, basePath] = await Promise.all([listWorkspaceFiles(), getWorkspacePath()]);
+      setWorkspaceFiles(files.filter(f => !f.is_dir)); // only files, not dirs
+      setWorkspaceBasePath(basePath);
+    } catch {
+      // ignore — workspace might not exist yet
+    }
+  }, []);
+
+  // MentionInput callbacks
+  const handleMentionTrigger = useCallback((query: string) => {
+    setShowFilePicker(true);
+    setFilePickerQuery(query);
+    setFilePickerIndex(0);
+    if (workspaceFiles.length === 0) fetchWorkspaceFiles();
+    if (allBots.length === 0) refreshAllBots();
+  }, [workspaceFiles.length, allBots.length, fetchWorkspaceFiles, refreshAllBots]);
+
+  const handleMentionDismiss = useCallback(() => {
+    setShowFilePicker(false);
+  }, []);
+
+  const handleMentionBotSelect = (bot: BotInfo) => {
+    inputRef.current?.insertMention({ type: 'bot', id: bot.id, name: bot.name });
+  };
+
+  const handleFileSelect = (file: WorkspaceFile) => {
+    inputRef.current?.insertMention({ type: 'file', id: file.path, name: file.name });
+  };
+
   const refreshAiName = () => {
     loadWorkspaceFile('SOUL.md').then((content) => {
       const match = content.match(/^---\s*\nname:\s*(.+)\s*\n/m);
@@ -254,8 +325,14 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
     };
   }, [currentSessionId, boundBots]);
 
-  // Load all available bots on mount and when popover opens
-  const refreshAllBots = () => listBots().then(setAllBots).catch(() => setAllBots([]));
+  // Listen for tray "new session" event
+  useEffect(() => {
+    const unlisten = listen('tray://new-session', () => {
+      handleNewSession();
+    });
+    return () => { unlisten.then(fn => fn()); };
+  }, [sessions]);
+
   useEffect(() => { refreshAllBots(); }, []);
 
   const loadBoundBots = async (sessionId: string) => {
@@ -314,21 +391,73 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamingContent]);
+  }, [messages, streamingContent, activeTools]);
 
-  // Auto-resize textarea
-  useEffect(() => {
-    if (inputRef.current) {
-      inputRef.current.style.height = 'auto';
-      inputRef.current.style.height = Math.min(inputRef.current.scrollHeight, 160) + 'px';
+  // Sync message state from MentionInput (for send button disabled state)
+  // Also detect /command trigger
+  const handleMentionInput = useCallback((text: string) => {
+    setMessage(text);
+
+    // Detect /command at the very start of input
+    const trimmed = text.trimStart();
+    if (trimmed.startsWith('/') && !trimmed.includes(' ') && !trimmed.includes('\n')) {
+      const query = trimmed.slice(1);
+      setCommandQuery(query);
+      setCommandPickerIndex(0);
+      setShowCommandPicker(true);
+    } else {
+      setShowCommandPicker(false);
     }
-  }, [message]);
+  }, []);
 
   const handleSend = async () => {
-    if ((!message.trim() && pendingImages.length === 0) || loading) return;
+    const plainText = inputRef.current?.getPlainText() || '';
+    const mentions = inputRef.current?.getMentions() || [];
+    const inputEmpty = inputRef.current?.isEmpty() ?? true;
 
-    const userMessage = message;
+    if ((inputEmpty && pendingImages.length === 0) || loading) return;
+
+    // Intercept /command typed directly (with optional args)
+    const trimmed = plainText.trim();
+    const cmdMatch = trimmed.match(/^\/(\S+)(?:\s+(.*))?$/);
+    if (cmdMatch) {
+      const cmd = SLASH_COMMANDS.find(c => c.name === cmdMatch[1]);
+      if (cmd) {
+        executeCommand(cmd, cmdMatch[2]);
+        return;
+      }
+    }
+
+    let userMessage = plainText;
+
+    // Load @-referenced file contents and prepend as context
+    const fileMentions = mentions.filter(m => m.type === 'file');
+    if (fileMentions.length > 0) {
+      const fileContents = await Promise.all(
+        fileMentions.map(async (m) => {
+          try {
+            const content = await loadWorkspaceFile(m.name);
+            const truncated = content.length > 100_000
+              ? content.slice(0, 100_000) + '\n... (truncated)'
+              : content;
+            const absPath = workspaceBasePath ? `${workspaceBasePath}/${m.name}` : m.id;
+            return `[用户引用了文件: ${m.name}，路径: ${absPath}]\n\`\`\`\n${truncated}\n\`\`\``;
+          } catch {
+            return `[用户引用了文件: ${m.name}] (读取失败)`;
+          }
+        })
+      );
+      userMessage = fileContents.join('\n\n') + '\n\n' + userMessage;
+    }
+
+    // If a bot is @mentioned, bind it to the session before sending
+    const botMentions = mentions.filter(m => m.type === 'bot');
+    for (const bm of botMentions) {
+      await handleBindBot(bm.id);
+    }
+
     const userAttachments = pendingImages.length > 0 ? [...pendingImages] : undefined;
+    inputRef.current?.clear();
     setMessage('');
     setPendingImages([]);
     setLoading(true);
@@ -343,14 +472,55 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
     }]);
 
     try {
-      const response = await chat(userMessage, currentSessionId, userAttachments);
+      // Subscribe to stream events before starting
+      const unChunk = await onChatChunk((chunk) => {
+        setStreamingContent(prev => prev + chunk);
+      });
+      const unTool = await onToolStatus((evt) => {
+        if (evt.type === 'start') {
+          setActiveTools(prev => [...prev, { name: evt.name, status: 'running', preview: evt.preview }]);
+        } else {
+          setActiveTools(prev =>
+            prev.map(t => t.name === evt.name && t.status === 'running'
+              ? { ...t, status: 'done' as const, preview: evt.result_preview || t.preview }
+              : t
+            )
+          );
+        }
+      });
+
+      const completePromise = new Promise<string>((resolve, reject) => {
+        let unComplete: UnlistenFn | null = null;
+        let unError: UnlistenFn | null = null;
+        const cleanup = () => {
+          unComplete?.();
+          unError?.();
+        };
+        onChatComplete((reply) => { cleanup(); resolve(reply); }).then(fn => { unComplete = fn; });
+        onChatError((err) => { cleanup(); reject(new Error(err)); }).then(fn => { unError = fn; });
+      });
+
+      // Start streaming
+      await chatStreamStart(userMessage, currentSessionId, userAttachments);
+
+      // Wait for completion
+      const reply = await completePromise;
+
+      // Cleanup listeners
+      unChunk();
+      unTool();
+
       // Reload from DB to get persisted messages (including assistant reply)
+      setStreamingContent('');
+      setActiveTools([]);
       await loadMessages(currentSessionId);
       // Refresh sessions list to update names/timestamps
       const list = await listSessions();
       setSessions(list);
     } catch (error) {
       console.error('Failed to send message:', error);
+      setStreamingContent('');
+      setActiveTools([]);
       setMessages(prev => [...prev, {
         role: 'assistant' as const,
         content: `Error: ${String(error)}`,
@@ -360,6 +530,132 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
       setLoading(false);
     }
   };
+
+  /** Send a prompt directly (used by quick action examples) */
+  const sendQuickPrompt = async (prompt: string) => {
+    if (loading) return;
+    setLoading(true);
+    setStreamingContent('');
+
+    setMessages(prev => [...prev, {
+      role: 'user' as const,
+      content: prompt,
+      timestamp: Date.now(),
+    }]);
+
+    try {
+      const unChunk = await onChatChunk((chunk) => {
+        setStreamingContent(prev => prev + chunk);
+      });
+      const unTool = await onToolStatus((evt) => {
+        if (evt.type === 'start') {
+          setActiveTools(prev => [...prev, { name: evt.name, status: 'running', preview: evt.preview }]);
+        } else {
+          setActiveTools(prev =>
+            prev.map(t => t.name === evt.name && t.status === 'running'
+              ? { ...t, status: 'done' as const, preview: evt.result_preview || t.preview }
+              : t
+            )
+          );
+        }
+      });
+
+      const completePromise = new Promise<string>((resolve, reject) => {
+        let unComplete: UnlistenFn | null = null;
+        let unError: UnlistenFn | null = null;
+        const cleanup = () => { unComplete?.(); unError?.(); };
+        onChatComplete((reply) => { cleanup(); resolve(reply); }).then(fn => { unComplete = fn; });
+        onChatError((err) => { cleanup(); reject(new Error(err)); }).then(fn => { unError = fn; });
+      });
+
+      await chatStreamStart(prompt, currentSessionId);
+      await completePromise;
+
+      unChunk();
+      unTool();
+      setStreamingContent('');
+      setActiveTools([]);
+      await loadMessages(currentSessionId);
+      const list = await listSessions();
+      setSessions(list);
+    } catch (error) {
+      console.error('Failed to send quick prompt:', error);
+      setStreamingContent('');
+      setActiveTools([]);
+      setMessages(prev => [...prev, {
+        role: 'assistant' as const,
+        content: `Error: ${String(error)}`,
+        timestamp: Date.now(),
+      }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /** Render user message content with @mention pills */
+  const renderUserContent = useCallback((text: string) => {
+    // Split on @mention patterns: @Name followed by space/punctuation/end
+    // Bot names registered in boundBots get styled, others stay plain
+    const knownNames = new Set([
+      ...boundBots.map(b => b.name),
+      ...allBots.map(b => b.name),
+    ]);
+
+    const parts: React.ReactNode[] = [];
+    let remaining = text;
+    let key = 0;
+
+    while (remaining.length > 0) {
+      const atIdx = remaining.indexOf('@');
+      if (atIdx === -1) {
+        parts.push(remaining);
+        break;
+      }
+
+      // Push text before @
+      if (atIdx > 0) {
+        parts.push(remaining.slice(0, atIdx));
+      }
+
+      // Try to match a known bot name after @
+      const afterAt = remaining.slice(atIdx + 1);
+      let matched = false;
+      for (const name of knownNames) {
+        if (afterAt.startsWith(name)) {
+          // Check that it's followed by whitespace, end, or punctuation
+          const charAfter = afterAt[name.length];
+          if (!charAfter || /[\s,，.。!！?？)）\]】]/.test(charAfter)) {
+            parts.push(
+              <span
+                key={`mention-${key++}`}
+                style={{
+                  background: 'rgba(255,255,255,0.2)',
+                  color: '#FFFFFF',
+                  padding: '1px 6px',
+                  borderRadius: '6px',
+                  fontWeight: 600,
+                  fontSize: '13px',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                @{name}
+              </span>
+            );
+            remaining = afterAt.slice(name.length);
+            matched = true;
+            break;
+          }
+        }
+      }
+
+      if (!matched) {
+        parts.push('@');
+        remaining = afterAt;
+      }
+    }
+
+    return <>{parts}</>;
+  }, [boundBots, allBots]);
 
   const handleDeleteMessage = async (msg: ChatMessage, idx: number) => {
     if (msg.id) {
@@ -390,6 +686,99 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
     }
   };
 
+  // Slash command execution
+  const executeCommand = useCallback(async (cmd: SlashCommand, args?: string) => {
+    inputRef.current?.clear();
+    setMessage('');
+    setShowCommandPicker(false);
+
+    const showSystemMsg = (content: string) => {
+      setMessages((prev) => [...prev, {
+        role: 'assistant' as const,
+        content,
+        timestamp: Date.now(),
+      }]);
+    };
+
+    switch (cmd.name) {
+      case 'clear':
+        await handleClearAll();
+        break;
+      case 'new':
+        await handleNewSession();
+        break;
+      case 'model': {
+        try {
+          const info = await getActiveLlm();
+          const model = info.model
+            ? `**${t('chat.command.currentModel')}**: \`${info.provider_id}/${info.model}\``
+            : t('chat.command.noModel');
+          showSystemMsg(model);
+        } catch {
+          showSystemMsg(t('chat.command.noModel'));
+        }
+        break;
+      }
+      case 'skills': {
+        try {
+          const skills = await listSkills({ enabledOnly: true });
+          if (skills.length === 0) {
+            showSystemMsg(t('chat.command.noSkills'));
+          } else {
+            const lines = skills.map(
+              (s) => `- ${s.emoji || '📦'} **${s.name}** — ${s.description}`
+            ).join('\n');
+            showSystemMsg(`**${t('chat.command.enabledSkills')}** (${skills.length})\n\n${lines}`);
+          }
+        } catch {
+          showSystemMsg(t('chat.command.noSkills'));
+        }
+        break;
+      }
+      case 'cron': {
+        if (!args?.trim()) {
+          showSystemMsg(`${t('chat.command.cronUsage')}\n\n${t('chat.command.cronExamples')}`);
+          break;
+        }
+        // Parse: /cron 5m 提醒我喝水
+        const cronMatch = args.trim().match(/^(\d+)(m|h)\s+(.+)$/);
+        if (!cronMatch) {
+          showSystemMsg(`${t('chat.command.cronUsage')}\n\n${t('chat.command.cronExamples')}`);
+          break;
+        }
+        const [, amount, unit, taskText] = cronMatch;
+        const delayMinutes = unit === 'h' ? parseInt(amount) * 60 : parseInt(amount);
+        try {
+          await createCronJob({
+            id: '',
+            name: taskText.slice(0, 30),
+            enabled: true,
+            schedule: {
+              type: 'delay',
+              cron: '',
+              delay_minutes: delayMinutes,
+            },
+            text: taskText,
+            dispatch: {
+              targets: [{ type: 'app' }],
+            },
+          });
+          showSystemMsg(`${t('chat.command.cronCreated')}: **${taskText}** (${amount}${unit})`);
+        } catch {
+          showSystemMsg(t('chat.command.cronFailed'));
+        }
+        break;
+      }
+      case 'help': {
+        const helpLines = SLASH_COMMANDS.map(
+          (c) => `  /${c.name} — ${t(c.description)}`
+        ).join('\n');
+        showSystemMsg(`**${t('chat.command.helpTitle')}**\n\n${helpLines}`);
+        break;
+      }
+    }
+  }, [handleClearAll, handleNewSession, t]);
+
   const handleCloseSession = async (sessionId: string) => {
     if (sessions.length <= 1) return;
     try {
@@ -406,6 +795,62 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
 
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // When slash command picker is open, intercept navigation keys
+    if (showCommandPicker) {
+      const cmds = filterCommands(commandQuery);
+      const maxIdx = cmds.length - 1;
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setCommandPickerIndex(prev => Math.min(prev + 1, maxIdx));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setCommandPickerIndex(prev => Math.max(prev - 1, 0));
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        const selected = cmds[commandPickerIndex];
+        if (selected) executeCommand(selected);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowCommandPicker(false);
+        return;
+      }
+    }
+
+    // When mention picker is open, intercept navigation keys
+    if (showFilePicker) {
+      const items = buildMentionList(allBots, workspaceFiles, filePickerQuery);
+      const maxIdx = items.length - 1;
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setFilePickerIndex(prev => Math.min(prev + 1, maxIdx));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setFilePickerIndex(prev => Math.max(prev - 1, 0));
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        const selected = items[filePickerIndex];
+        if (selected) {
+          if (selected.type === 'bot') handleMentionBotSelect(selected.bot);
+          else handleFileSelect(selected.file);
+        }
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowFilePicker(false);
+        return;
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -435,10 +880,50 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
   };
 
   const quickActions = [
-    { icon: MessageSquare, label: t('chat.quick.askAnything'), prompt: '' },
-    { icon: Puzzle, label: t('chat.quick.skills'), prompt: '' },
-    { icon: Terminal, label: t('chat.quick.command'), prompt: '' },
-    { icon: Clock, label: t('chat.quick.schedule'), prompt: '' },
+    {
+      icon: MessageSquare,
+      label: t('chat.quick.askAnything'),
+      desc: t('chat.quick.askAnythingDesc'),
+      examples: [
+        t('chat.quick.askAnythingEx1'),
+        t('chat.quick.askAnythingEx2'),
+        t('chat.quick.askAnythingEx3'),
+      ],
+      color: 'var(--color-primary)',
+    },
+    {
+      icon: Puzzle,
+      label: t('chat.quick.skills'),
+      desc: t('chat.quick.skillsDesc'),
+      examples: [
+        t('chat.quick.skillsEx1'),
+        t('chat.quick.skillsEx2'),
+        t('chat.quick.skillsEx3'),
+      ],
+      color: '#8b5cf6',
+    },
+    {
+      icon: Terminal,
+      label: t('chat.quick.command'),
+      desc: t('chat.quick.commandDesc'),
+      examples: [
+        t('chat.quick.commandEx1'),
+        t('chat.quick.commandEx2'),
+        t('chat.quick.commandEx3'),
+      ],
+      color: '#059669',
+    },
+    {
+      icon: Clock,
+      label: t('chat.quick.schedule'),
+      desc: t('chat.quick.scheduleDesc'),
+      examples: [
+        t('chat.quick.scheduleEx1'),
+        t('chat.quick.scheduleEx2'),
+        t('chat.quick.scheduleEx3'),
+      ],
+      color: '#d97706',
+    },
   ];
 
   return (
@@ -658,71 +1143,193 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
       {/* Messages area */}
       <div className="flex-1 overflow-y-auto" style={{ background: 'var(--color-bg)' }}>
         {messages.length === 0 && !loading ? (
-          /* Empty state - welcome screen with inline input */
-          <div className="h-full flex flex-col items-center justify-center px-6">
+          /* Empty state - welcome screen with expandable action cards */
+          <div
+            className="h-full flex flex-col items-center justify-center px-6"
+            onClick={() => expandedAction !== null && setExpandedAction(null)}
+          >
             <div className="max-w-lg w-full text-center">
-              {/* Logo / Icon */}
+              {/* Logo / Icon — hide when expanded */}
               <div
-                className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6"
+                className="transition-all duration-700 ease-out"
                 style={{
-                  background: 'linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-end) 100%)',
-                  boxShadow: '0 4px 24px rgba(255, 107, 107, 0.2)',
+                  opacity: expandedAction !== null ? 0 : 1,
+                  maxHeight: expandedAction !== null ? 0 : '280px',
+                  overflow: 'hidden',
                 }}
               >
-                <Sparkles size={28} className="text-white" />
-              </div>
+                <div
+                  className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-8"
+                  style={{
+                    background: 'linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-end) 100%)',
+                    boxShadow: '0 4px 24px rgba(255, 107, 107, 0.2)',
+                  }}
+                >
+                  <Sparkles size={28} className="text-white" />
+                </div>
 
-              <h1
-                className="text-2xl font-bold mb-2 tracking-tight"
-                style={{ fontFamily: 'var(--font-display)', color: 'var(--color-text)' }}
-              >
-                {t('chat.empty.title')}
-              </h1>
-              <p className="text-[14px] mb-6" style={{ color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
-                {(t('chat.empty.description') as string).replace('YiClaw', aiName)}
-              </p>
+                <h1
+                  className="text-2xl font-bold mb-2 tracking-tight"
+                  style={{ fontFamily: 'var(--font-display)', color: 'var(--color-text)' }}
+                >
+                  {t('chat.empty.title')}
+                </h1>
+                <p className="text-[14px] mb-6" style={{ color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
+                  {(t('chat.empty.description') as string).replace('YiClaw', aiName)}
+                </p>
+              </div>
 
               {/* Quick action cards */}
               <div className="grid grid-cols-2 gap-3 mb-6">
                 {quickActions.map((action, idx) => {
                   const Icon = action.icon;
+                  const isExpanded = expandedAction === idx;
+                  const isHidden = expandedAction !== null && !isExpanded;
+
                   return (
-                    <button
+                    <div
                       key={idx}
-                      onClick={() => {
-                        if (action.prompt) {
-                          setMessage(action.prompt);
-                          inputRef.current?.focus();
-                        }
-                      }}
-                      className="flex items-center gap-3 p-3.5 rounded-xl text-left transition-all duration-200"
-                      style={{ background: 'var(--color-bg-elevated)' }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.transform = 'translateY(-1px)';
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.transform = 'translateY(0)';
+                      className="transition-all duration-700 ease-out"
+                      style={{
+                        gridColumn: isExpanded ? '1 / -1' : undefined,
+                        opacity: isHidden ? 0 : 1,
+                        transform: isHidden ? 'scale(0.9)' : 'scale(1)',
+                        pointerEvents: isHidden ? 'none' : 'auto',
+                        maxHeight: isHidden ? 0 : '400px',
+                        overflow: 'hidden',
                       }}
                     >
-                      <div
-                        className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
-                        style={{ background: 'var(--color-primary-subtle)' }}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setExpandedAction(isExpanded ? null : idx);
+                        }}
+                        className="w-full text-left rounded-xl transition-all duration-600"
+                        style={{
+                          background: isExpanded
+                            ? 'var(--color-bg-elevated)'
+                            : 'var(--color-bg-elevated)',
+                          boxShadow: isExpanded
+                            ? `0 8px 32px ${action.color}20, 0 0 0 1px ${action.color}30`
+                            : 'none',
+                        }}
+                        onMouseEnter={(e) => {
+                          if (!isExpanded) e.currentTarget.style.transform = 'translateY(-2px)';
+                        }}
+                        onMouseLeave={(e) => {
+                          if (!isExpanded) e.currentTarget.style.transform = 'translateY(0)';
+                        }}
                       >
-                        <Icon size={16} style={{ color: 'var(--color-primary)' }} />
-                      </div>
-                      <span className="text-[13px] font-medium" style={{ color: 'var(--color-text-secondary)' }}>
-                        {action.label}
-                      </span>
-                    </button>
+                        {/* Card header */}
+                        <div className="flex items-center gap-3 p-3.5">
+                          <div
+                            className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-all duration-700"
+                            style={{
+                              background: isExpanded
+                                ? `${action.color}20`
+                                : 'var(--color-primary-subtle)',
+                              transform: isExpanded ? 'scale(1.1)' : 'scale(1)',
+                            }}
+                          >
+                            <Icon
+                              size={16}
+                              style={{ color: isExpanded ? action.color : 'var(--color-primary)' }}
+                            />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <span
+                              className="text-[13px] font-medium block"
+                              style={{ color: isExpanded ? 'var(--color-text)' : 'var(--color-text-secondary)' }}
+                            >
+                              {action.label}
+                            </span>
+                            {isExpanded && (
+                              <span
+                                className="text-[12px] block mt-0.5 animate-fade-in"
+                                style={{ color: 'var(--color-text-muted)' }}
+                              >
+                                {action.desc}
+                              </span>
+                            )}
+                          </div>
+                          <div
+                            className="transition-transform duration-700"
+                            style={{
+                              transform: isExpanded ? 'rotate(45deg)' : 'rotate(0)',
+                              color: 'var(--color-text-tertiary)',
+                            }}
+                          >
+                            <Plus size={14} />
+                          </div>
+                        </div>
+
+                        {/* Expanded: example prompts */}
+                        {isExpanded && (
+                          <div className="px-3.5 pb-3.5 space-y-1.5 animate-fade-in">
+                            <div
+                              className="text-[11px] font-medium uppercase tracking-wider mb-2 px-1"
+                              style={{ color: 'var(--color-text-tertiary)' }}
+                            >
+                              {t('chat.empty.tip1').includes('Enter') ? 'Try asking' : '试试这些'}
+                            </div>
+                            {action.examples.map((ex, eidx) => (
+                              <div
+                                key={eidx}
+                                className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-[13px] transition-all duration-150 cursor-pointer"
+                                style={{
+                                  background: 'var(--color-bg-subtle)',
+                                  color: 'var(--color-text-secondary)',
+                                }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setExpandedAction(null);
+                                  // Directly send the example prompt
+                                  sendQuickPrompt(ex);
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.background = `${action.color}12`;
+                                  e.currentTarget.style.color = 'var(--color-text)';
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.background = 'var(--color-bg-subtle)';
+                                  e.currentTarget.style.color = 'var(--color-text-secondary)';
+                                }}
+                              >
+                                <Zap size={12} style={{ color: action.color, opacity: 0.7 }} className="shrink-0" />
+                                <span>{ex}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </button>
+                    </div>
                   );
                 })}
               </div>
 
-              {/* Tips */}
-              <div className="text-[12px] space-y-1.5" style={{ color: 'var(--color-text-tertiary)' }}>
+              {/* Tips — hide when expanded */}
+              <div
+                className="text-[12px] space-y-1.5 transition-all duration-700 ease-out"
+                style={{
+                  color: 'var(--color-text-tertiary)',
+                  opacity: expandedAction !== null ? 0 : 1,
+                  maxHeight: expandedAction !== null ? 0 : '60px',
+                  overflow: 'hidden',
+                }}
+              >
                 <p>{t('chat.empty.tip1')}</p>
                 <p>{t('chat.empty.tip2')}</p>
               </div>
+
+              {/* Back hint when expanded */}
+              {expandedAction !== null && (
+                <div
+                  className="text-[11px] animate-fade-in"
+                  style={{ color: 'var(--color-text-tertiary)', opacity: 0.6 }}
+                >
+                  {t('chat.empty.backHint')}
+                </div>
+              )}
             </div>
           </div>
         ) : (
@@ -741,7 +1348,8 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
                 </button>
               </div>
             )}
-            {messages.map((msg, idx) => (
+            {messages.filter(m => m.role !== 'tool').map((msg, idx) => {
+              return (
               <div
                 key={idx}
                 className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'} group`}
@@ -834,7 +1442,9 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
                     })()}
                     {msg.role === 'user' ? (
                       <div className="whitespace-pre-wrap break-words">
-                        {msg.content.replace(/\n\n\[用户上传了文件:.*?\]/g, '').trim()}
+                        {renderUserContent(
+                          msg.content.replace(/\n\n\[用户上传了文件:.*?\]/g, '').replace(/\[用户引用了文件:.*?\]\n```[\s\S]*?```\n?\n?/g, '').trim()
+                        )}
                       </div>
                     ) : (
                       <div className="markdown-body">
@@ -887,30 +1497,78 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
                   </div>
                 )}
               </div>
-            ))}
+              );
+            })}
 
-            {/* Loading */}
-            {loading && !streamingContent && (
+            {/* Active tool calls + streaming response */}
+            {loading && (
               <div className="flex gap-3 justify-start">
                 <div
-                  className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                  className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5"
                   style={{ background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)' }}
                 >
                   <Bot size={16} style={{ color: 'var(--color-primary)' }} />
                 </div>
-                <div
-                  className="py-3 px-4 rounded-2xl"
-                  style={{
-                    background: 'var(--color-bg-elevated)',
-                    border: '1px solid var(--color-border)',
-                    borderBottomLeftRadius: '6px',
-                  }}
-                >
-                  <div className="flex gap-1.5">
-                    <span className="w-2 h-2 rounded-full animate-bounce" style={{ background: 'var(--color-text-tertiary)', animationDelay: '0ms' }} />
-                    <span className="w-2 h-2 rounded-full animate-bounce" style={{ background: 'var(--color-text-tertiary)', animationDelay: '150ms' }} />
-                    <span className="w-2 h-2 rounded-full animate-bounce" style={{ background: 'var(--color-text-tertiary)', animationDelay: '300ms' }} />
-                  </div>
+                <div className="max-w-[80%] space-y-2">
+                  {/* Tool status chips */}
+                  {activeTools.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {activeTools.map((tool, tidx) => (
+                        <div
+                          key={tidx}
+                          className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px]"
+                          style={{
+                            background: 'var(--color-bg-elevated)',
+                            border: '1px solid var(--color-border)',
+                            color: 'var(--color-text-muted)',
+                          }}
+                        >
+                          {tool.status === 'running' ? (
+                            <Loader2 size={11} className="animate-spin" style={{ color: 'var(--color-primary)' }} />
+                          ) : (
+                            <CheckCircle2 size={11} style={{ color: 'var(--color-success, #22c55e)' }} />
+                          )}
+                          <span className="font-medium" style={{ color: 'var(--color-text-secondary)' }}>
+                            {tool.name}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Streaming content */}
+                  {streamingContent ? (
+                    <div
+                      className="py-2.5 px-4 rounded-2xl text-[14px] leading-relaxed prose prose-sm max-w-none"
+                      style={{
+                        background: 'var(--color-bg-elevated)',
+                        border: '1px solid var(--color-border)',
+                        borderBottomLeftRadius: '6px',
+                        color: 'var(--color-text)',
+                      }}
+                    >
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                        {streamingContent}
+                      </ReactMarkdown>
+                      <span className="inline-block w-1.5 h-4 ml-0.5 animate-pulse rounded-sm" style={{ background: 'var(--color-primary)', verticalAlign: 'text-bottom' }} />
+                    </div>
+                  ) : (
+                    /* Loading dots (before first chunk) */
+                    <div
+                      className="py-3 px-4 rounded-2xl inline-block"
+                      style={{
+                        background: 'var(--color-bg-elevated)',
+                        border: '1px solid var(--color-border)',
+                        borderBottomLeftRadius: '6px',
+                      }}
+                    >
+                      <div className="flex gap-1.5">
+                        <span className="w-2 h-2 rounded-full animate-bounce" style={{ background: 'var(--color-text-tertiary)', animationDelay: '0ms' }} />
+                        <span className="w-2 h-2 rounded-full animate-bounce" style={{ background: 'var(--color-text-tertiary)', animationDelay: '150ms' }} />
+                        <span className="w-2 h-2 rounded-full animate-bounce" style={{ background: 'var(--color-text-tertiary)', animationDelay: '300ms' }} />
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -924,7 +1582,7 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
       <div className="shrink-0 px-6 py-4" style={{ background: 'var(--color-bg)', borderTop: '1px solid var(--color-border)' }}>
         <form onSubmit={(e) => { e.preventDefault(); handleSend(); }} className="max-w-3xl mx-auto">
           <div
-            className="rounded-2xl transition-all"
+            className="relative rounded-2xl transition-all"
             style={{
               background: 'var(--color-bg-elevated)',
               border: '1px solid var(--color-border)',
@@ -932,6 +1590,28 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
             onDrop={handleDrop}
             onDragOver={handleDragOver}
           >
+            {/* /slash-command picker dropdown */}
+            {showCommandPicker && (
+              <SlashCommandPicker
+                query={commandQuery}
+                selectedIndex={commandPickerIndex}
+                onSelect={executeCommand}
+                t={t}
+              />
+            )}
+
+            {/* @-mention picker dropdown (bots + files) */}
+            {showFilePicker && !showCommandPicker && (
+              <MentionPicker
+                bots={allBots}
+                files={workspaceFiles}
+                query={filePickerQuery}
+                selectedIndex={filePickerIndex}
+                onSelectBot={handleMentionBotSelect}
+                onSelectFile={handleFileSelect}
+              />
+            )}
+
             {/* Image preview strip */}
             {pendingImages.length > 0 && (
               <div className="flex gap-2 px-3 pt-3 pb-1 flex-wrap">
@@ -989,19 +1669,37 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
                 <Paperclip size={18} />
               </button>
 
-              <textarea
+              <MentionInput
                 ref={inputRef}
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                onKeyDown={handleKeyDown}
-                onPaste={handlePaste}
                 placeholder={t('chat.placeholder')}
                 disabled={loading}
-                rows={1}
-                className="flex-1 bg-transparent border-none outline-none resize-none text-[14px] px-2 py-1.5 placeholder:text-[var(--color-text-tertiary)]"
-                style={{ color: 'var(--color-text)', maxHeight: '160px' }}
-                autoFocus
+                onInput={handleMentionInput}
+                onMentionTrigger={handleMentionTrigger}
+                onMentionDismiss={handleMentionDismiss}
+                onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
               />
+              {/* Voice input button — disabled pending fixes
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={toggleRecording}
+                disabled={voiceStatus === 'loading' || voiceStatus === 'transcribing'}
+                className={`w-9 h-9 flex items-center justify-center rounded-xl shrink-0 transition-all hover:bg-[var(--color-bg-muted)] disabled:opacity-50${voiceStatus === 'recording' ? ' voice-recording !bg-[rgba(255,69,58,0.12)]' : ''}`}
+                style={{ color: voiceStatus === 'recording' ? '#FF453A' : 'var(--color-text-muted)' }}
+                title={
+                  voiceStatus === 'recording' ? t('chat.voice.recording')
+                  : voiceStatus === 'loading' ? t('chat.voice.modelLoading', { progress: modelProgress })
+                  : voiceStatus === 'transcribing' ? t('chat.voice.transcribing')
+                  : t('chat.voice.record')
+                }
+              >
+                {voiceStatus === 'loading' || voiceStatus === 'transcribing'
+                  ? <Loader2 size={18} className="animate-spin" />
+                  : <Mic size={18} />
+                }
+              </button>
+              */}
               <button
                 type="submit"
                 disabled={loading || (!message.trim() && pendingImages.length === 0)}

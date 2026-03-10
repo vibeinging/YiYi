@@ -41,3 +41,25 @@ export async function getUserWorkspace(): Promise<string> {
 export async function setUserWorkspace(path: string): Promise<void> {
   await invoke('set_user_workspace', { path });
 }
+
+export interface ClaudeCodeStatus {
+  installed: boolean;
+  has_api_key: boolean;
+  available_provider?: {
+    id: string;
+    name: string;
+    base_url: string;
+  } | null;
+}
+
+export async function checkClaudeCodeStatus(): Promise<ClaudeCodeStatus> {
+  return await invoke<ClaudeCodeStatus>('check_claude_code_status');
+}
+
+export async function getAppFlag(key: string): Promise<string | null> {
+  return await invoke<string | null>('get_app_flag', { key });
+}
+
+export async function setAppFlag(key: string, value: string): Promise<void> {
+  await invoke('set_app_flag', { key, value });
+}

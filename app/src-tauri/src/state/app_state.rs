@@ -88,6 +88,7 @@ impl AppState {
         db.migrate_providers_from_json(&secret_dir).ok();
         db.migrate_jobs_from_json(&working_dir).ok();
         db.migrate_heartbeat_from_json(&working_dir).ok();
+        db.migrate_memory_from_files(&working_dir).ok();
 
         // Migrate channels from config.json to bots table (one-time)
         migrate_channels_to_bots(&db, &config);

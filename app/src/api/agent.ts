@@ -94,6 +94,7 @@ export interface ToolStatusEvent {
   type: 'start' | 'end';
   name: string;
   preview?: string;
+  result_preview?: string;
 }
 
 export function onToolStatus(callback: (event: ToolStatusEvent) => void): Promise<UnlistenFn> {

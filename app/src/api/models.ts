@@ -148,3 +148,54 @@ export async function setActiveLlm(
     model,
   });
 }
+
+// ── Provider Plugin API ─────────────────────────────────────────────
+
+export interface ProviderPlugin {
+  id: string;
+  name: string;
+  default_base_url: string;
+  api_key_env: string;
+  api_compat: string;
+  is_local: boolean;
+  models: ModelInfo[];
+  description?: string;
+}
+
+export interface ProviderTemplate {
+  id: string;
+  name: string;
+  description: string;
+  plugin: ProviderPlugin;
+}
+
+export async function listProviderTemplates(): Promise<ProviderTemplate[]> {
+  return await invoke('list_provider_templates');
+}
+
+export async function importProviderPlugin(
+  plugin: ProviderPlugin,
+): Promise<ProviderDisplay> {
+  const raw = await invoke<ProviderInfo>('import_provider_plugin', { plugin });
+  return adaptProvider(raw);
+}
+
+export async function exportProviderConfig(
+  providerId: string,
+): Promise<ProviderPlugin> {
+  return await invoke('export_provider_config', { providerId });
+}
+
+export async function scanProviderPlugins(): Promise<ProviderDisplay[]> {
+  const raw = await invoke<ProviderInfo[]>('scan_provider_plugins');
+  return raw.map(adaptProvider);
+}
+
+export async function importProviderFromTemplate(
+  templateId: string,
+): Promise<ProviderDisplay> {
+  const raw = await invoke<ProviderInfo>('import_provider_from_template', {
+    templateId,
+  });
+  return adaptProvider(raw);
+}

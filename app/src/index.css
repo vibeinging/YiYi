@@ -290,6 +290,23 @@ select {
   animation: spin 0.8s linear infinite;
 }
 
+/* ─── Voice recording pulse ─── */
+@keyframes voicePulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 69, 58, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(255, 69, 58, 0); }
+}
+
+.voice-recording {
+  animation: voicePulse 1.2s ease-in-out infinite;
+}
+
+/* ─── MentionInput placeholder ─── */
+.mention-input:empty::before {
+  content: attr(data-placeholder);
+  color: var(--color-text-tertiary);
+  pointer-events: none;
+}
+
 /* ─── Glass utility ─── */
 .glass {
   background: var(--color-bg-glass);

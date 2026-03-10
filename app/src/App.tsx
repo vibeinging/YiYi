@@ -36,6 +36,7 @@ import { useTheme } from './hooks/useTheme';
 import { useDragRegion } from './hooks/useDragRegion';
 import { ToastProvider } from './components/Toast';
 import { SandboxAccessDialog } from './components/SandboxAccessDialog';
+import { ClaudeCodeDialog } from './components/ClaudeCodeDialog';
 
 type Page = 'chat' | 'skills' | 'cronjobs' | 'workspace' | 'mcp' | 'heartbeat' | 'bots' | 'terminal' | 'settings';
 
@@ -364,6 +365,7 @@ function App() {
       </div>
     </div>
     <SandboxAccessDialog />
+    <ClaudeCodeDialog />
     </ToastProvider>
   );
 }

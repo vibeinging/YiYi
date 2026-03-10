@@ -276,6 +276,7 @@ impl QQBot {
     }
 
     /// 发送频道消息（被动回复）
+    /// 当提供 msg_id 时，使用 message_reference 创建引用回复样式
     pub async fn send_guild_message(
         &self,
         channel_id: &str,
@@ -292,6 +293,11 @@ impl QQBot {
         let mut body = serde_json::json!({ "content": content });
         if let Some(id) = msg_id {
             body["msg_id"] = serde_json::Value::String(id.to_string());
+            // message_reference creates a visual reply-quote in the QQ client
+            body["message_reference"] = serde_json::json!({
+                "message_id": id,
+                "ignore_get_message_error": true,
+            });
         }
 
         client
@@ -416,9 +422,53 @@ async fn get_access_token(app_id: &str, client_secret: &str) -> Result<String, S
     fetch_access_token(&client, app_id, client_secret).await
 }
 
+/// Strip QQ mention tags like `<@!12345>`, `<@12345>` and `<qqbot-at-everyone/>` from content.
+fn strip_qq_mentions(content: &str) -> String {
+    let mut result = String::with_capacity(content.len());
+    let mut chars = content.chars().peekable();
+
+    while let Some(&ch) = chars.peek() {
+        if ch == '<' {
+            // Try to match <@!digits> or <@digits> or <qqbot-at-everyone/>
+            let remaining: String = chars.clone().collect();
+            if remaining.starts_with("<qqbot-at-everyone/>") {
+                // Skip the entire tag
+                for _ in 0.."<qqbot-at-everyone/>".len() {
+                    chars.next();
+                }
+                continue;
+            }
+            if remaining.starts_with("<@!") || remaining.starts_with("<@") {
+                // Find closing >
+                if let Some(end) = remaining.find('>') {
+                    let tag = &remaining[..=end];
+                    // Verify it matches <@!digits> or <@digits>
+                    let inner = if tag.starts_with("<@!") {
+                        &tag[3..tag.len() - 1]
+                    } else {
+                        &tag[2..tag.len() - 1]
+                    };
+                    if !inner.is_empty() && inner.chars().all(|c| c.is_ascii_digit()) {
+                        // Skip the entire mention tag
+                        for _ in 0..=end {
+                            chars.next();
+                        }
+                        continue;
+                    }
+                }
+            }
+        }
+        result.push(ch);
+        chars.next();
+    }
+
+    result.trim().to_string()
+}
+
 /// 处理频道消息
 async fn handle_qq_message(d: &serde_json::Value, bot_id: &str, tx: &mpsc::Sender<IncomingMessage>) {
-    let content = d["content"].as_str().unwrap_or("").trim().to_string();
+    let raw_content = d["content"].as_str().unwrap_or("").trim();
+    let content = strip_qq_mentions(raw_content);
     if content.is_empty() {
         return;
     }
@@ -457,7 +507,8 @@ async fn handle_qq_group_message(
     bot_id: &str,
     tx: &mpsc::Sender<IncomingMessage>,
 ) {
-    let content = d["content"].as_str().unwrap_or("").trim().to_string();
+    let raw_content = d["content"].as_str().unwrap_or("").trim();
+    let content = strip_qq_mentions(raw_content);
     if content.is_empty() {
         return;
     }

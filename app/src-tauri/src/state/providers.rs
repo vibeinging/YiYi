@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::engine::db::{CustomProviderRow, Database};
@@ -382,4 +383,441 @@ pub fn builtin_providers() -> Vec<ProviderDefinition> {
             is_local: false,
         },
     ]
+}
+
+// ── Provider Plugin System ──────────────────────────────────────────
+
+/// JSON config file format for a provider plugin.
+/// Each file in `plugins/providers/*.json` follows this schema.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderPlugin {
+    /// Unique identifier (e.g. "openrouter")
+    pub id: String,
+    /// Display name
+    pub name: String,
+    /// Default API base URL
+    #[serde(default)]
+    pub default_base_url: String,
+    /// Environment variable name for API key lookup
+    #[serde(default)]
+    pub api_key_env: String,
+    /// API compatibility: "openai", "anthropic", or "custom"
+    #[serde(default = "default_api_compat")]
+    pub api_compat: String,
+    /// Whether this is a local provider (e.g. Ollama)
+    #[serde(default)]
+    pub is_local: bool,
+    /// Pre-defined model list
+    #[serde(default)]
+    pub models: Vec<ModelInfo>,
+    /// Optional description
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+fn default_api_compat() -> String {
+    "openai".into()
+}
+
+/// A template for quickly creating a provider plugin.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderTemplate {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub plugin: ProviderPlugin,
+}
+
+/// Return the directory for provider plugin JSON files.
+pub fn plugins_dir(working_dir: &Path) -> PathBuf {
+    working_dir.join("plugins").join("providers")
+}
+
+/// Scan the `plugins/providers/` directory and load all valid `.json` plugin files.
+pub fn scan_plugin_files(working_dir: &Path) -> Vec<ProviderPlugin> {
+    let dir = plugins_dir(working_dir);
+    if !dir.exists() {
+        return Vec::new();
+    }
+    let mut plugins = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().map_or(false, |e| e == "json") {
+                match std::fs::read_to_string(&path) {
+                    Ok(content) => match serde_json::from_str::<ProviderPlugin>(&content) {
+                        Ok(plugin) => {
+                            log::info!("Loaded provider plugin: {} from {}", plugin.id, path.display());
+                            plugins.push(plugin);
+                        }
+                        Err(e) => {
+                            log::warn!("Invalid provider plugin {}: {}", path.display(), e);
+                        }
+                    },
+                    Err(e) => {
+                        log::warn!("Failed to read plugin file {}: {}", path.display(), e);
+                    }
+                }
+            }
+        }
+    }
+    plugins
+}
+
+/// Convert a ProviderPlugin into a CustomProviderData for registration.
+fn plugin_to_custom_data(plugin: &ProviderPlugin) -> CustomProviderData {
+    CustomProviderData {
+        definition: ProviderDefinition {
+            id: plugin.id.clone(),
+            name: plugin.name.clone(),
+            default_base_url: plugin.default_base_url.clone(),
+            api_key_prefix: plugin.api_key_env.clone(),
+            models: plugin.models.clone(),
+            is_custom: true,
+            is_local: plugin.is_local,
+        },
+        settings: ProviderSettings::default(),
+    }
+}
+
+/// Save a ProviderPlugin as a JSON file in the plugins directory.
+pub fn save_plugin_file(working_dir: &Path, plugin: &ProviderPlugin) -> Result<PathBuf, String> {
+    let dir = plugins_dir(working_dir);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create plugins directory: {}", e))?;
+    let file_path = dir.join(format!("{}.json", plugin.id));
+    let json = serde_json::to_string_pretty(plugin)
+        .map_err(|e| format!("Failed to serialize plugin: {}", e))?;
+    std::fs::write(&file_path, json)
+        .map_err(|e| format!("Failed to write plugin file: {}", e))?;
+    Ok(file_path)
+}
+
+/// Delete a plugin JSON file from the plugins directory.
+pub fn delete_plugin_file(working_dir: &Path, plugin_id: &str) -> Result<(), String> {
+    let file_path = plugins_dir(working_dir).join(format!("{}.json", plugin_id));
+    if file_path.exists() {
+        std::fs::remove_file(&file_path)
+            .map_err(|e| format!("Failed to delete plugin file: {}", e))?;
+    }
+    Ok(())
+}
+
+/// Built-in provider templates for common third-party services.
+pub fn builtin_templates() -> Vec<ProviderTemplate> {
+    vec![
+        ProviderTemplate {
+            id: "openrouter".into(),
+            name: "OpenRouter".into(),
+            description: "Unified API gateway for 200+ models from OpenAI, Anthropic, Google, Meta, etc.".into(),
+            plugin: ProviderPlugin {
+                id: "openrouter".into(),
+                name: "OpenRouter".into(),
+                default_base_url: "https://openrouter.ai/api/v1".into(),
+                api_key_env: "OPENROUTER_API_KEY".into(),
+                api_compat: "openai".into(),
+                is_local: false,
+                models: vec![
+                    ModelInfo { id: "openai/gpt-4.1".into(), name: "GPT-4.1".into() },
+                    ModelInfo { id: "anthropic/claude-sonnet-4-6".into(), name: "Claude Sonnet 4.6".into() },
+                    ModelInfo { id: "google/gemini-2.5-pro".into(), name: "Gemini 2.5 Pro".into() },
+                    ModelInfo { id: "meta-llama/llama-4-maverick".into(), name: "Llama 4 Maverick".into() },
+                    ModelInfo { id: "deepseek/deepseek-r1".into(), name: "DeepSeek R1".into() },
+                ],
+                description: Some("Unified API gateway for 200+ models".into()),
+            },
+        },
+        ProviderTemplate {
+            id: "together".into(),
+            name: "Together AI".into(),
+            description: "Fast inference for open-source models: Llama, Mixtral, Qwen, etc.".into(),
+            plugin: ProviderPlugin {
+                id: "together".into(),
+                name: "Together AI".into(),
+                default_base_url: "https://api.together.xyz/v1".into(),
+                api_key_env: "TOGETHER_API_KEY".into(),
+                api_compat: "openai".into(),
+                is_local: false,
+                models: vec![
+                    ModelInfo { id: "meta-llama/Llama-4-Maverick-17B-128E-Instruct-Turbo".into(), name: "Llama 4 Maverick Turbo".into() },
+                    ModelInfo { id: "Qwen/Qwen3-235B-A22B-fp8-tput".into(), name: "Qwen3 235B".into() },
+                    ModelInfo { id: "deepseek-ai/DeepSeek-R1".into(), name: "DeepSeek R1".into() },
+                ],
+                description: Some("Fast inference for open-source models".into()),
+            },
+        },
+        ProviderTemplate {
+            id: "groq".into(),
+            name: "Groq".into(),
+            description: "Ultra-fast LPU inference for Llama, Mixtral, Gemma models.".into(),
+            plugin: ProviderPlugin {
+                id: "groq".into(),
+                name: "Groq".into(),
+                default_base_url: "https://api.groq.com/openai/v1".into(),
+                api_key_env: "GROQ_API_KEY".into(),
+                api_compat: "openai".into(),
+                is_local: false,
+                models: vec![
+                    ModelInfo { id: "llama-3.3-70b-versatile".into(), name: "Llama 3.3 70B".into() },
+                    ModelInfo { id: "llama-3.1-8b-instant".into(), name: "Llama 3.1 8B Instant".into() },
+                    ModelInfo { id: "mixtral-8x7b-32768".into(), name: "Mixtral 8x7B".into() },
+                    ModelInfo { id: "gemma2-9b-it".into(), name: "Gemma2 9B".into() },
+                ],
+                description: Some("Ultra-fast LPU inference".into()),
+            },
+        },
+        ProviderTemplate {
+            id: "ollama".into(),
+            name: "Ollama (Local)".into(),
+            description: "Run models locally with Ollama. No API key needed.".into(),
+            plugin: ProviderPlugin {
+                id: "ollama".into(),
+                name: "Ollama (Local)".into(),
+                default_base_url: "http://localhost:11434/v1".into(),
+                api_key_env: String::new(),
+                api_compat: "openai".into(),
+                is_local: true,
+                models: vec![
+                    ModelInfo { id: "llama3.3".into(), name: "Llama 3.3".into() },
+                    ModelInfo { id: "qwen3:32b".into(), name: "Qwen3 32B".into() },
+                    ModelInfo { id: "deepseek-r1:32b".into(), name: "DeepSeek R1 32B".into() },
+                    ModelInfo { id: "gemma3:27b".into(), name: "Gemma 3 27B".into() },
+                ],
+                description: Some("Run models locally with Ollama".into()),
+            },
+        },
+        ProviderTemplate {
+            id: "lmstudio".into(),
+            name: "LM Studio (Local)".into(),
+            description: "Run local models via LM Studio. No API key needed.".into(),
+            plugin: ProviderPlugin {
+                id: "lmstudio".into(),
+                name: "LM Studio (Local)".into(),
+                default_base_url: "http://localhost:1234/v1".into(),
+                api_key_env: String::new(),
+                api_compat: "openai".into(),
+                is_local: true,
+                models: vec![
+                    ModelInfo { id: "local-model".into(), name: "Local Model".into() },
+                ],
+                description: Some("Run local models via LM Studio".into()),
+            },
+        },
+        ProviderTemplate {
+            id: "siliconflow".into(),
+            name: "SiliconFlow".into(),
+            description: "Chinese cloud inference platform with competitive pricing.".into(),
+            plugin: ProviderPlugin {
+                id: "siliconflow".into(),
+                name: "SiliconFlow".into(),
+                default_base_url: "https://api.siliconflow.cn/v1".into(),
+                api_key_env: "SILICONFLOW_API_KEY".into(),
+                api_compat: "openai".into(),
+                is_local: false,
+                models: vec![
+                    ModelInfo { id: "deepseek-ai/DeepSeek-V3".into(), name: "DeepSeek V3".into() },
+                    ModelInfo { id: "deepseek-ai/DeepSeek-R1".into(), name: "DeepSeek R1".into() },
+                    ModelInfo { id: "Qwen/Qwen2.5-72B-Instruct".into(), name: "Qwen2.5 72B".into() },
+                ],
+                description: Some("Chinese cloud inference platform".into()),
+            },
+        },
+    ]
+}
+
+impl ProvidersState {
+    /// Load provider plugins from the plugins directory and register them
+    /// as custom providers (if not already registered in DB).
+    pub fn load_plugins(&mut self, working_dir: &Path) {
+        let plugins = scan_plugin_files(working_dir);
+        let mut changed = false;
+        for plugin in plugins {
+            if !self.custom_providers.contains_key(&plugin.id) {
+                // Check if it conflicts with a built-in provider
+                let builtins = builtin_providers();
+                if builtins.iter().any(|b| b.id == plugin.id) {
+                    log::warn!(
+                        "Plugin '{}' conflicts with built-in provider, skipping",
+                        plugin.id
+                    );
+                    continue;
+                }
+                log::info!("Registering plugin provider: {}", plugin.id);
+                self.custom_providers
+                    .insert(plugin.id.clone(), plugin_to_custom_data(&plugin));
+                changed = true;
+            }
+        }
+        if changed {
+            if let Err(e) = self.save() {
+                log::error!("Failed to save after loading plugins: {}", e);
+            }
+        }
+    }
+
+    /// Import a plugin from its JSON definition: save the file and register.
+    pub fn import_plugin(
+        &mut self,
+        working_dir: &Path,
+        plugin: ProviderPlugin,
+    ) -> Result<ProviderInfo, String> {
+        // Save as JSON file
+        save_plugin_file(working_dir, &plugin)?;
+
+        // Register in memory
+        let data = plugin_to_custom_data(&plugin);
+        let id = plugin.id.clone();
+        self.custom_providers.insert(id.clone(), data);
+        self.save()?;
+
+        self.get_all_providers()
+            .into_iter()
+            .find(|p| p.id == id)
+            .ok_or_else(|| "Failed to register plugin provider".into())
+    }
+
+    /// Remove a plugin provider: delete from DB and file system.
+    pub fn remove_plugin(
+        &mut self,
+        working_dir: &Path,
+        plugin_id: &str,
+    ) -> Result<(), String> {
+        self.custom_providers.remove(plugin_id);
+        delete_plugin_file(working_dir, plugin_id)?;
+        Ok(())
+    }
+}
+
+// ── Plugin Directory Watcher ────────────────────────────────────────
+
+/// Watches the `plugins/providers/` directory for changes and reloads plugins.
+pub struct PluginWatcher {
+    working_dir: PathBuf,
+    providers: Arc<tokio::sync::RwLock<ProvidersState>>,
+    last_scan: Arc<tokio::sync::RwLock<Option<std::time::SystemTime>>>,
+}
+
+impl PluginWatcher {
+    pub fn new(
+        working_dir: PathBuf,
+        providers: Arc<tokio::sync::RwLock<ProvidersState>>,
+    ) -> Self {
+        Self {
+            working_dir,
+            providers,
+            last_scan: Arc::new(tokio::sync::RwLock::new(None)),
+        }
+    }
+
+    /// Start polling for plugin directory changes (runs forever).
+    pub async fn watch(&self) {
+        let dir = plugins_dir(&self.working_dir);
+
+        // Ensure directory exists
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            log::warn!("Failed to create plugins/providers dir: {}", e);
+        }
+
+        // Get initial modification time
+        if let Ok(meta) = tokio::fs::metadata(&dir).await {
+            if let Ok(modified) = meta.modified() {
+                *self.last_scan.write().await = Some(modified);
+            }
+        }
+
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        loop {
+            interval.tick().await;
+
+            // Check if directory modification time changed
+            let current_modified = match tokio::fs::metadata(&dir).await {
+                Ok(meta) => meta.modified().ok(),
+                Err(_) => continue,
+            };
+
+            // Also check individual file mtimes for more accurate detection
+            let max_file_mtime = self.max_file_mtime(&dir).await;
+            let effective_mtime = match (current_modified, max_file_mtime) {
+                (Some(a), Some(b)) => Some(std::cmp::max(a, b)),
+                (a, b) => a.or(b),
+            };
+
+            let last = *self.last_scan.read().await;
+            if effective_mtime != last && effective_mtime.is_some() {
+                *self.last_scan.write().await = effective_mtime;
+
+                // Reload plugins
+                let plugins = scan_plugin_files(&self.working_dir);
+                let mut providers = self.providers.write().await;
+
+                // Track which plugin IDs exist on disk
+                let plugin_ids: std::collections::HashSet<String> =
+                    plugins.iter().map(|p| p.id.clone()).collect();
+
+                // Add new plugins
+                let mut changed = false;
+                for plugin in &plugins {
+                    if !providers.custom_providers.contains_key(&plugin.id) {
+                        let builtins = builtin_providers();
+                        if builtins.iter().any(|b| b.id == plugin.id) {
+                            continue;
+                        }
+                        providers
+                            .custom_providers
+                            .insert(plugin.id.clone(), plugin_to_custom_data(plugin));
+                        changed = true;
+                        log::info!("Hot-loaded provider plugin: {}", plugin.id);
+                    }
+                }
+
+                // Remove plugins whose files were deleted
+                // (only remove those that were originally loaded from plugin files)
+                let dir_path = plugins_dir(&self.working_dir);
+                let to_remove: Vec<String> = providers
+                    .custom_providers
+                    .keys()
+                    .filter(|id| {
+                        // Only auto-remove if the plugin file previously existed
+                        let file = dir_path.join(format!("{}.json", id));
+                        !plugin_ids.contains(*id) && !file.exists()
+                            // Don't remove user-created custom providers (those without plugin files)
+                            && providers.custom_providers.get(*id).map_or(false, |_| {
+                                // Check if there was ever a plugin file for this
+                                false
+                            })
+                    })
+                    .cloned()
+                    .collect();
+
+                for id in to_remove {
+                    providers.custom_providers.remove(&id);
+                    changed = true;
+                    log::info!("Removed provider plugin (file deleted): {}", id);
+                }
+
+                if changed {
+                    if let Err(e) = providers.save() {
+                        log::error!("Failed to save after plugin reload: {}", e);
+                    }
+                }
+            }
+        }
+    }
+
+    async fn max_file_mtime(&self, dir: &Path) -> Option<std::time::SystemTime> {
+        let mut max = None;
+        if let Ok(mut entries) = tokio::fs::read_dir(dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if path.extension().map_or(false, |e| e == "json") {
+                    if let Ok(meta) = tokio::fs::metadata(&path).await {
+                        if let Ok(mtime) = meta.modified() {
+                            max = Some(max.map_or(mtime, |m: std::time::SystemTime| m.max(mtime)));
+                        }
+                    }
+                }
+            }
+        }
+        max
+    }
 }

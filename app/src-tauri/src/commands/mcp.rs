@@ -105,6 +105,8 @@ pub async fn create_mcp_client(
         args: client.args,
         env: client.env,
         cwd: client.cwd,
+        skill_override: None,
+        priority: 0,
     };
 
     config.mcp.insert(client_key.clone(), mcp_config.clone());
@@ -142,6 +144,8 @@ pub async fn update_mcp_client(
         args: client.args,
         env: client.env,
         cwd: client.cwd,
+        skill_override: None,
+        priority: 0,
     };
 
     config.mcp.insert(key.clone(), mcp_config.clone());

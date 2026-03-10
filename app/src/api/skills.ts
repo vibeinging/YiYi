@@ -147,6 +147,96 @@ export async function reloadSkills(): Promise<{ status: string; message?: string
   return await invoke('reload_skills');
 }
 
+// ============================================================================
+// Skills Hub (ClawHub / OpenClaw)
+// ============================================================================
+
+export interface HubSkill {
+  slug: string;
+  name: string;
+  description: string;
+  version?: string;
+  source_url?: string;
+  author?: string;
+  tags?: string[];
+  security_verdict?: string;
+}
+
+export interface HubConfig {
+  base_url: string;
+  search_path: string;
+  detail_path: string;
+  file_path: string;
+  download_path: string;
+  list_path: string;
+}
+
+export interface HubInstallResult {
+  name: string;
+  enabled: boolean;
+  source_url: string;
+}
+
+/**
+ * Search skills from hub (supports ClawHub vector search)
+ */
+export async function hubSearchSkills(
+  query: string,
+  limit?: number,
+  hubUrl?: string,
+): Promise<HubSkill[]> {
+  return await invoke<HubSkill[]>('hub_search_skills', {
+    query,
+    limit: limit ?? 20,
+    hubUrl,
+  });
+}
+
+/**
+ * List/browse skills from hub with sorting and pagination
+ */
+export async function hubListSkills(
+  limit?: number,
+  cursor?: string,
+  sort?: string,
+  hubUrl?: string,
+): Promise<{ items: HubSkill[]; nextCursor: string | null }> {
+  return await invoke('hub_list_skills', {
+    limit: limit ?? 20,
+    cursor,
+    sort,
+    hubUrl,
+  });
+}
+
+/**
+ * Install a skill from hub URL (ClawHub, skills.sh, GitHub)
+ */
+export async function hubInstallSkill(
+  url: string,
+  options?: {
+    version?: string;
+    enable?: boolean;
+    overwrite?: boolean;
+    hubUrl?: string;
+  },
+): Promise<HubInstallResult> {
+  return await invoke('hub_install_skill', {
+    url,
+    version: options?.version,
+    enable: options?.enable ?? true,
+    overwrite: options?.overwrite ?? false,
+    hubUrl: options?.hubUrl,
+  });
+}
+
+/**
+ * Get hub configuration
+ */
+export async function getHubConfig(): Promise<HubConfig> {
+  return await invoke('get_hub_config');
+}
+
 /**
  * AI 生成技能 - 流式返回
  */

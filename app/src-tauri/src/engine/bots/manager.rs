@@ -379,6 +379,16 @@ impl BotManager {
         }
     }
 
+    /// Get the number of connected (registered) bots.
+    pub async fn connected_count(&self) -> usize {
+        self.response_handlers.read().await.len()
+    }
+
+    /// Check if the bot manager consumer loop is running.
+    pub async fn is_running(&self) -> bool {
+        *self.running.read().await
+    }
+
     pub async fn stop(&self) {
         let mut running = self.running.write().await;
         *running = false;
@@ -505,7 +515,7 @@ async fn process_message(
     // Build system prompt, optionally with bot persona.
     // Override the "Bots & External Messaging" section — when processing an incoming
     // bot message the agent IS the bot and should reply directly without tools.
-    let mut system_prompt = react_agent::build_system_prompt(&state.working_dir, &skills, lang.as_deref()).await;
+    let mut system_prompt = react_agent::build_system_prompt(&state.working_dir, &skills, lang.as_deref(), None, None).await;
 
     // Remove the bot-tools guidance that confuses the agent in this context
     if let Some(idx) = system_prompt.find("## Bots & External Messaging") {
@@ -537,7 +547,8 @@ async fn process_message(
 
     // Collect MCP tools
     let mcp_tools = state.mcp_runtime.get_all_tools().await;
-    let extra_tools = mcp_tools_as_definitions(&mcp_tools);
+    let empty_overrides = std::collections::HashMap::new();
+    let extra_tools = mcp_tools_as_definitions(&mcp_tools, &empty_overrides);
 
     // Just pass the user's message content directly.
     // The system prompt already contains all the context the agent needs.

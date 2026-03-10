@@ -42,7 +42,8 @@
     "resources": {
       "src-python/": "src-python/",
       "wheels/": "wheels/",
-      "python-stdlib/": "python-stdlib/"
+      "python-stdlib/": "python-stdlib/",
+      "skills/": "skills/"
     }
   }
 }

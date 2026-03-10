@@ -1,10 +1,16 @@
 //! Skills Hub client - search and install skills from multiple marketplaces.
 //!
 //! Supported sources:
-//! - ClawHub (default: https://clawhub.ai)
+//! - ClawHub (default: https://clawhub.ai) — OpenClaw skill registry
 //! - skills.sh (GitHub wrapper)
 //! - GitHub repositories (any repo with SKILL.md)
 //! - Custom hub instances
+//!
+//! ## OpenClaw / ClawHub compatibility
+//!
+//! ClawHub skills use `metadata.openclaw` (aliases: `metadata.clawdbot`, `metadata.clawdis`)
+//! in their SKILL.md frontmatter. YiClaw uses `metadata.yiclaw`. This module handles
+//! transparent conversion between the two formats during install.
 
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -22,6 +28,10 @@ pub struct HubConfig {
     pub detail_path: String,
     /// Skill file endpoint path (default: /api/v1/skills/{slug}/file)
     pub file_path: String,
+    /// Download endpoint path (default: /api/v1/download)
+    pub download_path: String,
+    /// Skills listing endpoint path (default: /api/v1/skills)
+    pub list_path: String,
 }
 
 impl Default for HubConfig {
@@ -31,6 +41,8 @@ impl Default for HubConfig {
             search_path: "/api/v1/search".into(),
             detail_path: "/api/v1/skills/{slug}".into(),
             file_path: "/api/v1/skills/{slug}/file".into(),
+            download_path: "/api/v1/download".into(),
+            list_path: "/api/v1/skills".into(),
         }
     }
 }
@@ -45,6 +57,9 @@ pub struct HubSkill {
     pub source_url: Option<String>,
     pub author: Option<String>,
     pub tags: Option<Vec<String>>,
+    /// Security verdict from ClawHub moderation (clean/suspicious/malicious)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub security_verdict: Option<String>,
 }
 
 /// Install result
@@ -71,7 +86,12 @@ fn make_client() -> Client {
         .unwrap_or_default()
 }
 
-/// Search skills from hub
+/// Search skills from hub (supports ClawHub v1 API and generic formats)
+///
+/// ClawHub v1 search endpoint returns:
+/// ```json
+/// { "results": [{ "slug": "...", "displayName": "...", "summary": "...", "version": "...", "score": 0.9 }] }
+/// ```
 pub async fn search_hub_skills(
     query: &str,
     limit: usize,
@@ -110,27 +130,118 @@ pub async fn search_hub_skills(
             if slug.is_empty() {
                 return None;
             }
+            // ClawHub v1 uses "displayName" and "summary"
             Some(HubSkill {
-                name: item["name"]
+                name: item["displayName"]
                     .as_str()
-                    .or_else(|| item["displayName"].as_str())
+                    .or_else(|| item["name"].as_str())
                     .unwrap_or(&slug)
                     .to_string(),
-                slug,
-                description: item["description"]
+                slug: slug.clone(),
+                description: item["summary"]
                     .as_str()
-                    .or_else(|| item["summary"].as_str())
+                    .or_else(|| item["description"].as_str())
                     .unwrap_or("")
                     .to_string(),
-                version: item["version"].as_str().map(String::from),
-                source_url: item["url"].as_str().map(String::from),
-                author: item["author"].as_str().map(String::from),
+                version: item["version"]
+                    .as_str()
+                    .map(String::from),
+                source_url: item["url"]
+                    .as_str()
+                    .map(String::from)
+                    .or_else(|| {
+                        Some(format!(
+                            "{}/skills/{}",
+                            config.base_url.trim_end_matches('/'),
+                            slug
+                        ))
+                    }),
+                author: item["author"]
+                    .as_str()
+                    .or_else(|| item["owner"].as_str())
+                    .map(String::from),
                 tags: item["tags"].as_array().map(|arr| {
                     arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
                 }),
+                security_verdict: None,
             })
         })
         .collect())
+}
+
+/// List skills from hub with sorting/pagination (ClawHub v1 /api/v1/skills)
+///
+/// Returns `{ items: [...], nextCursor }`. Supports sort by:
+/// `updated`, `downloads`, `stars`, `trending`
+pub async fn list_hub_skills(
+    limit: usize,
+    cursor: Option<&str>,
+    sort: Option<&str>,
+    config: &HubConfig,
+) -> Result<(Vec<HubSkill>, Option<String>), String> {
+    let client = make_client();
+    let url = format!("{}{}", config.base_url.trim_end_matches('/'), config.list_path);
+
+    let mut query_params: Vec<(&str, String)> = vec![("limit", limit.to_string())];
+    if let Some(c) = cursor {
+        query_params.push(("cursor", c.to_string()));
+    }
+    if let Some(s) = sort {
+        query_params.push(("sort", s.to_string()));
+    }
+
+    let resp = client
+        .get(&url)
+        .query(&query_params)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("Hub list request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Hub list failed: HTTP {}", resp.status()));
+    }
+
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse hub response: {}", e))?;
+
+    let next_cursor = data["nextCursor"].as_str().map(String::from);
+    let items = data["items"].as_array().cloned().unwrap_or_default();
+
+    let skills: Vec<HubSkill> = items
+        .into_iter()
+        .filter_map(|item| {
+            let slug = item["slug"].as_str()?.to_string();
+            Some(HubSkill {
+                name: item["displayName"]
+                    .as_str()
+                    .unwrap_or(&slug)
+                    .to_string(),
+                slug: slug.clone(),
+                description: item["summary"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string(),
+                version: item["latestVersion"]["version"]
+                    .as_str()
+                    .map(String::from),
+                source_url: Some(format!(
+                    "{}/skills/{}",
+                    config.base_url.trim_end_matches('/'),
+                    slug
+                )),
+                author: None,
+                tags: item["tags"].as_array().map(|arr| {
+                    arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+                }),
+                security_verdict: None,
+            })
+        })
+        .collect();
+
+    Ok((skills, next_cursor))
 }
 
 fn normalize_search_items(data: &serde_json::Value) -> Vec<serde_json::Value> {
@@ -138,7 +249,7 @@ fn normalize_search_items(data: &serde_json::Value) -> Vec<serde_json::Value> {
         return arr.clone();
     }
     if let Some(obj) = data.as_object() {
-        for key in ["items", "skills", "results", "data"] {
+        for key in ["results", "items", "skills", "data"] {
             if let Some(arr) = obj.get(key).and_then(|v| v.as_array()) {
                 return arr.clone();
             }
@@ -407,7 +518,12 @@ async fn fetch_github_directory_inner(
     Ok(files)
 }
 
-/// Fetch skill from ClawHub
+/// Fetch skill from ClawHub using the v1 API.
+///
+/// Flow:
+/// 1. `GET /api/v1/skills/{slug}` to get skill detail + latest version info
+/// 2. `GET /api/v1/skills/{slug}/file?path=SKILL.md&version=...` to get file contents
+/// 3. Convert OpenClaw metadata format to YiClaw format in SKILL.md
 async fn fetch_from_clawhub(
     slug: &str,
     version: Option<&str>,
@@ -418,14 +534,14 @@ async fn fetch_from_clawhub(
     }
 
     let client = make_client();
-    let url = format!(
+    let detail_url = format!(
         "{}{}",
         config.base_url.trim_end_matches('/'),
         config.detail_path.replace("{slug}", slug)
     );
 
     let resp = client
-        .get(&url)
+        .get(&detail_url)
         .header("Accept", "application/json")
         .send()
         .await
@@ -440,20 +556,46 @@ async fn fetch_from_clawhub(
         .await
         .map_err(|e| format!("Failed to parse ClawHub response: {}", e))?;
 
-    // Extract skill info
+    // ClawHub v1 response: { skill: { slug, displayName, summary, ... }, latestVersion: { version, ... }, owner: { ... } }
     let skill = data.get("skill").unwrap_or(&data);
-    let name = skill["displayName"]
+    let name = skill["slug"]
         .as_str()
-        .or_else(|| skill["name"].as_str())
         .unwrap_or(slug)
         .to_string();
 
-    // Fetch files
+    let resolved_version = version
+        .map(String::from)
+        .or_else(|| data["latestVersion"]["version"].as_str().map(String::from));
+
+    // Fetch files via file endpoint or version endpoint
     let mut files = HashMap::new();
 
-    // Get file list from version data
-    let version_data = data.get("version").unwrap_or(&data);
-    let files_meta = version_data.get("files").and_then(|f| f.as_array());
+    // Try to get file list from version data
+    let version_data = if let Some(v) = &resolved_version {
+        // Fetch specific version to get file list
+        let version_url = format!(
+            "{}/api/v1/skills/{}/versions/{}",
+            config.base_url.trim_end_matches('/'),
+            slug,
+            v
+        );
+        match client
+            .get(&version_url)
+            .header("Accept", "application/json")
+            .send()
+            .await
+        {
+            Ok(r) if r.status().is_success() => r.json::<serde_json::Value>().await.ok(),
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    let files_meta = version_data
+        .as_ref()
+        .and_then(|vd| vd["version"]["files"].as_array())
+        .or_else(|| data.get("latestVersion").and_then(|lv| lv["files"].as_array()));
 
     if let Some(files_meta) = files_meta {
         let file_url = format!(
@@ -463,9 +605,13 @@ async fn fetch_from_clawhub(
         );
 
         for file_item in files_meta {
-            if let Some(path) = file_item["path"].as_str() {
+            // files_meta items can be strings or objects with "path"
+            let path = file_item
+                .as_str()
+                .or_else(|| file_item["path"].as_str());
+            if let Some(path) = path {
                 let mut query = vec![("path", path.to_string())];
-                if let Some(v) = version {
+                if let Some(v) = &resolved_version {
                     query.push(("version", v.to_string()));
                 }
 
@@ -486,7 +632,34 @@ async fn fetch_from_clawhub(
         }
     }
 
-    // If no SKILL.md, try to construct from content field
+    // If we still don't have files, try the download endpoint
+    if files.is_empty() || !files.contains_key("SKILL.md") {
+        let file_url = format!(
+            "{}{}",
+            config.base_url.trim_end_matches('/'),
+            config.file_path.replace("{slug}", slug)
+        );
+        let mut query = vec![("path", "SKILL.md".to_string())];
+        if let Some(v) = &resolved_version {
+            query.push(("version", v.to_string()));
+        }
+
+        if let Ok(resp) = client
+            .get(&file_url)
+            .query(&query)
+            .header("Accept", "text/plain, text/markdown")
+            .send()
+            .await
+        {
+            if resp.status().is_success() {
+                if let Ok(content) = resp.text().await {
+                    files.insert("SKILL.md".into(), content);
+                }
+            }
+        }
+    }
+
+    // Fallback: try content field from detail response
     if !files.contains_key("SKILL.md") {
         if let Some(content) = skill["content"].as_str().or_else(|| data["content"].as_str()) {
             files.insert("SKILL.md".into(), content.to_string());
@@ -497,7 +670,13 @@ async fn fetch_from_clawhub(
         return Err("No skill files found from ClawHub".into());
     }
 
-    Ok((SkillBundle { name, files }, url))
+    // Convert OpenClaw metadata format to YiClaw format in SKILL.md
+    if let Some(skill_md) = files.get_mut("SKILL.md") {
+        *skill_md = convert_openclaw_to_yiclaw(skill_md);
+    }
+
+    let source_url = format!("{}/skills/{}", config.base_url.trim_end_matches('/'), slug);
+    Ok((SkillBundle { name, files }, source_url))
 }
 
 /// Fetch bundle from direct URL
@@ -588,7 +767,10 @@ fn extract_clawhub_slug(url: &str) -> String {
     }
 }
 
-/// Create skill from bundle
+/// Create skill from bundle.
+///
+/// Supports both YiClaw and OpenClaw/ClawHub bundle file layouts.
+/// ClawHub bundles may have flat file paths (e.g., "utils.py") alongside "SKILL.md".
 fn create_skill_from_bundle(
     bundle: &SkillBundle,
     overwrite: bool,
@@ -610,15 +792,17 @@ fn create_skill_from_bundle(
 
     // Write files
     for (path, content) in &bundle.files {
-        let file_path = if path == "SKILL.md" {
+        let file_path = if path == "SKILL.md" || path == "skill.md" {
+            // Normalize to SKILL.md
             skill_dir.join("SKILL.md")
-        } else if path.starts_with("references/") {
+        } else if path.starts_with("references/") || path.starts_with("scripts/") {
             skill_dir.join(path)
-        } else if path.starts_with("scripts/") {
-            skill_dir.join(path)
-        } else {
-            // Unknown path, skip
+        } else if path.starts_with('.') {
+            // Skip hidden files (.clawhubignore, .clawhub/, .gitignore)
             continue;
+        } else {
+            // ClawHub bundles may have flat supporting files — place them in references/
+            skill_dir.join("references").join(path)
         };
 
         if let Some(parent) = file_path.parent() {
@@ -680,6 +864,198 @@ fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+// ============================================================================
+// OpenClaw / ClawHub format conversion
+// ============================================================================
+
+/// Convert OpenClaw SKILL.md metadata format to YiClaw format.
+///
+/// OpenClaw uses `metadata.openclaw` (or `metadata.clawdbot`, `metadata.clawdis`):
+/// ```yaml
+/// metadata:
+///   openclaw:
+///     requires:
+///       env: [API_KEY]
+///       bins: [curl]
+///     primaryEnv: API_KEY
+///     emoji: "..."
+///     homepage: "..."
+/// ```
+///
+/// YiClaw uses `metadata.yiclaw`:
+/// ```yaml
+/// metadata:
+///   yiclaw:
+///     emoji: "..."
+///     requires: {}
+/// ```
+///
+/// This function preserves the original content and adds a `metadata.yiclaw` block
+/// if the SKILL.md uses OpenClaw format. If both formats exist, it does nothing.
+pub fn convert_openclaw_to_yiclaw(content: &str) -> String {
+    // Check if content has frontmatter
+    if !content.starts_with("---") {
+        return content.to_string();
+    }
+
+    let end_idx = match content[3..].find("---") {
+        Some(idx) => idx + 3,
+        None => return content.to_string(),
+    };
+
+    let frontmatter = &content[3..end_idx];
+    let body = &content[end_idx + 3..];
+
+    // Already has yiclaw metadata — no conversion needed
+    if frontmatter.contains("\"yiclaw\"") || frontmatter.contains("yiclaw:") {
+        return content.to_string();
+    }
+
+    // Check for OpenClaw metadata keys
+    let has_openclaw = frontmatter.contains("\"openclaw\"")
+        || frontmatter.contains("openclaw:")
+        || frontmatter.contains("\"clawdbot\"")
+        || frontmatter.contains("clawdbot:")
+        || frontmatter.contains("\"clawdis\"")
+        || frontmatter.contains("clawdis:");
+
+    if !has_openclaw {
+        return content.to_string();
+    }
+
+    // Extract emoji from OpenClaw metadata
+    let emoji = extract_metadata_field(frontmatter, "emoji");
+    let _homepage = extract_metadata_field(frontmatter, "homepage");
+
+    // Extract requires.env and requires.bins for mapping
+    let requires_env = extract_metadata_array(frontmatter, "env");
+    let requires_bins = extract_metadata_array(frontmatter, "bins");
+
+    // Build YiClaw requires object
+    let mut requires_parts = Vec::new();
+    if !requires_env.is_empty() {
+        let envs: Vec<String> = requires_env.iter().map(|e| format!("\"{}\"", e)).collect();
+        requires_parts.push(format!("\"env\": [{}]", envs.join(", ")));
+    }
+    if !requires_bins.is_empty() {
+        let bins: Vec<String> = requires_bins.iter().map(|b| format!("\"{}\"", b)).collect();
+        requires_parts.push(format!("\"bins\": [{}]", bins.join(", ")));
+    }
+
+    let requires_str = if requires_parts.is_empty() {
+        "{}".to_string()
+    } else {
+        format!("{{{}}}", requires_parts.join(", "))
+    };
+
+    // Build the yiclaw metadata line
+    let emoji_str = emoji.as_deref().unwrap_or("");
+    let yiclaw_metadata = format!(
+        "\"yiclaw\":\n      {{\n        \"emoji\": \"{}\",\n        \"requires\": {}\n      }}",
+        emoji_str, requires_str
+    );
+
+    // Insert yiclaw metadata alongside openclaw metadata in the frontmatter
+    // Strategy: find the metadata block and add yiclaw after the existing openclaw block
+    let new_frontmatter = if frontmatter.contains("metadata:") {
+        // Find the metadata section and append yiclaw block
+        let metadata_line_end = frontmatter.find("metadata:").unwrap() + "metadata:".len();
+        let before_metadata = &frontmatter[..metadata_line_end];
+        let after_metadata = &frontmatter[metadata_line_end..];
+
+        // Find the closing of the metadata block (look for the openclaw/clawdbot/clawdis block end)
+        // Simple approach: add yiclaw at the same indentation level as openclaw
+        format!(
+            "{}\n    {}\n{}",
+            before_metadata.trim_end(),
+            yiclaw_metadata,
+            after_metadata.trim_start_matches(|c: char| c == '\n' || c == '\r'),
+        )
+    } else {
+        // No metadata section, add one
+        format!(
+            "{}\nmetadata:\n  {{\n    {}\n  }}",
+            frontmatter.trim_end(),
+            yiclaw_metadata
+        )
+    };
+
+    format!("---\n{}---{}", new_frontmatter, body)
+}
+
+/// Extract a simple string field value from metadata block
+fn extract_metadata_field(frontmatter: &str, field: &str) -> Option<String> {
+    // Match patterns like: "emoji": "value" or emoji: "value" or emoji: value
+    let pattern1 = format!("\"{}\":", field);
+    let pattern2 = format!("{}:", field);
+
+    let line = frontmatter
+        .lines()
+        .find(|l| l.contains(&pattern1) || l.trim().starts_with(&pattern2))?;
+
+    let after_colon = line.split(':').skip(1).collect::<Vec<_>>().join(":");
+    let value = after_colon.trim().trim_matches('"').trim_matches('\'');
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+/// Extract an array field from the requires block in metadata
+fn extract_metadata_array(frontmatter: &str, field: &str) -> Vec<String> {
+    let mut results = Vec::new();
+
+    // Look for inline array: field: [val1, val2] or "field": ["val1", "val2"]
+    for line in frontmatter.lines() {
+        let trimmed = line.trim();
+        if (trimmed.starts_with(&format!("{}:", field))
+            || trimmed.starts_with(&format!("- {}", field))
+            || trimmed.starts_with(&format!("\"{}\":", field)))
+            && trimmed.contains('[')
+        {
+            if let Some(arr_start) = trimmed.find('[') {
+                if let Some(arr_end) = trimmed.find(']') {
+                    let arr_content = &trimmed[arr_start + 1..arr_end];
+                    for item in arr_content.split(',') {
+                        let val = item.trim().trim_matches('"').trim_matches('\'').trim();
+                        if !val.is_empty() {
+                            results.push(val.to_string());
+                        }
+                    }
+                    return results;
+                }
+            }
+        }
+    }
+
+    // Look for YAML list format:
+    // env:
+    //   - VAR1
+    //   - VAR2
+    let field_patterns = [format!("{}:", field), format!("\"{}\":", field)];
+    let mut capturing = false;
+    for line in frontmatter.lines() {
+        let trimmed = line.trim();
+        if field_patterns.iter().any(|p| trimmed.starts_with(p)) {
+            capturing = true;
+            continue;
+        }
+        if capturing {
+            if trimmed.starts_with("- ") {
+                let val = trimmed[2..].trim().trim_matches('"').trim_matches('\'');
+                if !val.is_empty() {
+                    results.push(val.to_string());
+                }
+            } else if !trimmed.is_empty() {
+                break;
+            }
+        }
+    }
+
+    results
+}
+
 /// Get default hub config from environment
 pub fn get_default_hub_config() -> HubConfig {
     HubConfig {
@@ -691,5 +1067,9 @@ pub fn get_default_hub_config() -> HubConfig {
             .unwrap_or_else(|_| "/api/v1/skills/{slug}".into()),
         file_path: std::env::var("YICLAW_SKILLS_HUB_FILE_PATH")
             .unwrap_or_else(|_| "/api/v1/skills/{slug}/file".into()),
+        download_path: std::env::var("YICLAW_SKILLS_HUB_DOWNLOAD_PATH")
+            .unwrap_or_else(|_| "/api/v1/download".into()),
+        list_path: std::env::var("YICLAW_SKILLS_HUB_LIST_PATH")
+            .unwrap_or_else(|_| "/api/v1/skills".into()),
     }
 }

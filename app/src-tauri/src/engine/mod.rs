@@ -4,6 +4,7 @@ pub mod config_watcher;
 pub mod doc_tools;
 pub mod llm_client;
 pub mod mcp_runtime;
+pub mod mcp_server;
 pub mod python_bridge;
 pub mod react_agent;
 pub mod scheduler;

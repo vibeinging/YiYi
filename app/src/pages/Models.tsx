@@ -17,6 +17,10 @@ import {
   Trash2,
   ExternalLink,
   Sparkles,
+  Download,
+  Upload,
+  Package,
+  Server,
 } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-shell';
 import {
@@ -29,8 +33,13 @@ import {
   removeModel,
   getActiveLlm,
   setActiveLlm as setActiveLlmApi,
+  listProviderTemplates,
+  importProviderFromTemplate,
+  importProviderPlugin,
   type ProviderDisplay,
   type ModelInfo,
+  type ProviderTemplate,
+  type ProviderPlugin,
 } from '../api/models';
 import { PageHeader } from '../components/PageHeader';
 import { toast, confirm } from '../components/Toast';
@@ -191,6 +200,15 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
     newModelId: '', newModelName: '',
   });
 
+  // Template import dialog
+  const [showTemplateDialog, setShowTemplateDialog] = useState(false);
+  const [templates, setTemplates] = useState<ProviderTemplate[]>([]);
+  const [importingTemplate, setImportingTemplate] = useState<string | null>(null);
+
+  // JSON import dialog
+  const [showJsonImportDialog, setShowJsonImportDialog] = useState(false);
+  const [jsonImportText, setJsonImportText] = useState('');
+
   const loadData = async () => {
     try {
       const [providersData, activeData] = await Promise.all([listProviders(), getActiveLlm()]);
@@ -270,6 +288,43 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
     try { await deleteCustomProvider(providerId); await loadData(); } catch (error) { console.error(error); }
   };
 
+  const handleOpenTemplates = async () => {
+    try {
+      const tpls = await listProviderTemplates();
+      setTemplates(tpls);
+      setShowTemplateDialog(true);
+    } catch (error) { console.error(error); }
+  };
+
+  const handleImportTemplate = async (templateId: string) => {
+    setImportingTemplate(templateId);
+    try {
+      await importProviderFromTemplate(templateId);
+      await loadData();
+      toast.success(t('models.importSuccess'));
+      setShowTemplateDialog(false);
+    } catch (error: any) {
+      toast.error(`${t('models.importError')}: ${error?.toString() || ''}`);
+    } finally { setImportingTemplate(null); }
+  };
+
+  const handleJsonImport = async () => {
+    try {
+      const plugin = JSON.parse(jsonImportText) as ProviderPlugin;
+      if (!plugin.id || !plugin.name) {
+        toast.error('JSON must contain "id" and "name" fields');
+        return;
+      }
+      await importProviderPlugin(plugin);
+      await loadData();
+      toast.success(t('models.importSuccess'));
+      setShowJsonImportDialog(false);
+      setJsonImportText('');
+    } catch (error: any) {
+      toast.error(`${t('models.importError')}: ${error?.toString() || ''}`);
+    }
+  };
+
   if (loading) {
     return (
       <div className="h-full flex items-center justify-center">
@@ -309,14 +364,32 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
         <div className="mb-6">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-[15px] font-bold" style={{ color: 'var(--color-text)' }}>{t('models.quickSetup')}</h2>
-            <button
-              onClick={() => setShowCustomDialog(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
-              style={{ background: 'var(--color-primary)', color: '#FFFFFF' }}
-            >
-              <Plus size={14} />
-              {t('models.addProvider')}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleOpenTemplates}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
+                style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-secondary)' }}
+              >
+                <Package size={14} />
+                {t('models.fromTemplate')}
+              </button>
+              <button
+                onClick={() => setShowJsonImportDialog(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
+                style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-secondary)' }}
+              >
+                <Upload size={14} />
+                {t('models.fromJson')}
+              </button>
+              <button
+                onClick={() => setShowCustomDialog(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
+                style={{ background: 'var(--color-primary)', color: '#FFFFFF' }}
+              >
+                <Plus size={14} />
+                {t('models.addProvider')}
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
@@ -822,6 +895,114 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
                 className="px-4 py-2 rounded-lg text-[13px] font-medium disabled:opacity-50"
                 style={{ background: 'var(--color-primary)', color: '#FFFFFF' }}>
                 {t('models.save')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Template import dialog */}
+      {showTemplateDialog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 animate-fade-in">
+          <div className="rounded-2xl p-6 w-full max-w-lg animate-scale-in" style={{ background: 'var(--color-bg-elevated)' }}>
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="font-bold text-[16px]" style={{ fontFamily: 'var(--font-display)' }}>{t('models.templates')}</h2>
+              <button onClick={() => setShowTemplateDialog(false)}
+                className="w-8 h-8 flex items-center justify-center rounded-lg transition-colors"
+                style={{ color: 'var(--color-text-tertiary)' }}>
+                <X size={16} />
+              </button>
+            </div>
+            <p className="text-[12px] mb-4" style={{ color: 'var(--color-text-secondary)' }}>{t('models.templateDesc')}</p>
+            <div className="space-y-2 max-h-[400px] overflow-y-auto">
+              {templates.map((tpl) => {
+                const alreadyAdded = providers.some(p => p.id === tpl.id);
+                return (
+                  <div key={tpl.id}
+                    className="flex items-center justify-between p-3.5 rounded-xl transition-all"
+                    style={{ background: 'var(--color-bg-subtle)' }}>
+                    <div className="min-w-0 flex-1 mr-3">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-[13px] font-semibold" style={{ color: 'var(--color-text)' }}>{tpl.name}</span>
+                        {tpl.plugin.is_local && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-md font-medium"
+                            style={{ background: 'var(--color-success-subtle, rgba(52,199,89,0.1))', color: 'var(--color-success, #34C759)' }}>
+                            {t('models.localProvider')}
+                          </span>
+                        )}
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-md font-medium"
+                          style={{ background: 'var(--color-primary-subtle)', color: 'var(--color-primary)' }}>
+                          {tpl.plugin.api_compat}
+                        </span>
+                      </div>
+                      <p className="text-[11px] truncate" style={{ color: 'var(--color-text-tertiary)' }}>
+                        {tpl.description}
+                      </p>
+                      <p className="text-[10px] mt-0.5 font-mono" style={{ color: 'var(--color-text-muted)' }}>
+                        {tpl.plugin.default_base_url}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => handleImportTemplate(tpl.id)}
+                      disabled={alreadyAdded || importingTemplate === tpl.id}
+                      className="px-3 py-1.5 rounded-lg text-[12px] font-medium disabled:opacity-50 flex-shrink-0 flex items-center gap-1.5"
+                      style={{ background: alreadyAdded ? 'var(--color-bg-subtle)' : 'var(--color-primary)', color: alreadyAdded ? 'var(--color-text-muted)' : '#FFFFFF' }}>
+                      {importingTemplate === tpl.id ? (
+                        <Loader2 size={13} className="animate-spin" />
+                      ) : alreadyAdded ? (
+                        <><Check size={13} /> {t('models.configured')}</>
+                      ) : (
+                        <><Download size={13} /> {t('models.importProvider')}</>
+                      )}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* JSON import dialog */}
+      {showJsonImportDialog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 animate-fade-in">
+          <div className="rounded-2xl p-6 w-full max-w-lg animate-scale-in" style={{ background: 'var(--color-bg-elevated)' }}>
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="font-bold text-[16px]" style={{ fontFamily: 'var(--font-display)' }}>{t('models.fromJson')}</h2>
+              <button onClick={() => { setShowJsonImportDialog(false); setJsonImportText(''); }}
+                className="w-8 h-8 flex items-center justify-center rounded-lg transition-colors"
+                style={{ color: 'var(--color-text-tertiary)' }}>
+                <X size={16} />
+              </button>
+            </div>
+            <p className="text-[12px] mb-3" style={{ color: 'var(--color-text-secondary)' }}>
+              Paste a provider plugin JSON configuration:
+            </p>
+            <textarea
+              value={jsonImportText}
+              onChange={(e) => setJsonImportText(e.target.value)}
+              placeholder={`{
+  "id": "my-provider",
+  "name": "My Provider",
+  "default_base_url": "https://api.example.com/v1",
+  "api_key_env": "MY_API_KEY",
+  "api_compat": "openai",
+  "is_local": false,
+  "models": [
+    { "id": "model-1", "name": "Model 1" }
+  ]
+}`}
+              className="w-full rounded-xl px-3.5 py-3 text-[12px] outline-none font-mono resize-none"
+              style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text)', height: '240px' }}
+            />
+            <div className="flex justify-end mt-4">
+              <button
+                onClick={handleJsonImport}
+                disabled={!jsonImportText.trim()}
+                className="px-4 py-2 rounded-lg text-[13px] font-medium disabled:opacity-50 flex items-center gap-1.5"
+                style={{ background: 'var(--color-primary)', color: '#FFFFFF' }}>
+                <Upload size={14} />
+                {t('models.importProvider')}
               </button>
             </div>
           </div>

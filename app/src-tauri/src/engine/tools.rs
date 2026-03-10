@@ -1,10 +1,9 @@
 use super::doc_tools;
 use super::mcp_runtime::MCPRuntime;
 use super::python_bridge;
-use chromiumoxide::browser::{Browser, BrowserConfig};
-use chromiumoxide::page::Page;
+// Playwright bridge: browser automation via external Node.js process
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -313,26 +312,81 @@ pub fn get_app_handle() -> Option<&'static tauri::AppHandle> {
 }
 
 /// Convert MCP tools to agent ToolDefinitions.
-pub fn mcp_tools_as_definitions(tools: &[super::mcp_runtime::MCPTool]) -> Vec<ToolDefinition> {
+/// If `skill_overrides` is provided, tools from servers with a skill_override will have
+/// their description replaced by the SKILL.md content (for richer prompt context).
+pub fn mcp_tools_as_definitions(
+    tools: &[super::mcp_runtime::MCPTool],
+    skill_overrides: &HashMap<String, String>,
+) -> Vec<ToolDefinition> {
     tools
         .iter()
-        .map(|t| ToolDefinition {
-            r#type: "function".into(),
-            function: FunctionDef {
-                name: t.name.clone(),
-                description: t.description.clone(),
-                parameters: t.input_schema.clone(),
-            },
+        .map(|t| {
+            // Check if this tool's server has a skill override description
+            let description = skill_overrides
+                .get(&t.server_key)
+                .cloned()
+                .unwrap_or_else(|| t.description.clone());
+            ToolDefinition {
+                r#type: "function".into(),
+                function: FunctionDef {
+                    name: t.name.clone(),
+                    description,
+                    parameters: t.input_schema.clone(),
+                },
+            }
         })
         .collect()
 }
 
-/// Shared browser instance for browser_use tool (chromiumoxide)
-struct BrowserState {
-    browser: Browser,
-    page: Option<Page>,
-    _handler: tokio::task::JoinHandle<()>,
+/// Build a map of server_key -> skill override description from config and working dir.
+/// Reads SKILL.md from active_skills/<skill_name> for each MCP server that has skill_override set.
+pub fn build_mcp_skill_overrides(
+    mcp_config: &HashMap<String, crate::state::config::MCPClientConfig>,
+    working_dir: &std::path::Path,
+) -> HashMap<String, String> {
+    let mut overrides = HashMap::new();
+    let active_dir = working_dir.join("active_skills");
+    for (key, cfg) in mcp_config {
+        if let Some(skill_name) = &cfg.skill_override {
+            let skill_md = active_dir.join(skill_name).join("SKILL.md");
+            if let Ok(content) = std::fs::read_to_string(&skill_md) {
+                overrides.insert(key.clone(), content);
+            }
+        }
+    }
+    overrides
 }
+
+/// Playwright bridge state: Node.js child process + HTTP port.
+struct BrowserState {
+    child: tokio::process::Child,
+    port: u16,
+    client: reqwest::Client,
+}
+
+impl BrowserState {
+    fn is_alive(&self) -> bool {
+        // Check if child process still running
+        if let Some(id) = self.child.id() {
+            unsafe { libc::kill(id as i32, 0) == 0 }
+        } else {
+            false
+        }
+    }
+
+    async fn shutdown(mut self) {
+        // Send stop action to cleanly close browser
+        let _ = self.client
+            .post(format!("http://127.0.0.1:{}/action", self.port))
+            .json(&serde_json::json!({"action": "stop"}))
+            .timeout(std::time::Duration::from_secs(3))
+            .send()
+            .await;
+        // Kill the Node.js process
+        let _ = self.child.kill().await;
+    }
+}
+
 static BROWSER_STATE: std::sync::LazyLock<Arc<Mutex<Option<BrowserState>>>> =
     std::sync::LazyLock::new(|| Arc::new(Mutex::new(None)));
 
@@ -528,6 +582,8 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
             - goto: Navigate current page to URL (no new tab)\n\
             - get_url: Get current page URL\n\
             - snapshot: Get page text content (title + body text)\n\
+            - ai_snapshot: Get structured page snapshot with numbered interactive elements for AI. Returns a tree with [1] <button>Login</button> style labels. Use 'act' to interact by number. Labels are ephemeral — re-run ai_snapshot after navigation or major DOM changes.\n\
+            - act: Interact with a numbered element from ai_snapshot. Provide 'element' (number), 'operation' (click/type/select). For type also provide 'text'; for select provide 'value'. If the element is not found, run ai_snapshot again.\n\
             - screenshot: Capture page as PNG image\n\
             - click: Click element by CSS selector\n\
             - type: Type text into element\n\
@@ -548,7 +604,7 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["start", "open", "goto", "get_url", "snapshot", "screenshot",
+                        "enum": ["start", "open", "goto", "get_url", "snapshot", "ai_snapshot", "act", "screenshot",
                                  "click", "type", "press_key", "scroll", "wait", "evaluate",
                                  "find_elements", "select", "upload", "cookies",
                                  "list_frames", "switch_frame", "evaluate_in_frame", "stop"],
@@ -568,11 +624,12 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
                     "file_path": { "type": "string", "description": "Local file path for 'upload'" },
                     "limit": { "type": "number", "description": "Max elements to return (for 'find_elements', default: 20)" },
                     "attributes": { "type": "array", "items": {"type": "string"}, "description": "Attributes to extract (for 'find_elements', e.g. [\"href\", \"class\"])" },
-                    "operation": { "type": "string", "enum": ["get", "set", "delete"], "description": "Cookie operation (for 'cookies')" },
+                    "operation": { "type": "string", "description": "For 'cookies': get/set/delete. For 'act': click/type/select (default: click)" },
                     "name": { "type": "string", "description": "Cookie name (for 'cookies')" },
                     "domain": { "type": "string", "description": "Cookie domain (for 'cookies set')" },
                     "frame_index": { "type": "number", "description": "Frame index from list_frames (for 'switch_frame' / 'evaluate_in_frame')" },
-                    "frame_url": { "type": "string", "description": "Frame URL pattern to match (for 'switch_frame' / 'evaluate_in_frame')" }
+                    "frame_url": { "type": "string", "description": "Frame URL pattern to match (for 'switch_frame' / 'evaluate_in_frame')" },
+                    "element": { "type": "number", "description": "Element number from ai_snapshot (for 'act' action)" }
                 },
                 "required": ["action"]
             }),
@@ -682,38 +739,50 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
             }),
         ),
         tool_def(
-            "memory_search",
-            "Search memory files for relevant context. Searches .md files under the memory/ directory using keyword matching. Use before answering questions about prior work, decisions, preferences, or past conversations.",
+            "memory_add",
+            "Add a memory entry to the persistent knowledge store. Use this to save important facts, user preferences, project decisions, or experiences that should be remembered across conversations. Each memory has a category for organization.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "query": { "type": "string", "description": "Search query (keywords or phrases)" },
-                    "max_results": { "type": "integer", "description": "Maximum results to return (default: 10)" },
-                    "scope": { "type": "string", "enum": ["all", "sessions", "topics", "compacted"], "description": "Scope to search in (default: all)" }
+                    "content": { "type": "string", "description": "The memory content to store" },
+                    "category": { "type": "string", "enum": ["fact", "preference", "experience", "decision", "note"], "description": "Category of the memory (default: fact). fact=factual info, preference=user likes/dislikes, experience=lessons learned, decision=choices made, note=general notes" }
+                },
+                "required": ["content"]
+            }),
+        ),
+        tool_def(
+            "memory_search",
+            "Search stored memories using full-text search with BM25 relevance ranking. Supports Chinese and English. Use before answering questions about prior work, decisions, preferences, or past conversations.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Search query (keywords or phrases, supports Chinese and English)" },
+                    "category": { "type": "string", "enum": ["fact", "preference", "experience", "decision", "note"], "description": "Optional: filter by category" },
+                    "max_results": { "type": "integer", "description": "Maximum results to return (default: 10)" }
                 },
                 "required": ["query"]
             }),
         ),
         tool_def(
-            "memory_write",
-            "Write or append to a topic note in memory/topics/. Use this to persist important information, user preferences, project notes, or decisions across conversations.",
+            "memory_delete",
+            "Delete a specific memory entry by its ID. Use memory_search or memory_list first to find the ID.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "topic": { "type": "string", "description": "Topic filename (without .md extension), e.g. 'user_preferences'" },
-                    "content": { "type": "string", "description": "Content to write or append" },
-                    "mode": { "type": "string", "enum": ["append", "overwrite"], "description": "Write mode (default: append)" }
+                    "id": { "type": "string", "description": "The memory ID to delete" }
                 },
-                "required": ["topic", "content"]
+                "required": ["id"]
             }),
         ),
         tool_def(
             "memory_list",
-            "List all memory files with their sizes and last modified times. Helps discover what knowledge is stored.",
+            "List stored memories, optionally filtered by category. Shows content, category, and timestamps.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "scope": { "type": "string", "enum": ["all", "sessions", "topics", "compacted"], "description": "Scope to list (default: all)" }
+                    "category": { "type": "string", "enum": ["fact", "preference", "experience", "decision", "note"], "description": "Optional: filter by category" },
+                    "limit": { "type": "integer", "description": "Maximum entries to return (default: 20)" },
+                    "offset": { "type": "integer", "description": "Number of entries to skip (default: 0, for pagination)" }
                 }
             }),
         ),
@@ -995,8 +1064,9 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
                 doc_tools::create_docx(path, content)
             }
         }
+        "memory_add" => memory_add_tool(&args).await,
         "memory_search" => memory_search_tool(&args).await,
-        "memory_write" => memory_write_tool(&args).await,
+        "memory_delete" => memory_delete_tool(&args).await,
         "memory_list" => memory_list_tool(&args).await,
         "manage_cronjob" => manage_cronjob_tool(&args).await,
         "list_bound_bots" => list_bound_bots_tool().await,
@@ -1444,615 +1514,170 @@ async fn desktop_screenshot_tool() -> String {
     }
 }
 
-/// Helper macro: acquire browser page, returns error tuple if unavailable.
-macro_rules! require_page {
-    ($state_lock:ident, $page:ident) => {
-        let $state_lock = BROWSER_STATE.lock().await;
-        let _state = match $state_lock.as_ref() {
-            Some(s) => s,
-            None => return ("Error: Browser not started. Call browser_use with action='start' first.".into(), vec![]),
-        };
-        let $page = match _state.page.as_ref() {
-            Some(p) => p,
-            None => return ("Error: No page open. Call browser_use with action='open' first.".into(), vec![]),
-        };
-    };
+/// Helper: if browser state exists but is dead, clean it up and set to None.
+async fn cleanup_dead_browser() {
+    let mut state_lock = BROWSER_STATE.lock().await;
+    let is_dead = state_lock.as_ref().map_or(false, |s| !s.is_alive());
+    if is_dead {
+        if let Some(state) = state_lock.take() {
+            log::warn!("Playwright bridge process died, cleaning up");
+            state.shutdown().await;
+        }
+    }
+}
+
+/// Resolve the path to the playwright-bridge server.js script.
+fn playwright_bridge_script() -> String {
+    // In dev, it's relative to the src-tauri directory
+    let dev_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("playwright-bridge")
+        .join("server.js");
+    if dev_path.exists() {
+        return dev_path.to_string_lossy().to_string();
+    }
+    // In production bundle, look in resource dir
+    if let Some(app) = APP_HANDLE.get() {
+        use tauri::Manager;
+        if let Ok(resource_dir) = app.path().resource_dir() {
+            let bundled: std::path::PathBuf = resource_dir.join("playwright-bridge").join("server.js");
+            if bundled.exists() {
+                return bundled.to_string_lossy().to_string();
+            }
+        }
+    }
+    dev_path.to_string_lossy().to_string()
+}
+
+/// Response from the Playwright bridge.
+#[derive(Debug, Deserialize, Default)]
+struct BridgeResponse {
+    text: String,
+    #[serde(default)]
+    images: Vec<String>,
 }
 
 /// Returns (text_content, image_data_uris).
 async fn browser_use_tool(args: &serde_json::Value) -> (String, Vec<String>) {
-    use futures::StreamExt;
-
     let action = args["action"].as_str().unwrap_or("");
 
-    let text = match action {
-        // ── Lifecycle ──────────────────────────────────────────────────
-        "start" => {
-            let headed = args["headed"].as_bool().unwrap_or(false);
-            let mut state_lock = BROWSER_STATE.lock().await;
-            *state_lock = None;
-
-            let config = if headed {
-                BrowserConfig::builder().with_head().window_size(1280, 900).build()
-            } else {
-                BrowserConfig::builder().window_size(1280, 900).build()
-            };
-            let config = match config {
-                Ok(c) => c,
-                Err(e) => return (format!("Failed to build browser config: {}", e), vec![]),
-            };
-
-            match Browser::launch(config).await {
-                Ok((browser, mut handler)) => {
-                    let handle = tokio::spawn(async move {
-                        while let Some(h) = handler.next().await {
-                            if h.is_err() { break; }
-                        }
-                    });
-                    *state_lock = Some(BrowserState { browser, page: None, _handler: handle });
-                    if headed { "Browser started in visible (headed) mode.".into() }
-                    else { "Browser started in headless mode.".into() }
-                }
-                Err(e) => format!("Failed to start browser: {}", e),
-            }
+    // "start" needs special handling: launch the bridge process
+    if action == "start" {
+        let mut state_lock = BROWSER_STATE.lock().await;
+        // Shut down old bridge if any
+        if let Some(old) = state_lock.take() {
+            log::info!("Shutting down previous Playwright bridge");
+            old.shutdown().await;
         }
 
-        "stop" => {
-            let mut state_lock = BROWSER_STATE.lock().await;
-            if let Some(mut state) = state_lock.take() {
-                state.browser.close().await.ok();
-                state._handler.abort();
-            }
-            "Browser stopped.".into()
-        }
+        let script_path = playwright_bridge_script();
+        log::info!("Launching Playwright bridge: {}", script_path);
 
-        // ── Navigation ─────────────────────────────────────────────────
-        "open" => {
-            let url = args["url"].as_str().unwrap_or("");
-            if url.is_empty() { return ("Error: 'url' is required for 'open' action".into(), vec![]); }
+        let mut child = match tokio::process::Command::new("node")
+            .arg(&script_path)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => return (format!("Failed to start Playwright bridge: {}. Make sure Node.js is installed.", e), vec![]),
+        };
 
-            let mut state_lock = BROWSER_STATE.lock().await;
-            let state = match state_lock.as_mut() {
-                Some(s) => s,
-                None => return ("Error: Browser not started.".into(), vec![]),
-            };
-            // Close previous page/tab if any to avoid leaking tabs
-            if let Some(old_page) = state.page.take() {
-                old_page.close().await.ok();
-            }
-            match state.browser.new_page(url).await {
-                Ok(page) => {
-                    // new_page(url) already navigates and waits for the page to load.
-                    // Do NOT call wait_for_navigation() here — it waits for the NEXT
-                    // navigation which may never happen, causing an indefinite hang.
-                    let title = page.get_title().await.ok().flatten().unwrap_or_default();
-                    state.page = Some(page);
-                    format!("Opened new tab: {} (title: {})", url, title)
-                }
-                Err(e) => format!("Failed to open page: {}", e),
-            }
-        }
+        // Read stdout until we get READY:{port}
+        let stdout = child.stdout.take().unwrap();
+        let mut reader = tokio::io::BufReader::new(stdout);
+        let mut line = String::new();
+        let ready_timeout = std::time::Duration::from_secs(15);
 
-        "goto" => {
-            let url = args["url"].as_str().unwrap_or("");
-            if url.is_empty() { return ("Error: 'url' is required for 'goto' action".into(), vec![]); }
-            require_page!(_lock, page);
-            match page.goto(url).await {
-                Ok(_) => {
-                    // goto() already navigates to the URL and waits for the page load.
-                    // Do NOT call wait_for_navigation() — it would block waiting for
-                    // a subsequent navigation that may never occur.
-                    let title = page.get_title().await.ok().flatten().unwrap_or_default();
-                    format!("Navigated to: {} (title: {})", url, title)
-                }
-                Err(e) => format!("Navigation failed: {}", e),
-            }
-        }
-
-        "get_url" => {
-            require_page!(_lock, page);
-            match page.url().await {
-                Ok(Some(url)) => format!("Current URL: {}", url),
-                Ok(None) => "Current URL: (none)".into(),
-                Err(e) => format!("Failed to get URL: {}", e),
-            }
-        }
-
-        // ── Content reading ────────────────────────────────────────────
-        "snapshot" => {
-            require_page!(_lock, page);
-            let title = page.get_title().await.ok().flatten().unwrap_or_default();
-            let url = page.url().await.ok().flatten().unwrap_or_default();
-            match page.evaluate("document.body.innerText").await {
-                Ok(result) => {
-                    let text: String = result.into_value().unwrap_or_default();
-                    format!("Title: {}\nURL: {}\n\nContent:\n{}", title, url, truncate_output(&text, 8000))
-                }
-                Err(e) => format!("Failed to get page content: {}", e),
-            }
-        }
-
-        "screenshot" => {
-            require_page!(_lock, page);
-            match page.screenshot(
-                chromiumoxide::page::ScreenshotParams::builder().full_page(true).build(),
-            ).await {
-                Ok(png_data) => {
-                    use base64::Engine;
-                    let b64 = base64::engine::general_purpose::STANDARD.encode(&png_data);
-                    let data_uri = format!("data:image/png;base64,{}", b64);
-                    return (
-                        format!("Screenshot captured ({} bytes). Analyze the image to understand the page visually.", png_data.len()),
-                        vec![data_uri],
-                    );
-                }
-                Err(e) => format!("Screenshot failed: {}", e),
-            }
-        }
-
-        // ── Element interaction ────────────────────────────────────────
-        "click" => {
-            let selector = args["selector"].as_str().unwrap_or("");
-            if selector.is_empty() { return ("Error: 'selector' is required".into(), vec![]); }
-            require_page!(_lock, page);
-            match page.find_element(selector).await {
-                Ok(el) => {
-                    el.scroll_into_view().await.ok();
-                    match el.click().await {
-                        Ok(_) => format!("Clicked: {}", selector),
-                        Err(e) => format!("Click failed: {}", e),
-                    }
-                }
-                Err(e) => format!("Element not found ({}): {}", selector, e),
-            }
-        }
-
-        "type" => {
-            let selector = args["selector"].as_str().unwrap_or("");
-            let text = args["text"].as_str().unwrap_or("");
-            let clear = args["clear"].as_bool().unwrap_or(false);
-            if selector.is_empty() || text.is_empty() {
-                return ("Error: 'selector' and 'text' are required".into(), vec![]);
-            }
-            require_page!(_lock, page);
-            match page.find_element(selector).await {
-                Ok(el) => {
-                    el.click().await.ok();
-                    if clear {
-                        // Select all existing content then replace
-                        page.evaluate(format!(
-                            "document.querySelector('{}').value = ''",
-                            selector.replace('\\', "\\\\").replace('\'', "\\'")
-                        ).as_str()).await.ok();
-                    }
-                    match el.type_str(text).await {
-                        Ok(_) => format!("Typed into {}: '{}'", selector, text),
-                        Err(e) => format!("Type failed: {}", e),
-                    }
-                }
-                Err(e) => format!("Element not found ({}): {}", selector, e),
-            }
-        }
-
-        "press_key" => {
-            let key = args["key"].as_str().unwrap_or("");
-            if key.is_empty() { return ("Error: 'key' is required".into(), vec![]); }
-            let selector = args["selector"].as_str().unwrap_or("");
-            require_page!(_lock, page);
-            let target = if selector.is_empty() { "body" } else { selector };
-            match page.find_element(target).await {
-                Ok(el) => match el.press_key(key).await {
-                    Ok(_) => {
-                        if selector.is_empty() {
-                            format!("Pressed key: {}", key)
-                        } else {
-                            format!("Pressed key {} on: {}", key, selector)
-                        }
-                    }
-                    Err(e) => format!("press_key failed: {}", e),
-                },
-                Err(e) => format!("Element not found: {}", e),
-            }
-        }
-
-        "scroll" => {
-            let selector = args["selector"].as_str().unwrap_or("");
-            let direction = args["direction"].as_str().unwrap_or("down");
-            let amount = args["amount"].as_f64().unwrap_or(500.0);
-            require_page!(_lock, page);
-
-            if !selector.is_empty() {
-                match page.find_element(selector).await {
-                    Ok(el) => match el.scroll_into_view().await {
-                        Ok(_) => format!("Scrolled element into view: {}", selector),
-                        Err(e) => format!("Scroll failed: {}", e),
-                    },
-                    Err(e) => format!("Element not found ({}): {}", selector, e),
-                }
-            } else {
-                let (x, y) = match direction {
-                    "up" => (0.0, -amount),
-                    "down" => (0.0, amount),
-                    "left" => (-amount, 0.0),
-                    "right" => (amount, 0.0),
-                    _ => (0.0, amount),
-                };
-                let js = format!("window.scrollBy({}, {})", x, y);
-                match page.evaluate(js.as_str()).await {
-                    Ok(_) => format!("Scrolled {} by {}px", direction, amount),
-                    Err(e) => format!("Scroll failed: {}", e),
-                }
-            }
-        }
-
-        "wait" => {
-            let selector = args["selector"].as_str().unwrap_or("");
-            let timeout_ms = args["timeout"].as_u64().unwrap_or(5000).min(30000);
-
-            if selector.is_empty() {
-                tokio::time::sleep(std::time::Duration::from_millis(timeout_ms)).await;
-                return (format!("Waited {}ms", timeout_ms), vec![]);
-            }
-
-            let start = std::time::Instant::now();
-            let timeout = std::time::Duration::from_millis(timeout_ms);
-            let sel = selector.to_string();
+        let port: u16 = match tokio::time::timeout(ready_timeout, async {
+            use tokio::io::AsyncBufReadExt;
             loop {
-                // Acquire and release lock each iteration to avoid holding it for up to 30s
-                {
-                    let state_lock = BROWSER_STATE.lock().await;
-                    let state = match state_lock.as_ref() {
-                        Some(s) => s,
-                        None => return ("Error: Browser not started.".into(), vec![]),
-                    };
-                    let page = match state.page.as_ref() {
-                        Some(p) => p,
-                        None => return ("Error: No page open.".into(), vec![]),
-                    };
-                    if page.find_element(sel.as_str()).await.is_ok() {
-                        return (format!("Element found: {} (after {}ms)", sel, start.elapsed().as_millis()), vec![]);
-                    }
+                line.clear();
+                let n = reader.read_line(&mut line).await.map_err(|e| format!("IO error: {}", e))?;
+                if n == 0 { return Err("Bridge process exited before becoming ready".to_string()); }
+                let trimmed = line.trim();
+                if let Some(port_str) = trimmed.strip_prefix("READY:") {
+                    return port_str.parse::<u16>().map_err(|e| format!("Invalid port: {}", e));
                 }
-                if start.elapsed() >= timeout {
-                    return (format!("Timeout ({}ms) waiting for element: {}", timeout_ms, sel), vec![]);
+            }
+        }).await {
+            Ok(Ok(p)) => p,
+            Ok(Err(e)) => {
+                let _ = child.kill().await;
+                return (format!("Playwright bridge failed to start: {}", e), vec![]);
+            }
+            Err(_) => {
+                let _ = child.kill().await;
+                return ("Playwright bridge startup timed out (15s)".to_string(), vec![]);
+            }
+        };
+
+        let client = reqwest::Client::new();
+
+        // Forward the actual start action (with headed flag) to the bridge
+        let resp = client
+            .post(format!("http://127.0.0.1:{}/action", port))
+            .json(args)
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .await;
+
+        match resp {
+            Ok(r) => {
+                let body: BridgeResponse = r.json().await.unwrap_or_default();
+                if body.text.starts_with("Error:") {
+                    // Browser launch failed inside bridge, kill the process
+                    let _ = child.kill().await;
+                    return (body.text, vec![]);
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                *state_lock = Some(BrowserState { child, port, client });
+                return (body.text, body.images);
+            }
+            Err(e) => {
+                let _ = child.kill().await;
+                return (format!("Bridge start request failed: {}", e), vec![]);
             }
         }
+    }
 
-        // ── JavaScript ─────────────────────────────────────────────────
-        "evaluate" => {
-            let expression = args["expression"].as_str().unwrap_or("");
-            if expression.is_empty() { return ("Error: 'expression' is required".into(), vec![]); }
-            require_page!(_lock, page);
-            match page.evaluate(expression).await {
-                Ok(result) => {
-                    let val: serde_json::Value = result.into_value().unwrap_or(serde_json::Value::Null);
-                    let output = serde_json::to_string_pretty(&val).unwrap_or_else(|_| format!("{:?}", val));
-                    truncate_output(&format!("Result:\n{}", output), 8000)
-                }
-                Err(e) => format!("JS evaluation failed: {}", e),
-            }
+    // "stop" shuts down the bridge
+    if action == "stop" {
+        let mut state_lock = BROWSER_STATE.lock().await;
+        if let Some(state) = state_lock.take() {
+            state.shutdown().await;
         }
+        return ("Browser stopped.".to_string(), vec![]);
+    }
 
-        // ── Query multiple elements ────────────────────────────────────
-        "find_elements" => {
-            let selector = args["selector"].as_str().unwrap_or("");
-            if selector.is_empty() { return ("Error: 'selector' is required".into(), vec![]); }
-            let limit = args["limit"].as_u64().unwrap_or(20) as usize;
-            let attrs: Vec<String> = args["attributes"]
-                .as_array()
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                .unwrap_or_default();
-            require_page!(_lock, page);
-
-            match page.find_elements(selector).await {
-                Ok(elements) => {
-                    let total = elements.len();
-                    let mut lines = vec![format!("Found {} elements matching \"{}\" (showing first {}):", total, selector, limit.min(total))];
-
-                    for (i, el) in elements.iter().take(limit).enumerate() {
-                        let text = el.inner_text().await.ok().flatten().unwrap_or_default();
-                        let text_preview = if text.chars().count() > 100 {
-                            format!("{}...", text.chars().take(100).collect::<String>())
-                        } else {
-                            text
-                        };
-
-                        let mut attr_parts = Vec::new();
-                        for attr_name in &attrs {
-                            if let Ok(Some(val)) = el.attribute(attr_name.as_str()).await {
-                                attr_parts.push(format!("{}=\"{}\"", attr_name, val));
-                            }
-                        }
-
-                        let attr_str = if attr_parts.is_empty() {
-                            String::new()
-                        } else {
-                            format!(" {}", attr_parts.join(" "))
-                        };
-
-                        lines.push(format!("[{}] text=\"{}\"{}", i + 1, text_preview.replace('\n', " "), attr_str));
-                    }
-
-                    truncate_output(&lines.join("\n"), 8000)
-                }
-                Err(e) => format!("find_elements failed ({}): {}", selector, e),
-            }
-        }
-
-        // ── Dropdown select ────────────────────────────────────────────
-        "select" => {
-            let selector = args["selector"].as_str().unwrap_or("");
-            let value = args["value"].as_str().unwrap_or("");
-            if selector.is_empty() || value.is_empty() {
-                return ("Error: 'selector' and 'value' are required".into(), vec![]);
-            }
-            let safe_sel = selector.replace('\\', "\\\\").replace('\'', "\\'").replace('\n', "\\n").replace('\r', "\\r");
-            let safe_val = value.replace('\\', "\\\\").replace('\'', "\\'").replace('\n', "\\n").replace('\r', "\\r");
-            let js = format!(
-                "(() => {{ const el = document.querySelector('{}'); if (!el) return 'Element not found'; el.value = '{}'; el.dispatchEvent(new Event('change', {{bubbles: true}})); return 'ok'; }})()",
-                safe_sel, safe_val
-            );
-            require_page!(_lock, page);
-            match page.evaluate(js.as_str()).await {
-                Ok(result) => {
-                    let r: String = result.into_value().unwrap_or_default();
-                    if r == "ok" {
-                        format!("Selected value '{}' in {}", value, selector)
-                    } else {
-                        format!("Select failed: {}", r)
-                    }
-                }
-                Err(e) => format!("Select failed: {}", e),
-            }
-        }
-
-        // ── File upload ────────────────────────────────────────────────
-        "upload" => {
-            let selector = args["selector"].as_str().unwrap_or("");
-            let file_path = args["file_path"].as_str().unwrap_or("");
-            if selector.is_empty() || file_path.is_empty() {
-                return ("Error: 'selector' and 'file_path' are required".into(), vec![]);
-            }
-            if !std::path::Path::new(file_path).exists() {
-                return (format!("Error: file not found: {}", file_path), vec![]);
-            }
-            require_page!(_lock, page);
-            match page.find_element(selector).await {
-                Ok(el) => {
-                    use chromiumoxide::cdp::browser_protocol::dom::*;
-                    let remote_id = el.remote_object_id.clone();
-                    let describe = DescribeNodeParams::builder()
-                        .object_id(remote_id)
-                        .build();
-                    match page.execute(describe).await {
-                        Ok(resp) => {
-                            let backend_id = resp.result.node.backend_node_id;
-                            let set_files = match SetFileInputFilesParams::builder()
-                                .files(vec![file_path.to_string()])
-                                .backend_node_id(backend_id)
-                                .build() {
-                                Ok(p) => p,
-                                Err(e) => return (format!("Failed to build upload params: {}", e), vec![]),
-                            };
-                            match page.execute(set_files).await {
-                                Ok(_) => format!("File uploaded: {} to {}", file_path, selector),
-                                Err(e) => format!("Upload failed: {}", e),
-                            }
-                        }
-                        Err(e) => format!("Failed to describe node: {}", e),
-                    }
-                }
-                Err(e) => format!("Element not found ({}): {}", selector, e),
-            }
-        }
-
-        // ── Cookies ────────────────────────────────────────────────────
-        "cookies" => {
-            let operation = args["operation"].as_str().unwrap_or("get");
-            require_page!(_lock, page);
-
-            match operation {
-                "get" => {
-                    match page.get_cookies().await {
-                        Ok(cookies) => {
-                            let list: Vec<serde_json::Value> = cookies.iter().map(|c| {
-                                serde_json::json!({
-                                    "name": c.name,
-                                    "value": c.value,
-                                    "domain": c.domain,
-                                    "path": c.path,
-                                    "httpOnly": c.http_only,
-                                    "secure": c.secure,
-                                    "expires": c.expires,
-                                })
-                            }).collect();
-                            let json = serde_json::to_string_pretty(&list).unwrap_or_default();
-                            truncate_output(&format!("Cookies ({}):\n{}", cookies.len(), json), 8000)
-                        }
-                        Err(e) => format!("Failed to get cookies: {}", e),
-                    }
-                }
-                "set" => {
-                    let name = args["name"].as_str().unwrap_or("");
-                    let value = args["value"].as_str().unwrap_or("");
-                    if name.is_empty() || value.is_empty() {
-                        return ("Error: 'name' and 'value' are required for cookies set".into(), vec![]);
-                    }
-                    let domain = args["domain"].as_str().unwrap_or("");
-                    use chromiumoxide::cdp::browser_protocol::network::CookieParam;
-                    let mut param = CookieParam::new(name, value);
-                    if !domain.is_empty() {
-                        param.domain = Some(domain.to_string());
-                    }
-                    param.path = Some("/".to_string());
-                    match page.set_cookie(param).await {
-                        Ok(_) => format!("Cookie set: {}={}", name, value),
-                        Err(e) => format!("Failed to set cookie: {}", e),
-                    }
-                }
-                "delete" => {
-                    let name = args["name"].as_str().unwrap_or("");
-                    if name.is_empty() {
-                        return ("Error: 'name' is required for cookies delete".into(), vec![]);
-                    }
-                    use chromiumoxide::cdp::browser_protocol::network::DeleteCookiesParams;
-                    match page.delete_cookie(DeleteCookiesParams::new(name)).await {
-                        Ok(_) => format!("Cookie deleted: {}", name),
-                        Err(e) => format!("Failed to delete cookie: {}", e),
-                    }
-                }
-                _ => format!("Unknown cookie operation: '{}'. Supported: get, set, delete", operation),
-            }
-        }
-
-        // ── iframe support ─────────────────────────────────────────────
-        "list_frames" => {
-            require_page!(_lock, page);
-            match page.frames().await {
-                Ok(frame_ids) => {
-                    if frame_ids.is_empty() {
-                        "No frames found on this page.".into()
-                    } else {
-                        let mut lines = vec![format!("Found {} frame(s):", frame_ids.len())];
-                        for (i, fid) in frame_ids.iter().enumerate() {
-                            let url = page.frame_url(fid.clone()).await.ok().flatten().unwrap_or_else(|| "(unknown)".into());
-                            let name = page.frame_name(fid.clone()).await.ok().flatten().unwrap_or_default();
-                            let name_str = if name.is_empty() { String::new() } else { format!(" name=\"{}\"", name) };
-                            let is_main = page.mainframe().await.ok().flatten().as_ref() == Some(fid);
-                            let main_str = if is_main { " [main]" } else { "" };
-                            lines.push(format!("[{}]{}{} url={}", i, main_str, name_str, url));
-                        }
-                        lines.join("\n")
-                    }
-                }
-                Err(e) => format!("Failed to list frames: {}", e),
-            }
-        }
-
-        "switch_frame" => {
-            let frame_index = args["frame_index"].as_u64();
-            let frame_url_pattern = args["frame_url"].as_str().unwrap_or("");
-            if frame_index.is_none() && frame_url_pattern.is_empty() {
-                return ("Error: 'frame_index' or 'frame_url' is required for switch_frame".into(), vec![]);
-            }
-            require_page!(_lock, page);
-            match page.frames().await {
-                Ok(frame_ids) => {
-                    let target_frame = if let Some(idx) = frame_index {
-                        frame_ids.get(idx as usize).cloned()
-                    } else {
-                        // Find frame by URL pattern
-                        let mut found = None;
-                        for fid in &frame_ids {
-                            if let Ok(Some(url)) = page.frame_url(fid.clone()).await {
-                                if url.contains(frame_url_pattern) {
-                                    found = Some(fid.clone());
-                                    break;
-                                }
-                            }
-                        }
-                        found
-                    };
-                    match target_frame {
-                        Some(fid) => {
-                            let url = page.frame_url(fid.clone()).await.ok().flatten().unwrap_or_default();
-                            // Store active frame id for subsequent evaluate_in_frame calls
-                            // We use a JS evaluate to get frame content as a simple verification
-                            match page.frame_execution_context(fid).await {
-                                Ok(Some(_ctx)) => {
-                                    format!("Switched to frame: {} — use 'evaluate_in_frame' with the same frame_index/frame_url to run JS inside it", url)
-                                }
-                                Ok(None) => format!("Frame found ({}) but execution context not available. The frame may not be fully loaded.", url),
-                                Err(e) => format!("Failed to get frame context: {}", e),
-                            }
-                        }
-                        None => {
-                            if let Some(idx) = frame_index {
-                                format!("Error: frame index {} out of range (total: {})", idx, frame_ids.len())
-                            } else {
-                                format!("Error: no frame found matching URL pattern '{}'", frame_url_pattern)
-                            }
-                        }
-                    }
-                }
-                Err(e) => format!("Failed to list frames: {}", e),
-            }
-        }
-
-        "evaluate_in_frame" => {
-            let expression = args["expression"].as_str().unwrap_or("");
-            if expression.is_empty() {
-                return ("Error: 'expression' is required for evaluate_in_frame".into(), vec![]);
-            }
-            let frame_index = args["frame_index"].as_u64();
-            let frame_url_pattern = args["frame_url"].as_str().unwrap_or("");
-            if frame_index.is_none() && frame_url_pattern.is_empty() {
-                return ("Error: 'frame_index' or 'frame_url' is required for evaluate_in_frame".into(), vec![]);
-            }
-            require_page!(_lock, page);
-
-            // Resolve frame
-            let frame_ids = match page.frames().await {
-                Ok(ids) => ids,
-                Err(e) => return (format!("Failed to list frames: {}", e), vec![]),
-            };
-            let target_frame = if let Some(idx) = frame_index {
-                frame_ids.get(idx as usize).cloned()
-            } else {
-                let mut found = None;
-                for fid in &frame_ids {
-                    if let Ok(Some(url)) = page.frame_url(fid.clone()).await {
-                        if url.contains(frame_url_pattern) {
-                            found = Some(fid.clone());
-                            break;
-                        }
-                    }
-                }
-                found
-            };
-            let fid = match target_frame {
-                Some(f) => f,
-                None => return ("Error: target frame not found".into(), vec![]),
-            };
-
-            // Get execution context for the frame
-            let ctx_id = match page.frame_execution_context(fid).await {
-                Ok(Some(ctx)) => ctx,
-                Ok(None) => return ("Error: frame execution context not available".into(), vec![]),
-                Err(e) => return (format!("Failed to get frame context: {}", e), vec![]),
-            };
-
-            // Execute JS in the frame's context via CDP
-            use chromiumoxide::cdp::js_protocol::runtime::EvaluateParams;
-            let params = match EvaluateParams::builder()
-                .expression(expression)
-                .context_id(ctx_id)
-                .build() {
-                Ok(p) => p,
-                Err(e) => return (format!("Failed to build evaluate params: {}", e), vec![]),
-            };
-            match page.execute(params).await {
-                Ok(resp) => {
-                    let result = resp.result.result;
-                    let val = result.value.unwrap_or(serde_json::Value::Null);
-                    let output = serde_json::to_string_pretty(&val).unwrap_or_else(|_| format!("{:?}", val));
-                    truncate_output(&format!("Frame JS result:\n{}", output), 8000)
-                }
-                Err(e) => format!("Frame JS evaluation failed: {}", e),
-            }
-        }
-
-        _ => format!(
-            "Unknown browser action: '{}'. Supported: start, open, goto, get_url, snapshot, screenshot, \
-             click, type, press_key, scroll, wait, evaluate, find_elements, select, upload, cookies, \
-             list_frames, switch_frame, evaluate_in_frame, stop",
-            action
-        ),
+    // All other actions: proxy to the bridge via HTTP
+    cleanup_dead_browser().await;
+    let state_lock = BROWSER_STATE.lock().await;
+    let state = match state_lock.as_ref() {
+        Some(s) => s,
+        None => return ("Error: Browser not started. Call browser_use with action='start' first.".to_string(), vec![]),
     };
 
-    (text, vec![])
+    let timeout = if action == "screenshot" || action == "ai_snapshot" {
+        std::time::Duration::from_secs(30)
+    } else if action == "wait" {
+        std::time::Duration::from_secs(35)
+    } else {
+        std::time::Duration::from_secs(60)
+    };
+
+    match state.client
+        .post(format!("http://127.0.0.1:{}/action", state.port))
+        .json(args)
+        .timeout(timeout)
+        .send()
+        .await
+    {
+        Ok(r) => {
+            let body: BridgeResponse = r.json().await.unwrap_or_default();
+            (body.text, body.images)
+        }
+        Err(e) => (format!("Browser bridge error: {}", e), vec![]),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2130,378 +1755,147 @@ async fn pip_install_tool(args: &serde_json::Value) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Memory search tool — rg > grep > built-in fallback (cross-platform)
+// Memory tools — FTS5-backed full-text search
 // ---------------------------------------------------------------------------
 
+/// Add a memory entry to the SQLite FTS5 knowledge store.
+async fn memory_add_tool(args: &serde_json::Value) -> String {
+    let content = args["content"].as_str().unwrap_or("");
+    let category = args["category"].as_str().unwrap_or("fact");
+
+    if content.is_empty() {
+        return "Error: content is required".into();
+    }
+
+    let db = match DATABASE.get() {
+        Some(db) => db,
+        None => return "Error: database not available".into(),
+    };
+
+    // Use the current task-local session_id if available
+    let sid = get_current_session_id();
+    let session_id: Option<String> = if sid.is_empty() { None } else { Some(sid) };
+
+    match db.memory_add(content, category, session_id.as_deref()) {
+        Ok(id) => format!("Memory added (id: {}, category: {})", id, category),
+        Err(e) => format!("Error adding memory: {}", e),
+    }
+}
+
+/// Search memories using FTS5 MATCH with BM25 ranking.
 async fn memory_search_tool(args: &serde_json::Value) -> String {
     let query = args["query"].as_str().unwrap_or("");
+    let category = args["category"].as_str();
     let max_results = args["max_results"].as_u64().unwrap_or(10) as usize;
-    let scope = args["scope"].as_str().unwrap_or("all");
 
     if query.is_empty() {
         return "Error: query is required".into();
     }
 
-    let working_dir = match WORKING_DIR.get() {
-        Some(d) => d.clone(),
-        None => return "Error: working directory not configured".into(),
+    let db = match DATABASE.get() {
+        Some(db) => db,
+        None => return "Error: database not available".into(),
     };
 
-    // Build search paths based on scope
-    let mut search_paths: Vec<String> = Vec::new();
-    if scope == "all" || scope == "topics" {
-        let memory_md = working_dir.join("MEMORY.md");
-        if memory_md.exists() {
-            search_paths.push(memory_md.to_string_lossy().to_string());
-        }
-    }
-
-    let memory_dir = working_dir.join("memory");
-    match scope {
-        "sessions" => {
-            let dir = memory_dir.join("sessions");
-            if dir.is_dir() { search_paths.push(dir.to_string_lossy().to_string()); }
-        }
-        "topics" => {
-            let dir = memory_dir.join("topics");
-            if dir.is_dir() { search_paths.push(dir.to_string_lossy().to_string()); }
-        }
-        "compacted" => {
-            let dir = memory_dir.join("compacted");
-            if dir.is_dir() { search_paths.push(dir.to_string_lossy().to_string()); }
-        }
-        _ => {
-            // "all" — search entire memory directory
-            if memory_dir.is_dir() { search_paths.push(memory_dir.to_string_lossy().to_string()); }
-        }
-    }
-
-    if search_paths.is_empty() {
-        return "No memory files found (MEMORY.md or memory/)".into();
-    }
-
-    // Try external tools: rg → grep (Unix) / findstr (Windows)
-    if let Some(result) = try_rg_search(query, max_results, &search_paths, &working_dir).await {
-        return result;
-    }
-    if let Some(result) = try_grep_search(query, max_results, &search_paths, &working_dir).await {
-        return result;
-    }
-
-    // Built-in fallback: pure Rust keyword search (works everywhere)
-    memory_search_builtin(query, max_results, &working_dir).await
-}
-
-/// Try searching with ripgrep (rg).
-async fn try_rg_search(
-    query: &str,
-    max_results: usize,
-    paths: &[String],
-    working_dir: &std::path::Path,
-) -> Option<String> {
-    let mut cmd = tokio::process::Command::new("rg");
-    cmd.args([
-        "-i", "-n", "--no-heading",
-        "-C", "1",
-        "--max-count", &max_results.to_string(),
-        "-g", "*.md",
-        "--", query,
-    ]);
-    cmd.args(paths);
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-
-    run_search_cmd(cmd, query, working_dir).await
-}
-
-/// Try searching with grep (Unix only).
-#[cfg(not(target_os = "windows"))]
-async fn try_grep_search(
-    query: &str,
-    max_results: usize,
-    paths: &[String],
-    working_dir: &std::path::Path,
-) -> Option<String> {
-    let mut cmd = tokio::process::Command::new("grep");
-    cmd.args([
-        "-i", "-n", "-r",
-        "--include=*.md",
-        "-C", "1",
-        "-m", &max_results.to_string(),
-        "--", query,
-    ]);
-    cmd.args(paths);
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-
-    run_search_cmd(cmd, query, working_dir).await
-}
-
-/// Windows: skip grep fallback (no native grep).
-#[cfg(target_os = "windows")]
-async fn try_grep_search(
-    _query: &str,
-    _max_results: usize,
-    _paths: &[String],
-    _working_dir: &std::path::Path,
-) -> Option<String> {
-    None
-}
-
-/// Run a search command and format the output.
-/// Returns None if the command fails to execute (not found, etc.).
-async fn run_search_cmd(
-    mut cmd: tokio::process::Command,
-    query: &str,
-    working_dir: &std::path::Path,
-) -> Option<String> {
-    let output = cmd.output().await.ok()?;
-    // Exit code 1 = no matches (not an error for grep/rg), 2+ = real error
-    if !output.status.success() && output.status.code() != Some(1) {
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    if stdout.trim().is_empty() {
-        return Some(format!("No matches found for '{}' in memory files", query));
-    }
-    // Make paths relative to working_dir for readability
-    let wd_prefix = format!("{}/", working_dir.to_string_lossy());
-    let wd_prefix_backslash = format!("{}\\", working_dir.to_string_lossy());
-    let relative = stdout
-        .replace(&wd_prefix, "")
-        .replace(&wd_prefix_backslash, "");
-    Some(truncate_output(&relative, 8000))
-}
-
-/// Built-in pure-Rust memory search fallback.
-/// Case-insensitive keyword matching with context lines.
-async fn memory_search_builtin(
-    query: &str,
-    max_results: usize,
-    working_dir: &std::path::Path,
-) -> String {
-    let keywords: Vec<String> = query
-        .to_lowercase()
-        .split_whitespace()
-        .map(String::from)
-        .collect();
-    if keywords.is_empty() {
-        return "No valid keywords in query".into();
-    }
-
-    // Collect memory files
-    let mut memory_files = Vec::new();
-    let memory_md = working_dir.join("MEMORY.md");
-    if memory_md.exists() {
-        memory_files.push(memory_md);
-    }
-    let memory_dir = working_dir.join("memory");
-    if let Ok(mut entries) = tokio::fs::read_dir(&memory_dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let path = entry.path();
-            if path.extension().map_or(false, |e| e == "md") {
-                memory_files.push(path);
+    match db.memory_search(query, category, max_results) {
+        Ok(rows) => {
+            if rows.is_empty() {
+                return format!("No memories found matching '{}'", query);
             }
+            let results: Vec<String> = rows
+                .iter()
+                .map(|m| {
+                    format!(
+                        "[{}] ({})\n{}\n  -- id: {} | created: {}",
+                        m.category,
+                        format_timestamp(m.updated_at),
+                        m.content,
+                        m.id,
+                        format_timestamp(m.created_at),
+                    )
+                })
+                .collect();
+            format!(
+                "Found {} memories matching '{}':\n\n{}",
+                results.len(),
+                query,
+                results.join("\n---\n")
+            )
         }
+        Err(e) => format!("Error searching memories: {}", e),
     }
-
-    if memory_files.is_empty() {
-        return "No memory files found".into();
-    }
-
-    struct Match {
-        file: String,
-        line_num: usize,
-        context: String,
-        score: usize,
-    }
-
-    let mut matches: Vec<Match> = Vec::new();
-
-    for file_path in &memory_files {
-        let content = match tokio::fs::read_to_string(file_path).await {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-        let rel_path = file_path
-            .strip_prefix(working_dir)
-            .unwrap_or(file_path)
-            .to_string_lossy()
-            .to_string();
-        let lines: Vec<&str> = content.lines().collect();
-
-        for (i, line) in lines.iter().enumerate() {
-            let lower = line.to_lowercase();
-            let score: usize = keywords.iter().filter(|kw| lower.contains(kw.as_str())).count();
-            if score > 0 {
-                // Gather 1 line of context before/after
-                let start = i.saturating_sub(1);
-                let end = (i + 2).min(lines.len());
-                let context: String = lines[start..end]
-                    .iter()
-                    .enumerate()
-                    .map(|(j, l)| {
-                        let ln = start + j + 1;
-                        if start + j == i {
-                            format!("{}:{}> {}", rel_path, ln, l)
-                        } else {
-                            format!("{}:{}- {}", rel_path, ln, l)
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-
-                matches.push(Match {
-                    file: rel_path.clone(),
-                    line_num: i + 1,
-                    context,
-                    score,
-                });
-            }
-        }
-    }
-
-    matches.sort_by(|a, b| b.score.cmp(&a.score).then(a.file.cmp(&b.file)).then(a.line_num.cmp(&b.line_num)));
-    matches.truncate(max_results);
-
-    if matches.is_empty() {
-        return format!("No matches found for '{}' in memory files", query);
-    }
-
-    let results: Vec<String> = matches.iter().map(|m| m.context.clone()).collect();
-    format!(
-        "Found {} matches for '{}':\n{}",
-        results.len(),
-        query,
-        results.join("\n--\n")
-    )
 }
 
-// ---------------------------------------------------------------------------
-// memory_write — persist topic notes
-// ---------------------------------------------------------------------------
-
-async fn memory_write_tool(args: &serde_json::Value) -> String {
-    let topic = args["topic"].as_str().unwrap_or("");
-    let content = args["content"].as_str().unwrap_or("");
-    let mode = args["mode"].as_str().unwrap_or("append");
-
-    if topic.is_empty() || content.is_empty() {
-        return "Error: topic and content are required".into();
+/// Delete a memory entry by ID.
+async fn memory_delete_tool(args: &serde_json::Value) -> String {
+    let id = args["id"].as_str().unwrap_or("");
+    if id.is_empty() {
+        return "Error: id is required".into();
     }
 
-    // Sanitize topic name
-    let safe_topic: String = topic
-        .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c > '\x7f' { c } else { '_' })
-        .take(100)
-        .collect();
-
-    let working_dir = match WORKING_DIR.get() {
-        Some(d) => d.clone(),
-        None => return "Error: working directory not configured".into(),
+    let db = match DATABASE.get() {
+        Some(db) => db,
+        None => return "Error: database not available".into(),
     };
 
-    let topics_dir = working_dir.join("memory").join("topics");
-    tokio::fs::create_dir_all(&topics_dir).await.ok();
-
-    let filepath = topics_dir.join(format!("{}.md", safe_topic));
-
-    match mode {
-        "overwrite" => {
-            match tokio::fs::write(&filepath, content).await {
-                Ok(()) => format!("Written to memory/topics/{}.md", safe_topic),
-                Err(e) => format!("Error writing file: {}", e),
-            }
-        }
-        _ => {
-            // append
-            use tokio::io::AsyncWriteExt;
-            let append_content = format!("\n{}\n", content);
-            match tokio::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&filepath)
-                .await
-            {
-                Ok(mut file) => {
-                    match file.write_all(append_content.as_bytes()).await {
-                        Ok(()) => format!("Appended to memory/topics/{}.md", safe_topic),
-                        Err(e) => format!("Error appending: {}", e),
-                    }
-                }
-                Err(e) => format!("Error opening file: {}", e),
-            }
-        }
+    match db.memory_delete(id) {
+        Ok(true) => format!("Memory deleted (id: {})", id),
+        Ok(false) => format!("No memory found with id: {}", id),
+        Err(e) => format!("Error deleting memory: {}", e),
     }
 }
 
-// ---------------------------------------------------------------------------
-// memory_list — discover stored memory files
-// ---------------------------------------------------------------------------
-
+/// List memories with optional category filter and pagination.
 async fn memory_list_tool(args: &serde_json::Value) -> String {
-    let scope = args["scope"].as_str().unwrap_or("all");
+    let category = args["category"].as_str();
+    let limit = args["limit"].as_u64().unwrap_or(20) as usize;
+    let offset = args["offset"].as_u64().unwrap_or(0) as usize;
 
-    let working_dir = match WORKING_DIR.get() {
-        Some(d) => d.clone(),
-        None => return "Error: working directory not configured".into(),
+    let db = match DATABASE.get() {
+        Some(db) => db,
+        None => return "Error: database not available".into(),
     };
 
-    let memory_dir = working_dir.join("memory");
-    let dirs_to_scan: Vec<(&str, std::path::PathBuf)> = match scope {
-        "sessions" => vec![("sessions", memory_dir.join("sessions"))],
-        "topics" => vec![("topics", memory_dir.join("topics"))],
-        "compacted" => vec![("compacted", memory_dir.join("compacted"))],
-        _ => vec![
-            ("sessions", memory_dir.join("sessions")),
-            ("topics", memory_dir.join("topics")),
-            ("compacted", memory_dir.join("compacted")),
-        ],
-    };
+    let total = db.memory_count(category).unwrap_or(0);
 
-    let mut output = Vec::new();
-
-    // Also check MEMORY.md at working_dir root
-    if scope == "all" {
-        let memory_md = working_dir.join("MEMORY.md");
-        if memory_md.exists() {
-            if let Ok(meta) = tokio::fs::metadata(&memory_md).await {
-                output.push(format!("MEMORY.md ({} bytes)", meta.len()));
+    match db.memory_list(category, limit, offset) {
+        Ok(rows) => {
+            if rows.is_empty() {
+                return if category.is_some() {
+                    format!("No memories found in category '{}'", category.unwrap())
+                } else {
+                    "No memories stored yet.".into()
+                };
             }
+            let entries: Vec<String> = rows
+                .iter()
+                .map(|m| {
+                    format!(
+                        "- [{}] {} (id: {}, updated: {})",
+                        m.category,
+                        truncate_output(&m.content, 200),
+                        m.id,
+                        format_timestamp(m.updated_at),
+                    )
+                })
+                .collect();
+            format!(
+                "Memories ({} total, showing {}-{}):\n{}",
+                total,
+                offset + 1,
+                offset + rows.len(),
+                entries.join("\n")
+            )
         }
+        Err(e) => format!("Error listing memories: {}", e),
     }
+}
 
-    for (label, dir) in dirs_to_scan {
-        if !dir.exists() {
-            continue;
-        }
-        let mut entries = match tokio::fs::read_dir(&dir).await {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let mut files = Vec::new();
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let path = entry.path();
-            if path.extension().map_or(false, |e| e == "md") {
-                if let Ok(meta) = tokio::fs::metadata(&path).await {
-                    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                    let modified = meta.modified().ok()
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0);
-                    files.push(format!("  {}/{} ({} bytes, modified: {})", label, name, meta.len(), modified));
-                }
-            }
-        }
-        files.sort();
-        output.extend(files);
-    }
-
-    if output.is_empty() {
-        "No memory files found.".into()
-    } else {
-        format!("Memory files:\n{}", output.join("\n"))
-    }
+/// Format a millisecond timestamp into a human-readable string.
+fn format_timestamp(ts: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ts)
+        .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_else(|| ts.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -3565,7 +2959,19 @@ async fn try_mcp_tool(
     tool_name: &str,
     args: &serde_json::Value,
 ) -> Option<String> {
-    // Find which client owns this tool and call it directly
+    // First try to find the tool via get_all_tools which already has server_key metadata
+    let all_tools = runtime.get_all_tools().await;
+    if let Some(tool) = all_tools.iter().find(|t| t.name == tool_name) {
+        if !tool.server_key.is_empty() {
+            // Direct call using the known server key
+            match runtime.call_tool(&tool.server_key, tool_name, args.clone()).await {
+                Ok(result) => return Some(truncate_output(&result, 8000)),
+                Err(e) => return Some(format!("MCP tool error: {}", e)),
+            }
+        }
+    }
+
+    // Fallback: scan all clients (for backwards compatibility)
     let clients = runtime.get_all_client_keys().await;
     for key in &clients {
         let tools = runtime.get_tools(key).await;

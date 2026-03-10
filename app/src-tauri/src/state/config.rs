@@ -12,6 +12,9 @@ pub struct Config {
     pub mcp: HashMap<String, MCPClientConfig>,
     #[serde(default)]
     pub agents: AgentsConfig,
+    /// Configuration for exposing local skills as an MCP server.
+    #[serde(default)]
+    pub skill_server: SkillServerConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -101,6 +104,36 @@ pub struct MCPClientConfig {
     pub env: HashMap<String, String>,
     #[serde(default)]
     pub cwd: Option<String>,
+    /// If set, use this SKILL.md name to override MCP tool descriptions in the prompt.
+    #[serde(default)]
+    pub skill_override: Option<String>,
+    /// Priority for tool ordering. Higher priority tools appear first. Default 0.
+    #[serde(default)]
+    pub priority: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SkillServerConfig {
+    /// Whether to expose local skills as an MCP server.
+    #[serde(default)]
+    pub expose_as_mcp: bool,
+    /// Host to bind the MCP server to. Default "127.0.0.1".
+    #[serde(default = "default_mcp_host")]
+    pub host: String,
+    /// Port for the MCP server. Default 9315.
+    #[serde(default = "default_mcp_port")]
+    pub port: u16,
+    /// Which skills to expose. Empty means all enabled skills.
+    #[serde(default)]
+    pub skills: Vec<String>,
+}
+
+fn default_mcp_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_mcp_port() -> u16 {
+    9315
 }
 
 fn default_true() -> bool {

@@ -119,9 +119,14 @@ pub async fn run_react_with_options(
                     result.content.chars().take(200).collect::<String>()
                 );
 
+                let content = if result.images.is_empty() {
+                    MessageContent::text(result.content)
+                } else {
+                    MessageContent::with_images(&result.content, &result.images)
+                };
                 messages.push(LLMMessage {
                     role: "tool".into(),
-                    content: Some(MessageContent::text(result.content)),
+                    content: Some(content),
                     tool_calls: None,
                     tool_call_id: Some(result.tool_call_id),
                 });
@@ -265,9 +270,14 @@ where
                     result_preview,
                 });
 
+                let content = if result.images.is_empty() {
+                    MessageContent::text(result.content)
+                } else {
+                    MessageContent::with_images(&result.content, &result.images)
+                };
                 messages.push(LLMMessage {
                     role: "tool".into(),
-                    content: Some(MessageContent::text(result.content)),
+                    content: Some(content),
                     tool_calls: None,
                     tool_call_id: Some(result.tool_call_id),
                 });
@@ -437,6 +447,8 @@ pub async fn build_system_prompt(
     working_dir: &std::path::Path,
     skills_content: &[String],
     language: Option<&str>,
+    mcp_tools: Option<&[super::mcp_runtime::MCPTool]>,
+    unavailable_servers: Option<&[String]>,
 ) -> String {
     let persona = load_persona(working_dir).await;
     let lang = language.unwrap_or("zh-CN");
@@ -471,13 +483,43 @@ pub async fn build_system_prompt(
         }
     }
 
-    // Auto-generate tool list from builtin_tools()
+    // Auto-generate tool list from builtin_tools() and MCP tools
     let tools = builtin_tools();
-    let tool_list: String = tools
+    let mut tool_lines: Vec<String> = tools
         .iter()
         .map(|t| format!("- {}: {}", t.function.name, t.function.description))
-        .collect::<Vec<_>>()
-        .join("\n");
+        .collect();
+
+    // Append MCP tools in unified format
+    if let Some(mcp) = mcp_tools {
+        if !mcp.is_empty() {
+            tool_lines.push("\n### MCP Server Tools (external)".to_string());
+            for t in mcp {
+                let server_hint = if t.server_key.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [server: {}]", t.server_key)
+                };
+                tool_lines.push(format!(
+                    "- {}: {}{}",
+                    t.name, t.description, server_hint
+                ));
+            }
+        }
+    }
+
+    // Note any unavailable MCP servers
+    if let Some(unavail) = unavailable_servers {
+        if !unavail.is_empty() {
+            tool_lines.push(format!(
+                "\nNote: The following MCP servers are currently unavailable: {}. \
+                Their tools cannot be used until they reconnect.",
+                unavail.join(", ")
+            ));
+        }
+    }
+
+    let tool_list = tool_lines.join("\n");
 
     // Workspace sandbox information
     let workspace_display = working_dir.to_string_lossy();
@@ -539,8 +581,48 @@ IMPORTANT: Do NOT use cron for one-time tasks. For reminders > 30 min away, pref
 Users can bind external platform bots (Discord, Telegram, QQ, Feishu, DingTalk, etc.) to chat sessions.
 - To check which bots are bound: call the `list_bound_bots` tool
 - To send a message through a bot: call the `send_bot_message` tool
+- To create/manage bots: call the `manage_bot` tool
 - Bot information is stored in the database, NEVER in config files — do NOT read config files to find bot info
 - If the user mentions a bot name or asks to send a message to an external platform, use these tools
+
+## Browser Usage (browser_use tool)
+You have a full Chromium browser for web automation. Use it proactively whenever you need to:
+- **Browse websites** — search engines, social media, documentation, etc.
+- **Search for information** — when web_search is unavailable or insufficient, open a search engine or target website directly
+- **Operate platforms** — post content, manage accounts, perform actions on websites the user asks about
+- **Set up platform bots** — navigate developer consoles, extract credentials
+- **Scrape or extract data** — read page content, find elements, collect information
+
+### Decision flow:
+1. If the user asks to search/browse/operate a website → **use browser_use**, do NOT say you can't access it
+2. If web_search fails or is not configured → **fall back to browser_use**: open a search engine or the target site directly
+3. If the task involves any web interaction → **use browser_use**
+4. NEVER tell the user you cannot access a website. You have a real browser — just open it and go there.
+
+### Common workflow:
+1. `browser_use(action='start', headed=true)` — start visible browser
+2. `browser_use(action='open', url='...')` — open the target URL
+3. `browser_use(action='screenshot')` — see the page visually (the screenshot is sent to you as an image)
+4. `browser_use(action='snapshot')` — read the page text content
+5. Use click/type/scroll/find_elements to interact with the page
+6. Use `list_frames` + `evaluate_in_frame` if the page has iframes
+7. `browser_use(action='stop')` — close when done
+
+### Platform bot setup:
+When setting up bots, open the developer console:
+- Feishu: https://open.feishu.cn/app
+- Discord: https://discord.com/developers/applications
+- Telegram: https://t.me/BotFather
+- DingTalk: https://open-dev.dingtalk.com/
+- QQ: https://q.qq.com/
+
+### Key principles:
+- Use `headed=true` so the user can see and interact with the browser
+- Take screenshots frequently — you can see them as images to understand the page
+- When user action is needed (login, QR scan, CAPTCHA): tell the user \"请在浏览器中完成登录/扫码，完成后告诉我\"
+- NEVER try to fill in passwords — let the user do it
+- Be patient — wait for user confirmation between steps
+- When browsing Chinese sites (小红书、微博、抖音等), navigate directly to the website URL
 ",
         workspace = workspace_display,
         allowed_paths = allowed_paths_info,
@@ -884,5 +966,125 @@ async fn compact_messages_if_needed(
         {
             f.write_all(entry.as_bytes()).await.ok();
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Auto-memory extraction — extract noteworthy info from conversations
+// ---------------------------------------------------------------------------
+
+/// Extract memories from a conversation turn using LLM.
+/// Called after the assistant finishes replying.
+/// Runs in the background so it doesn't block the user.
+pub async fn extract_memories_from_conversation(
+    config: &LLMConfig,
+    user_message: &str,
+    assistant_reply: &str,
+    session_id: Option<&str>,
+) {
+    use super::tools::get_database;
+
+    let db = match get_database() {
+        Some(db) => db,
+        None => return,
+    };
+
+    // Skip very short conversations (greetings, etc.)
+    if user_message.len() < 20 && assistant_reply.len() < 50 {
+        return;
+    }
+
+    // Truncate to avoid sending huge texts to LLM
+    let user_preview: String = user_message.chars().take(2000).collect();
+    let assistant_preview: String = assistant_reply.chars().take(2000).collect();
+
+    let extraction_prompt = format!(
+        r#"Analyze the following conversation and extract any information worth remembering for future conversations.
+Focus on:
+- User preferences (likes, dislikes, habits)
+- Important facts about the user (name, occupation, projects, etc.)
+- Decisions made during the conversation
+- Key experiences or lessons learned
+- Important notes or context
+
+For each memory, provide a category from: fact, preference, experience, decision, note
+
+Respond ONLY with a JSON array. Each element should be an object with "content" (string) and "category" (string).
+If there is nothing worth remembering, respond with an empty array: []
+
+Conversation:
+User: {user_preview}
+Assistant: {assistant_preview}
+
+Extract memories (JSON array only):"#
+    );
+
+    let messages = vec![LLMMessage {
+        role: "user".into(),
+        content: Some(MessageContent::text(extraction_prompt)),
+        tool_calls: None,
+        tool_call_id: None,
+    }];
+
+    let result = match chat_completion(config, &messages, &[]).await {
+        Ok(resp) => resp.message.content.map(|c| c.into_text()).unwrap_or_default(),
+        Err(e) => {
+            log::warn!("Memory extraction LLM call failed: {}", e);
+            return;
+        }
+    };
+
+    // Parse the JSON response
+    let trimmed = result.trim();
+    // Handle cases where LLM wraps in ```json ... ```
+    let json_str = if trimmed.starts_with("```") {
+        trimmed
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim()
+    } else {
+        trimmed
+    };
+
+    #[derive(serde::Deserialize)]
+    struct ExtractedMemory {
+        content: String,
+        category: String,
+    }
+
+    let memories: Vec<ExtractedMemory> = match serde_json::from_str(json_str) {
+        Ok(m) => m,
+        Err(e) => {
+            log::debug!(
+                "Memory extraction parse error: {} (response: {})",
+                e,
+                &result[..result.len().min(200)]
+            );
+            return;
+        }
+    };
+
+    if memories.is_empty() {
+        return;
+    }
+
+    let valid_categories = ["fact", "preference", "experience", "decision", "note"];
+    let mut added = 0;
+    for mem in &memories {
+        let cat = if valid_categories.contains(&mem.category.as_str()) {
+            &mem.category
+        } else {
+            "note"
+        };
+        if !mem.content.is_empty() {
+            if db.memory_add(&mem.content, cat, session_id).is_ok() {
+                added += 1;
+            }
+        }
+    }
+
+    if added > 0 {
+        log::info!("Auto-extracted {} memories from conversation", added);
     }
 }

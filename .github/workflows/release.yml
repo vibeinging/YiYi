@@ -1,0 +1,148 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest        # Apple Silicon (M-series)
+            rust_target: aarch64-apple-darwin
+          - platform: macos-latest          # Intel Mac (cross-compile on ARM)
+            rust_target: x86_64-apple-darwin
+          - platform: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+          - platform: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+          cache-on-failure: true
+
+      # ── Linux system deps ──
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libgtk-3-dev
+
+      # ── Python setup for wheels & stdlib ──
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Download platform-specific wheels
+        shell: bash
+        run: |
+          cd app/src-tauri
+          # Remove existing platform-specific wheels (keep pure-python ones)
+          rm -f wheels/*macosx* wheels/*manylinux* wheels/*win* wheels/*linux*
+          # Download wheels for this platform
+          pip download \
+            -r wheels/requirements.txt \
+            --dest wheels/ \
+            --only-binary :all: \
+            --implementation cp \
+            --python-version 313 \
+            --no-deps
+          ls -la wheels/
+
+      - name: Prepare Python stdlib (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cd app/src-tauri
+          PYVER=$(python3 -c "import sys; print(f'python{sys.version_info.major}.{sys.version_info.minor}')")
+          STDLIB_SRC=$(python3 -c "import sysconfig; print(sysconfig.get_path('stdlib'))")
+          if [ -d "$STDLIB_SRC" ]; then
+            rm -rf python-stdlib/lib
+            mkdir -p python-stdlib/lib/$PYVER
+            cp -r "$STDLIB_SRC"/* python-stdlib/lib/$PYVER/
+            find python-stdlib -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+            find python-stdlib -name test -type d -exec rm -rf {} + 2>/dev/null || true
+          fi
+
+      - name: Prepare Python stdlib (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd app/src-tauri
+          $pyver = python -c "import sys; print(f'python{sys.version_info.major}.{sys.version_info.minor}')"
+          $stdlib = python -c "import sysconfig; print(sysconfig.get_path('stdlib'))"
+          if (Test-Path "$stdlib") {
+            Remove-Item -Recurse -Force python-stdlib/lib -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Path "python-stdlib/lib/$pyver" -Force
+            Copy-Item -Recurse (Join-Path $stdlib '*') "python-stdlib/lib/$pyver/"
+            Get-ChildItem -Recurse -Directory -Filter __pycache__ python-stdlib | Remove-Item -Recurse -Force
+            Get-ChildItem -Recurse -Directory -Filter test python-stdlib | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
+      # ── Frontend ──
+      - name: Install frontend dependencies
+        working-directory: app
+        run: npm ci
+
+      # ── Build & Upload Release ──
+      - name: Check signing key
+        shell: bash
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY not set, updater signing will be skipped"
+          fi
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+
+      - name: Build Tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        with:
+          projectPath: app
+          tauriScript: npx tauri
+          args: --target ${{ matrix.rust_target }}
+          tagName: ${{ github.ref_name }}
+          releaseName: "YiClaw ${{ github.ref_name }}"
+          releaseBody: "See the assets below to download for your platform."
+          releaseDraft: true
+          prerelease: false

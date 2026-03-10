@@ -33,7 +33,11 @@ import {
   importSkill,
   getSkillContent,
   updateSkill,
+  hubSearchSkills,
+  hubListSkills,
+  hubInstallSkill,
   type Skill,
+  type HubSkill,
 } from '../api/skills';
 
 type SourceFilter = 'all' | 'builtin' | 'customized' | 'hub' | 'openclaw';
@@ -57,6 +61,16 @@ export function SkillsPage() {
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
   const [saving, setSaving] = useState(false);
+  // Hub browsing state
+  const [hubSkills, setHubSkills] = useState<HubSkill[]>([]);
+  const [hubLoading, setHubLoading] = useState(false);
+  const [hubSearch, setHubSearch] = useState('');
+  const [hubCursor, setHubCursor] = useState<string | null>(null);
+  const [hubSort, setHubSort] = useState<string>('downloads');
+  const [installingSlug, setInstallingSlug] = useState<string | null>(null);
+  const [hubUrl, setHubUrl] = useState<string>('https://clawhub.ai');
+  const [showHubSettings, setShowHubSettings] = useState(false);
+  const [hubUrlDraft, setHubUrlDraft] = useState<string>('https://clawhub.ai');
 
   const getSourceLabel = (source: SourceFilter): string => {
     return t(`skills.sourceFilter.${source}` as any);
@@ -76,6 +90,64 @@ export function SkillsPage() {
       setLoading(false);
     }
   };
+
+  const loadHubSkills = async (searchQuery?: string) => {
+    setHubLoading(true);
+    try {
+      const url = hubUrl || undefined;
+      if (searchQuery && searchQuery.trim()) {
+        const results = await hubSearchSkills(searchQuery, 30, url);
+        setHubSkills(results);
+        setHubCursor(null);
+      } else {
+        const result = await hubListSkills(30, undefined, hubSort, url);
+        setHubSkills(result.items);
+        setHubCursor(result.nextCursor);
+      }
+    } catch (error) {
+      console.error('Failed to load hub skills:', error);
+      toast.error(`Hub: ${String(error)}`);
+    } finally {
+      setHubLoading(false);
+    }
+  };
+
+  const loadMoreHubSkills = async () => {
+    if (!hubCursor || hubLoading) return;
+    setHubLoading(true);
+    try {
+      const url = hubUrl || undefined;
+      const result = await hubListSkills(30, hubCursor, hubSort, url);
+      setHubSkills(prev => [...prev, ...result.items]);
+      setHubCursor(result.nextCursor);
+    } catch (error) {
+      console.error('Failed to load more hub skills:', error);
+    } finally {
+      setHubLoading(false);
+    }
+  };
+
+  const handleHubInstall = async (skill: HubSkill) => {
+    if (!skill.source_url) return;
+    setInstallingSlug(skill.slug);
+    try {
+      const url = hubUrl || undefined;
+      await hubInstallSkill(skill.source_url, { enable: true, overwrite: false, hubUrl: url });
+      toast.success(`${skill.name} ${t('skills.toggleEnable')}`);
+      await loadSkills();
+    } catch (error) {
+      console.error('Failed to install hub skill:', error);
+      toast.error(`${t('skills.importFailed')}: ${String(error)}`);
+    } finally {
+      setInstallingSlug(null);
+    }
+  };
+
+  useEffect(() => {
+    if (sourceFilter === 'openclaw' || sourceFilter === 'hub') {
+      loadHubSkills();
+    }
+  }, [sourceFilter, hubSort]);
 
   useEffect(() => {
     loadSkills();
@@ -246,9 +318,22 @@ export function SkillsPage() {
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--color-text-tertiary)' }} />
             <input
               type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={t('skills.searchPlaceholder')}
+              value={(sourceFilter === 'openclaw' || sourceFilter === 'hub') ? hubSearch : search}
+              onChange={(e) => {
+                if (sourceFilter === 'openclaw' || sourceFilter === 'hub') {
+                  setHubSearch(e.target.value);
+                } else {
+                  setSearch(e.target.value);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (sourceFilter === 'openclaw' || sourceFilter === 'hub')) {
+                  loadHubSkills(hubSearch);
+                }
+              }}
+              placeholder={(sourceFilter === 'openclaw' || sourceFilter === 'hub')
+                ? t('skills.hubSearchPlaceholder')
+                : t('skills.searchPlaceholder')}
               className="w-full pl-9 pr-4 py-2 rounded-xl text-[13px]"
               style={{ background: 'var(--color-bg-elevated)', color: 'var(--color-text)' }}
             />
@@ -262,145 +347,327 @@ export function SkillsPage() {
             }))}
             variant="inline"
           />
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={showEnabledOnly}
-              onChange={(e) => setShowEnabledOnly(e.target.checked)}
-              className="accent-[var(--color-primary)] w-3.5 h-3.5"
-            />
-            <span className="text-[13px]" style={{ color: 'var(--color-text-secondary)' }}>{t('skills.enabledOnly')}</span>
-          </label>
-        </div>
-
-        {/* Skills grid */}
-        {loading ? (
-          <div className="flex items-center justify-center h-64">
-            <Loader2 size={28} className="animate-spin" style={{ color: 'var(--color-primary)' }} />
-          </div>
-        ) : filteredSkills.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-64 rounded-2xl" style={{ background: 'var(--color-bg-elevated)' }}>
-            <Puzzle size={40} className="mb-3" style={{ color: 'var(--color-text-muted)' }} />
-            <p className="text-[14px] font-medium" style={{ color: 'var(--color-text-secondary)' }}>{t('skills.noSkills')}</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-            {filteredSkills.map((skill) => (
-              <div
-                key={skill.name}
-                className="group p-3.5 rounded-xl transition-all duration-200 hover:-translate-y-0.5"
-                style={{ background: 'var(--color-bg-elevated)' }}
-              >
-                {/* Header */}
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    {skill.emoji ? (
-                      <span className="text-lg shrink-0">{skill.emoji}</span>
-                    ) : (
-                      <div
-                        className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
-                        style={{ background: 'var(--color-bg-subtle)' }}
+          {(sourceFilter === 'openclaw' || sourceFilter === 'hub') ? (
+            <>
+              <Select
+                value={hubSort}
+                onChange={(v) => setHubSort(v)}
+                options={[
+                  { value: 'downloads', label: t('skills.hubSortDownloads') },
+                  { value: 'updated', label: t('skills.hubSortUpdated') },
+                  { value: 'stars', label: t('skills.hubSortStars') },
+                  { value: 'trending', label: t('skills.hubSortTrending') },
+                ]}
+                variant="inline"
+              />
+              <div className="relative">
+                <button
+                  onClick={() => { setShowHubSettings(!showHubSettings); setHubUrlDraft(hubUrl); }}
+                  className="w-8 h-8 flex items-center justify-center rounded-lg transition-colors"
+                  style={{ color: 'var(--color-text-tertiary)' }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-elevated)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                  title="Hub Settings"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                </button>
+                {showHubSettings && (
+                  <div
+                    className="absolute right-0 top-10 z-50 p-3 rounded-xl shadow-lg min-w-[320px]"
+                    style={{ background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)' }}
+                  >
+                    <label className="block text-[11px] font-medium mb-1.5" style={{ color: 'var(--color-text-secondary)' }}>
+                      Hub URL
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={hubUrlDraft}
+                        onChange={(e) => setHubUrlDraft(e.target.value)}
+                        placeholder="https://clawhub.ai"
+                        className="flex-1 px-2.5 py-1.5 rounded-lg text-[12px]"
+                        style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text)' }}
+                      />
+                      <button
+                        onClick={() => {
+                          setHubUrl(hubUrlDraft.trim() || 'https://clawhub.ai');
+                          setShowHubSettings(false);
+                          setHubSkills([]);
+                          setHubCursor(null);
+                          setTimeout(() => loadHubSkills(), 100);
+                        }}
+                        className="px-3 py-1.5 rounded-lg text-[12px] font-medium"
+                        style={{ background: 'var(--color-primary)', color: '#FFFFFF' }}
                       >
-                        <Puzzle size={14} style={{ color: 'var(--color-text-tertiary)' }} />
-                      </div>
-                    )}
-                    <div className="min-w-0">
-                      <h3 className="font-semibold text-[13px] truncate" style={{ color: 'var(--color-text)' }}>{skill.name}</h3>
+                        {t('common.save')}
+                      </button>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: 'var(--color-text-muted)', background: 'var(--color-bg-subtle)' }}>
-                      {getSourceLabel(skill.source || 'builtin')}
-                    </span>
-                    <button
-                      onClick={() => handleToggle(skill)}
-                      disabled={toggling.has(skill.name)}
-                      className="w-6 h-6 rounded-md flex items-center justify-center transition-colors"
-                      style={{
-                        background: skill.enabled ? 'rgba(74, 222, 128, 0.1)' : 'var(--color-bg-subtle)',
-                        color: skill.enabled ? 'var(--color-success)' : 'var(--color-text-tertiary)',
-                      }}
-                      title={skill.enabled ? t('skills.toggleDisable') : t('skills.toggleEnable')}
-                    >
-                      {toggling.has(skill.name) ? (
-                        <Loader2 size={12} className="animate-spin" />
-                      ) : skill.enabled ? (
-                        <Power size={12} />
-                      ) : (
-                        <PowerOff size={12} />
-                      )}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Description */}
-                <p className="text-[12px] leading-relaxed line-clamp-2 mb-2" style={{ color: 'var(--color-text-secondary)' }}>
-                  {getSkillDescription(skill)}
-                </p>
-
-                {/* Tags */}
-                {skill.tags && skill.tags.length > 0 && (
-                  <div className="flex flex-wrap gap-1 mb-2">
-                    {skill.tags.slice(0, 3).map((tag) => (
-                      <span
-                        key={tag}
-                        className="px-1.5 py-0.5 text-[10px] rounded"
-                        style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-tertiary)' }}
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                    {skill.tags.length > 3 && (
-                      <span className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
-                        +{skill.tags.length - 3}
-                      </span>
-                    )}
+                    <p className="text-[10px] mt-1.5" style={{ color: 'var(--color-text-muted)' }}>
+                      ClawHub: https://clawhub.ai
+                    </p>
                   </div>
                 )}
+              </div>
+            </>
+          ) : (
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={showEnabledOnly}
+                onChange={(e) => setShowEnabledOnly(e.target.checked)}
+                className="accent-[var(--color-primary)] w-3.5 h-3.5"
+              />
+              <span className="text-[13px]" style={{ color: 'var(--color-text-secondary)' }}>{t('skills.enabledOnly')}</span>
+            </label>
+          )}
+        </div>
 
-                {/* Footer */}
-                <div className="flex items-center justify-between pt-2" style={{ borderTop: '1px solid var(--color-bg-subtle)' }}>
-                  <div className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--color-text-tertiary)' }}>
-                    {skill.author && <span>{skill.author}</span>}
-                    {skill.version && <span>v{skill.version}</span>}
-                  </div>
-                  <div className="flex items-center gap-0.5">
-                    <button
-                      onClick={() => handleViewContent(skill)}
-                      className="w-6 h-6 flex items-center justify-center rounded-md transition-colors"
-                      style={{ color: 'var(--color-text-tertiary)' }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-subtle)'; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                      title={t('skills.viewContent')}
-                    >
-                      <FileText size={12} />
-                    </button>
-                    <button
-                      onClick={() => handleViewContent(skill, true)}
-                      className="w-6 h-6 flex items-center justify-center rounded-md transition-colors"
-                      style={{ color: 'var(--color-text-tertiary)' }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-subtle)'; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                      title={t('common.edit')}
-                    >
-                      <Pencil size={11} />
-                    </button>
-                    {skill.url && (
+        {/* Skills grid — local skills or hub browsing */}
+        {(sourceFilter === 'openclaw' || sourceFilter === 'hub') ? (
+          /* Hub / OpenClaw browsing view */
+          hubLoading && hubSkills.length === 0 ? (
+            <div className="flex items-center justify-center h-64">
+              <Loader2 size={28} className="animate-spin" style={{ color: 'var(--color-primary)' }} />
+            </div>
+          ) : hubSkills.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-64 rounded-2xl" style={{ background: 'var(--color-bg-elevated)' }}>
+              <Puzzle size={40} className="mb-3" style={{ color: 'var(--color-text-muted)' }} />
+              <p className="text-[14px] font-medium" style={{ color: 'var(--color-text-secondary)' }}>
+                {t('skills.hubEmpty')}
+              </p>
+              <p className="text-[12px] mt-1" style={{ color: 'var(--color-text-muted)' }}>
+                {t('skills.hubEmptyHint')}
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                {hubSkills.map((hs) => (
+                  <div
+                    key={hs.slug}
+                    className="group p-3.5 rounded-xl transition-all duration-200 hover:-translate-y-0.5"
+                    style={{ background: 'var(--color-bg-elevated)' }}
+                  >
+                    {/* Header */}
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div
+                          className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
+                          style={{ background: 'var(--color-bg-subtle)' }}
+                        >
+                          <Puzzle size={14} style={{ color: 'var(--color-text-tertiary)' }} />
+                        </div>
+                        <div className="min-w-0">
+                          <h3 className="font-semibold text-[13px] truncate" style={{ color: 'var(--color-text)' }}>{hs.name || hs.slug}</h3>
+                          <p className="text-[10px] truncate" style={{ color: 'var(--color-text-muted)' }}>{hs.slug}</p>
+                        </div>
+                      </div>
                       <button
-                        onClick={() => open(skill.url!)}
+                        onClick={() => handleHubInstall(hs)}
+                        disabled={installingSlug === hs.slug}
+                        className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium transition-colors shrink-0"
+                        style={{ background: 'var(--color-primary)', color: '#FFFFFF' }}
+                      >
+                        {installingSlug === hs.slug ? (
+                          <Loader2 size={11} className="animate-spin" />
+                        ) : (
+                          <Download size={11} />
+                        )}
+                        {t('skills.hubInstall')}
+                      </button>
+                    </div>
+
+                    {/* Description */}
+                    <p className="text-[12px] leading-relaxed line-clamp-2 mb-2" style={{ color: 'var(--color-text-secondary)' }}>
+                      {hs.description}
+                    </p>
+
+                    {/* Tags */}
+                    {hs.tags && hs.tags.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mb-2">
+                        {(hs.tags as string[]).slice(0, 3).map((tag: string) => (
+                          <span
+                            key={tag}
+                            className="px-1.5 py-0.5 text-[10px] rounded"
+                            style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-tertiary)' }}
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Footer */}
+                    <div className="flex items-center justify-between pt-2" style={{ borderTop: '1px solid var(--color-bg-subtle)' }}>
+                      <div className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--color-text-tertiary)' }}>
+                        {hs.author && <span>{hs.author}</span>}
+                        {hs.version && <span>v{hs.version}</span>}
+                      </div>
+                      <div className="flex items-center gap-0.5">
+                        {hs.source_url && (
+                          <button
+                            onClick={() => open(hs.source_url!)}
+                            className="w-6 h-6 flex items-center justify-center rounded-md transition-colors"
+                            style={{ color: 'var(--color-text-tertiary)' }}
+                            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--color-bg-subtle)'; }}
+                            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                          >
+                            <ExternalLink size={11} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {/* Load more */}
+              {hubCursor && (
+                <div className="flex justify-center mt-4">
+                  <button
+                    onClick={loadMoreHubSkills}
+                    disabled={hubLoading}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-medium transition-colors"
+                    style={{ background: 'var(--color-bg-elevated)', color: 'var(--color-text-secondary)' }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-subtle)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--color-bg-elevated)'; }}
+                  >
+                    {hubLoading && <Loader2 size={14} className="animate-spin" />}
+                    {t('skills.hubLoadMore')}
+                  </button>
+                </div>
+              )}
+            </>
+          )
+        ) : (
+          /* Local skills view */
+          loading ? (
+            <div className="flex items-center justify-center h-64">
+              <Loader2 size={28} className="animate-spin" style={{ color: 'var(--color-primary)' }} />
+            </div>
+          ) : filteredSkills.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-64 rounded-2xl" style={{ background: 'var(--color-bg-elevated)' }}>
+              <Puzzle size={40} className="mb-3" style={{ color: 'var(--color-text-muted)' }} />
+              <p className="text-[14px] font-medium" style={{ color: 'var(--color-text-secondary)' }}>{t('skills.noSkills')}</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+              {filteredSkills.map((skill) => (
+                <div
+                  key={skill.name}
+                  className="group p-3.5 rounded-xl transition-all duration-200 hover:-translate-y-0.5"
+                  style={{ background: 'var(--color-bg-elevated)' }}
+                >
+                  {/* Header */}
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      {skill.emoji ? (
+                        <span className="text-lg shrink-0">{skill.emoji}</span>
+                      ) : (
+                        <div
+                          className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
+                          style={{ background: 'var(--color-bg-subtle)' }}
+                        >
+                          <Puzzle size={14} style={{ color: 'var(--color-text-tertiary)' }} />
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <h3 className="font-semibold text-[13px] truncate" style={{ color: 'var(--color-text)' }}>{skill.name}</h3>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: 'var(--color-text-muted)', background: 'var(--color-bg-subtle)' }}>
+                        {getSourceLabel(skill.source || 'builtin')}
+                      </span>
+                      <button
+                        onClick={() => handleToggle(skill)}
+                        disabled={toggling.has(skill.name)}
+                        className="w-6 h-6 rounded-md flex items-center justify-center transition-colors"
+                        style={{
+                          background: skill.enabled ? 'rgba(74, 222, 128, 0.1)' : 'var(--color-bg-subtle)',
+                          color: skill.enabled ? 'var(--color-success)' : 'var(--color-text-tertiary)',
+                        }}
+                        title={skill.enabled ? t('skills.toggleDisable') : t('skills.toggleEnable')}
+                      >
+                        {toggling.has(skill.name) ? (
+                          <Loader2 size={12} className="animate-spin" />
+                        ) : skill.enabled ? (
+                          <Power size={12} />
+                        ) : (
+                          <PowerOff size={12} />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Description */}
+                  <p className="text-[12px] leading-relaxed line-clamp-2 mb-2" style={{ color: 'var(--color-text-secondary)' }}>
+                    {getSkillDescription(skill)}
+                  </p>
+
+                  {/* Tags */}
+                  {skill.tags && skill.tags.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mb-2">
+                      {skill.tags.slice(0, 3).map((tag) => (
+                        <span
+                          key={tag}
+                          className="px-1.5 py-0.5 text-[10px] rounded"
+                          style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-tertiary)' }}
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                      {skill.tags.length > 3 && (
+                        <span className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
+                          +{skill.tags.length - 3}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Footer */}
+                  <div className="flex items-center justify-between pt-2" style={{ borderTop: '1px solid var(--color-bg-subtle)' }}>
+                    <div className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--color-text-tertiary)' }}>
+                      {skill.author && <span>{skill.author}</span>}
+                      {skill.version && <span>v{skill.version}</span>}
+                    </div>
+                    <div className="flex items-center gap-0.5">
+                      <button
+                        onClick={() => handleViewContent(skill)}
                         className="w-6 h-6 flex items-center justify-center rounded-md transition-colors"
                         style={{ color: 'var(--color-text-tertiary)' }}
-                        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--color-bg-subtle)'; }}
-                        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-subtle)'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                        title={t('skills.viewContent')}
                       >
-                        <ExternalLink size={11} />
+                        <FileText size={12} />
                       </button>
-                    )}
+                      <button
+                        onClick={() => handleViewContent(skill, true)}
+                        className="w-6 h-6 flex items-center justify-center rounded-md transition-colors"
+                        style={{ color: 'var(--color-text-tertiary)' }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-subtle)'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                        title={t('common.edit')}
+                      >
+                        <Pencil size={11} />
+                      </button>
+                      {skill.url && (
+                        <button
+                          onClick={() => open(skill.url!)}
+                          className="w-6 h-6 flex items-center justify-center rounded-md transition-colors"
+                          style={{ color: 'var(--color-text-tertiary)' }}
+                          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--color-bg-subtle)'; }}
+                          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                        >
+                          <ExternalLink size={11} />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )
         )}
       </div>
 

@@ -470,11 +470,20 @@ pub async fn chat(
         let cfg = state.config.read().await;
         (cfg.agents.language.clone(), cfg.agents.max_iterations)
     };
-    let system_prompt =
-        react_agent::build_system_prompt(&state.working_dir, &skills, lang.as_deref()).await;
+    let (mcp_tools, unavailable_servers) = state.mcp_runtime.get_all_tools_with_status().await;
+    let skill_overrides = {
+        let cfg = state.config.read().await;
+        crate::engine::tools::build_mcp_skill_overrides(&cfg.mcp, &state.working_dir)
+    };
+    let extra_tools = mcp_tools_as_definitions(&mcp_tools, &skill_overrides);
 
-    let mcp_tools = state.mcp_runtime.get_all_tools().await;
-    let extra_tools = mcp_tools_as_definitions(&mcp_tools);
+    let system_prompt = react_agent::build_system_prompt(
+        &state.working_dir,
+        &skills,
+        lang.as_deref(),
+        Some(&mcp_tools),
+        if unavailable_servers.is_empty() { None } else { Some(&unavailable_servers) },
+    ).await;
 
     // Get conversation history for this session (exclude the message we just pushed)
     let history_messages = state.db.get_recent_messages(&sid, 50).unwrap_or_default();
@@ -501,6 +510,23 @@ pub async fn chat(
 
     // Save assistant reply
     state.db.push_message(&sid, "assistant", &reply)?;
+
+    // Auto-extract memories in background
+    {
+        let config_clone = config.clone();
+        let msg_clone = augmented_message.clone();
+        let reply_clone = reply.clone();
+        let sid_clone = sid.clone();
+        tokio::spawn(async move {
+            react_agent::extract_memories_from_conversation(
+                &config_clone,
+                &msg_clone,
+                &reply_clone,
+                Some(&sid_clone),
+            )
+            .await;
+        });
+    }
 
     // Set session title from user's first message
     if llm_history.is_empty() {
@@ -543,8 +569,12 @@ pub async fn chat_stream_start(
         let cfg = state.config.read().await;
         (cfg.agents.language.clone(), cfg.agents.max_iterations)
     };
-    let mcp_tools = state.mcp_runtime.get_all_tools().await;
-    let extra_tools = mcp_tools_as_definitions(&mcp_tools);
+    let (mcp_tools, unavailable_servers) = state.mcp_runtime.get_all_tools_with_status().await;
+    let skill_overrides = {
+        let cfg = state.config.read().await;
+        crate::engine::tools::build_mcp_skill_overrides(&cfg.mcp, &state.working_dir)
+    };
+    let extra_tools = mcp_tools_as_definitions(&mcp_tools, &skill_overrides);
 
     // Save attachments to filesystem, store paths in metadata
     let save = save_attachments_to_disk(&working_dir, &user_workspace, &sid, &attachments);
@@ -569,8 +599,13 @@ pub async fn chat_stream_start(
         // Wrap entire agent run in with_session_id so all tool calls see the correct session
         let sid_for_scope = sid_clone.clone();
         crate::engine::tools::with_session_id(sid_for_scope, async {
-        let system_prompt =
-            react_agent::build_system_prompt(&working_dir, &skills, lang.as_deref()).await;
+        let system_prompt = react_agent::build_system_prompt(
+            &working_dir,
+            &skills,
+            lang.as_deref(),
+            Some(&mcp_tools),
+            if unavailable_servers.is_empty() { None } else { Some(&unavailable_servers) },
+        ).await;
 
         let handle = app_handle.clone();
         let on_event = move |evt: react_agent::AgentStreamEvent| {
@@ -639,6 +674,23 @@ pub async fn chat_stream_start(
                         "session_id": sid_clone,
                     }),
                 );
+
+                // Auto-extract memories in background
+                {
+                    let config_bg = config.clone();
+                    let msg_bg = augmented_message.clone();
+                    let reply_bg = reply.clone();
+                    let sid_bg = sid_clone.clone();
+                    tokio::spawn(async move {
+                        react_agent::extract_memories_from_conversation(
+                            &config_bg,
+                            &msg_bg,
+                            &reply_bg,
+                            Some(&sid_bg),
+                        )
+                        .await;
+                    });
+                }
             }
             Err(e) => {
                 if e == "cancelled" {

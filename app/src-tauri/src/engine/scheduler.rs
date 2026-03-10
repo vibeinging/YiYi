@@ -89,7 +89,7 @@ pub async fn execute_job_task(
             match llm_config.as_ref() {
                 None => Err(format!("CronJob '{}': no LLM configured", spec.id)),
                 Some(config) => {
-                    let prompt = react_agent::build_system_prompt(working_dir, &[], None).await;
+                    let prompt = react_agent::build_system_prompt(working_dir, &[], None, None, None).await;
                     let input = if text.is_empty() { "Execute the scheduled task." } else { text };
                     react_agent::run_react(config, &prompt, input, &[]).await
                 }

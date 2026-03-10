@@ -1,6 +1,7 @@
 mod commands;
 mod engine;
 mod state;
+mod tray;
 
 use engine::config_watcher::ConfigWatcher;
 use engine::python_bridge;
@@ -61,6 +62,11 @@ pub fn run() {
                 window
                     .eval("document.body.classList.add('tauri-vibrancy')")
                     .ok();
+            }
+
+            // Setup system tray
+            if let Err(e) = tray::setup_tray(app.handle()) {
+                log::error!("Failed to setup system tray: {}", e);
             }
 
             // Store app handle for Python bridge
@@ -133,6 +139,18 @@ pub fn run() {
                 });
             }
 
+            // Start MCP skill server if configured
+            {
+                let skill_server_config = {
+                    let cfg = tauri::async_runtime::block_on(state.config.read());
+                    cfg.skill_server.clone()
+                };
+                let wd = state.working_dir.clone();
+                tauri::async_runtime::spawn(async move {
+                    engine::mcp_server::start_skill_server(wd, &skill_server_config).await;
+                });
+            }
+
             // Auto-start enabled bots in background
             {
                 let bot_state = AppState {
@@ -156,6 +174,12 @@ pub fn run() {
                 });
             }
 
+            // Load provider plugins from plugins/providers/ directory
+            {
+                let mut providers = tauri::async_runtime::block_on(state.providers.write());
+                providers.load_plugins(&state.working_dir);
+            }
+
             // Start config file watcher
             {
                 let watcher = ConfigWatcher::new(
@@ -164,6 +188,17 @@ pub fn run() {
                 );
                 tauri::async_runtime::spawn(async move {
                     watcher.watch().await;
+                });
+            }
+
+            // Start provider plugin directory watcher
+            {
+                let plugin_watcher = crate::state::providers::PluginWatcher::new(
+                    state.working_dir.clone(),
+                    state.providers.clone(),
+                );
+                tauri::async_runtime::spawn(async move {
+                    plugin_watcher.watch().await;
                 });
             }
 
@@ -204,6 +239,16 @@ pub fn run() {
 
             Ok(())
         })
+        .on_window_event(|window, event| {
+            // Intercept the close request: hide window instead of quitting
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Prevent the window from actually closing
+                api.prevent_close();
+                // Hide the window so background services keep running
+                window.hide().ok();
+                log::info!("Window hidden to tray (background services continue)");
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             // System
             commands::system::health_check,
@@ -215,6 +260,9 @@ pub fn run() {
             commands::system::save_agents_config,
             commands::system::get_user_workspace,
             commands::system::set_user_workspace,
+            commands::system::check_claude_code_status,
+            commands::system::get_app_flag,
+            commands::system::set_app_flag,
             // Models & Providers
             commands::models::list_providers,
             commands::models::configure_provider,
@@ -226,6 +274,11 @@ pub fn run() {
             commands::models::remove_model,
             commands::models::get_active_llm,
             commands::models::set_active_llm,
+            commands::models::list_provider_templates,
+            commands::models::import_provider_plugin,
+            commands::models::export_provider_config,
+            commands::models::scan_provider_plugins,
+            commands::models::import_provider_from_template,
             // Workspace
             commands::workspace::list_workspace_files,
             commands::workspace::load_workspace_file,
@@ -286,6 +339,7 @@ pub fn run() {
             commands::skills::generate_skill_ai,
             // Skills Hub
             commands::skills::hub_search_skills,
+            commands::skills::hub_list_skills,
             commands::skills::hub_install_skill,
             commands::skills::batch_enable_skills,
             commands::skills::batch_disable_skills,

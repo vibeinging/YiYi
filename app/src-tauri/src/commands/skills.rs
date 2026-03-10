@@ -33,7 +33,10 @@ static EMBEDDED_SKILLS: Dir = include_dir!("$CARGO_MANIFEST_DIR/skills");
 
 /// Names of all builtin skills
 const BUILTIN_SKILL_NAMES: &[&str] = &[
+    "bot_setup",
     "browser_visible",
+    "coding_assistant",
+    "claude_code",
     "file_reader",
     "news",
     "himalaya",
@@ -678,6 +681,33 @@ pub async fn batch_disable_skills(
         "disabled": disabled,
         "failed": failed,
         "total": disabled.len() + failed.len(),
+    }))
+}
+
+/// List skills from hub with sorting/pagination (ClawHub browse)
+#[tauri::command]
+pub async fn hub_list_skills(
+    limit: Option<usize>,
+    cursor: Option<String>,
+    sort: Option<String>,
+    hub_url: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let config = HubConfig {
+        base_url: hub_url.unwrap_or_else(|| skills_hub::get_default_hub_config().base_url),
+        ..skills_hub::get_default_hub_config()
+    };
+
+    let (skills, next_cursor) = skills_hub::list_hub_skills(
+        limit.unwrap_or(20),
+        cursor.as_deref(),
+        sort.as_deref(),
+        &config,
+    )
+    .await?;
+
+    Ok(serde_json::json!({
+        "items": skills,
+        "nextCursor": next_cursor,
     }))
 }
 
