@@ -1,0 +1,465 @@
+mod commands;
+mod engine;
+mod state;
+
+use engine::config_watcher::ConfigWatcher;
+use engine::python_bridge;
+use engine::scheduler::CronScheduler;
+use state::AppState;
+use tauri::Manager;
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    // Set PYTHONHOME so the embedded Python finds its stdlib.
+    // In dev mode: use the system Python's stdlib.
+    // In production: use the bundled python-stdlib/ in the app resources.
+    setup_python_home();
+
+    // Prevent Python from writing .pyc cache files into bundled stdlib,
+    // which would trigger Tauri dev hot-reload.
+    std::env::set_var("PYTHONDONTWRITEBYTECODE", "1");
+
+    tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_python::init())
+        .manage(AppState::new())
+        .setup(|app| {
+            if cfg!(debug_assertions) {
+                app.handle().plugin(
+                    tauri_plugin_log::Builder::default()
+                        .level(log::LevelFilter::Info)
+                        .build(),
+                )?;
+            }
+
+            // macOS: apply vibrancy + set notification identity
+            #[cfg(target_os = "macos")]
+            {
+                // Set mac-notification-sys application identity BEFORE tauri-plugin-notification
+                // initializes it (both share the same Once-guarded static). In dev mode the Tauri
+                // plugin would default to "com.apple.Terminal"; we override to our own identifier
+                // so notifications show the correct app icon.
+                let ident = if tauri::is_dev() {
+                    "com.apple.Terminal" // dev: Terminal icon (matches Tauri plugin behavior)
+                } else {
+                    "com.yiclaw.desktop"
+                };
+                let _ = mac_notification_sys::set_application(ident);
+
+                let window = app.get_webview_window("main").unwrap();
+
+                use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
+                apply_vibrancy(
+                    &window,
+                    NSVisualEffectMaterial::UnderWindowBackground,
+                    None,
+                    None,
+                )
+                .expect("Unsupported platform! 'apply_vibrancy' is only supported on macOS");
+
+                window
+                    .eval("document.body.classList.add('tauri-vibrancy')")
+                    .ok();
+            }
+
+            // Store app handle for Python bridge
+            python_bridge::set_app_handle(app.handle().clone());
+
+            // Bootstrap Python packages on first launch
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    bootstrap_python_packages(&handle).await;
+                });
+            }
+
+            // Seed builtin skills and default persona templates
+            let state = app.state::<AppState>();
+            commands::skills::seed_builtin_skills(&state.working_dir);
+            let lang = {
+                let cfg = tauri::async_runtime::block_on(state.config.read());
+                cfg.agents.language.clone().unwrap_or_else(|| "zh-CN".into())
+            };
+            engine::react_agent::seed_default_templates(&state.working_dir, &lang);
+
+            // Set MCP runtime, working dir, and app handle for tool execution
+            engine::tools::set_mcp_runtime(state.mcp_runtime.clone());
+            engine::tools::set_working_dir(state.working_dir.clone());
+            engine::tools::set_app_handle(app.handle().clone());
+            engine::tools::set_database(state.db.clone());
+            engine::tools::set_providers(state.providers.clone());
+            engine::tools::set_scheduler(state.scheduler.clone());
+
+            // Load persistent sandbox paths from database
+            {
+                let paths: Vec<std::path::PathBuf> = state
+                    .db
+                    .list_sandbox_paths()
+                    .into_iter()
+                    .map(std::path::PathBuf::from)
+                    .collect();
+                if !paths.is_empty() {
+                    log::info!("Loaded {} sandbox allowed paths", paths.len());
+                    tauri::async_runtime::block_on(engine::tools::init_sandbox_paths(paths));
+                }
+            }
+
+            // Connect MCP clients in background
+            {
+                let mcp = state.mcp_runtime.clone();
+                let mcp_config = {
+                    let cfg = tauri::async_runtime::block_on(state.config.read());
+                    cfg.mcp.clone()
+                };
+                tauri::async_runtime::spawn(async move {
+                    for (key, cfg) in &mcp_config {
+                        if !cfg.enabled {
+                            continue;
+                        }
+                        let result = match cfg.transport.as_str() {
+                            "stdio" => mcp.connect_stdio(key, cfg).await,
+                            "http" | "streamable_http" => mcp.connect_http(key, cfg).await,
+                            _ => {
+                                log::warn!("Unknown MCP transport: {}", cfg.transport);
+                                continue;
+                            }
+                        };
+                        match result {
+                            Ok(tools) => log::info!("MCP '{}': {} tools loaded", key, tools.len()),
+                            Err(e) => log::warn!("MCP '{}' connection failed: {}", key, e),
+                        }
+                    }
+                });
+            }
+
+            // Auto-start enabled bots in background
+            {
+                let bot_state = AppState {
+                    working_dir: state.working_dir.clone(),
+                    user_workspace: std::sync::RwLock::new(state.user_workspace()),
+                    secret_dir: state.secret_dir.clone(),
+                    config: state.config.clone(),
+                    providers: state.providers.clone(),
+                    db: state.db.clone(),
+                    bot_manager: state.bot_manager.clone(),
+                    mcp_runtime: state.mcp_runtime.clone(),
+                    chat_cancelled: state.chat_cancelled.clone(),
+                    scheduler: state.scheduler.clone(),
+                };
+                let bot_app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    match commands::bots::start_all_bots(&bot_state, bot_app_handle).await {
+                        Ok(result) => log::info!("Auto-started bots: {}", result),
+                        Err(e) => log::error!("Failed to auto-start bots: {}", e),
+                    }
+                });
+            }
+
+            // Start config file watcher
+            {
+                let watcher = ConfigWatcher::new(
+                    state.working_dir.clone(),
+                    state.config.clone(),
+                );
+                tauri::async_runtime::spawn(async move {
+                    watcher.watch().await;
+                });
+            }
+
+            // Start cron scheduler in background
+            let scheduler_holder = state.scheduler.clone();
+
+            let app_state_ref = AppState {
+                working_dir: state.working_dir.clone(),
+                user_workspace: std::sync::RwLock::new(state.user_workspace()),
+                secret_dir: state.secret_dir.clone(),
+                config: state.config.clone(),
+                providers: state.providers.clone(),
+                db: state.db.clone(),
+                bot_manager: state.bot_manager.clone(),
+                mcp_runtime: state.mcp_runtime.clone(),
+                chat_cancelled: state.chat_cancelled.clone(),
+                scheduler: state.scheduler.clone(),
+            };
+
+            tauri::async_runtime::spawn(async move {
+                match CronScheduler::new().await {
+                    Ok(scheduler) => {
+                        if let Err(e) = scheduler.load_jobs(&app_state_ref).await {
+                            log::error!("Failed to load cron jobs: {}", e);
+                        }
+                        if let Err(e) = scheduler.start().await {
+                            log::error!("Failed to start cron scheduler: {}", e);
+                        }
+                        // Store scheduler in state for later use (e.g. resume one-time jobs)
+                        *scheduler_holder.write().await = Some(scheduler);
+                        log::info!("Cron scheduler started");
+                    }
+                    Err(e) => {
+                        log::error!("Failed to create cron scheduler: {}", e);
+                    }
+                }
+            });
+
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            // System
+            commands::system::health_check,
+            commands::system::list_models,
+            commands::system::set_model,
+            commands::system::get_current_model,
+            commands::system::is_setup_complete,
+            commands::system::complete_setup,
+            commands::system::save_agents_config,
+            commands::system::get_user_workspace,
+            commands::system::set_user_workspace,
+            // Models & Providers
+            commands::models::list_providers,
+            commands::models::configure_provider,
+            commands::models::test_provider,
+            commands::models::test_model,
+            commands::models::create_custom_provider,
+            commands::models::delete_custom_provider,
+            commands::models::add_model,
+            commands::models::remove_model,
+            commands::models::get_active_llm,
+            commands::models::set_active_llm,
+            // Workspace
+            commands::workspace::list_workspace_files,
+            commands::workspace::load_workspace_file,
+            commands::workspace::load_workspace_file_binary,
+            commands::workspace::save_workspace_file,
+            commands::workspace::delete_workspace_file,
+            commands::workspace::create_workspace_file,
+            commands::workspace::create_workspace_dir,
+            commands::workspace::upload_workspace,
+            commands::workspace::download_workspace,
+            commands::workspace::get_workspace_path,
+            commands::workspace::sandbox_respond,
+            commands::workspace::sandbox_list_allowed,
+            commands::workspace::sandbox_remove_path,
+            commands::workspace::list_agent_files,
+            commands::workspace::read_agent_file,
+            commands::workspace::write_agent_file,
+            commands::workspace::list_memory_files,
+            commands::workspace::read_memory_file,
+            commands::workspace::write_memory_file,
+            // Bots
+            commands::bots::bots_list,
+            commands::bots::bots_list_platforms,
+            commands::bots::bots_get,
+            commands::bots::bots_create,
+            commands::bots::bots_update,
+            commands::bots::bots_delete,
+            commands::bots::bots_send,
+            commands::bots::bots_start,
+            commands::bots::bots_stop,
+            commands::bots::bots_list_sessions,
+            commands::bots::session_bind_bot,
+            commands::bots::session_unbind_bot,
+            commands::bots::session_list_bots,
+            // Agent & Chat
+            commands::agent::chat,
+            commands::agent::chat_stream_start,
+            commands::agent::chat_stream_stop,
+            commands::agent::get_history,
+            commands::agent::clear_history,
+            commands::agent::delete_message,
+            // Sessions
+            commands::agent::list_sessions,
+            commands::agent::create_session,
+            commands::agent::rename_session,
+            commands::agent::delete_session,
+            // Skills
+            commands::skills::list_skills,
+            commands::skills::get_skill,
+            commands::skills::get_skill_content,
+            commands::skills::enable_skill,
+            commands::skills::disable_skill,
+            commands::skills::update_skill,
+            commands::skills::create_skill,
+            commands::skills::delete_skill,
+            commands::skills::import_skill,
+            commands::skills::reload_skills,
+            commands::skills::generate_skill_ai,
+            // Skills Hub
+            commands::skills::hub_search_skills,
+            commands::skills::hub_install_skill,
+            commands::skills::batch_enable_skills,
+            commands::skills::batch_disable_skills,
+            commands::skills::get_hub_config,
+            // Cron Jobs
+            commands::cronjobs::list_cronjobs,
+            commands::cronjobs::create_cronjob,
+            commands::cronjobs::update_cronjob,
+            commands::cronjobs::delete_cronjob,
+            commands::cronjobs::pause_cronjob,
+            commands::cronjobs::resume_cronjob,
+            commands::cronjobs::run_cronjob,
+            commands::cronjobs::get_cronjob_state,
+            commands::cronjobs::list_cronjob_executions,
+            // Shell
+            commands::shell::execute_shell,
+            commands::shell::execute_shell_stream,
+            // Browser
+            commands::browser::launch_browser,
+            commands::browser::browser_navigate,
+            commands::browser::browser_screenshot,
+            commands::browser::close_browser,
+            // Heartbeat
+            commands::heartbeat::get_heartbeat_config,
+            commands::heartbeat::save_heartbeat_config,
+            commands::heartbeat::send_heartbeat,
+            commands::heartbeat::get_heartbeat_history,
+            // Environment
+            commands::env::list_envs,
+            commands::env::save_envs,
+            commands::env::delete_env,
+            // MCP
+            commands::mcp::list_mcp_clients,
+            commands::mcp::get_mcp_client,
+            commands::mcp::create_mcp_client,
+            commands::mcp::update_mcp_client,
+            commands::mcp::toggle_mcp_client,
+            commands::mcp::delete_mcp_client,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+
+/// Bootstrap core Python packages on first launch.
+/// Checks if packages are already installed, if not installs from bundled wheels.
+async fn bootstrap_python_packages(handle: &tauri::AppHandle) {
+    use tauri_plugin_python::PythonExt;
+
+    let runner = handle.runner();
+    let core_packages = r#"["pypdf","pptx","openpyxl","docx","PIL"]"#;
+
+    // Check which core packages are missing
+    match runner
+        .call_function(
+            "check_packages",
+            vec![serde_json::Value::String(core_packages.into())],
+        )
+        .await
+    {
+        Ok(result) => {
+            let result_str = result.as_str().map(|s| s.to_string()).unwrap_or_else(|| result.to_string());
+            let missing: Vec<String> =
+                serde_json::from_str(&result_str).unwrap_or_default();
+            if missing.is_empty() {
+                log::info!("All core Python packages are available");
+                return;
+            }
+            log::info!("Missing Python packages: {:?}", missing);
+
+            // Try offline install from bundled wheels
+            // In dev mode, resource_dir may not contain wheels, so fallback to source dir
+            let wheels_dir = handle
+                .path()
+                .resource_dir()
+                .ok()
+                .map(|d| d.join("wheels"))
+                .filter(|d| d.join("requirements.txt").exists() && std::fs::read_dir(d).map(|mut r| r.any(|e| e.ok().map_or(false, |e| e.path().extension().map_or(false, |ext| ext == "whl")))).unwrap_or(false))
+                .or_else(|| {
+                    // Fallback: look next to the Cargo.toml (dev mode)
+                    let dev_wheels = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("wheels");
+                    if dev_wheels.exists() { Some(dev_wheels) } else { None }
+                });
+
+            if let Some(wheels_dir) = wheels_dir {
+                let req_file = wheels_dir.join("requirements.txt");
+                log::info!("Installing from wheels: {}", wheels_dir.display());
+                match runner
+                    .call_function(
+                        "pip_install_offline",
+                        vec![
+                            serde_json::Value::String(
+                                wheels_dir.to_string_lossy().into(),
+                            ),
+                            serde_json::Value::String(
+                                req_file.to_string_lossy().into(),
+                            ),
+                        ],
+                    )
+                    .await
+                {
+                    Ok(msg) => {
+                        let msg_str = msg.as_str().unwrap_or("done");
+                        log::info!("Offline install: {}", msg_str);
+                    }
+                    Err(e) => log::warn!("Offline install failed: {}", e),
+                }
+            } else {
+                log::info!("No bundled wheels found, packages must be installed manually");
+            }
+        }
+        Err(e) => {
+            log::warn!("Failed to check Python packages: {}", e);
+        }
+    }
+}
+
+/// Set PYTHONHOME before Python interpreter initializes.
+///
+/// Directory layout:
+///   Unix:    python-stdlib/lib/python3.X/...
+///   Windows: python-stdlib/Lib/...  (no version subdirectory)
+///
+/// PYTHONHOME should point to python-stdlib/ (the prefix).
+fn setup_python_home() {
+    // If PYTHONHOME is already set externally, respect it
+    if std::env::var("PYTHONHOME").is_ok() {
+        return;
+    }
+
+    // Dev mode: check for bundled stdlib next to Cargo.toml
+    let dev_stdlib = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("python-stdlib");
+    if has_stdlib(&dev_stdlib) {
+        std::env::set_var("PYTHONHOME", &dev_stdlib);
+        eprintln!("[python] Using bundled stdlib: {}", dev_stdlib.display());
+        return;
+    }
+
+    // Production mode: look for python-stdlib in the executable's directory.
+    // On macOS .app bundles: Contents/MacOS/python-stdlib/
+    // On Windows/Linux: next to the executable.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            // macOS: Contents/MacOS/ -> check Contents/Resources/python-stdlib/ first
+            #[cfg(target_os = "macos")]
+            {
+                let resources = exe_dir.join("../Resources/python-stdlib");
+                if has_stdlib(&resources) {
+                    let canonical = resources.canonicalize().unwrap_or(resources.clone());
+                    std::env::set_var("PYTHONHOME", &canonical);
+                    eprintln!("[python] Using bundled stdlib: {}", canonical.display());
+                    return;
+                }
+            }
+
+            let prod_stdlib = exe_dir.join("python-stdlib");
+            if has_stdlib(&prod_stdlib) {
+                std::env::set_var("PYTHONHOME", &prod_stdlib);
+                eprintln!("[python] Using bundled stdlib: {}", prod_stdlib.display());
+                return;
+            }
+        }
+    }
+}
+
+/// Check if a directory looks like a valid Python stdlib prefix.
+fn has_stdlib(base: &std::path::Path) -> bool {
+    // Unix: {base}/lib/python3.X/
+    if base.join("lib").exists() {
+        return true;
+    }
+    // Windows: {base}/Lib/
+    if base.join("Lib").exists() {
+        return true;
+    }
+    false
+}

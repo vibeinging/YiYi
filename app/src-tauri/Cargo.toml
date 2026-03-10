@@ -1,0 +1,55 @@
+[package]
+name = "yiclaw"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+license = ""
+repository = ""
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.5.6", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.10.3", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-shell = "2"
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6"
+dotenv = "0.15"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+futures-util = "0.3"
+zip = "2"
+glob = "0.3"
+tokio-cron-scheduler = "0.13"
+cron = "0.15"
+headless_chrome = "1"
+base64 = "0.22"
+axum = "0.8"
+tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+async-trait = "0.1"
+include_dir = "0.7"
+calamine = "0.26"
+rust_xlsxwriter = "0.82"
+docx-rs = "0.4"
+quick-xml = "0.37"
+pdf-extract = "0.7"
+tauri-plugin-python = { version = "0.3", features = ["pyo3"] }
+tauri-plugin-notification = "2"
+rusqlite = { version = "0.31", features = ["bundled"] }
+async_py = { version = "0.2", default-features = false, features = ["pyo3"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.26"
+window-vibrancy = "0.5"
+mac-notification-sys = "0.6"
