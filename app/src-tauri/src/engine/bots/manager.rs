@@ -445,6 +445,7 @@ async fn process_message(
     early_reply: Option<Box<dyn Fn(String) -> futures_util::future::BoxFuture<'static, ()> + Send + Sync>>,
     app_handle: Option<tauri::AppHandle>,
 ) -> Result<(String, String), String> {
+    // Use global LLM config for all bot messages
     let config = crate::commands::agent::resolve_llm_config(state).await?;
 
     // Check if this bot is bound to an existing session
@@ -495,7 +496,7 @@ async fn process_message(
         vec![]
     };
 
-    // Load skills
+    // Load skills (with names for agent filtering)
     let skills_dir = state.working_dir.join("active_skills");
     let mut skills = Vec::new();
     if let Ok(mut entries) = tokio::fs::read_dir(&skills_dir).await {
@@ -512,10 +513,10 @@ async fn process_message(
         (cfg.agents.language.clone(), cfg.agents.max_iterations)
     };
 
-    // Build system prompt, optionally with bot persona.
-    // Override the "Bots & External Messaging" section — when processing an incoming
-    // bot message the agent IS the bot and should reply directly without tools.
-    let mut system_prompt = react_agent::build_system_prompt(&state.working_dir, &skills, lang.as_deref(), None, None).await;
+    // Build system prompt using global config
+    let mut system_prompt = react_agent::build_system_prompt(
+        &state.working_dir, &skills, lang.as_deref(), None, None,
+    ).await;
 
     // Remove the bot-tools guidance that confuses the agent in this context
     if let Some(idx) = system_prompt.find("## Bots & External Messaging") {

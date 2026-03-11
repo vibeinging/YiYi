@@ -13,7 +13,17 @@ struct BrowserInstance {
 impl BrowserInstance {
     fn is_alive(&self) -> bool {
         if let Some(id) = self.child.id() {
-            unsafe { libc::kill(id as i32, 0) == 0 }
+            let pid = match i32::try_from(id) {
+                Ok(p) => p,
+                Err(_) => return false,
+            };
+            let ret = unsafe { libc::kill(pid, 0) };
+            if ret == 0 {
+                true
+            } else {
+                // EPERM means the process exists but we lack permission to signal it
+                std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+            }
         } else {
             false
         }
@@ -70,7 +80,7 @@ fn bridge_script_path() -> String {
 }
 
 /// Spawn a new Playwright bridge process and wait for it to be ready.
-async fn spawn_bridge(headed: bool) -> Result<BrowserInstance, String> {
+async fn spawn_bridge(headless: bool) -> Result<BrowserInstance, String> {
     let script_path = bridge_script_path();
 
     let mut child = tokio::process::Command::new("node")
@@ -104,7 +114,7 @@ async fn spawn_bridge(headed: bool) -> Result<BrowserInstance, String> {
     // Send start action with headed flag
     client
         .post(format!("http://127.0.0.1:{}/action", port))
-        .json(&serde_json::json!({"action": "start", "headed": !headed}))
+        .json(&serde_json::json!({"action": "start", "headed": !headless}))
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
@@ -168,7 +178,7 @@ pub async fn browser_screenshot(
 
     let resp = instance.client
         .post(format!("http://127.0.0.1:{}/action", instance.port))
-        .json(&serde_json::json!({"action": "screenshot"}))
+        .json(&serde_json::json!({"action": "screenshot", "fullPage": full_page}))
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await

@@ -574,6 +574,7 @@ pub async fn start_all_bots(
         mcp_runtime: state.mcp_runtime.clone(),
         chat_cancelled: state.chat_cancelled.clone(),
         scheduler: state.scheduler.clone(),
+        streaming_state: state.streaming_state.clone(),
     });
 
     // Start the consumer loop

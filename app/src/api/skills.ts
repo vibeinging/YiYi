@@ -160,6 +160,10 @@ export interface HubSkill {
   author?: string;
   tags?: string[];
   security_verdict?: string;
+  requires?: {
+    env?: string[];
+    bins?: string[];
+  };
 }
 
 export interface HubConfig {

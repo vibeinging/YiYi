@@ -1652,6 +1652,8 @@ impl Database {
             .map_err(|e| format!("Failed to rebuild FTS index: {}", e))?;
         Ok(())
     }
+
+    // Agent CRUD methods removed — switched to dynamic agent spawning.
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

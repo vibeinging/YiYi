@@ -1,6 +1,7 @@
 pub mod bots;
 pub mod db;
 pub mod config_watcher;
+pub mod memory;
 pub mod doc_tools;
 pub mod llm_client;
 pub mod mcp_runtime;

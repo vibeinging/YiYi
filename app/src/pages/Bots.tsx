@@ -318,7 +318,7 @@ export function BotsPage({ consumeNotifContext }: BotsPageProps) {
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      <div className="shrink-0 px-6 pt-8 pb-0 max-w-4xl mx-auto w-full">
+      <div className="shrink-0 px-6 pt-8 pb-0 w-full">
         <PageHeader
           title={t('bots.title')}
           description={t('bots.description')}
@@ -416,7 +416,7 @@ export function BotsPage({ consumeNotifContext }: BotsPageProps) {
       {/* Bots tab */}
       {activeTab === 'bots' && (
         <div className="flex-1 overflow-y-auto">
-          <div className="max-w-4xl mx-auto px-6 pb-8">
+          <div className="w-full px-8 pb-8">
             {/* Status bar */}
             <div className="flex items-center gap-3 mb-6 px-4 py-3 rounded-xl border" style={{ background: 'var(--color-bg-elevated)', borderColor: 'var(--color-border)' }}>
               <div className={`w-2 h-2 rounded-full ${enabledCount > 0 ? 'bg-[var(--color-success)]' : 'bg-[var(--color-text-muted)]'}`} />

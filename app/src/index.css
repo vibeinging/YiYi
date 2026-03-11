@@ -119,6 +119,12 @@
   --sidebar-border: transparent;
 }
 
+/* ─── Spawn Agent Animations ─── */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.4; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.3); }
+}
+
 /* ─── Reset ─── */
 * {
   margin: 0;

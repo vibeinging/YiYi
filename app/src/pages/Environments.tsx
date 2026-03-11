@@ -293,7 +293,7 @@ export function EnvironmentsPage({ embedded = false }: { embedded?: boolean } = 
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-5xl mx-auto px-6 py-8">
+      <div className="w-full px-8 py-8">
         {content}
       </div>
     </div>

@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -10,6 +12,30 @@ use crate::engine::db::Database;
 use crate::engine::mcp_runtime::MCPRuntime;
 use crate::engine::scheduler::CronScheduler;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolSnapshot {
+    pub name: String,
+    pub status: String, // "running" or "done"
+    pub preview: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpawnAgentSnapshot {
+    pub name: String,
+    pub task: String,
+    pub status: String, // "running" or "complete"
+    pub content: String,
+    pub tools: Vec<ToolSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamingSnapshot {
+    pub is_active: bool,
+    pub accumulated_text: String,
+    pub tools: Vec<ToolSnapshot>,
+    pub spawn_agents: Vec<SpawnAgentSnapshot>,
+}
+
 pub struct AppState {
     pub working_dir: PathBuf,       // Internal app data (~/.yiclaw)
     pub user_workspace: std::sync::RwLock<PathBuf>,  // User-facing workspace
@@ -21,6 +47,7 @@ pub struct AppState {
     pub mcp_runtime: Arc<MCPRuntime>,
     pub chat_cancelled: Arc<AtomicBool>,
     pub scheduler: Arc<RwLock<Option<CronScheduler>>>,
+    pub streaming_state: Arc<std::sync::Mutex<HashMap<String, StreamingSnapshot>>>,
 }
 
 impl AppState {
@@ -107,6 +134,7 @@ impl AppState {
             mcp_runtime: Arc::new(MCPRuntime::new()),
             chat_cancelled: Arc::new(AtomicBool::new(false)),
             scheduler: Arc::new(RwLock::new(None)),
+            streaming_state: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 }

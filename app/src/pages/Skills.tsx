@@ -21,6 +21,8 @@ import {
   X,
   Pencil,
   Save,
+  ShieldAlert,
+  ShieldX,
 } from 'lucide-react';
 import { Select } from '../components/Select';
 import { PageHeader } from '../components/PageHeader';
@@ -275,7 +277,7 @@ export function SkillsPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-5xl mx-auto px-6 py-8">
+      <div className="w-full px-8 py-8">
         <PageHeader
           title={t('skills.title')}
           description={t('skills.description')}
@@ -462,25 +464,67 @@ export function SkillsPage() {
                           <p className="text-[10px] truncate" style={{ color: 'var(--color-text-muted)' }}>{hs.slug}</p>
                         </div>
                       </div>
-                      <button
-                        onClick={() => handleHubInstall(hs)}
-                        disabled={installingSlug === hs.slug}
-                        className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium transition-colors shrink-0"
-                        style={{ background: 'var(--color-primary)', color: '#FFFFFF' }}
-                      >
-                        {installingSlug === hs.slug ? (
-                          <Loader2 size={11} className="animate-spin" />
-                        ) : (
-                          <Download size={11} />
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {hs.security_verdict === 'suspicious' && (
+                          <span title={t('skills.securitySuspicious')}>
+                            <ShieldAlert size={14} style={{ color: 'var(--color-warning, #f59e0b)' }} />
+                          </span>
                         )}
-                        {t('skills.hubInstall')}
-                      </button>
+                        {hs.security_verdict === 'malicious' && (
+                          <span title={t('skills.securityMalicious')}>
+                            <ShieldX size={14} style={{ color: 'var(--color-danger, #ef4444)' }} />
+                          </span>
+                        )}
+                        <button
+                          onClick={() => handleHubInstall(hs)}
+                          disabled={installingSlug === hs.slug || hs.security_verdict === 'malicious'}
+                          className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium transition-colors"
+                          style={{
+                            background: hs.security_verdict === 'malicious' ? 'var(--color-bg-subtle)' : 'var(--color-primary)',
+                            color: hs.security_verdict === 'malicious' ? 'var(--color-text-muted)' : '#FFFFFF',
+                            cursor: hs.security_verdict === 'malicious' ? 'not-allowed' : undefined,
+                          }}
+                        >
+                          {installingSlug === hs.slug ? (
+                            <Loader2 size={11} className="animate-spin" />
+                          ) : (
+                            <Download size={11} />
+                          )}
+                          {t('skills.hubInstall')}
+                        </button>
+                      </div>
                     </div>
 
                     {/* Description */}
                     <p className="text-[12px] leading-relaxed line-clamp-2 mb-2" style={{ color: 'var(--color-text-secondary)' }}>
                       {hs.description}
                     </p>
+
+                    {/* Requires */}
+                    {hs.requires && (hs.requires.env?.length || hs.requires.bins?.length) ? (
+                      <div className="flex flex-wrap gap-1 mb-2">
+                        {hs.requires.env?.map((v) => (
+                          <span
+                            key={`env-${v}`}
+                            className="px-1.5 py-0.5 text-[10px] rounded"
+                            style={{ background: 'rgba(59,130,246,0.1)', color: 'var(--color-text-secondary)' }}
+                            title={t('skills.requiresEnv')}
+                          >
+                            ${v}
+                          </span>
+                        ))}
+                        {hs.requires.bins?.map((v) => (
+                          <span
+                            key={`bin-${v}`}
+                            className="px-1.5 py-0.5 text-[10px] rounded"
+                            style={{ background: 'rgba(168,85,247,0.1)', color: 'var(--color-text-secondary)' }}
+                            title={t('skills.requiresBin')}
+                          >
+                            {v}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
 
                     {/* Tags */}
                     {hs.tags && hs.tags.length > 0 && (

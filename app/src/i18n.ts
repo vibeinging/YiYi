@@ -19,6 +19,7 @@ const resources = {
         sessions: '会话',
         terminal: '终端',
         heartbeat: '心跳',
+
         settings: '设置',
         section: {
           assistant: '助手',
@@ -165,6 +166,10 @@ const resources = {
         hubSortUpdated: '最近更新',
         hubSortStars: '收藏数',
         hubSortTrending: '趋势',
+        securitySuspicious: '此技能可能存在安全风险',
+        securityMalicious: '此技能已被标记为恶意',
+        requiresEnv: '需要环境变量',
+        requiresBin: '需要命令行工具',
         // Builtin skill descriptions
         skillDesc: {
           browser_visible: '打开真实可见的浏览器窗口，用于演示、调试或需要人工交互的场景',
@@ -649,6 +654,7 @@ const resources = {
           bindHint: '绑定机器人后，外部消息将路由到此会话，你也可以通过会话发送消息',
           rebound: '该机器人已从其他会话解绑并绑定到当前会话',
         },
+
       },
     },
   },
@@ -668,6 +674,7 @@ const resources = {
         sessions: 'Sessions',
         terminal: 'Terminal',
         heartbeat: 'Heartbeat',
+
         settings: 'Settings',
         section: {
           assistant: 'Assistant',
@@ -813,6 +820,10 @@ const resources = {
         hubSortUpdated: 'Recently updated',
         hubSortStars: 'Stars',
         hubSortTrending: 'Trending',
+        securitySuspicious: 'This skill may pose security risks',
+        securityMalicious: 'This skill has been flagged as malicious',
+        requiresEnv: 'Requires environment variable',
+        requiresBin: 'Requires CLI tool',
         // Builtin skill descriptions
         skillDesc: {
           browser_visible: 'Open a real visible browser window for demos, debugging, or interactive scenarios',
@@ -1262,6 +1273,7 @@ const resources = {
           bindHint: 'Bound bots route external messages to this session and let you send messages through them',
           rebound: 'Bot was unbound from another session and bound to this one',
         },
+
         clearAll: 'Clear All',
         addImage: 'Add Image',
         addFile: 'Add Attachment',

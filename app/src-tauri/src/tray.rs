@@ -156,6 +156,7 @@ async fn toggle_all_bots(app: &AppHandle) {
             mcp_runtime: state.mcp_runtime.clone(),
             chat_cancelled: state.chat_cancelled.clone(),
             scheduler: state.scheduler.clone(),
+            streaming_state: state.streaming_state.clone(),
         };
         let app_handle = app.clone();
         manager

@@ -6,6 +6,7 @@ use crate::engine::db;
 use crate::engine::llm_client::{LLMConfig, LLMMessage, MessageContent};
 use crate::engine::react_agent;
 use crate::engine::tools::mcp_tools_as_definitions;
+use crate::state::app_state::{StreamingSnapshot, ToolSnapshot};
 use crate::state::AppState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,14 +89,16 @@ pub async fn resolve_llm_config(state: &AppState) -> Result<LLMConfig, String> {
     })
 }
 
-/// Load active skill contents for the system prompt.
-async fn load_skill_prompts(state: &AppState) -> Vec<String> {
+/// Load active skill contents and names for the system prompt.
+/// Returns (contents, names) where indices correspond.
+async fn load_skill_prompts_with_names(state: &AppState) -> (Vec<String>, Vec<String>) {
     let skills_dir = state.working_dir.join("active_skills");
     let mut prompts = Vec::new();
+    let mut names = Vec::new();
 
     let mut entries = match tokio::fs::read_dir(&skills_dir).await {
         Ok(entries) => entries,
-        Err(_) => return prompts,
+        Err(_) => return (prompts, names),
     };
 
     while let Ok(Some(entry)) = entries.next_entry().await {
@@ -103,14 +106,18 @@ async fn load_skill_prompts(state: &AppState) -> Vec<String> {
         let skill_md = path.join("SKILL.md");
         if let Ok(content) = tokio::fs::read_to_string(&skill_md).await {
             let skill_dir = path.to_string_lossy();
+            let name = path.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
             prompts.push(format!(
                 "[Skill directory: {}]\n\n{}",
                 skill_dir, content
             ));
+            names.push(name);
         }
     }
 
-    prompts
+    (prompts, names)
 }
 
 /// Convert db messages to LLMMessages for conversation context.
@@ -180,6 +187,25 @@ fn resolve_session_id(session_id: &Option<String>) -> String {
         .filter(|s| !s.is_empty())
         .unwrap_or(DEFAULT_SESSION)
         .to_string()
+}
+
+/// Recall relevant memories based on user message and inject them as context.
+/// Returns an augmented message with memory context prepended if any relevant memories found.
+fn recall_memories(db: &db::Database, user_message: &str) -> Option<String> {
+    // Skip very short messages (greetings, single words)
+    if user_message.trim().len() < 4 {
+        return None;
+    }
+    let results = db.memory_search(user_message, None, 5).ok()?;
+    if results.is_empty() {
+        return None;
+    }
+    let mut context = String::from("[Recalled memories]\n");
+    for mem in &results {
+        context.push_str(&format!("- [{}] {}\n", mem.category, mem.content));
+    }
+    context.push_str("[/Recalled memories]\n");
+    Some(context)
 }
 
 /// Handle system commands that start with /
@@ -453,6 +479,7 @@ pub async fn chat(
         }
     }
 
+    // Use global LLM config
     let config = resolve_llm_config(&state).await?;
 
     // Save attachments to filesystem, store paths in metadata
@@ -465,10 +492,12 @@ pub async fn chat(
     };
     state.db.push_message_with_metadata(&sid, "user", &augmented_message, save.metadata_json.as_deref())?;
 
-    let skills = load_skill_prompts(&state).await;
+    let (skills, _skill_names) = load_skill_prompts_with_names(&state).await;
     let (lang, max_iter) = {
         let cfg = state.config.read().await;
-        (cfg.agents.language.clone(), cfg.agents.max_iterations)
+        let lang = cfg.agents.language.clone();
+        let max_iter = cfg.agents.max_iterations;
+        (lang, max_iter)
     };
     let (mcp_tools, unavailable_servers) = state.mcp_runtime.get_all_tools_with_status().await;
     let skill_overrides = {
@@ -477,12 +506,9 @@ pub async fn chat(
     };
     let extra_tools = mcp_tools_as_definitions(&mcp_tools, &skill_overrides);
 
+    let unavail = if unavailable_servers.is_empty() { None } else { Some(unavailable_servers.as_slice()) };
     let system_prompt = react_agent::build_system_prompt(
-        &state.working_dir,
-        &skills,
-        lang.as_deref(),
-        Some(&mcp_tools),
-        if unavailable_servers.is_empty() { None } else { Some(&unavailable_servers) },
+        &state.working_dir, &skills, lang.as_deref(), Some(&mcp_tools), unavail,
     ).await;
 
     // Get conversation history for this session (exclude the message we just pushed)
@@ -493,13 +519,20 @@ pub async fn chat(
         vec![]
     };
 
+    // Recall relevant memories and inject into context
+    let agent_message = if let Some(mem_context) = recall_memories(&state.db, &message) {
+        format!("{mem_context}\n{augmented_message}")
+    } else {
+        augmented_message.clone()
+    };
+
     // Run agent with session-scoped context (task_local) so tools see the correct session
     let reply = crate::engine::tools::with_session_id(
         sid.clone(),
         react_agent::run_react_with_options(
             &config,
             &system_prompt,
-            &augmented_message,
+            &agent_message,
             &extra_tools,
             &llm_history,
             max_iter,
@@ -550,11 +583,15 @@ pub async fn chat_stream_start(
     // Handle system commands
     if message.trim().starts_with('/') {
         if let Some(response) = handle_command(&state, &sid, &message).await {
-            app.emit("chat://complete", &response).ok();
+            app.emit("chat://complete", serde_json::json!({
+                "text": response,
+                "session_id": sid,
+            })).ok();
             return Ok(());
         }
     }
 
+    // Use global LLM config
     let config = resolve_llm_config(&state).await?;
     let db = state.db.clone();
     let working_dir = state.working_dir.clone();
@@ -564,10 +601,12 @@ pub async fn chat_stream_start(
     // Reset cancellation flag for new stream
     cancelled.store(false, std::sync::atomic::Ordering::Relaxed);
 
-    let skills = load_skill_prompts(&state).await;
+    let (skills, _skill_names) = load_skill_prompts_with_names(&state).await;
     let (lang, max_iter) = {
         let cfg = state.config.read().await;
-        (cfg.agents.language.clone(), cfg.agents.max_iterations)
+        let lang = cfg.agents.language.clone();
+        let max_iter = cfg.agents.max_iterations;
+        (lang, max_iter)
     };
     let (mcp_tools, unavailable_servers) = state.mcp_runtime.get_all_tools_with_status().await;
     let skill_overrides = {
@@ -585,6 +624,13 @@ pub async fn chat_stream_start(
     };
     db.push_message_with_metadata(&sid, "user", &augmented_message, save.metadata_json.as_deref())?;
 
+    // Recall relevant memories and inject into context
+    let agent_message = if let Some(mem_context) = recall_memories(&db, &message) {
+        format!("{mem_context}\n{augmented_message}")
+    } else {
+        augmented_message.clone()
+    };
+
     // Snapshot history for the spawned task
     let history_messages = db.get_recent_messages(&sid, 50).unwrap_or_default();
     let llm_history: Vec<LLMMessage> = if history_messages.len() > 1 {
@@ -593,25 +639,45 @@ pub async fn chat_stream_start(
         vec![]
     };
 
+    let streaming_state = state.streaming_state.clone();
+
+    // Initialize the snapshot for this session
+    {
+        let mut ss = streaming_state.lock().unwrap();
+        ss.insert(sid.clone(), StreamingSnapshot {
+            is_active: true,
+            accumulated_text: String::new(),
+            tools: vec![],
+            spawn_agents: vec![],
+        });
+    }
+
     let app_handle = app.clone();
     let sid_clone = sid.clone();
     tokio::spawn(async move {
         // Wrap entire agent run in with_session_id so all tool calls see the correct session
         let sid_for_scope = sid_clone.clone();
         crate::engine::tools::with_session_id(sid_for_scope, async {
+        let unavail = if unavailable_servers.is_empty() { None } else { Some(unavailable_servers.as_slice()) };
         let system_prompt = react_agent::build_system_prompt(
-            &working_dir,
-            &skills,
-            lang.as_deref(),
-            Some(&mcp_tools),
-            if unavailable_servers.is_empty() { None } else { Some(&unavailable_servers) },
+            &working_dir, &skills, lang.as_deref(), Some(&mcp_tools), unavail,
         ).await;
 
         let handle = app_handle.clone();
+        let ss_for_event = streaming_state.clone();
+        let sid_for_event = sid_clone.clone();
         let on_event = move |evt: react_agent::AgentStreamEvent| {
             match &evt {
                 react_agent::AgentStreamEvent::Token(text) => {
-                    handle.emit("chat://chunk", text).ok();
+                    handle.emit("chat://chunk", serde_json::json!({
+                        "text": text,
+                        "session_id": sid_for_event,
+                    })).ok();
+                    if let Ok(mut ss) = ss_for_event.lock() {
+                        if let Some(snap) = ss.get_mut(&sid_for_event) {
+                            snap.accumulated_text.push_str(text);
+                        }
+                    }
                 }
                 react_agent::AgentStreamEvent::ToolStart { name, args_preview } => {
                     handle
@@ -621,9 +687,19 @@ pub async fn chat_stream_start(
                                 "type": "start",
                                 "name": name,
                                 "preview": args_preview,
+                                "session_id": sid_for_event,
                             }),
                         )
                         .ok();
+                    if let Ok(mut ss) = ss_for_event.lock() {
+                        if let Some(snap) = ss.get_mut(&sid_for_event) {
+                            snap.tools.push(ToolSnapshot {
+                                name: name.clone(),
+                                status: "running".into(),
+                                preview: Some(args_preview.clone()),
+                            });
+                        }
+                    }
                 }
                 react_agent::AgentStreamEvent::ToolEnd { name, result_preview } => {
                     handle
@@ -633,9 +709,23 @@ pub async fn chat_stream_start(
                                 "type": "end",
                                 "name": name,
                                 "preview": result_preview,
+                                "session_id": sid_for_event,
                             }),
                         )
                         .ok();
+                    if let Ok(mut ss) = ss_for_event.lock() {
+                        if let Some(snap) = ss.get_mut(&sid_for_event) {
+                            for t in snap.tools.iter_mut().rev() {
+                                if t.name == *name && t.status == "running" {
+                                    t.status = "done".into();
+                                    if !result_preview.is_empty() {
+                                        t.preview = Some(result_preview.clone());
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 }
                 react_agent::AgentStreamEvent::Complete(_)
                 | react_agent::AgentStreamEvent::Error(_) => {}
@@ -645,7 +735,7 @@ pub async fn chat_stream_start(
         match react_agent::run_react_with_options_stream(
             &config,
             &system_prompt,
-            &augmented_message,
+            &agent_message,
             &extra_tools,
             &llm_history,
             max_iter,
@@ -663,7 +753,10 @@ pub async fn chat_stream_start(
                     db.rename_session(&sid_clone, &title).ok();
                 }
 
-                app_handle.emit("chat://complete", &reply).ok();
+                app_handle.emit("chat://complete", serde_json::json!({
+                    "text": reply,
+                    "session_id": sid_clone,
+                })).ok();
 
                 let preview: String = reply.chars().take(100).collect();
                 crate::engine::scheduler::send_notification_with_context(
@@ -694,9 +787,15 @@ pub async fn chat_stream_start(
             }
             Err(e) => {
                 if e == "cancelled" {
-                    app_handle.emit("chat://complete", "").ok();
+                    app_handle.emit("chat://complete", serde_json::json!({
+                        "text": "",
+                        "session_id": sid_clone,
+                    })).ok();
                 } else {
-                    app_handle.emit("chat://error", &e).ok();
+                    app_handle.emit("chat://error", serde_json::json!({
+                        "text": e,
+                        "session_id": sid_clone,
+                    })).ok();
                     let err_preview: String = e.chars().take(100).collect();
                     crate::engine::scheduler::send_notification_with_context(
                         "YiClaw",
@@ -708,6 +807,27 @@ pub async fn chat_stream_start(
                     );
                 }
             }
+        }
+
+        // Mark snapshot as inactive, then schedule cleanup after 30s for recovery window
+        if let Ok(mut ss) = streaming_state.lock() {
+            if let Some(snap) = ss.get_mut(&sid_clone) {
+                snap.is_active = false;
+            }
+        }
+        {
+            let ss_cleanup = streaming_state.clone();
+            let sid_cleanup = sid_clone.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                if let Ok(mut ss) = ss_cleanup.lock() {
+                    if let Some(snap) = ss.get(&sid_cleanup) {
+                        if !snap.is_active {
+                            ss.remove(&sid_cleanup);
+                        }
+                    }
+                }
+            });
         }
         }).await; // end with_session_id
     });
@@ -790,6 +910,15 @@ pub async fn chat_stream_stop(
 }
 
 #[tauri::command]
+pub async fn chat_stream_state(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<Option<StreamingSnapshot>, String> {
+    let ss = state.streaming_state.lock().map_err(|e| e.to_string())?;
+    Ok(ss.get(&session_id).cloned())
+}
+
+#[tauri::command]
 pub async fn clear_history(
     state: State<'_, AppState>,
     session_id: Option<String>,
@@ -805,3 +934,5 @@ pub async fn delete_message(
 ) -> Result<(), String> {
     state.db.delete_message(message_id)
 }
+
+// Agent CRUD commands removed — switched to dynamic agent spawning.

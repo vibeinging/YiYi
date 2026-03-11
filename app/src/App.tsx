@@ -8,6 +8,7 @@ import {
   Clock,
   FolderOpen,
   Zap,
+
   Activity,
   ChevronLeft,
   ChevronRight,
@@ -30,6 +31,7 @@ import { CronJobsPage } from './pages/CronJobs';
 import { WorkspacePage } from './pages/Workspace';
 import { MCPPage } from './pages/MCP';
 import { HeartbeatPage } from './pages/Heartbeat';
+
 import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
 import { useTheme } from './hooks/useTheme';
@@ -37,6 +39,7 @@ import { useDragRegion } from './hooks/useDragRegion';
 import { ToastProvider } from './components/Toast';
 import { SandboxAccessDialog } from './components/SandboxAccessDialog';
 import { ClaudeCodeDialog } from './components/ClaudeCodeDialog';
+import { useChatEventBridge } from './hooks/useChatEventBridge';
 
 type Page = 'chat' | 'skills' | 'cronjobs' | 'workspace' | 'mcp' | 'heartbeat' | 'bots' | 'terminal' | 'settings';
 
@@ -84,6 +87,9 @@ function App() {
   const [setupDone, setSetupDone] = useState<boolean | null>(null); // null = loading
   const { appliedTheme } = useTheme();
   const drag = useDragRegion();
+
+  // Bridge Tauri streaming events to Zustand store (app-level, runs once)
+  useChatEventBridge();
 
   // File notifications from agent send_file_to_user tool
   const [fileNotification, setFileNotification] = useState<{
@@ -182,6 +188,9 @@ function App() {
     };
   }, [applyNotifContext]);
 
+  /** Render the active page. Streaming state now lives in Zustand store,
+   *  so ChatPage can safely unmount and remount without losing state.
+   */
   const renderPage = () => {
     switch (currentPage) {
       case 'chat': return <ChatPage consumeNotifContext={consumeNotifContext} />;
@@ -193,7 +202,7 @@ function App() {
       case 'bots': return <BotsPage consumeNotifContext={consumeNotifContext} />;
       case 'terminal': return <TerminalPage />;
       case 'settings': return <SettingsPage />;
-      default: return <ChatPage consumeNotifContext={consumeNotifContext} />;
+      default: return null;
     }
   };
 
@@ -359,7 +368,7 @@ function App() {
           </div>
         )}
         {/* Page content */}
-        <div className="flex-1 overflow-hidden" style={{ background: 'var(--color-bg)' }}>
+        <div className="flex-1 overflow-hidden" style={{ background: 'var(--color-bg)', position: 'relative' }}>
           {renderPage()}
         </div>
       </div>

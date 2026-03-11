@@ -96,6 +96,7 @@ pub fn run() {
             engine::tools::set_database(state.db.clone());
             engine::tools::set_providers(state.providers.clone());
             engine::tools::set_scheduler(state.scheduler.clone());
+            engine::tools::set_streaming_state(state.streaming_state.clone());
 
             // Load persistent sandbox paths from database
             {
@@ -164,6 +165,7 @@ pub fn run() {
                     mcp_runtime: state.mcp_runtime.clone(),
                     chat_cancelled: state.chat_cancelled.clone(),
                     scheduler: state.scheduler.clone(),
+                    streaming_state: state.streaming_state.clone(),
                 };
                 let bot_app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
@@ -216,6 +218,7 @@ pub fn run() {
                 mcp_runtime: state.mcp_runtime.clone(),
                 chat_cancelled: state.chat_cancelled.clone(),
                 scheduler: state.scheduler.clone(),
+                streaming_state: state.streaming_state.clone(),
             };
 
             tauri::async_runtime::spawn(async move {
@@ -317,6 +320,7 @@ pub fn run() {
             commands::agent::chat,
             commands::agent::chat_stream_start,
             commands::agent::chat_stream_stop,
+            commands::agent::chat_stream_state,
             commands::agent::get_history,
             commands::agent::clear_history,
             commands::agent::delete_message,

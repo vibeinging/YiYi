@@ -60,6 +60,18 @@ pub struct HubSkill {
     /// Security verdict from ClawHub moderation (clean/suspicious/malicious)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub security_verdict: Option<String>,
+    /// Dependency requirements (env vars, binaries)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requires: Option<HubSkillRequires>,
+}
+
+/// Dependency requirements for a hub skill
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HubSkillRequires {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bins: Option<Vec<String>>,
 }
 
 /// Install result
@@ -163,7 +175,11 @@ pub async fn search_hub_skills(
                 tags: item["tags"].as_array().map(|arr| {
                     arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
                 }),
-                security_verdict: None,
+                security_verdict: item["securityVerdict"]
+                    .as_str()
+                    .or_else(|| item["security_verdict"].as_str())
+                    .map(String::from),
+                requires: parse_hub_requires(&item),
             })
         })
         .collect())
@@ -232,16 +248,50 @@ pub async fn list_hub_skills(
                     config.base_url.trim_end_matches('/'),
                     slug
                 )),
-                author: None,
+                author: item["owner"]["username"]
+                    .as_str()
+                    .or_else(|| item["author"].as_str())
+                    .map(String::from),
                 tags: item["tags"].as_array().map(|arr| {
                     arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
                 }),
-                security_verdict: None,
+                security_verdict: item["securityVerdict"]
+                    .as_str()
+                    .or_else(|| item["security_verdict"].as_str())
+                    .map(String::from),
+                requires: parse_hub_requires(&item),
             })
         })
         .collect();
 
     Ok((skills, next_cursor))
+}
+
+/// Parse requires info from hub API response item
+fn parse_hub_requires(item: &serde_json::Value) -> Option<HubSkillRequires> {
+    // Try metadata.requires, metadata.openclaw.requires, or top-level requires
+    let requires = item["requires"].as_object()
+        .or_else(|| item["metadata"]["requires"].as_object())
+        .or_else(|| item["metadata"]["openclaw"]["requires"].as_object())
+        .or_else(|| item["metadata"]["yiclaw"]["requires"].as_object());
+
+    let requires = match requires {
+        Some(r) => r,
+        None => return None,
+    };
+
+    let env = requires.get("env").and_then(|v| {
+        v.as_array().map(|arr| arr.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+    });
+    let bins = requires.get("bins").and_then(|v| {
+        v.as_array().map(|arr| arr.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+    });
+
+    if env.is_none() && bins.is_none() {
+        return None;
+    }
+
+    Some(HubSkillRequires { env, bins })
 }
 
 fn normalize_search_items(data: &serde_json::Value) -> Vec<serde_json::Value> {

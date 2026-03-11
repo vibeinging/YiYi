@@ -1015,7 +1015,7 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-5xl mx-auto px-8 py-10">
+      <div className="w-full px-8 py-10">
         {content}
       </div>
     </div>

@@ -79,15 +79,15 @@ export async function chatStreamStop(): Promise<void> {
 }
 
 export function onChatChunk(callback: (chunk: string) => void): Promise<UnlistenFn> {
-  return listen<string>('chat://chunk', (event) => callback(event.payload));
+  return listen<{ text: string; session_id: string }>('chat://chunk', (event) => callback(event.payload.text));
 }
 
 export function onChatComplete(callback: (reply: string) => void): Promise<UnlistenFn> {
-  return listen<string>('chat://complete', (event) => callback(event.payload));
+  return listen<{ text: string; session_id: string }>('chat://complete', (event) => callback(event.payload.text));
 }
 
 export function onChatError(callback: (error: string) => void): Promise<UnlistenFn> {
-  return listen<string>('chat://error', (event) => callback(event.payload));
+  return listen<{ text: string; session_id: string }>('chat://error', (event) => callback(event.payload.text));
 }
 
 export interface ToolStatusEvent {
@@ -95,6 +95,7 @@ export interface ToolStatusEvent {
   name: string;
   preview?: string;
   result_preview?: string;
+  session_id?: string;
 }
 
 export function onToolStatus(callback: (event: ToolStatusEvent) => void): Promise<UnlistenFn> {
@@ -120,3 +121,31 @@ export async function clearHistory(sessionId?: string): Promise<void> {
 export async function deleteMessage(messageId: number): Promise<void> {
   await invoke('delete_message', { messageId });
 }
+
+// --- Spawn agents (sub-agent) streaming events ---
+
+export interface SpawnStartEvent {
+  agents: { name: string; task: string }[];
+}
+
+export interface SpawnAgentChunkEvent {
+  agent_name: string;
+  content: string;
+}
+
+export interface SpawnAgentToolEvent {
+  agent_name: string;
+  type: 'start' | 'end';
+  tool_name: string;
+  preview: string;
+}
+
+export interface SpawnAgentCompleteEvent {
+  agent_name: string;
+  result: string;
+}
+
+export interface SpawnCompleteEvent {
+  results: { name: string; result: string }[];
+}
+

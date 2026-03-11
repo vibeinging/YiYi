@@ -629,6 +629,27 @@ When setting up bots, open the developer console:
         tool_list = tool_list,
     ));
 
+    // Load MEMORY.md into system prompt
+    let memory_content = super::memory::read_memory_md(working_dir);
+    if !memory_content.is_empty() {
+        let truncated = if memory_content.len() > 2000 {
+            // Find a safe UTF-8 boundary near 2000 bytes
+            let boundary = memory_content
+                .char_indices()
+                .take_while(|(i, _)| *i <= 2000)
+                .last()
+                .map(|(i, c)| i + c.len_utf8())
+                .unwrap_or(0);
+            format!(
+                "{}...\n(truncated, use memory_read tool for full content)",
+                &memory_content[..boundary]
+            )
+        } else {
+            memory_content
+        };
+        prompt.push_str(&format!("\n\n# Long-term Memory\n{truncated}"));
+    }
+
     // Append skill instructions
     for skill in skills_content {
         if !skill.is_empty() {
@@ -640,6 +661,8 @@ When setting up bots, open the developer console:
 
     prompt
 }
+
+// build_agent_system_prompt removed — switched to dynamic agent spawning.
 
 // ---------------------------------------------------------------------------
 // /compact command support
@@ -1071,6 +1094,7 @@ Extract memories (JSON array only):"#
 
     let valid_categories = ["fact", "preference", "experience", "decision", "note"];
     let mut added = 0;
+    let mut important_items: Vec<String> = Vec::new();
     for mem in &memories {
         let cat = if valid_categories.contains(&mem.category.as_str()) {
             &mem.category
@@ -1081,6 +1105,29 @@ Extract memories (JSON array only):"#
             if db.memory_add(&mem.content, cat, session_id).is_ok() {
                 added += 1;
             }
+            // Also write to diary
+            if let Some(working_dir) = super::tools::get_working_dir() {
+                let _ = super::memory::append_diary(&working_dir, &mem.content, Some(cat));
+            }
+            // Collect important memories for MEMORY.md promotion
+            if matches!(cat, "fact" | "preference" | "decision") {
+                important_items.push(mem.content.clone());
+            }
+        }
+    }
+
+    // Promote important memories to MEMORY.md
+    if !important_items.is_empty() {
+        if let Some(working_dir) = super::tools::get_working_dir() {
+            let mut existing = super::memory::read_memory_md(&working_dir);
+            if existing.is_empty() {
+                existing = "# Memory\n".to_string();
+            }
+            existing.push_str("\n\n## Auto-extracted\n");
+            for item in &important_items {
+                existing.push_str(&format!("- {item}\n"));
+            }
+            let _ = super::memory::write_memory_md(&working_dir, &existing);
         }
     }
 

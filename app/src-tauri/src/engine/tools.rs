@@ -28,6 +28,9 @@ static SCHEDULER: std::sync::OnceLock<Arc<tokio::sync::RwLock<Option<crate::engi
 /// Global providers reference for tools that need LLM config resolution.
 static PROVIDERS: std::sync::OnceLock<Arc<tokio::sync::RwLock<crate::state::providers::ProvidersState>>> = std::sync::OnceLock::new();
 
+/// Global streaming state for snapshot updates from spawn agents.
+static STREAMING_STATE: std::sync::OnceLock<Arc<std::sync::Mutex<std::collections::HashMap<String, crate::state::app_state::StreamingSnapshot>>>> = std::sync::OnceLock::new();
+
 /// Per-task session ID for tools that need session context (e.g. send_bot_message).
 /// Uses task_local so concurrent agent runs don't interfere with each other.
 tokio::task_local! {
@@ -167,13 +170,13 @@ async fn sandbox_check(raw_path: &str) -> Result<(), String> {
             Ok(())
         }
         SandboxResponse::AllowPermanent => {
-            // Add to both persistent and session
-            let mut persistent = sandbox_persistent_paths().lock().await;
-            persistent.insert(canonical.clone());
-            drop(persistent);
+            // Add to both session and persistent (lock order: session → persistent)
             let mut session = sandbox_session_paths().lock().await;
             session.insert(canonical.clone());
             drop(session);
+            let mut persistent = sandbox_persistent_paths().lock().await;
+            persistent.insert(canonical.clone());
+            drop(persistent);
             // Save to database
             if let Some(db) = DATABASE.get() {
                 let path_str = canonical.to_string_lossy().to_string();
@@ -268,6 +271,10 @@ pub fn set_scheduler(scheduler: Arc<tokio::sync::RwLock<Option<crate::engine::sc
 /// Set the global providers reference for tools.
 pub fn set_providers(providers: Arc<tokio::sync::RwLock<crate::state::providers::ProvidersState>>) {
     PROVIDERS.set(providers).ok();
+}
+
+pub fn set_streaming_state(ss: Arc<std::sync::Mutex<std::collections::HashMap<String, crate::state::app_state::StreamingSnapshot>>>) {
+    STREAMING_STATE.set(ss).ok();
 }
 
 /// Get the stored database reference (for scheduler).
@@ -368,7 +375,17 @@ impl BrowserState {
     fn is_alive(&self) -> bool {
         // Check if child process still running
         if let Some(id) = self.child.id() {
-            unsafe { libc::kill(id as i32, 0) == 0 }
+            let pid = match i32::try_from(id) {
+                Ok(p) => p,
+                Err(_) => return false,
+            };
+            let ret = unsafe { libc::kill(pid, 0) };
+            if ret == 0 {
+                true
+            } else {
+                // EPERM means the process exists but we lack permission to signal it
+                std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+            }
         } else {
             false
         }
@@ -786,6 +803,64 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
                 }
             }),
         ),
+        // --- Markdown diary & long-term memory tools ---
+        tool_def(
+            "diary_write",
+            "Write an entry to today's diary. Use this to record important events, learnings, decisions, and interactions from the current session.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "The diary entry content"
+                    },
+                    "topic": {
+                        "type": "string",
+                        "description": "Brief topic/title for this entry"
+                    }
+                },
+                "required": ["content"]
+            }),
+        ),
+        tool_def(
+            "diary_read",
+            "Read diary entries. Can read a specific date or recent days. Returns chronological diary content.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "date": {
+                        "type": "string",
+                        "description": "Specific date in YYYY-MM-DD format. If omitted, reads recent days."
+                    },
+                    "days": {
+                        "type": "integer",
+                        "description": "Number of recent days to read (default: 3, max: 30)"
+                    }
+                }
+            }),
+        ),
+        tool_def(
+            "memory_read",
+            "Read the long-term memory file (MEMORY.md). Contains important persistent facts, user preferences, key decisions, and knowledge accumulated over time.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        ),
+        tool_def(
+            "memory_write",
+            "Update the long-term memory file (MEMORY.md). Use this to promote important information from diary or conversation to persistent memory. Overwrites the entire file - read first, then write the updated version.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "The complete MEMORY.md content to write"
+                    }
+                },
+                "required": ["content"]
+            }),
+        ),
         tool_def(
             "manage_cronjob",
             "Create, list, or delete scheduled tasks. Supports three schedule types:\n\
@@ -973,6 +1048,33 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
                 "required": ["path"]
             }),
         ),
+        tool_def(
+            "spawn_agents",
+            "Dynamically create and run a team of temporary agents to handle complex tasks in parallel. Each agent works independently on its assigned task, and all results are collected and returned.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agents": {
+                        "type": "array",
+                        "description": "Array of agent specifications to spawn in parallel",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": { "type": "string", "description": "Agent name/role (e.g., 'Researcher', 'Analyst')" },
+                                "task": { "type": "string", "description": "Detailed task description for this agent" },
+                                "skills": {
+                                    "type": "array",
+                                    "items": { "type": "string" },
+                                    "description": "Optional array of skill names to load for this agent"
+                                }
+                            },
+                            "required": ["name", "task"]
+                        }
+                    }
+                },
+                "required": ["agents"]
+            }),
+        ),
     ]
 }
 
@@ -994,19 +1096,12 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         "web_search" => web_search_tool(&args).await,
         "get_current_time" => get_current_time_tool().await,
         "desktop_screenshot" => {
-            let result = desktop_screenshot_tool().await;
-            // If result contains base64 image data, extract it
-            if result.contains("data:image/png;base64,") {
-                if let Some(start) = result.find("data:image/png;base64,") {
-                    let data_uri = result[start..].split_whitespace().next().unwrap_or("").to_string();
-                    return ToolResult {
-                        tool_call_id: call.id.clone(),
-                        content: "Desktop screenshot captured.".into(),
-                        images: vec![data_uri],
-                    };
-                }
-            }
-            result
+            let (content, images) = desktop_screenshot_tool().await;
+            return ToolResult {
+                tool_call_id: call.id.clone(),
+                content,
+                images,
+            };
         }
         "browser_use" => {
             let (content, images) = browser_use_tool(&args).await;
@@ -1068,6 +1163,80 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         "memory_search" => memory_search_tool(&args).await,
         "memory_delete" => memory_delete_tool(&args).await,
         "memory_list" => memory_list_tool(&args).await,
+        "diary_write" => {
+            let content = match args["content"].as_str() {
+                Some(c) => c,
+                None => return ToolResult { tool_call_id: call.id.clone(), content: "Error: content is required".into(), images: vec![] },
+            };
+            let topic = args["topic"].as_str();
+            let working_dir = match WORKING_DIR.get() {
+                Some(d) => d.clone(),
+                None => return ToolResult { tool_call_id: call.id.clone(), content: "Error: working directory not set".into(), images: vec![] },
+            };
+            match super::memory::append_diary(&working_dir, content, topic) {
+                Ok(()) => {
+                    // Also store in DB for search
+                    if let Some(db) = DATABASE.get() {
+                        let sid = get_current_session_id();
+                        let session_id: Option<&str> = if sid.is_empty() { None } else { Some(&sid) };
+                        let _ = db.memory_add(content, "note", session_id);
+                    }
+                    "Diary entry written.".into()
+                }
+                Err(e) => format!("Error: {e}"),
+            }
+        }
+        "diary_read" => {
+            let working_dir = match WORKING_DIR.get() {
+                Some(d) => d.clone(),
+                None => return ToolResult { tool_call_id: call.id.clone(), content: "Error: working directory not set".into(), images: vec![] },
+            };
+            if let Some(date) = args.get("date").and_then(|d| d.as_str()) {
+                match super::memory::read_diary(&working_dir, date) {
+                    Err(e) => e,
+                    Ok(content) if content.is_empty() => format!("No diary entry found for {date}."),
+                    Ok(content) => content,
+                }
+            } else {
+                let days = args.get("days").and_then(|d| d.as_u64()).unwrap_or(3).min(30) as usize;
+                let entries = super::memory::read_recent_diaries(&working_dir, days);
+                if entries.is_empty() {
+                    "No recent diary entries found.".into()
+                } else {
+                    let mut output = String::new();
+                    for (date, content) in entries {
+                        output.push_str(&format!("--- {date} ---\n{content}\n\n"));
+                    }
+                    output
+                }
+            }
+        }
+        "memory_read" => {
+            let working_dir = match WORKING_DIR.get() {
+                Some(d) => d.clone(),
+                None => return ToolResult { tool_call_id: call.id.clone(), content: "Error: working directory not set".into(), images: vec![] },
+            };
+            let content = super::memory::read_memory_md(&working_dir);
+            if content.is_empty() {
+                "MEMORY.md is empty. No long-term memories stored yet.".into()
+            } else {
+                content
+            }
+        }
+        "memory_write" => {
+            let content = match args["content"].as_str() {
+                Some(c) => c,
+                None => return ToolResult { tool_call_id: call.id.clone(), content: "Error: content is required".into(), images: vec![] },
+            };
+            let working_dir = match WORKING_DIR.get() {
+                Some(d) => d.clone(),
+                None => return ToolResult { tool_call_id: call.id.clone(), content: "Error: working directory not set".into(), images: vec![] },
+            };
+            match super::memory::write_memory_md(&working_dir, content) {
+                Ok(()) => "MEMORY.md updated successfully.".into(),
+                Err(e) => format!("Error: {e}"),
+            }
+        }
         "manage_cronjob" => manage_cronjob_tool(&args).await,
         "list_bound_bots" => list_bound_bots_tool().await,
         "manage_skill" => manage_skill_tool(&args).await,
@@ -1077,6 +1246,7 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         "add_calendar_event" => add_calendar_event_tool(&args).await,
         "claude_code" => claude_code_tool(&args).await,
         "send_file_to_user" => send_file_to_user_tool(&args).await,
+        "spawn_agents" => spawn_agents_tool(args.clone()).await,
         _ => {
             // Try MCP runtime for unknown tools
             if let Some(runtime) = MCP_RUNTIME.get() {
@@ -1360,14 +1530,13 @@ async fn grep_search_tool(args: &serde_json::Value) -> String {
         return format!("Error: {}", e);
     }
 
-    // Use grep command for robustness
-    let mut cmd_str = format!("grep -rn --include='*' '{}' '{}'", pattern, path);
+    // Use Command::new with args to avoid shell injection
+    let mut cmd = tokio::process::Command::new("grep");
+    cmd.arg("-rn");
     if let Some(fp) = file_pattern {
-        cmd_str = format!("grep -rn --include='{}' '{}' '{}'", fp, pattern, path);
+        cmd.arg(format!("--include={}", fp));
     }
-
-    let mut cmd = tokio::process::Command::new("sh");
-    cmd.arg("-c").arg(&cmd_str);
+    cmd.arg("--").arg(pattern).arg(path);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
@@ -1482,7 +1651,7 @@ async fn get_current_time_tool() -> String {
     )
 }
 
-async fn desktop_screenshot_tool() -> String {
+async fn desktop_screenshot_tool() -> (String, Vec<String>) {
     // Use macOS screencapture command
     let tmp = format!("/tmp/yiclaw_screenshot_{}.png", uuid::Uuid::new_v4());
 
@@ -1498,19 +1667,19 @@ async fn desktop_screenshot_tool() -> String {
                         use base64::Engine;
                         let b64 =
                             base64::engine::general_purpose::STANDARD.encode(&data);
-                        format!(
-                            "Screenshot captured ({} bytes). Base64 data: data:image/png;base64,{}",
-                            data.len(),
-                            &b64[..b64.len().min(200)]
+                        let data_uri = format!("data:image/png;base64,{}", b64);
+                        (
+                            format!("[Screenshot captured successfully, {} bytes]", data.len()),
+                            vec![data_uri],
                         )
                     }
-                    Err(e) => format!("Failed to read screenshot: {}", e),
+                    Err(e) => (format!("Failed to read screenshot: {}", e), vec![]),
                 }
             } else {
-                "Screenshot command failed".into()
+                ("Screenshot command failed".into(), vec![])
             }
         }
-        Err(e) => format!("Failed to take screenshot: {}", e),
+        Err(e) => (format!("Failed to take screenshot: {}", e), vec![]),
     }
 }
 
@@ -1584,7 +1753,10 @@ async fn browser_use_tool(args: &serde_json::Value) -> (String, Vec<String>) {
         };
 
         // Read stdout until we get READY:{port}
-        let stdout = child.stdout.take().unwrap();
+        let stdout = match child.stdout.take() {
+            Some(s) => s,
+            None => return (format!("Failed to capture stdout from Playwright bridge process."), vec![]),
+        };
         let mut reader = tokio::io::BufReader::new(stdout);
         let mut line = String::new();
         let ready_timeout = std::time::Duration::from_secs(15);
@@ -2486,7 +2658,7 @@ async fn manage_skill_tool(args: &serde_json::Value) -> String {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     if path.is_dir() && path.join("SKILL.md").exists() {
-                        let skill_name = path.file_name().unwrap().to_string_lossy().to_string();
+                        let skill_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
                         result.push(format!("  [enabled] {}", skill_name));
                     }
                 }
@@ -2497,7 +2669,7 @@ async fn manage_skill_tool(args: &serde_json::Value) -> String {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     if path.is_dir() && path.join("SKILL.md").exists() {
-                        let skill_name = path.file_name().unwrap().to_string_lossy().to_string();
+                        let skill_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
                         if !active_dir.join(&skill_name).exists() {
                             result.push(format!("  [disabled] {}", skill_name));
                         }
@@ -2983,4 +3155,332 @@ async fn try_mcp_tool(
         }
     }
     None
+}
+
+// ---------------------------------------------------------------------------
+// spawn_agents: dynamically create and run ephemeral sub-agents in parallel
+// ---------------------------------------------------------------------------
+
+/// Depth counter for spawn_agents to prevent infinite recursion.
+/// Uses task_local so concurrent agent runs track depth independently.
+tokio::task_local! {
+    static DELEGATION_DEPTH: u32;
+}
+
+/// Maximum delegation depth to prevent infinite loops.
+const MAX_DELEGATION_DEPTH: u32 = 3;
+
+/// A single agent specification from the spawn_agents tool call.
+#[derive(Debug, Deserialize)]
+struct AgentSpec {
+    name: String,
+    task: String,
+    #[serde(default)]
+    skills: Vec<String>,
+}
+
+async fn spawn_agents_tool(args: serde_json::Value) -> String {
+    let specs: Vec<AgentSpec> = match serde_json::from_value(args["agents"].clone()) {
+        Ok(v) => v,
+        Err(e) => return format!("Error: invalid agents parameter: {}", e),
+    };
+    if specs.is_empty() {
+        return "Error: agents array must not be empty".into();
+    }
+
+    // Check delegation depth
+    let current_depth = DELEGATION_DEPTH.try_with(|d| *d).unwrap_or(0);
+    if current_depth >= MAX_DELEGATION_DEPTH {
+        return format!(
+            "Error: Maximum delegation depth ({}) reached. Cannot spawn further agents to prevent infinite loops.",
+            MAX_DELEGATION_DEPTH
+        );
+    }
+
+    // Resolve LLM config (use global active LLM — same as parent)
+    let llm_config = match resolve_llm_config_from_globals().await {
+        Some(cfg) => cfg,
+        None => return "Error: No active model configured".into(),
+    };
+
+    let working_dir = match WORKING_DIR.get() {
+        Some(wd) => wd.clone(),
+        None => return "Error: Working directory not set".into(),
+    };
+
+    // Grab the global app handle for streaming events (may be None in non-UI contexts)
+    let app_handle = APP_HANDLE.get().cloned();
+
+    // Capture session ID for event filtering and DB persistence
+    let session_id = get_current_session_id();
+
+    // Emit spawn_start event with agent list and session_id
+    if let Some(ref handle) = app_handle {
+        let agents_info: Vec<serde_json::Value> = specs
+            .iter()
+            .map(|s| serde_json::json!({ "name": s.name, "task": s.task }))
+            .collect();
+        handle
+            .emit("chat://spawn_start", serde_json::json!({ "agents": agents_info, "session_id": session_id }))
+            .ok();
+    }
+
+    // Update streaming snapshot with spawn agent entries
+    if let Some(ss_arc) = STREAMING_STATE.get() {
+        if let Ok(mut ss) = ss_arc.lock() {
+            if let Some(snap) = ss.get_mut(&session_id) {
+                snap.spawn_agents = specs.iter().map(|s| {
+                    crate::state::app_state::SpawnAgentSnapshot {
+                        name: s.name.clone(),
+                        task: s.task.clone(),
+                        status: "running".into(),
+                        content: String::new(),
+                        tools: vec![],
+                    }
+                }).collect();
+            }
+        }
+    }
+
+    // Load all available skills from active_skills/
+    let skills_dir = working_dir.join("active_skills");
+    let mut all_skill_contents: Vec<(String, String)> = Vec::new(); // (name, content)
+    if let Ok(mut entries) = tokio::fs::read_dir(&skills_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            let skill_md = path.join("SKILL.md");
+            if let Ok(content) = tokio::fs::read_to_string(&skill_md).await {
+                let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                let formatted = format!("[Skill directory: {}]\n\n{}", path.to_string_lossy(), content);
+                all_skill_contents.push((name, formatted));
+            }
+        }
+    }
+
+    // Load MCP tools (inherited from parent) — must be done before spawning as MCP_RUNTIME may not be Send
+    let (mcp_tools_list, unavailable_servers) = if let Some(runtime) = MCP_RUNTIME.get() {
+        runtime.get_all_tools_with_status().await
+    } else {
+        (vec![], vec![])
+    };
+    let skill_overrides = std::collections::HashMap::new();
+    let mcp_extra: Vec<ToolDefinition> = mcp_tools_as_definitions(&mcp_tools_list, &skill_overrides);
+
+    let agent_names: Vec<String> = specs.iter().map(|s| s.name.clone()).collect();
+    let agent_tasks: Vec<String> = specs.iter().map(|s| s.task.clone()).collect();
+
+    // Launch all agents in a background tokio task — returns immediately
+    let depth = current_depth + 1;
+    spawn_agents_background(
+        specs, depth, llm_config, working_dir, app_handle,
+        all_skill_contents, mcp_tools_list, unavailable_servers, mcp_extra, session_id,
+    );
+
+    // Return immediately — agents run in background
+    format!(
+        "Team started with {} agents: {}.\n\nTheir tasks:\n{}\n\nThe agents are working in the background. Results will be delivered when all agents complete.",
+        agent_names.len(),
+        agent_names.join(", "),
+        agent_names.iter().zip(agent_tasks.iter())
+            .map(|(n, t)| format!("- **{}**: {}", n, t))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+/// Background task that runs spawned agents in parallel. Separated from spawn_agents_tool
+/// to ensure the async block is Send + 'static (no borrowed references from the caller).
+fn spawn_agents_background(
+    specs: Vec<AgentSpec>,
+    depth: u32,
+    llm_config: super::llm_client::LLMConfig,
+    working_dir: std::path::PathBuf,
+    app_handle: Option<tauri::AppHandle>,
+    all_skill_contents: Vec<(String, String)>,
+    mcp_tools_list: Vec<super::mcp_runtime::MCPTool>,
+    unavailable_servers: Vec<String>,
+    mcp_extra: Vec<ToolDefinition>,
+    session_id: String,
+) {
+    let sid = session_id.clone();
+    tokio::spawn(with_session_id(sid, async move {
+        let futures: Vec<_> = specs.into_iter().map(|spec| {
+            let config = llm_config.clone();
+            let wd = working_dir.clone();
+            let mcp_extra = mcp_extra.clone();
+            let all_skills = all_skill_contents.clone();
+            let mcp_tools_for_prompt = mcp_tools_list.clone();
+            let unavail_for_prompt = unavailable_servers.clone();
+            let handle_for_agent = app_handle.clone();
+            let sid_for_agent = session_id.clone();
+
+            async move {
+                let agent_name = spec.name.clone();
+
+                let skill_contents: Vec<String> = if spec.skills.is_empty() {
+                    all_skills.iter().map(|(_, c)| c.clone()).collect()
+                } else {
+                    all_skills.iter()
+                        .filter(|(name, _)| spec.skills.iter().any(|s| s == name))
+                        .map(|(_, c)| c.clone())
+                        .collect()
+                };
+
+                let mcp_ref = if mcp_tools_for_prompt.is_empty() { None } else { Some(mcp_tools_for_prompt.as_slice()) };
+                let unavail_ref = if unavail_for_prompt.is_empty() { None } else { Some(unavail_for_prompt.as_slice()) };
+
+                let base_prompt = super::react_agent::build_system_prompt(
+                    &wd, &skill_contents, None, mcp_ref, unavail_ref,
+                ).await;
+
+                let system_prompt = format!(
+                    "You are **{}**, a specialist agent.\n\
+                    Your task: {}\n\n\
+                    Complete the task thoroughly and return a clear, concise result.\n\n\
+                    {}",
+                    spec.name, spec.task, base_prompt
+                );
+
+                let result = if let Some(ref handle) = handle_for_agent {
+                    let h = handle.clone();
+                    let name_for_cb = agent_name.clone();
+                    let sid_for_cb = sid_for_agent.clone();
+                    let on_event = move |evt: super::react_agent::AgentStreamEvent| {
+                        match &evt {
+                            super::react_agent::AgentStreamEvent::Token(text) => {
+                                h.emit("chat://spawn_agent_chunk", serde_json::json!({
+                                    "agent_name": name_for_cb, "content": text,
+                                    "session_id": sid_for_cb,
+                                })).ok();
+                                // Update streaming snapshot
+                                if let Some(ss_arc) = STREAMING_STATE.get() {
+                                    if let Ok(mut ss) = ss_arc.lock() {
+                                        if let Some(snap) = ss.get_mut(&sid_for_cb) {
+                                            if let Some(agent) = snap.spawn_agents.iter_mut().find(|a| a.name == name_for_cb) {
+                                                agent.content.push_str(text);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            super::react_agent::AgentStreamEvent::ToolStart { name, args_preview } => {
+                                h.emit("chat://spawn_agent_tool", serde_json::json!({
+                                    "agent_name": name_for_cb, "type": "start",
+                                    "tool_name": name, "preview": args_preview,
+                                    "session_id": sid_for_cb,
+                                })).ok();
+                                if let Some(ss_arc) = STREAMING_STATE.get() {
+                                    if let Ok(mut ss) = ss_arc.lock() {
+                                        if let Some(snap) = ss.get_mut(&sid_for_cb) {
+                                            if let Some(agent) = snap.spawn_agents.iter_mut().find(|a| a.name == name_for_cb) {
+                                                agent.tools.push(crate::state::app_state::ToolSnapshot {
+                                                    name: name.clone(),
+                                                    status: "running".into(),
+                                                    preview: Some(args_preview.clone()),
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            super::react_agent::AgentStreamEvent::ToolEnd { name, result_preview } => {
+                                h.emit("chat://spawn_agent_tool", serde_json::json!({
+                                    "agent_name": name_for_cb, "type": "end",
+                                    "tool_name": name, "preview": result_preview,
+                                    "session_id": sid_for_cb,
+                                })).ok();
+                                if let Some(ss_arc) = STREAMING_STATE.get() {
+                                    if let Ok(mut ss) = ss_arc.lock() {
+                                        if let Some(snap) = ss.get_mut(&sid_for_cb) {
+                                            if let Some(agent) = snap.spawn_agents.iter_mut().find(|a| a.name == name_for_cb) {
+                                                for t in agent.tools.iter_mut().rev() {
+                                                    if t.name == *name && t.status == "running" {
+                                                        t.status = "done".into();
+                                                        if !result_preview.is_empty() {
+                                                            t.preview = Some(result_preview.clone());
+                                                        }
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            super::react_agent::AgentStreamEvent::Complete(_)
+                            | super::react_agent::AgentStreamEvent::Error(_) => {}
+                        }
+                    };
+                    DELEGATION_DEPTH.scope(depth, Box::pin(
+                        super::react_agent::run_react_with_options_stream(
+                            &config, &system_prompt, &spec.task, &mcp_extra,
+                            &[], None, Some(&wd), on_event, None,
+                        )
+                    )).await
+                } else {
+                    DELEGATION_DEPTH.scope(depth, Box::pin(
+                        super::react_agent::run_react_with_options(
+                            &config, &system_prompt, &spec.task, &mcp_extra,
+                            &[], None, Some(&wd),
+                        )
+                    )).await
+                };
+
+                let (agent_result_text, is_error) = match result {
+                    Ok(reply) => (truncate_output(&reply, 12000), false),
+                    Err(e) => (e, true),
+                };
+
+                if let Some(ref handle) = handle_for_agent {
+                    handle.emit("chat://spawn_agent_complete", serde_json::json!({
+                        "agent_name": agent_name, "result": agent_result_text,
+                        "session_id": sid_for_agent,
+                    })).ok();
+                }
+
+                // Update streaming snapshot: mark spawn agent as complete
+                if let Some(ss_arc) = STREAMING_STATE.get() {
+                    if let Ok(mut ss) = ss_arc.lock() {
+                        if let Some(snap) = ss.get_mut(&sid_for_agent) {
+                            if let Some(agent) = snap.spawn_agents.iter_mut().find(|a| a.name == agent_name) {
+                                agent.status = "complete".into();
+                                agent.content = agent_result_text.clone();
+                            }
+                        }
+                    }
+                }
+
+                (agent_name, agent_result_text, is_error)
+            }
+        }).collect();
+
+        let results = futures::future::join_all(futures).await;
+
+        let combined: Vec<String> = results.iter().map(|(name, text, is_err)| {
+            if *is_err {
+                format!("=== Agent: {} ===\nError: {}", name, text)
+            } else {
+                format!("=== Agent: {} ===\n{}", name, text)
+            }
+        }).collect();
+        let combined_text = combined.join("\n\n");
+
+        if !session_id.is_empty() {
+            if let Some(db) = DATABASE.get() {
+                db.push_message(&session_id, "assistant", &format!(
+                    "**[Team Task Complete]**\n\n{}", combined_text
+                )).ok();
+            }
+        }
+
+        if let Some(ref handle) = app_handle {
+            let results_json: Vec<serde_json::Value> = results.iter()
+                .map(|(name, result, _)| serde_json::json!({ "name": name, "result": result }))
+                .collect();
+            handle.emit("chat://spawn_complete", serde_json::json!({
+                "results": results_json,
+                "session_id": session_id,
+            })).ok();
+        }
+    }));
 }

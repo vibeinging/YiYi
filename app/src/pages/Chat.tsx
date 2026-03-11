@@ -23,6 +23,7 @@ import {
   Link2,
   Unlink,
   ChevronDown,
+  ChevronRight,
   Trash2,
   ZoomIn,
   Paperclip,
@@ -31,13 +32,9 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import {
-  chat,
   chatStreamStart,
-  chatStreamStop,
-  onChatChunk,
   onChatComplete,
   onChatError,
-  onToolStatus,
   listSessions,
   createSession,
   deleteSession,
@@ -55,6 +52,7 @@ import {
   sessionUnbindBot,
   type BotInfo,
 } from '../api/bots';
+
 import { listWorkspaceFiles, loadWorkspaceFile, getWorkspacePath, type WorkspaceFile } from '../api/workspace';
 import { getActiveLlm } from '../api/models';
 import { listSkills } from '../api/skills';
@@ -62,12 +60,17 @@ import { createCronJob } from '../api/cronjobs';
 import { MentionPicker, buildMentionList } from '../components/MentionPicker';
 import { MentionInput, type MentionInputHandle, type MentionTag } from '../components/MentionInput';
 import { SlashCommandPicker, filterCommands, SLASH_COMMANDS, type SlashCommand } from '../components/SlashCommandPicker';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { SpawnAgentPanel } from '../components/SpawnAgentPanel';
+import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
+import { useChatStreamStore } from '../stores/chatStreamStore';
 import { useDragRegion } from '../hooks/useDragRegion';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
+
+import type { SpawnAgent } from '../stores/chatStreamStore';
 
 interface ChatPageProps {
   consumeNotifContext?: () => Record<string, unknown> | null;
@@ -85,9 +88,12 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
   const [currentSessionId, setCurrentSessionId] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [message, setMessage] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [streamingContent, setStreamingContent] = useState('');
-  const [activeTools, setActiveTools] = useState<{ name: string; status: 'running' | 'done'; preview?: string }[]>([]);
+  const loading = useChatStreamStore((s) => s.loading);
+  const streamingContent = useChatStreamStore((s) => s.streamingContent);
+  const activeTools = useChatStreamStore((s) => s.activeTools);
+  const spawnAgents = useChatStreamStore((s) => s.spawnAgents);
+  const collapsedAgents = useChatStreamStore((s) => s.collapsedAgents);
+  const toggleCollapseAgent = useChatStreamStore((s) => s.toggleCollapseAgent);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<MentionInputHandle>(null);
@@ -97,6 +103,7 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
   const [showBotPopover, setShowBotPopover] = useState(false);
   const [reboundNotice, setReboundNotice] = useState('');
   const botPopoverRef = useRef<HTMLDivElement>(null);
+
   const [pendingImages, setPendingImages] = useState<Attachment[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
@@ -291,11 +298,27 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
     }
   };
 
-  // Load messages and bound bots when session changes
+  // Load messages and bound bots when session changes; sync store session
   useEffect(() => {
     if (!currentSessionId) return;
+    useChatStreamStore.getState().setSessionId(currentSessionId);
     loadMessages(currentSessionId);
     loadBoundBots(currentSessionId);
+
+    // Check if there's an active stream for this session (handles page-switch recovery).
+    // We recover from the backend snapshot INSTEAD of resetting, so no chunks are lost
+    // between mount and the snapshot response.
+    invoke('chat_stream_state', { sessionId: currentSessionId })
+      .then((snapshot: any) => {
+        if (snapshot && snapshot.is_active) {
+          useChatStreamStore.getState().recoverFromSnapshot(snapshot);
+        } else {
+          useChatStreamStore.getState().resetStream();
+        }
+      })
+      .catch(() => {
+        useChatStreamStore.getState().resetStream();
+      });
   }, [currentSessionId]);
 
   // Refresh messages when bot activity happens for the current session
@@ -379,6 +402,7 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
     return () => document.removeEventListener('mousedown', handleClick);
   }, [showBotPopover]);
 
+
   const loadMessages = async (sessionId: string) => {
     try {
       const msgs = await getHistory(sessionId);
@@ -391,7 +415,7 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamingContent, activeTools]);
+  }, [messages, streamingContent, activeTools, spawnAgents]);
 
   // Sync message state from MentionInput (for send button disabled state)
   // Also detect /command trigger
@@ -409,6 +433,45 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
       setShowCommandPicker(false);
     }
   }, []);
+
+  // Reload messages when all spawn agents complete
+  useEffect(() => {
+    const unlisten = listen<{ session_id: string }>('chat://spawn_complete', (event) => {
+      if (event.payload.session_id === currentSessionId) {
+        loadMessages(currentSessionId);
+      }
+    });
+    return () => { unlisten.then(fn => fn()); };
+  }, [currentSessionId]);
+
+  /**
+   * Subscribe to streaming events, invoke chatStreamStart, and wait for
+   * completion.  Returns the assistant reply string.  Callers are responsible
+   * for setting loading / streamingContent state around this call.
+   */
+  const runStreamingChat = async (
+    text: string,
+    sessionId: string,
+    attachments?: Attachment[],
+  ): Promise<string> => {
+    // Register complete/error listeners BEFORE starting the stream to avoid race conditions
+    let resolveComplete: (reply: string) => void;
+    let rejectComplete: (err: Error) => void;
+    const completePromise = new Promise<string>((resolve, reject) => {
+      resolveComplete = resolve;
+      rejectComplete = reject;
+    });
+
+    const unComplete = await onChatComplete((reply) => { resolveComplete(reply); });
+    const unError = await onChatError((err) => { rejectComplete(new Error(err)); });
+
+    await chatStreamStart(text, sessionId, attachments);
+    const reply = await completePromise;
+
+    unComplete();
+    unError();
+    return reply;
+  };
 
   const handleSend = async () => {
     const plainText = inputRef.current?.getPlainText() || '';
@@ -460,8 +523,7 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
     inputRef.current?.clear();
     setMessage('');
     setPendingImages([]);
-    setLoading(true);
-    setStreamingContent('');
+    useChatStreamStore.getState().startStream();
 
     // Optimistically show user message
     setMessages(prev => [...prev, {
@@ -472,70 +534,31 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
     }]);
 
     try {
-      // Subscribe to stream events before starting
-      const unChunk = await onChatChunk((chunk) => {
-        setStreamingContent(prev => prev + chunk);
-      });
-      const unTool = await onToolStatus((evt) => {
-        if (evt.type === 'start') {
-          setActiveTools(prev => [...prev, { name: evt.name, status: 'running', preview: evt.preview }]);
-        } else {
-          setActiveTools(prev =>
-            prev.map(t => t.name === evt.name && t.status === 'running'
-              ? { ...t, status: 'done' as const, preview: evt.result_preview || t.preview }
-              : t
-            )
-          );
-        }
-      });
-
-      const completePromise = new Promise<string>((resolve, reject) => {
-        let unComplete: UnlistenFn | null = null;
-        let unError: UnlistenFn | null = null;
-        const cleanup = () => {
-          unComplete?.();
-          unError?.();
-        };
-        onChatComplete((reply) => { cleanup(); resolve(reply); }).then(fn => { unComplete = fn; });
-        onChatError((err) => { cleanup(); reject(new Error(err)); }).then(fn => { unError = fn; });
-      });
-
-      // Start streaming
-      await chatStreamStart(userMessage, currentSessionId, userAttachments);
-
-      // Wait for completion
-      const reply = await completePromise;
-
-      // Cleanup listeners
-      unChunk();
-      unTool();
+      await runStreamingChat(userMessage, currentSessionId, userAttachments);
 
       // Reload from DB to get persisted messages (including assistant reply)
-      setStreamingContent('');
-      setActiveTools([]);
+      useChatStreamStore.setState({ streamingContent: '', activeTools: [] });
       await loadMessages(currentSessionId);
       // Refresh sessions list to update names/timestamps
       const list = await listSessions();
       setSessions(list);
     } catch (error) {
       console.error('Failed to send message:', error);
-      setStreamingContent('');
-      setActiveTools([]);
+      useChatStreamStore.setState({ streamingContent: '', activeTools: [] });
       setMessages(prev => [...prev, {
         role: 'assistant' as const,
         content: `Error: ${String(error)}`,
         timestamp: Date.now(),
       }]);
     } finally {
-      setLoading(false);
+      useChatStreamStore.getState().endStream();
     }
   };
 
   /** Send a prompt directly (used by quick action examples) */
   const sendQuickPrompt = async (prompt: string) => {
     if (loading) return;
-    setLoading(true);
-    setStreamingContent('');
+    useChatStreamStore.getState().startStream();
 
     setMessages(prev => [...prev, {
       role: 'user' as const,
@@ -544,51 +567,22 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
     }]);
 
     try {
-      const unChunk = await onChatChunk((chunk) => {
-        setStreamingContent(prev => prev + chunk);
-      });
-      const unTool = await onToolStatus((evt) => {
-        if (evt.type === 'start') {
-          setActiveTools(prev => [...prev, { name: evt.name, status: 'running', preview: evt.preview }]);
-        } else {
-          setActiveTools(prev =>
-            prev.map(t => t.name === evt.name && t.status === 'running'
-              ? { ...t, status: 'done' as const, preview: evt.result_preview || t.preview }
-              : t
-            )
-          );
-        }
-      });
+      await runStreamingChat(prompt, currentSessionId);
 
-      const completePromise = new Promise<string>((resolve, reject) => {
-        let unComplete: UnlistenFn | null = null;
-        let unError: UnlistenFn | null = null;
-        const cleanup = () => { unComplete?.(); unError?.(); };
-        onChatComplete((reply) => { cleanup(); resolve(reply); }).then(fn => { unComplete = fn; });
-        onChatError((err) => { cleanup(); reject(new Error(err)); }).then(fn => { unError = fn; });
-      });
-
-      await chatStreamStart(prompt, currentSessionId);
-      await completePromise;
-
-      unChunk();
-      unTool();
-      setStreamingContent('');
-      setActiveTools([]);
+      useChatStreamStore.setState({ streamingContent: '', activeTools: [] });
       await loadMessages(currentSessionId);
       const list = await listSessions();
       setSessions(list);
     } catch (error) {
       console.error('Failed to send quick prompt:', error);
-      setStreamingContent('');
-      setActiveTools([]);
+      useChatStreamStore.setState({ streamingContent: '', activeTools: [] });
       setMessages(prev => [...prev, {
         role: 'assistant' as const,
         content: `Error: ${String(error)}`,
         timestamp: Date.now(),
       }]);
     } finally {
-      setLoading(false);
+      useChatStreamStore.getState().endStream();
     }
   };
 
@@ -1120,6 +1114,7 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
           )}
         </div>
 
+
         {/* Bound bot badges (inline) */}
         {boundBots.map((bot) => (
           <span
@@ -1334,7 +1329,7 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
           </div>
         ) : (
           /* Message list */
-          <div className="max-w-3xl mx-auto py-6 px-6 space-y-6">
+          <div className="w-full py-6 px-8 space-y-6">
             {/* Clear all button */}
             {messages.length > 0 && (
               <div className="flex justify-end">
@@ -1513,9 +1508,9 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
                   {/* Tool status chips */}
                   {activeTools.length > 0 && (
                     <div className="flex flex-wrap gap-1.5">
-                      {activeTools.map((tool, tidx) => (
+                      {activeTools.map((tool) => (
                         <div
-                          key={tidx}
+                          key={tool.id}
                           className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px]"
                           style={{
                             background: 'var(--color-bg-elevated)',
@@ -1573,6 +1568,15 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
               </div>
             )}
 
+            {/* Sub-agent (spawn_agents) panel — persistent, independent of streaming state */}
+            {spawnAgents.length > 0 && (
+              <SpawnAgentPanel
+                agents={spawnAgents}
+                collapsedAgents={collapsedAgents}
+                onToggleCollapse={toggleCollapseAgent}
+              />
+            )}
+
             <div ref={messagesEndRef} />
           </div>
         )}
@@ -1580,7 +1584,7 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
 
       {/* Input area */}
       <div className="shrink-0 px-6 py-4" style={{ background: 'var(--color-bg)', borderTop: '1px solid var(--color-border)' }}>
-        <form onSubmit={(e) => { e.preventDefault(); handleSend(); }} className="max-w-3xl mx-auto">
+        <form onSubmit={(e) => { e.preventDefault(); handleSend(); }} className="w-full">
           <div
             className="relative rounded-2xl transition-all"
             style={{
