@@ -149,7 +149,7 @@ pub struct AgentsConfig {
     #[serde(default)]
     pub max_input_length: Option<usize>,
     /// User-facing workspace directory. Agent-generated files, uploads, etc.
-    /// If None, defaults to ~/Documents/YiClaw.
+    /// If None, defaults to ~/Documents/YiYiClaw.
     #[serde(default)]
     pub workspace_dir: Option<String>,
 }

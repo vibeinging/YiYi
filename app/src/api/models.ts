@@ -42,7 +42,26 @@ export interface TestConnectionResponse {
   success: boolean;
   message: string;
   latency_ms?: number;
+  reply?: string;
 }
+
+/** Zhipu site definitions shared across Models and SetupWizard */
+export const ZHIPU_SITES = {
+  cn: {
+    label: '国内站',
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    codingBaseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+    signupUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
+  },
+  intl: {
+    label: '国际站 (Z.AI)',
+    baseUrl: 'https://api.z.ai/api/paas/v4',
+    codingBaseUrl: 'https://api.z.ai/api/coding/paas/v4',
+    signupUrl: 'https://www.z.ai/',
+  },
+} as const;
+
+export type ZhipuSiteKey = keyof typeof ZHIPU_SITES;
 
 /** Adapt raw backend ProviderInfo to ProviderDisplay for the UI */
 function adaptProvider(p: ProviderInfo): ProviderDisplay {
@@ -77,11 +96,13 @@ export async function testProvider(
   providerId: string,
   apiKey?: string,
   baseUrl?: string,
+  modelId?: string,
 ): Promise<TestConnectionResponse> {
   return await invoke('test_provider', {
     providerId,
     apiKey,
     baseUrl,
+    modelId,
   });
 }
 

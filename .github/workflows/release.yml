@@ -142,7 +142,7 @@ jobs:
           tauriScript: npx tauri
           args: --target ${{ matrix.rust_target }}
           tagName: ${{ github.ref_name }}
-          releaseName: "YiClaw ${{ github.ref_name }}"
+          releaseName: "YiYiClaw ${{ github.ref_name }}"
           releaseBody: "See the assets below to download for your platform."
           releaseDraft: true
           prerelease: false

@@ -139,7 +139,7 @@ export function CreateSkillModal({ onClose, onSuccess }: CreateSkillModalProps) 
     if (tags.length > 0) content += `tags:\n${tags.map(t => `  - ${t}`).join('\n')}\n`;
     content += 'metadata:\n';
     content += '  {\n';
-    content += '    "yiclaw":\n';
+    content += '    "yiyiclaw":\n';
     content += '      {\n';
     content += `        "emoji": "${emoji || '🔧'}",\n`;
     content += '        "requires": {}\n';

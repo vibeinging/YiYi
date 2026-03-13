@@ -12,3 +12,4 @@ pub mod scheduler;
 pub mod skills_hub;
 pub mod token_counter;
 pub mod tools;
+pub mod pty_manager;

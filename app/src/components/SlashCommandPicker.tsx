@@ -3,7 +3,7 @@
  */
 
 import { useRef, useEffect } from 'react';
-import { Trash2, Plus, HelpCircle, Cpu, Puzzle, Clock, type LucideIcon } from 'lucide-react';
+import { Trash2, Puzzle, ClipboardList, ArrowLeft, type LucideIcon } from 'lucide-react';
 
 export interface SlashCommand {
   name: string;
@@ -15,11 +15,9 @@ export interface SlashCommand {
 
 export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'clear', description: 'chat.command.clearDesc', icon: Trash2 },
-  { name: 'new', description: 'chat.command.newDesc', icon: Plus },
-  { name: 'model', description: 'chat.command.modelDesc', icon: Cpu },
   { name: 'skills', description: 'chat.command.skillsDesc', icon: Puzzle },
-  { name: 'cron', description: 'chat.command.cronDesc', icon: Clock, hasArgs: true },
-  { name: 'help', description: 'chat.command.helpDesc', icon: HelpCircle },
+  { name: 'task', description: 'chat.command.taskDesc', icon: ClipboardList, hasArgs: true },
+  { name: 'back', description: 'chat.command.backDesc', icon: ArrowLeft },
 ];
 
 export function filterCommands(query: string): SlashCommand[] {

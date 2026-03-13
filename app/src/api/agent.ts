@@ -16,15 +16,32 @@ export interface MessageSource {
   sender_name?: string;
 }
 
+export interface ToolCallInfo {
+  id: string;
+  name: string;
+  arguments: string;
+}
+
+export interface SpawnAgentResult {
+  name: string;
+  result: string;
+  is_error?: boolean;
+}
+
 export interface ChatMessage {
   id?: number;
-  role: 'user' | 'assistant' | 'system' | 'tool';
+  role: 'user' | 'assistant' | 'system' | 'tool' | 'context_reset';
   content: string;
   timestamp?: number;
   toolName?: string;
   toolStatus?: 'running' | 'done';
   attachments?: Attachment[];
   source?: MessageSource;
+  tool_calls?: ToolCallInfo[];
+  tool_call_id?: string;
+  tool_name?: string;
+  spawn_agents?: SpawnAgentResult[];
+  thinking?: string;
 }
 
 export interface ChatSession {
@@ -32,6 +49,8 @@ export interface ChatSession {
   name: string;
   created_at: number;
   updated_at: number;
+  source: string;
+  source_meta: string | null;
 }
 
 export async function listSessions(): Promise<ChatSession[]> {
@@ -40,6 +59,15 @@ export async function listSessions(): Promise<ChatSession[]> {
 
 export async function createSession(name: string): Promise<ChatSession> {
   return await invoke('create_session', { name });
+}
+
+export async function ensureSession(
+  id: string,
+  name: string,
+  source: string,
+  sourceMeta?: string,
+): Promise<ChatSession> {
+  return await invoke('ensure_session', { id, name, source, sourceMeta });
 }
 
 export async function renameSession(sessionId: string, name: string): Promise<void> {

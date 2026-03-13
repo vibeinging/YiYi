@@ -49,3 +49,68 @@ export async function downloadWorkspace(): Promise<Uint8Array> {
 export async function getWorkspacePath(): Promise<string> {
   return await invoke('get_workspace_path');
 }
+
+// --- Authorized Folders ---
+export interface AuthorizedFolder {
+  id: string;
+  path: string;
+  label: string | null;
+  permission: 'read_only' | 'read_write';
+  is_default: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export async function listAuthorizedFolders(): Promise<AuthorizedFolder[]> {
+  return await invoke('list_authorized_folders');
+}
+
+export async function addAuthorizedFolder(
+  path: string, label?: string, permission?: string
+): Promise<AuthorizedFolder> {
+  return await invoke('add_authorized_folder', { path, label, permission });
+}
+
+export async function updateAuthorizedFolder(
+  id: string, label?: string, permission?: string
+): Promise<void> {
+  await invoke('update_authorized_folder', { id, label, permission });
+}
+
+export async function removeAuthorizedFolder(id: string): Promise<void> {
+  await invoke('remove_authorized_folder', { id });
+}
+
+export async function pickFolder(): Promise<string | null> {
+  return await invoke('pick_folder');
+}
+
+// --- Sensitive Patterns ---
+export interface SensitivePattern {
+  id: string;
+  pattern: string;
+  is_builtin: boolean;
+  enabled: boolean;
+  created_at: number;
+}
+
+export async function listSensitivePatterns(): Promise<SensitivePattern[]> {
+  return await invoke('list_sensitive_patterns');
+}
+
+export async function addSensitivePattern(pattern: string): Promise<SensitivePattern> {
+  return await invoke('add_sensitive_pattern', { pattern });
+}
+
+export async function toggleSensitivePattern(id: string, enabled: boolean): Promise<void> {
+  await invoke('toggle_sensitive_pattern', { id, enabled });
+}
+
+export async function removeSensitivePattern(id: string): Promise<void> {
+  await invoke('remove_sensitive_pattern', { id });
+}
+
+// --- Folder file listing ---
+export async function listFolderFiles(folderPath: string): Promise<WorkspaceFile[]> {
+  return await invoke('list_folder_files', { folderPath });
+}

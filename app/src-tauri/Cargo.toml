@@ -1,5 +1,5 @@
 [package]
-name = "yiclaw"
+name = "yiyiclaw"
 version = "0.1.0"
 description = "A Tauri App"
 authors = ["you"]
@@ -31,6 +31,8 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 futures-util = "0.3"
 zip = "2"
 glob = "0.3"
+scraper = "0.22"
+urlencoding = "2"
 tokio-cron-scheduler = "0.13"
 cron = "0.15"
 futures = "0.3"
@@ -49,6 +51,10 @@ tauri-plugin-notification = "2"
 rusqlite = { version = "0.31", features = ["bundled"] }
 async_py = { version = "0.2", default-features = false, features = ["pyo3"] }
 libc = "0.2"
+rfd = "0.15"
+lazy_static = "1.4"
+portable-pty = "0.8"
+strip-ansi-escapes = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"

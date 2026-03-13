@@ -105,3 +105,19 @@ export async function sessionUnbindBot(sessionId: string, botId: string): Promis
 export async function sessionListBots(sessionId: string): Promise<BotInfo[]> {
   return await invoke<BotInfo[]>('session_list_bots', { sessionId });
 }
+
+// === Bot Connection Status ===
+
+export type BotConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'error';
+
+export interface BotStatusInfo {
+  bot_id: string;
+  state: BotConnectionState;
+  message: string | null;
+  connected_at: number | null;
+  last_error: string | null;
+}
+
+export async function getBotStatuses(): Promise<BotStatusInfo[]> {
+  return await invoke<BotStatusInfo[]>('bots_get_status');
+}

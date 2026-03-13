@@ -3,7 +3,7 @@ name: pdf
 description: "Use this skill whenever the user wants to do anything with PDF files — reading, extracting, creating professional documents, filling forms."
 metadata:
   {
-    "yiclaw":
+    "yiyiclaw":
       {
         "emoji": "📄",
         "requires": {}

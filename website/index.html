@@ -1,0 +1,1450 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YiYiClaw — 你的私人 AI 助手</title>
+  <meta name="description" content="YiYiClaw 是一款本地运行的智能 AI 助手，连接多平台消息渠道，通过 Skills 技能系统驱动无限可能。" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=Outfit:wght@300;400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    /* ===== Reset ===== */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --void: #050508;
+      --surface: #0a0a0f;
+      --elevated: #111118;
+      --border: rgba(255,255,255,0.06);
+      --border-hover: rgba(255,255,255,0.12);
+      --text: #e8e6e3;
+      --text-dim: rgba(232,230,227,0.55);
+      --text-ghost: rgba(232,230,227,0.25);
+      --amber: #e8a838;
+      --amber-dim: rgba(232,168,56,0.15);
+      --teal: #2dd4bf;
+      --teal-dim: rgba(45,212,191,0.12);
+      --violet: #8b5cf6;
+      --violet-dim: rgba(139,92,246,0.12);
+      --rose: #f472b6;
+      --container: min(100% - 3rem, 76rem);
+      --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+      --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    html {
+      scroll-behavior: smooth;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      scroll-padding-top: 5rem;
+    }
+
+    body {
+      font-family: 'Outfit', 'Noto Sans SC', -apple-system, sans-serif;
+      background: var(--void);
+      color: var(--text);
+      line-height: 1.6;
+      overflow-x: hidden;
+      cursor: none;
+    }
+
+    a { color: inherit; text-decoration: none; cursor: none; }
+    button { cursor: none; }
+    .container { width: var(--container); margin: 0 auto; }
+
+    /* ===== Custom Cursor ===== */
+    .cursor-dot {
+      position: fixed;
+      top: 0; left: 0;
+      width: 8px; height: 8px;
+      background: var(--amber);
+      border-radius: 50%;
+      pointer-events: none;
+      z-index: 9999;
+      transition: transform 0.1s ease, opacity 0.3s;
+      transform: translate(-50%, -50%);
+      mix-blend-mode: difference;
+    }
+    .cursor-ring {
+      position: fixed;
+      top: 0; left: 0;
+      width: 40px; height: 40px;
+      border: 1.5px solid rgba(232,168,56,0.4);
+      border-radius: 50%;
+      pointer-events: none;
+      z-index: 9998;
+      transition: width 0.4s var(--ease-spring), height 0.4s var(--ease-spring),
+                  border-color 0.3s, background 0.3s;
+      transform: translate(-50%, -50%);
+    }
+    .cursor-ring.hovering {
+      width: 60px; height: 60px;
+      background: rgba(232,168,56,0.06);
+      border-color: rgba(232,168,56,0.6);
+    }
+
+    /* ===== Grain Overlay ===== */
+    .grain {
+      position: fixed;
+      inset: 0;
+      z-index: 9000;
+      pointer-events: none;
+      opacity: 0.035;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      background-repeat: repeat;
+      background-size: 256px;
+    }
+
+    /* ===== Scroll Progress ===== */
+    .scroll-progress {
+      position: fixed;
+      top: 0; left: 0;
+      height: 2px;
+      background: linear-gradient(90deg, var(--amber), var(--teal));
+      z-index: 10000;
+      transform-origin: left;
+      transform: scaleX(0);
+    }
+
+    /* ===== Glow Mesh Background ===== */
+    .glow-mesh {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      overflow: hidden;
+    }
+    .glow-mesh .blob {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(120px);
+      opacity: 0.2;
+      will-change: transform;
+    }
+    .glow-mesh .blob-1 {
+      width: 600px; height: 600px;
+      background: var(--amber);
+      top: -15%; right: -10%;
+      animation: blobDrift1 30s ease-in-out infinite;
+    }
+    .glow-mesh .blob-2 {
+      width: 500px; height: 500px;
+      background: var(--teal);
+      bottom: -10%; left: -10%;
+      animation: blobDrift2 25s ease-in-out infinite;
+    }
+    .glow-mesh .blob-3 {
+      width: 350px; height: 350px;
+      background: var(--violet);
+      top: 50%; left: 40%;
+      animation: blobDrift3 20s ease-in-out infinite;
+    }
+    @keyframes blobDrift1 {
+      0%, 100% { transform: translate(0, 0) scale(1); }
+      25% { transform: translate(-80px, 60px) scale(1.15); }
+      50% { transform: translate(-40px, 120px) scale(0.9); }
+      75% { transform: translate(40px, 40px) scale(1.05); }
+    }
+    @keyframes blobDrift2 {
+      0%, 100% { transform: translate(0, 0) scale(1); }
+      33% { transform: translate(100px, -70px) scale(1.1); }
+      66% { transform: translate(50px, -120px) scale(0.95); }
+    }
+    @keyframes blobDrift3 {
+      0%, 100% { transform: translate(0, 0) scale(1) rotate(0deg); }
+      50% { transform: translate(-60px, 80px) scale(1.2) rotate(30deg); }
+    }
+
+    /* ===== Navigation ===== */
+    .nav {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 100;
+      padding: 1.25rem 0;
+      transition: all 0.5s var(--ease-out-expo);
+    }
+    .nav.scrolled {
+      padding: 0.75rem 0;
+      background: rgba(5, 5, 8, 0.8);
+      backdrop-filter: blur(24px) saturate(1.2);
+      -webkit-backdrop-filter: blur(24px) saturate(1.2);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-inner {
+      width: var(--container);
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .nav-brand {
+      font-family: 'Syne', sans-serif;
+      font-size: 1.375rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      display: flex;
+      align-items: center;
+      gap: 0.625rem;
+    }
+    .nav-brand .paw-icon {
+      width: 36px; height: 36px;
+      position: relative;
+    }
+    .nav-brand .paw-icon::before {
+      content: '';
+      position: absolute;
+      inset: -4px;
+      background: var(--amber-dim);
+      border-radius: 50%;
+      filter: blur(8px);
+      animation: pawGlow 3s ease-in-out infinite;
+    }
+    @keyframes pawGlow {
+      0%, 100% { opacity: 0.5; transform: scale(1); }
+      50% { opacity: 1; transform: scale(1.15); }
+    }
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 2.5rem;
+      list-style: none;
+    }
+    .nav-links a {
+      font-size: 0.875rem;
+      font-weight: 400;
+      color: var(--text-dim);
+      letter-spacing: 0.02em;
+      transition: color 0.3s;
+      position: relative;
+    }
+    .nav-links a:hover { color: var(--text); }
+    .nav-links a::after {
+      content: '';
+      position: absolute;
+      bottom: -6px; left: 0; right: 0;
+      height: 1px;
+      background: var(--amber);
+      transform: scaleX(0);
+      transform-origin: right;
+      transition: transform 0.4s var(--ease-out-expo);
+    }
+    .nav-links a:hover::after {
+      transform: scaleX(1);
+      transform-origin: left;
+    }
+    .nav-cta-btn {
+      padding: 0.5rem 1.5rem;
+      border: 1px solid var(--amber);
+      border-radius: 100px;
+      color: var(--amber) !important;
+      font-weight: 500;
+      font-size: 0.875rem;
+      transition: all 0.3s var(--ease-out-expo);
+      background: transparent;
+    }
+    .nav-cta-btn:hover {
+      color: var(--void) !important;
+      background: var(--amber);
+    }
+    .nav-cta-btn::after { display: none !important; }
+
+    .mobile-toggle {
+      display: none;
+      background: none;
+      border: none;
+      color: var(--text);
+      padding: 0.5rem;
+    }
+
+    /* ===== Hero ===== */
+    .hero {
+      position: relative;
+      z-index: 1;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      padding: 8rem 0 6rem;
+    }
+    .hero-inner {
+      width: var(--container);
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4rem;
+      align-items: center;
+    }
+    .hero-text { position: relative; }
+    .hero-eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.625rem;
+      margin-bottom: 2rem;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      color: var(--amber);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      opacity: 0;
+      animation: revealUp 0.8s var(--ease-out-expo) 0.2s forwards;
+    }
+    .hero-eyebrow .line {
+      width: 24px; height: 1px;
+      background: var(--amber);
+    }
+    .hero-h1 {
+      font-family: 'Syne', sans-serif;
+      font-size: clamp(2.75rem, 5.5vw, 4.5rem);
+      font-weight: 800;
+      line-height: 1.08;
+      letter-spacing: -0.04em;
+      margin-bottom: 1.75rem;
+    }
+    .hero-h1 .word {
+      display: inline-block;
+      opacity: 0;
+      transform: translateY(40px) rotateX(-15deg);
+      animation: wordReveal 0.9s var(--ease-out-expo) forwards;
+    }
+    .hero-h1 .word:nth-child(1) { animation-delay: 0.3s; }
+    .hero-h1 .word:nth-child(2) { animation-delay: 0.4s; }
+    .hero-h1 .word:nth-child(3) { animation-delay: 0.5s; }
+    .hero-h1 .accent-text {
+      background: linear-gradient(135deg, var(--amber) 0%, #f59e0b 40%, var(--teal) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero-h1 br + .word { animation-delay: 0.55s; }
+    .hero-desc {
+      font-size: 1.125rem;
+      color: var(--text-dim);
+      line-height: 1.75;
+      max-width: 28rem;
+      margin-bottom: 2.5rem;
+      font-weight: 300;
+      opacity: 0;
+      animation: revealUp 0.8s var(--ease-out-expo) 0.7s forwards;
+    }
+    .hero-actions {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+      opacity: 0;
+      animation: revealUp 0.8s var(--ease-out-expo) 0.85s forwards;
+    }
+    .btn-glow {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.625rem;
+      padding: 1rem 2.25rem;
+      background: var(--amber);
+      color: var(--void);
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 0.9375rem;
+      border-radius: 100px;
+      border: none;
+      position: relative;
+      transition: all 0.4s var(--ease-out-expo);
+      letter-spacing: -0.01em;
+    }
+    .btn-glow::after {
+      content: '';
+      position: absolute;
+      inset: -2px;
+      border-radius: inherit;
+      background: var(--amber);
+      opacity: 0.3;
+      filter: blur(16px);
+      z-index: -1;
+      transition: opacity 0.4s;
+    }
+    .btn-glow:hover { transform: translateY(-2px) scale(1.02); }
+    .btn-glow:hover::after { opacity: 0.5; }
+    .download-btn { position: relative; }
+    .download-platform {
+      font-size: 0.7rem;
+      font-weight: 500;
+      opacity: 0.65;
+      margin-left: 0.15rem;
+    }
+    .btn-ghost {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 1rem 2rem;
+      color: var(--text-dim);
+      font-weight: 500;
+      font-size: 0.9375rem;
+      border: 1px solid var(--border);
+      border-radius: 100px;
+      transition: all 0.3s var(--ease-out-expo);
+      backdrop-filter: blur(8px);
+    }
+    .btn-ghost:hover {
+      color: var(--text);
+      border-color: var(--border-hover);
+      background: rgba(255,255,255,0.03);
+      transform: translateY(-2px);
+    }
+
+    /* Hero Visual */
+    .hero-visual {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      animation: revealScale 1.2s var(--ease-out-expo) 0.5s forwards;
+    }
+    .hero-orb {
+      width: 420px; height: 420px;
+      position: relative;
+    }
+    .hero-orb-ring {
+      position: absolute;
+      border-radius: 50%;
+      border: 1px solid;
+      animation: orbSpin 20s linear infinite;
+    }
+    .hero-orb-ring:nth-child(1) {
+      inset: 0;
+      border-color: rgba(232,168,56,0.15);
+    }
+    .hero-orb-ring:nth-child(2) {
+      inset: 30px;
+      border-color: rgba(45,212,191,0.1);
+      animation-duration: 28s;
+      animation-direction: reverse;
+    }
+    .hero-orb-ring:nth-child(3) {
+      inset: 70px;
+      border-color: rgba(139,92,246,0.08);
+      animation-duration: 35s;
+    }
+    @keyframes orbSpin { to { transform: rotate(360deg); } }
+    .hero-orb-center {
+      position: absolute;
+      inset: 100px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 35%, rgba(232,168,56,0.2), rgba(45,212,191,0.1), transparent 70%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(2px);
+    }
+    .hero-orb-center svg {
+      width: 80px; height: 80px;
+      opacity: 0.8;
+    }
+    /* Floating channel tags around the orb */
+    .hero-float-tag {
+      position: absolute;
+      padding: 0.375rem 0.875rem;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 100px;
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: var(--text-dim);
+      backdrop-filter: blur(12px);
+      white-space: nowrap;
+      animation: floatTag 6s ease-in-out infinite;
+    }
+    .hero-float-tag:nth-child(5) { top: 5%; left: 10%; animation-delay: 0s; }
+    .hero-float-tag:nth-child(6) { top: 20%; right: -5%; animation-delay: 1s; }
+    .hero-float-tag:nth-child(7) { bottom: 25%; right: 0; animation-delay: 2s; }
+    .hero-float-tag:nth-child(8) { bottom: 5%; left: 5%; animation-delay: 0.5s; }
+    .hero-float-tag:nth-child(9) { top: 45%; left: -8%; animation-delay: 1.5s; }
+    .hero-float-tag:nth-child(10) { top: 70%; right: -10%; animation-delay: 2.5s; }
+    @keyframes floatTag {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-12px); }
+    }
+
+    @keyframes revealUp {
+      from { opacity: 0; transform: translateY(24px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes wordReveal {
+      to { opacity: 1; transform: translateY(0) rotateX(0); }
+    }
+    @keyframes revealScale {
+      from { opacity: 0; transform: scale(0.9); }
+      to { opacity: 1; transform: scale(1); }
+    }
+
+    /* ===== Section Shared ===== */
+    .section { position: relative; z-index: 1; padding: 8rem 0; }
+    .section-label {
+      font-family: 'Syne', sans-serif;
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--amber);
+      margin-bottom: 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .section-label .dash {
+      width: 20px; height: 1px;
+      background: var(--amber);
+    }
+    .section-h2 {
+      font-family: 'Syne', sans-serif;
+      font-size: clamp(2rem, 4vw, 3rem);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.15;
+      margin-bottom: 1.25rem;
+    }
+    .section-sub {
+      font-size: 1.0625rem;
+      color: var(--text-dim);
+      line-height: 1.7;
+      max-width: 30rem;
+      font-weight: 300;
+    }
+
+    /* ===== Scroll Reveal ===== */
+    [data-reveal] {
+      opacity: 0;
+      transform: translateY(40px);
+      transition: opacity 0.9s var(--ease-out-expo), transform 0.9s var(--ease-out-expo);
+    }
+    [data-reveal].revealed {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    [data-reveal-delay="1"] { transition-delay: 0.1s; }
+    [data-reveal-delay="2"] { transition-delay: 0.2s; }
+    [data-reveal-delay="3"] { transition-delay: 0.3s; }
+    [data-reveal-delay="4"] { transition-delay: 0.4s; }
+    [data-reveal-delay="5"] { transition-delay: 0.5s; }
+    [data-reveal-delay="6"] { transition-delay: 0.6s; }
+
+    /* ===== Divider ===== */
+    .section-divider {
+      width: var(--container);
+      margin: 0 auto;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--border), transparent);
+    }
+
+    /* ===== Features Bento Grid ===== */
+    .bento {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 1.25rem;
+      margin-top: 3.5rem;
+    }
+    .bento-card {
+      position: relative;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 1.25rem;
+      padding: 2.25rem;
+      overflow: hidden;
+      transition: border-color 0.4s, transform 0.5s var(--ease-out-expo);
+    }
+    .bento-card:hover {
+      border-color: var(--border-hover);
+      transform: translateY(-4px);
+    }
+    /* Animated gradient border on hover */
+    .bento-card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      padding: 1px;
+      background: linear-gradient(135deg, var(--amber), var(--teal), var(--violet), var(--amber));
+      background-size: 300% 300%;
+      -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      opacity: 0;
+      transition: opacity 0.5s;
+      animation: gradientShift 4s ease infinite;
+    }
+    .bento-card:hover::before { opacity: 1; }
+    @keyframes gradientShift {
+      0%, 100% { background-position: 0% 50%; }
+      50% { background-position: 100% 50%; }
+    }
+    .bento-card .card-icon {
+      width: 44px; height: 44px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 1.5rem;
+    }
+    .bento-card h3 {
+      font-family: 'Syne', sans-serif;
+      font-size: 1.125rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+      letter-spacing: -0.01em;
+    }
+    .bento-card p {
+      font-size: 0.9375rem;
+      color: var(--text-dim);
+      line-height: 1.65;
+      font-weight: 300;
+    }
+    /* Bento layout — 10 cards */
+    .bento-card:nth-child(1) { grid-column: span 7; }
+    .bento-card:nth-child(2) { grid-column: span 5; }
+    .bento-card:nth-child(3) { grid-column: span 4; }
+    .bento-card:nth-child(4) { grid-column: span 4; }
+    .bento-card:nth-child(5) { grid-column: span 4; }
+    .bento-card:nth-child(6) { grid-column: span 6; }
+    .bento-card:nth-child(7) { grid-column: span 6; }
+    .bento-card:nth-child(8) { grid-column: span 4; }
+    .bento-card:nth-child(9) { grid-column: span 4; }
+    .bento-card:nth-child(10) { grid-column: span 4; }
+
+    /* Inner glow effect on large cards */
+    .bento-card:nth-child(1) .card-glow {
+      position: absolute;
+      top: -50%; right: -20%;
+      width: 300px; height: 300px;
+      background: var(--amber);
+      border-radius: 50%;
+      filter: blur(100px);
+      opacity: 0.04;
+      pointer-events: none;
+    }
+
+    /* ===== Steps / How it Works ===== */
+    .steps-track {
+      display: flex;
+      gap: 0;
+      margin-top: 4rem;
+      position: relative;
+    }
+    .steps-track::before {
+      content: '';
+      position: absolute;
+      top: 36px;
+      left: 36px;
+      right: 36px;
+      height: 1px;
+      background: linear-gradient(90deg, var(--amber), var(--teal), var(--violet));
+      opacity: 0.3;
+    }
+    .step-item {
+      flex: 1;
+      text-align: center;
+      position: relative;
+      padding: 0 1.5rem;
+    }
+    .step-dot {
+      width: 72px; height: 72px;
+      margin: 0 auto 2rem;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .step-dot::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      border: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .step-dot .num {
+      position: relative;
+      font-family: 'Syne', sans-serif;
+      font-size: 1.5rem;
+      font-weight: 800;
+      background: linear-gradient(135deg, var(--amber), var(--teal));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .step-dot::after {
+      content: '';
+      position: absolute;
+      inset: -6px;
+      border-radius: 50%;
+      border: 1px solid var(--amber);
+      opacity: 0;
+      animation: stepPulse 3s ease-in-out infinite;
+    }
+    .step-item:nth-child(1) .step-dot::after { animation-delay: 0s; }
+    .step-item:nth-child(2) .step-dot::after { animation-delay: 1s; }
+    .step-item:nth-child(3) .step-dot::after { animation-delay: 2s; }
+    @keyframes stepPulse {
+      0%, 100% { opacity: 0; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(1.15); }
+    }
+    .step-item h3 {
+      font-family: 'Syne', sans-serif;
+      font-size: 1.125rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+    }
+    .step-item p {
+      font-size: 0.9375rem;
+      color: var(--text-dim);
+      line-height: 1.6;
+      font-weight: 300;
+      max-width: 16rem;
+      margin: 0 auto;
+    }
+
+    /* ===== Use Cases ===== */
+    .cases-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.25rem;
+      margin-top: 3.5rem;
+    }
+    .case-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 1.25rem;
+      padding: 2rem;
+      transition: all 0.4s var(--ease-out-expo);
+      position: relative;
+      overflow: hidden;
+    }
+    .case-card::after {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--amber), transparent);
+      opacity: 0;
+      transition: opacity 0.4s;
+    }
+    .case-card:hover {
+      border-color: var(--border-hover);
+      transform: translateY(-6px);
+    }
+    .case-card:hover::after { opacity: 1; }
+    .case-emoji {
+      font-size: 1.75rem;
+      margin-bottom: 1.25rem;
+      display: block;
+    }
+    .case-card h3 {
+      font-family: 'Syne', sans-serif;
+      font-size: 1.0625rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+    }
+    .case-card p {
+      font-size: 0.875rem;
+      color: var(--text-dim);
+      line-height: 1.65;
+      font-weight: 300;
+    }
+
+    /* ===== Channels Grid ===== */
+    .channels-grid {
+      display: flex;
+      justify-content: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin-top: 3.5rem;
+    }
+    .channel-pill {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.875rem 1.5rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 100px;
+      white-space: nowrap;
+      transition: all 0.4s var(--ease-out-expo);
+    }
+    .channel-pill:hover {
+      border-color: var(--border-hover);
+      background: var(--elevated);
+      transform: translateY(-4px);
+    }
+    .channel-pill .ch-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .channel-pill .ch-name {
+      font-size: 0.9375rem;
+      font-weight: 500;
+    }
+    .channel-pill .ch-tag {
+      font-size: 0.75rem;
+      color: var(--text-ghost);
+      font-weight: 400;
+    }
+
+    /* ===== CTA ===== */
+    .cta {
+      position: relative;
+      z-index: 1;
+      padding: 8rem 0;
+      text-align: center;
+    }
+    .cta-inner {
+      position: relative;
+    }
+    .cta-inner::before {
+      content: '';
+      position: absolute;
+      top: 50%; left: 50%;
+      width: 500px; height: 500px;
+      transform: translate(-50%, -50%);
+      background: radial-gradient(circle, rgba(232,168,56,0.08), transparent 70%);
+      pointer-events: none;
+    }
+    .cta h2 {
+      font-family: 'Syne', sans-serif;
+      font-size: clamp(2rem, 4vw, 3.25rem);
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      margin-bottom: 1.25rem;
+      position: relative;
+    }
+    .cta p {
+      font-size: 1.125rem;
+      color: var(--text-dim);
+      font-weight: 300;
+      margin-bottom: 2.5rem;
+      position: relative;
+    }
+    .cta-actions {
+      display: flex;
+      justify-content: center;
+      gap: 1rem;
+      position: relative;
+    }
+
+    /* ===== Footer ===== */
+    .footer {
+      position: relative;
+      z-index: 1;
+      padding: 3rem 0;
+      border-top: 1px solid var(--border);
+    }
+    .footer-inner {
+      width: var(--container);
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .footer-brand {
+      font-family: 'Syne', sans-serif;
+      font-weight: 600;
+      font-size: 1rem;
+      color: var(--text-dim);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .footer-copy {
+      font-size: 0.8125rem;
+      color: var(--text-ghost);
+    }
+    .footer-links {
+      display: flex;
+      gap: 2rem;
+      list-style: none;
+    }
+    .footer-links a {
+      font-size: 0.8125rem;
+      color: var(--text-ghost);
+      transition: color 0.3s;
+    }
+    .footer-links a:hover { color: var(--text); }
+
+    /* ===== Responsive ===== */
+    @media (max-width: 1024px) {
+      .hero-inner { grid-template-columns: 1fr; text-align: center; }
+      .hero-desc { margin-left: auto; margin-right: auto; }
+      .hero-actions { justify-content: center; }
+      .hero-visual { margin-top: 2rem; }
+      .hero-orb { width: 320px; height: 320px; }
+      .bento-card:nth-child(1), .bento-card:nth-child(2) { grid-column: span 6; }
+      .bento-card:nth-child(3), .bento-card:nth-child(4), .bento-card:nth-child(5) { grid-column: span 4; }
+      .bento-card:nth-child(8), .bento-card:nth-child(9), .bento-card:nth-child(10) { grid-column: span 4; }
+      .cases-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 768px) {
+      body { cursor: auto; }
+      .cursor-dot, .cursor-ring { display: none; }
+      a, button { cursor: auto; }
+      .nav-links { display: none; }
+      .mobile-toggle { display: block; }
+      .nav-links.open {
+        display: flex;
+        flex-direction: column;
+        position: absolute;
+        top: 100%; left: 0; right: 0;
+        background: rgba(5,5,8,0.95);
+        backdrop-filter: blur(24px);
+        padding: 1.5rem;
+        gap: 1rem;
+        border-bottom: 1px solid var(--border);
+      }
+      .hero { padding: 7rem 1.5rem 4rem; }
+      .hero-orb { width: 260px; height: 260px; }
+      .hero-float-tag { display: none; }
+      .bento { grid-template-columns: 1fr; }
+      .bento-card { grid-column: span 1 !important; }
+      .steps-track { flex-direction: column; gap: 2.5rem; }
+      .steps-track::before { display: none; }
+      .cases-grid { grid-template-columns: 1fr; }
+      .footer-inner { flex-direction: column; gap: 1.25rem; text-align: center; }
+      .section { padding: 5rem 1.5rem; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Grain texture -->
+  <div class="grain"></div>
+
+  <!-- Scroll progress -->
+  <div class="scroll-progress" id="scrollProgress"></div>
+
+  <!-- Custom cursor -->
+  <div class="cursor-dot" id="cursorDot"></div>
+  <div class="cursor-ring" id="cursorRing"></div>
+
+  <!-- Background mesh -->
+  <div class="glow-mesh">
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+    <div class="blob blob-3"></div>
+  </div>
+
+  <!-- Nav -->
+  <nav class="nav" id="navbar">
+    <div class="nav-inner">
+      <a href="#" class="nav-brand">
+        <span class="paw-icon">
+          <svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <ellipse cx="18" cy="22" rx="6" ry="5" fill="url(#pawG)"/>
+            <circle cx="10" cy="14" r="4" fill="url(#pawG)" opacity="0.8"/>
+            <circle cx="26" cy="14" r="4" fill="url(#pawG)" opacity="0.8"/>
+            <circle cx="7" cy="22" r="3" fill="url(#pawG)" opacity="0.6"/>
+            <circle cx="29" cy="22" r="3" fill="url(#pawG)" opacity="0.6"/>
+            <defs>
+              <linearGradient id="pawG" x1="5" y1="10" x2="31" y2="30">
+                <stop offset="0%" stop-color="#e8a838"/>
+                <stop offset="100%" stop-color="#2dd4bf"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </span>
+        YiYiClaw
+      </a>
+      <ul class="nav-links" id="navLinks">
+        <li><a href="#features">核心能力</a></li>
+        <li><a href="#how-it-works">快速上手</a></li>
+        <li><a href="#usecases">应用场景</a></li>
+        <li><a href="https://github.com/HungryFour/YiPaw" target="_blank" rel="noopener">GitHub</a></li>
+        <li><a href="#download" class="nav-cta-btn">立即下载</a></li>
+      </ul>
+      <button class="mobile-toggle" id="mobileToggle" aria-label="Menu">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+          <line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/>
+        </svg>
+      </button>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero" id="hero">
+    <div class="hero-inner">
+      <div class="hero-text">
+        <div class="hero-eyebrow">
+          <span class="line"></span>
+          桌面应用 · 一键安装 · 开源免费
+        </div>
+        <h1 class="hero-h1">
+          <span class="word">一键安装，</span>
+          <span class="word">开箱即用</span><br/>
+          <span class="word"><span class="accent-text">越用越聪明的 AI 助手</span></span>
+        </h1>
+        <p class="hero-desc">
+          YiYiClaw 是一款桌面 App，双击安装即可使用。无需配置环境、无需写代码。它会自己学习进化，记住你的习惯，通过 Skills 技能系统不断解锁新能力。
+        </p>
+        <div class="hero-actions">
+          <a id="heroDownloadBtn" href="https://github.com/HungryFour/YiPaw/releases/latest" target="_blank" rel="noopener" class="btn-glow download-btn">
+            <svg class="download-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            <span class="download-label">免费下载</span>
+            <span class="download-platform"></span>
+          </a>
+          <a href="#features" class="btn-ghost">
+            了解更多
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/>
+            </svg>
+          </a>
+        </div>
+      </div>
+      <div class="hero-visual">
+        <div class="hero-orb">
+          <div class="hero-orb-ring"></div>
+          <div class="hero-orb-ring"></div>
+          <div class="hero-orb-ring"></div>
+          <div class="hero-orb-center">
+            <svg viewBox="0 0 80 80" fill="none">
+              <ellipse cx="40" cy="48" rx="14" ry="11" fill="url(#hpG)" opacity="0.9"/>
+              <circle cx="22" cy="28" r="8.5" fill="url(#hpG)" opacity="0.7"/>
+              <circle cx="58" cy="28" r="8.5" fill="url(#hpG)" opacity="0.7"/>
+              <circle cx="14" cy="48" r="6.5" fill="url(#hpG)" opacity="0.5"/>
+              <circle cx="66" cy="48" r="6.5" fill="url(#hpG)" opacity="0.5"/>
+              <defs>
+                <linearGradient id="hpG" x1="10" y1="20" x2="70" y2="65">
+                  <stop offset="0%" stop-color="#e8a838"/>
+                  <stop offset="100%" stop-color="#2dd4bf"/>
+                </linearGradient>
+              </defs>
+            </svg>
+          </div>
+          <div class="hero-float-tag">钉钉 DingTalk</div>
+          <div class="hero-float-tag">飞书 Feishu</div>
+          <div class="hero-float-tag">Discord</div>
+          <div class="hero-float-tag">Telegram</div>
+          <div class="hero-float-tag">QQ</div>
+          <div class="hero-float-tag">iMessage</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <div class="section-divider"></div>
+  <section class="section" id="features">
+    <div class="container">
+      <div data-reveal>
+        <div class="section-label"><span class="dash"></span> 核心能力</div>
+        <h2 class="section-h2">一个 App，解决所有问题</h2>
+        <p class="section-sub">不像其他 AI 工具需要折腾环境，YiYiClaw 就是一个桌面应用——双击安装，打开就能用。</p>
+      </div>
+      <div class="bento">
+        <!-- 1: 一键安装 (span 7) -->
+        <div class="bento-card" data-reveal data-reveal-delay="1" data-tilt>
+          <div class="card-glow"></div>
+          <div class="card-icon" style="background:var(--amber-dim);">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--amber)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+          </div>
+          <h3>一键安装，秒级启动</h3>
+          <p>原生桌面应用，支持 macOS / Windows / Linux。双击安装包即可完成部署，无需 Python、无需终端、无需任何环境配置。打开即用，像使用微信一样简单。</p>
+        </div>
+        <!-- 2: 自主进化 (span 5) -->
+        <div class="bento-card" data-reveal data-reveal-delay="2" data-tilt>
+          <div class="card-icon" style="background:var(--teal-dim);">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--teal)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+          </div>
+          <h3>自主进化，越用越强</h3>
+          <p>智能记忆系统自动学习你的偏好和习惯，对话上下文自动压缩存储。随着使用不断进化，变成最懂你的私人助手。</p>
+        </div>
+        <!-- 3: 安全沙箱 (span 4) -->
+        <div class="bento-card" data-reveal data-reveal-delay="2" data-tilt>
+          <div class="card-icon" style="background:rgba(239,68,68,0.12);">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+          </div>
+          <h3>安全沙箱运行</h3>
+          <p>所有技能在隔离沙箱中执行，数据本地存储加密。API Key 不外泄、对话不上传，你的隐私受到多层保护。</p>
+        </div>
+        <!-- 4: 省 Token (span 4) -->
+        <div class="bento-card" data-reveal data-reveal-delay="3" data-tilt>
+          <div class="card-icon" style="background:rgba(34,197,94,0.12);">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+            </svg>
+          </div>
+          <h3>智能省 Token</h3>
+          <p>自动压缩对话历史，智能裁剪冗余上下文，Skill 按需注入 Prompt。同样的任务，消耗更少的 Token，帮你省钱。</p>
+        </div>
+        <!-- 5: 技能市场 (span 4) -->
+        <div class="bento-card" data-reveal data-reveal-delay="4" data-tilt>
+          <div class="card-icon" style="background:rgba(168,85,247,0.12);">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#a855f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+            </svg>
+          </div>
+          <h3>技能市场，一键获取</h3>
+          <p>浏览社区 Skills Hub，看中哪个技能一键安装到本地。数百个开源技能随取随用，不需要自己写一行代码。</p>
+        </div>
+        <!-- 6: AI 生成技能 (span 6) -->
+        <div class="bento-card" data-reveal data-reveal-delay="4" data-tilt>
+          <div class="card-icon" style="background:rgba(236,72,153,0.12);">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ec4899" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+            </svg>
+          </div>
+          <h3>AI 辅助生成技能</h3>
+          <p>用自然语言描述你想要的能力，AI 自动生成 Skill 文件并部署。不会写代码也能创造专属技能，让助手做到你想象的任何事。</p>
+        </div>
+        <!-- 7: 多渠道互通 (span 6) -->
+        <div class="bento-card" data-reveal data-reveal-delay="5" data-tilt>
+          <div class="card-icon" style="background:var(--violet-dim);">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--violet)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+          </div>
+          <h3>多渠道消息互通</h3>
+          <p>App 内一键连接钉钉、飞书、QQ、Discord、iMessage、Telegram，统一管理所有对话和任务。</p>
+        </div>
+        <!-- 8: 定时任务与日程 (span 4) -->
+        <div class="bento-card" data-reveal data-reveal-delay="5" data-tilt>
+          <div class="card-icon" style="background:rgba(52,211,153,0.12);">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+            </svg>
+          </div>
+          <h3>日程调度与自动化</h3>
+          <p>内置 Cron 调度 + 日历日程管理，定时摘要、自动提醒、数据抓取，24/7 全天候无人值守运行。</p>
+        </div>
+        <!-- 9: 多模型 (span 4) -->
+        <div class="bento-card" data-reveal data-reveal-delay="6" data-tilt>
+          <div class="card-icon" style="background:rgba(251,191,36,0.12);">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="4"/><path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707"/>
+            </svg>
+          </div>
+          <h3>多模型自由切换</h3>
+          <p>OpenAI、Claude、Gemini、本地 LLM 一键切换，自定义 Provider，不绑定任何平台。</p>
+        </div>
+        <!-- 10: MCP (span 4) -->
+        <div class="bento-card" data-reveal data-reveal-delay="6" data-tilt>
+          <div class="card-icon" style="background:rgba(99,102,241,0.12);">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+            </svg>
+          </div>
+          <h3>MCP 协议扩展</h3>
+          <p>原生 MCP 支持，可视化管理工具服务器，热重载配置，连接外部能力无限扩展。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- How It Works -->
+  <div class="section-divider"></div>
+  <section class="section" id="how-it-works">
+    <div class="container">
+      <div style="text-align:center;" data-reveal>
+        <div class="section-label" style="justify-content:center;"><span class="dash"></span> 快速上手 <span class="dash"></span></div>
+        <h2 class="section-h2">三步上手，就这么简单</h2>
+        <p class="section-sub" style="margin:0 auto;">无需 Python，无需终端，无需环境配置</p>
+      </div>
+      <div class="steps-track" data-reveal data-reveal-delay="2">
+        <div class="step-item">
+          <div class="step-dot"><span class="num">1</span></div>
+          <h3>双击安装</h3>
+          <p>下载对应平台的安装包，双击即完成。像装微信一样简单，不需要任何技术背景。</p>
+        </div>
+        <div class="step-item">
+          <div class="step-dot"><span class="num">2</span></div>
+          <h3>选择模型</h3>
+          <p>填入 API Key 或选择本地离线模型，App 内一键配置，无需命令行操作。</p>
+        </div>
+        <div class="step-item">
+          <div class="step-dot"><span class="num">3</span></div>
+          <h3>用起来，它会自己进化</h3>
+          <p>开始对话，连接渠道。YiYiClaw 会自动学习你的偏好，越用越聪明。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Use Cases -->
+  <div class="section-divider"></div>
+  <section class="section" id="usecases">
+    <div class="container">
+      <div data-reveal>
+        <div class="section-label"><span class="dash"></span> 应用场景</div>
+        <h2 class="section-h2">你能用它做什么？</h2>
+        <p class="section-sub">从日常琐事到专业工作流</p>
+      </div>
+      <div class="cases-grid">
+        <div class="case-card" data-reveal data-reveal-delay="1" data-tilt>
+          <span class="case-emoji">📡</span>
+          <h3>社交媒体摘要</h3>
+          <p>每日自动从小红书、知乎、Reddit、Bilibili 抓取热点，生成个性化简报推送到消息渠道。</p>
+        </div>
+        <div class="case-card" data-reveal data-reveal-delay="2" data-tilt>
+          <span class="case-emoji">📄</span>
+          <h3>文档智能处理</h3>
+          <p>读取并总结 PDF、Word、Excel、PPT。自动生成报告、提取数据、跨格式转换。</p>
+        </div>
+        <div class="case-card" data-reveal data-reveal-delay="3" data-tilt>
+          <span class="case-emoji">🖥️</span>
+          <h3>桌面自动化</h3>
+          <p>浏览器自动化、桌面截图分析、文件管理，让 AI 帮你完成重复性工作。</p>
+        </div>
+        <div class="case-card" data-reveal data-reveal-delay="2" data-tilt>
+          <span class="case-emoji">🔬</span>
+          <h3>研究与学习</h3>
+          <p>追踪技术动态、维护知识库、自动总结邮件和 Newsletter，构建第二大脑。</p>
+        </div>
+        <div class="case-card" data-reveal data-reveal-delay="3" data-tilt>
+          <span class="case-emoji">✨</span>
+          <h3>内容创作</h3>
+          <p>生成文案、制作视频脚本、自动排版，支持完整内容生产工作流。</p>
+        </div>
+        <div class="case-card" data-reveal data-reveal-delay="4" data-tilt>
+          <span class="case-emoji">⚡</span>
+          <h3>开发辅助</h3>
+          <p>GitHub 代码审查、Issue 管理、自动化部署通知，开发者的 AI 搭档。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Channels Marquee -->
+  <div class="section-divider"></div>
+  <section class="section" id="channels">
+    <div class="container" data-reveal>
+      <div style="text-align:center;">
+        <div class="section-label" style="justify-content:center;"><span class="dash"></span> 全平台互通 <span class="dash"></span></div>
+        <h2 class="section-h2">一个助手，连接所有平台</h2>
+        <p class="section-sub" style="margin:0 auto;">统一管理你的消息渠道与任务</p>
+      </div>
+    </div>
+    <div class="container">
+      <div class="channels-grid" data-reveal data-reveal-delay="2">
+        <div class="channel-pill"><span class="ch-dot" style="background:var(--amber)"></span><span class="ch-name">钉钉</span><span class="ch-tag">DingTalk</span></div>
+        <div class="channel-pill"><span class="ch-dot" style="background:var(--violet)"></span><span class="ch-name">飞书</span><span class="ch-tag">Feishu / Lark</span></div>
+        <div class="channel-pill"><span class="ch-dot" style="background:var(--teal)"></span><span class="ch-name">QQ</span><span class="ch-tag">Tencent QQ</span></div>
+        <div class="channel-pill"><span class="ch-dot" style="background:#5865f2"></span><span class="ch-name">Discord</span><span class="ch-tag">Server & DM</span></div>
+        <div class="channel-pill"><span class="ch-dot" style="background:var(--rose)"></span><span class="ch-name">iMessage</span><span class="ch-tag">Apple Messages</span></div>
+        <div class="channel-pill"><span class="ch-dot" style="background:#26a5e4"></span><span class="ch-name">Telegram</span><span class="ch-tag">Bot API</span></div>
+        <div class="channel-pill"><span class="ch-dot" style="background:#07c160"></span><span class="ch-name">微信</span><span class="ch-tag">Coming Soon</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <div class="section-divider"></div>
+  <section class="cta" id="download">
+    <div class="container">
+      <div class="cta-inner" data-reveal>
+        <h2>一键安装，开始你的<br/>AI 进化之旅</h2>
+        <p>免费下载，开源可控。你的数据，你做主。它会越用越懂你。</p>
+        <div class="cta-actions">
+          <a id="ctaDownloadBtn" href="https://github.com/HungryFour/YiPaw/releases/latest" target="_blank" rel="noopener" class="btn-glow download-btn">
+            <svg class="download-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            <span class="download-label">立即下载</span>
+            <span class="download-platform"></span>
+          </a>
+          <a href="https://github.com/HungryFour/YiPaw" target="_blank" rel="noopener" class="btn-ghost">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+            GitHub
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <svg width="20" height="20" viewBox="0 0 36 36" fill="none">
+          <ellipse cx="18" cy="22" rx="6" ry="5" fill="url(#fG2)"/>
+          <circle cx="10" cy="14" r="4" fill="url(#fG2)" opacity="0.8"/>
+          <circle cx="26" cy="14" r="4" fill="url(#fG2)" opacity="0.8"/>
+          <defs><linearGradient id="fG2" x1="5" y1="10" x2="31" y2="30"><stop offset="0%" stop-color="#e8a838"/><stop offset="100%" stop-color="#2dd4bf"/></linearGradient></defs>
+        </svg>
+        YiYiClaw
+      </div>
+      <span class="footer-copy">&copy; 2024 — 2026 YiYiClaw. All rights reserved.</span>
+      <ul class="footer-links">
+        <li><a href="https://github.com/HungryFour/YiPaw" target="_blank" rel="noopener">GitHub</a></li>
+      </ul>
+    </div>
+  </footer>
+
+  <script>
+  (function() {
+    'use strict';
+
+    /* ===== Platform Detection & Download Links ===== */
+    const REPO = 'HungryFour/YiPaw';
+    const RELEASE_BASE = 'https://github.com/' + REPO + '/releases/latest/download/';
+    const RELEASE_PAGE = 'https://github.com/' + REPO + '/releases/latest';
+
+    function detectPlatform() {
+      var ua = navigator.userAgent;
+      var platform = navigator.platform || '';
+      if (/Mac/i.test(platform) || /Macintosh/i.test(ua)) {
+        // Detect Apple Silicon vs Intel
+        // navigator.userAgentData is available in modern Chromium
+        if (navigator.userAgentData && navigator.userAgentData.architecture === 'arm') {
+          return { os: 'macOS', arch: 'arm64', label: 'macOS (Apple Silicon)', ext: '_aarch64.dmg' };
+        }
+        // Fallback: check for Apple Silicon hints in UA or use canvas/GL renderer
+        try {
+          var canvas = document.createElement('canvas');
+          var gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+          if (gl) {
+            var dbg = gl.getExtension('WEBGL_debug_renderer_info');
+            var renderer = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : '';
+            if (/Apple M/.test(renderer) || /Apple GPU/.test(renderer)) {
+              return { os: 'macOS', arch: 'arm64', label: 'macOS (Apple Silicon)', ext: '_aarch64.dmg' };
+            }
+          }
+        } catch(e) {}
+        return { os: 'macOS', arch: 'x64', label: 'macOS (Intel)', ext: '_x64.dmg' };
+      }
+      if (/Win/i.test(platform) || /Windows/i.test(ua)) {
+        return { os: 'Windows', arch: 'x64', label: 'Windows', ext: '_x64-setup.exe' };
+      }
+      if (/Linux/i.test(platform) || /Linux/i.test(ua)) {
+        if (/aarch64|arm64/i.test(ua)) {
+          return { os: 'Linux', arch: 'arm64', label: 'Linux (ARM64)', ext: '_aarch64.deb' };
+        }
+        return { os: 'Linux', arch: 'x64', label: 'Linux', ext: '_amd64.deb' };
+      }
+      return null;
+    }
+
+    var platformInfo = detectPlatform();
+
+    // Show platform label immediately
+    document.querySelectorAll('.download-btn').forEach(function(btn) {
+      var platformSpan = btn.querySelector('.download-platform');
+      if (platformInfo && platformSpan) {
+        platformSpan.textContent = platformInfo.label;
+      }
+    });
+
+    // Fetch latest release assets to get direct download URL
+    if (platformInfo) {
+      fetch('https://api.github.com/repos/' + REPO + '/releases/latest')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (!data.assets) return;
+          var ext = platformInfo.ext;
+          var match = data.assets.find(function(a) {
+            return a.name.endsWith(ext);
+          });
+          if (match) {
+            document.querySelectorAll('.download-btn').forEach(function(btn) {
+              btn.href = match.browser_download_url;
+            });
+          }
+        })
+        .catch(function() { /* keep fallback to releases page */ });
+    }
+
+    /* ===== Scroll Progress ===== */
+    const progressBar = document.getElementById('scrollProgress');
+    function updateProgress() {
+      const scrollTop = window.scrollY;
+      const docHeight = document.documentElement.scrollHeight - window.innerHeight;
+      const progress = docHeight > 0 ? scrollTop / docHeight : 0;
+      progressBar.style.transform = `scaleX(${progress})`;
+    }
+    window.addEventListener('scroll', updateProgress, { passive: true });
+
+    /* ===== Nav Scroll ===== */
+    const nav = document.getElementById('navbar');
+    window.addEventListener('scroll', () => {
+      nav.classList.toggle('scrolled', window.scrollY > 60);
+    }, { passive: true });
+
+    /* ===== Mobile Menu ===== */
+    document.getElementById('mobileToggle').addEventListener('click', () => {
+      document.getElementById('navLinks').classList.toggle('open');
+    });
+
+    /* ===== Custom Cursor ===== */
+    const dot = document.getElementById('cursorDot');
+    const ring = document.getElementById('cursorRing');
+    let mouseX = -100, mouseY = -100, ringX = -100, ringY = -100;
+
+    document.addEventListener('mousemove', (e) => {
+      mouseX = e.clientX;
+      mouseY = e.clientY;
+      dot.style.left = mouseX + 'px';
+      dot.style.top = mouseY + 'px';
+    });
+
+    function animateRing() {
+      ringX += (mouseX - ringX) * 0.15;
+      ringY += (mouseY - ringY) * 0.15;
+      ring.style.left = ringX + 'px';
+      ring.style.top = ringY + 'px';
+      requestAnimationFrame(animateRing);
+    }
+    animateRing();
+
+    // Hover effect
+    document.querySelectorAll('a, button, [data-tilt]').forEach(el => {
+      el.addEventListener('mouseenter', () => ring.classList.add('hovering'));
+      el.addEventListener('mouseleave', () => ring.classList.remove('hovering'));
+    });
+
+    /* ===== Scroll Reveal ===== */
+    const revealObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('revealed');
+        }
+      });
+    }, { threshold: 0.08, rootMargin: '0px 0px -60px 0px' });
+
+    document.querySelectorAll('[data-reveal]').forEach(el => revealObserver.observe(el));
+
+    /* ===== Card Tilt Effect ===== */
+    document.querySelectorAll('[data-tilt]').forEach(card => {
+      card.addEventListener('mousemove', (e) => {
+        const rect = card.getBoundingClientRect();
+        const x = (e.clientX - rect.left) / rect.width - 0.5;
+        const y = (e.clientY - rect.top) / rect.height - 0.5;
+        card.style.transform = `perspective(600px) rotateY(${x * 6}deg) rotateX(${-y * 6}deg) translateY(-4px)`;
+      });
+      card.addEventListener('mouseleave', () => {
+        card.style.transform = '';
+      });
+    });
+
+    /* ===== Parallax Blobs ===== */
+    const blobs = document.querySelectorAll('.glow-mesh .blob');
+    let ticking = false;
+    window.addEventListener('scroll', () => {
+      if (!ticking) {
+        requestAnimationFrame(() => {
+          const scrollY = window.scrollY;
+          blobs[0].style.transform = `translateY(${scrollY * 0.05}px)`;
+          blobs[1].style.transform = `translateY(${scrollY * -0.03}px)`;
+          blobs[2].style.transform = `translateY(${scrollY * 0.04}px)`;
+          ticking = false;
+        });
+        ticking = true;
+      }
+    }, { passive: true });
+
+  })();
+  </script>
+</body>
+</html>

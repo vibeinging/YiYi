@@ -3,7 +3,7 @@ use super::mcp_runtime::MCPRuntime;
 use super::python_bridge;
 // Playwright bridge: browser automation via external Node.js process
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -31,53 +31,127 @@ static PROVIDERS: std::sync::OnceLock<Arc<tokio::sync::RwLock<crate::state::prov
 /// Global streaming state for snapshot updates from spawn agents.
 static STREAMING_STATE: std::sync::OnceLock<Arc<std::sync::Mutex<std::collections::HashMap<String, crate::state::app_state::StreamingSnapshot>>>> = std::sync::OnceLock::new();
 
-/// Per-task session ID for tools that need session context (e.g. send_bot_message).
-/// Uses task_local so concurrent agent runs don't interfere with each other.
+// Per-task session ID for tools that need session context (e.g. send_bot_message).
+// Uses task_local so concurrent agent runs track depth independently.
 tokio::task_local! {
     static TASK_SESSION_ID: String;
+    static TASK_CANCELLED: std::sync::Arc<std::sync::atomic::AtomicBool>;
+    static CONTINUATION_REQUESTED: std::sync::Arc<std::sync::atomic::AtomicBool>;
 }
 
-/// Sandbox: session-scoped allowed paths (cleared on restart).
-static SANDBOX_SESSION_PATHS: std::sync::OnceLock<Mutex<HashSet<PathBuf>>> =
+// Per-task bot context for tools that need to know the originating bot (e.g. schedule_create).
+// Stores (bot_id, conversation_id) so tools can infer dispatch targets when called from a Bot conversation.
+tokio::task_local! {
+    static TASK_BOT_CONTEXT: (String, String);
+}
+
+// Per-task working directory override. When set, tools use this instead of the global workspace.
+tokio::task_local! {
+    pub static TASK_WORKING_DIR: std::path::PathBuf;
+}
+
+/// Authorized folders loaded at startup, updated at runtime.
+static AUTHORIZED_FOLDERS: std::sync::OnceLock<Mutex<Vec<AuthorizedFolder>>> =
     std::sync::OnceLock::new();
 
-/// Sandbox: persistent allowed paths (saved to config).
-static SANDBOX_PERSISTENT_PATHS: std::sync::OnceLock<Mutex<HashSet<PathBuf>>> =
+/// User-facing workspace directory (~/Documents/YiYiClaw).
+/// Used as the default working directory for claude_code and file operations.
+static USER_WORKSPACE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Current task workspace path set by create_workspace_dir tool, keyed by session.
+static CURRENT_TASK_WORKSPACE: std::sync::OnceLock<Mutex<std::collections::HashMap<String, String>>> = std::sync::OnceLock::new();
+
+fn task_workspace_map() -> &'static Mutex<std::collections::HashMap<String, String>> {
+    CURRENT_TASK_WORKSPACE.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Get the task workspace path for a given session.
+#[allow(dead_code)]
+pub async fn get_task_workspace_for_session(session_id: &str) -> Option<String> {
+    let map = task_workspace_map().lock().await;
+    map.get(session_id).cloned()
+}
+
+/// Global PTY manager reference for interactive terminal sessions.
+static PTY_MANAGER: std::sync::OnceLock<Arc<crate::engine::pty_manager::PtyManager>> = std::sync::OnceLock::new();
+
+/// Sensitive path patterns.
+static SENSITIVE_PATTERNS: std::sync::OnceLock<Mutex<Vec<SensitivePattern>>> =
     std::sync::OnceLock::new();
 
-/// Sandbox: pending access requests queue (supports concurrent tool calls).
-static SANDBOX_REQUESTS: std::sync::OnceLock<
-    Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<SandboxResponse>>>,
-> = std::sync::OnceLock::new();
-
-/// Counter for generating unique request IDs.
-static SANDBOX_REQ_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// Sandbox access response from the user.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum SandboxResponse {
-    AllowOnce,
-    AllowPermanent,
-    Deny,
+#[derive(Debug, Clone)]
+pub struct AuthorizedFolder {
+    pub path: PathBuf,
+    pub permission: FolderPermission,
 }
 
-fn sandbox_session_paths() -> &'static Mutex<HashSet<PathBuf>> {
-    SANDBOX_SESSION_PATHS.get_or_init(|| Mutex::new(HashSet::new()))
+#[derive(Debug, Clone, PartialEq)]
+pub enum FolderPermission {
+    ReadOnly,
+    ReadWrite,
 }
 
-fn sandbox_persistent_paths() -> &'static Mutex<HashSet<PathBuf>> {
-    SANDBOX_PERSISTENT_PATHS.get_or_init(|| Mutex::new(HashSet::new()))
+#[derive(Debug, Clone)]
+pub struct SensitivePattern {
+    pub compiled: glob::Pattern,
+    /// Pre-compiled pattern for filename-only matching (from `**/` prefix patterns).
+    pub recursive_pattern: Option<glob::Pattern>,
+    pub enabled: bool,
 }
 
-fn sandbox_requests() -> &'static Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<SandboxResponse>>> {
-    SANDBOX_REQUESTS.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+impl From<super::db::AuthorizedFolderRow> for AuthorizedFolder {
+    fn from(r: super::db::AuthorizedFolderRow) -> Self {
+        AuthorizedFolder {
+            path: PathBuf::from(&r.path),
+            permission: if r.permission == "read_only" {
+                FolderPermission::ReadOnly
+            } else {
+                FolderPermission::ReadWrite
+            },
+        }
+    }
 }
 
-/// Initialize persistent sandbox paths from saved config.
-pub async fn init_sandbox_paths(paths: Vec<PathBuf>) {
-    let mut persistent = sandbox_persistent_paths().lock().await;
-    for p in paths {
-        persistent.insert(p);
+impl From<super::db::SensitivePathRow> for SensitivePattern {
+    fn from(r: super::db::SensitivePathRow) -> Self {
+        let home = dirs::home_dir().unwrap_or_default();
+        let home_str = home.to_string_lossy();
+        let expanded = r.pattern.replace('~', &home_str);
+        let compiled = glob::Pattern::new(&expanded)
+            .unwrap_or_else(|_| glob::Pattern::new("__invalid__").unwrap());
+        let recursive_pattern = r.pattern.strip_prefix("**/").and_then(|stripped| {
+            glob::Pattern::new(stripped).ok()
+        });
+        SensitivePattern {
+            compiled,
+            recursive_pattern,
+            enabled: r.enabled,
+        }
+    }
+}
+
+pub fn init_authorized_folders(rows: Vec<super::db::AuthorizedFolderRow>) {
+    let folders: Vec<AuthorizedFolder> = rows.into_iter().map(AuthorizedFolder::from).collect();
+    AUTHORIZED_FOLDERS.get_or_init(|| Mutex::new(folders));
+}
+
+pub fn init_sensitive_patterns(rows: Vec<super::db::SensitivePathRow>) {
+    let patterns: Vec<SensitivePattern> = rows.into_iter().map(SensitivePattern::from).collect();
+    SENSITIVE_PATTERNS.get_or_init(|| Mutex::new(patterns));
+}
+
+/// Refresh authorized folders from database (call after add/remove/update).
+pub async fn refresh_authorized_folders(rows: Vec<super::db::AuthorizedFolderRow>) {
+    if let Some(lock) = AUTHORIZED_FOLDERS.get() {
+        let mut folders = lock.lock().await;
+        *folders = rows.into_iter().map(AuthorizedFolder::from).collect();
+    }
+}
+
+pub async fn refresh_sensitive_patterns(rows: Vec<super::db::SensitivePathRow>) {
+    if let Some(lock) = SENSITIVE_PATTERNS.get() {
+        let mut patterns = lock.lock().await;
+        *patterns = rows.into_iter().map(SensitivePattern::from).collect();
     }
 }
 
@@ -96,137 +170,101 @@ fn resolve_path(raw_path: &str) -> PathBuf {
     expanded.canonicalize().unwrap_or(expanded)
 }
 
-/// Check if a path is within the sandbox (workspace or allowed paths).
-/// Returns Ok(()) if allowed, or requests user permission via the frontend.
-async fn sandbox_check(raw_path: &str) -> Result<(), String> {
+/// Check if a path is authorized for the requested operation.
+/// Returns Ok(()) if allowed, Err with clear message if denied.
+pub async fn access_check(raw_path: &str, needs_write: bool) -> Result<(), String> {
     if raw_path.is_empty() {
         return Ok(());
     }
 
     let canonical = resolve_path(raw_path);
 
-    // Always allow workspace directory
+    // 1. Always allow internal working directory (~/.yiyiclaw)
     if let Some(wd) = WORKING_DIR.get() {
-        let wd_canonical = wd.canonicalize().unwrap_or(wd.clone());
+        let wd_canonical = wd.canonicalize().unwrap_or_else(|_| wd.clone());
         if canonical.starts_with(&wd_canonical) {
             return Ok(());
         }
     }
 
-    // Check session + persistent allowed paths (single lock scope)
-    {
-        let session = sandbox_session_paths().lock().await;
-        let persistent = sandbox_persistent_paths().lock().await;
-        for allowed in session.iter().chain(persistent.iter()) {
-            let ac = allowed.canonicalize().unwrap_or(allowed.clone());
-            if canonical.starts_with(&ac) {
+    // 2. Check sensitive path blocklist FIRST
+    if is_sensitive_path(&canonical).await {
+        return Err(format!(
+            "Access denied: '{}' matches a sensitive file pattern. This file is protected even within authorized folders. You can adjust sensitive path rules in Settings > Workspace.",
+            raw_path
+        ));
+    }
+
+    // 3. Check authorized folders
+    if let Some(lock) = AUTHORIZED_FOLDERS.get() {
+        let folders = lock.lock().await;
+        for folder in folders.iter() {
+            let fc = folder.path.canonicalize().unwrap_or_else(|_| folder.path.clone());
+            if canonical.starts_with(&fc) {
+                if needs_write && folder.permission == FolderPermission::ReadOnly {
+                    return Err(format!(
+                        "Access denied: '{}' is in read-only folder '{}'. Change folder permissions in Settings > Workspace to allow writes.",
+                        raw_path,
+                        folder.path.display()
+                    ));
+                }
                 return Ok(());
             }
         }
     }
 
-    // Path not allowed — request user permission
-    let handle = match APP_HANDLE.get() {
-        Some(h) => h,
-        None => return Err(format!("Sandbox: access denied to '{}'", raw_path)),
-    };
+    // 4. Not in any authorized folder
+    Err(format!(
+        "Access denied: '{}' is outside all authorized folders. Add the parent folder in Settings > Workspace to grant access.",
+        raw_path
+    ))
+}
 
-    let req_id = format!(
-        "req_{}",
-        SANDBOX_REQ_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    );
+/// Check if a path matches any enabled sensitive pattern.
+async fn is_sensitive_path(canonical: &std::path::Path) -> bool {
+    let path_str = canonical.to_string_lossy();
 
-    let (tx, rx) = tokio::sync::oneshot::channel::<SandboxResponse>();
-    {
-        let mut reqs = sandbox_requests().lock().await;
-        reqs.insert(req_id.clone(), tx);
-    }
-
-    // Emit event to frontend with request ID
-    handle
-        .emit(
-            "sandbox://access_request",
-            serde_json::json!({ "id": req_id, "path": raw_path }),
-        )
-        .map_err(|e| format!("Failed to emit sandbox event: {}", e))?;
-
-    // Wait for user response (timeout 60s)
-    let response = tokio::time::timeout(std::time::Duration::from_secs(60), rx)
-        .await
-        .map_err(|_| {
-            // Clean up on timeout
-            let req_id = req_id.clone();
-            tokio::spawn(async move {
-                sandbox_requests().lock().await.remove(&req_id);
-            });
-            format!("Sandbox: access request timed out for '{}'", raw_path)
-        })?
-        .map_err(|_| format!("Sandbox: access request cancelled for '{}'", raw_path))?;
-
-    match response {
-        SandboxResponse::AllowOnce => {
-            let mut session = sandbox_session_paths().lock().await;
-            session.insert(canonical);
-            Ok(())
-        }
-        SandboxResponse::AllowPermanent => {
-            // Add to both session and persistent (lock order: session → persistent)
-            let mut session = sandbox_session_paths().lock().await;
-            session.insert(canonical.clone());
-            drop(session);
-            let mut persistent = sandbox_persistent_paths().lock().await;
-            persistent.insert(canonical.clone());
-            drop(persistent);
-            // Save to database
-            if let Some(db) = DATABASE.get() {
-                let path_str = canonical.to_string_lossy().to_string();
-                db.save_sandbox_path(&path_str).ok();
+    if let Some(lock) = SENSITIVE_PATTERNS.get() {
+        let patterns = lock.lock().await;
+        for sp in patterns.iter() {
+            if !sp.enabled {
+                continue;
             }
-            Ok(())
-        }
-        SandboxResponse::Deny => {
-            Err(format!("Sandbox: user denied access to '{}'", raw_path))
+            if sp.compiled.matches(&path_str) {
+                return true;
+            }
+            // Also check the filename alone for patterns like **/.env
+            if let Some(ref recursive_glob) = sp.recursive_pattern {
+                if let Some(filename) = canonical.file_name() {
+                    let fname = filename.to_string_lossy();
+                    if recursive_glob.matches(&fname) {
+                        return true;
+                    }
+                }
+            }
         }
     }
+    false
 }
 
-/// Respond to a pending sandbox access request by ID (called from frontend).
-pub async fn sandbox_respond(req_id: &str, response: SandboxResponse) -> Result<(), String> {
-    let mut reqs = sandbox_requests().lock().await;
-    if let Some(tx) = reqs.remove(req_id) {
-        tx.send(response).map_err(|_| "Sandbox: response channel closed".to_string())
+/// Get all authorized folder paths as display strings (for system prompt).
+pub async fn get_all_authorized_paths() -> Vec<String> {
+    if let Some(lock) = AUTHORIZED_FOLDERS.get() {
+        let folders = lock.lock().await;
+        folders
+            .iter()
+            .map(|f| {
+                let perm = if f.permission == FolderPermission::ReadOnly {
+                    "read-only"
+                } else {
+                    "read-write"
+                };
+                format!("{} ({})", f.path.display(), perm)
+            })
+            .collect()
     } else {
-        Err(format!("No pending sandbox request with id '{}'", req_id))
+        Vec::new()
     }
-}
-
-/// Get all persistent sandbox paths.
-pub async fn get_persistent_sandbox_paths() -> Vec<PathBuf> {
-    let persistent = sandbox_persistent_paths().lock().await;
-    persistent.iter().cloned().collect()
-}
-
-/// Get all sandbox-allowed paths (session + persistent) as display strings.
-pub async fn get_all_sandbox_paths() -> Vec<String> {
-    let session = sandbox_session_paths().lock().await;
-    let persistent = sandbox_persistent_paths().lock().await;
-    session
-        .iter()
-        .chain(persistent.iter())
-        .map(|p| p.to_string_lossy().to_string())
-        .collect()
-}
-
-/// Remove a persistent sandbox path.
-pub async fn remove_sandbox_path(path: &str) -> Result<(), String> {
-    let p = PathBuf::from(path);
-    let canonical = p.canonicalize().unwrap_or(p);
-    let mut persistent = sandbox_persistent_paths().lock().await;
-    persistent.remove(&canonical);
-    if let Some(db) = DATABASE.get() {
-        db.remove_sandbox_path(&canonical.to_string_lossy()).ok();
-    }
-    Ok(())
 }
 
 /// Set the MCP runtime for tool execution.
@@ -253,6 +291,57 @@ fn get_current_session_id() -> String {
     TASK_SESSION_ID.try_with(|s| s.clone()).unwrap_or_default()
 }
 
+/// Run a future with bot context (bot_id, conversation_id) bound to the current task.
+/// Tools within this future can access the originating bot info for smart dispatch inference.
+pub async fn with_bot_context<F, R>(bot_id: String, conversation_id: String, fut: F) -> R
+where
+    F: std::future::Future<Output = R>,
+{
+    TASK_BOT_CONTEXT.scope((bot_id, conversation_id), fut).await
+}
+
+/// Get the current task-local bot context. Returns None if not in a bot conversation.
+fn get_current_bot_context() -> Option<(String, String)> {
+    TASK_BOT_CONTEXT.try_with(|ctx| ctx.clone()).ok()
+}
+
+/// Run a future with a cancellation signal bound to the current task.
+pub async fn with_cancelled<F, R>(cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>, fut: F) -> R
+where
+    F: std::future::Future<Output = R>,
+{
+    TASK_CANCELLED.scope(cancelled, fut).await
+}
+
+/// Check if the current task has been cancelled.
+fn is_task_cancelled() -> bool {
+    TASK_CANCELLED
+        .try_with(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+        .unwrap_or(false)
+}
+
+/// Run a future with a continuation flag bound to the current task.
+pub async fn with_continuation_flag<F, R>(flag: std::sync::Arc<std::sync::atomic::AtomicBool>, fut: F) -> R
+where
+    F: std::future::Future<Output = R>,
+{
+    CONTINUATION_REQUESTED.scope(flag, fut).await
+}
+
+/// Check if the model requested continuation in the current round.
+pub fn is_continuation_requested() -> bool {
+    CONTINUATION_REQUESTED
+        .try_with(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+        .unwrap_or(false)
+}
+
+/// Reset the continuation flag for a new round.
+pub fn reset_continuation_flag() {
+    CONTINUATION_REQUESTED
+        .try_with(|c| c.store(false, std::sync::atomic::Ordering::Relaxed))
+        .ok();
+}
+
 /// Set the Tauri app handle for tools that emit frontend events.
 pub fn set_app_handle(handle: tauri::AppHandle) {
     APP_HANDLE.set(handle).ok();
@@ -277,6 +366,27 @@ pub fn set_streaming_state(ss: Arc<std::sync::Mutex<std::collections::HashMap<St
     STREAMING_STATE.set(ss).ok();
 }
 
+/// Set the user workspace directory for tools (e.g. claude_code default working dir).
+pub fn set_user_workspace(dir: std::path::PathBuf) {
+    USER_WORKSPACE.set(dir).ok();
+}
+
+pub fn set_pty_manager(mgr: Arc<crate::engine::pty_manager::PtyManager>) {
+    PTY_MANAGER.set(mgr).ok();
+}
+
+/// Get the effective working directory: task-local > global USER_WORKSPACE.
+fn get_effective_workspace() -> PathBuf {
+    TASK_WORKING_DIR
+        .try_with(|d| d.clone())
+        .unwrap_or_else(|_| {
+            USER_WORKSPACE
+                .get()
+                .cloned()
+                .unwrap_or_else(|| PathBuf::from("."))
+        })
+}
+
 /// Get the stored database reference (for scheduler).
 pub fn get_database() -> Option<Arc<super::db::Database>> {
     DATABASE.get().cloned()
@@ -285,6 +395,11 @@ pub fn get_database() -> Option<Arc<super::db::Database>> {
 /// Get the stored working directory (for scheduler).
 pub fn get_working_dir() -> Option<std::path::PathBuf> {
     WORKING_DIR.get().cloned()
+}
+
+/// Get the PTY manager reference, returning error if not initialized.
+fn get_pty_manager() -> Result<&'static Arc<crate::engine::pty_manager::PtyManager>, String> {
+    PTY_MANAGER.get().ok_or_else(|| "PTY manager not initialized".to_string())
 }
 
 /// Resolve LLM config from global providers state (public for scheduler).
@@ -306,10 +421,13 @@ async fn resolve_llm_config_from_globals() -> Option<super::llm_client::LLMConfi
         providers.providers.get(&active.provider_id).and_then(|s| s.api_key.clone())
     };
     let api_key = api_key.or_else(|| std::env::var(&p.api_key_prefix).ok())?;
+    let native_tools = crate::state::providers::resolve_native_injections(&p.native_tools, &active.model);
     Some(super::llm_client::LLMConfig {
         base_url,
         api_key,
         model: active.model.clone(),
+        provider_id: active.provider_id.clone(),
+        native_tools,
     })
 }
 
@@ -566,7 +684,7 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
         ),
         tool_def(
             "web_search",
-            "Search the web for information. Returns search results.",
+            "Search the web using DuckDuckGo. Returns top results with title, snippet and URL. Use for quick information lookup.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -681,7 +799,7 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
         ),
         tool_def(
             "pip_install",
-            "Install Python packages using pip. Packages are installed to the user's local directory (~/.yiclaw/python_packages/).",
+            "Install Python packages using pip. Packages are installed to the user's local directory (~/.yiyiclaw/python_packages/).",
             serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -863,31 +981,51 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
         ),
         tool_def(
             "manage_cronjob",
-            "Create, list, or delete scheduled tasks. Supports three schedule types:\n\
+            "Create, list, update, delete scheduled tasks, or query execution history. Supports three schedule types:\n\
             - 'delay': one-time task after N minutes (e.g., remind in 5 minutes). Use delay_minutes.\n\
             - 'once': one-time task at a specific time (ISO 8601). Use schedule_at.\n\
             - 'cron': recurring task with cron expression (6 fields: sec min hour day month weekday).\n\
-            For one-time reminders like '5分钟后提醒我', use schedule_type='delay' with delay_minutes=5.",
+            When called from a Bot conversation without dispatch_targets, auto-infers current Bot + conversation as dispatch target.\n\
+            For reminders like '5 min later remind me', use schedule_type='delay' with delay_minutes=5.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["create", "list", "delete"],
-                        "description": "Action to perform"
+                        "enum": ["create", "list", "update", "delete", "history", "get_execution"],
+                        "description": "操作类型：create 创建、list 列表、update 更新、delete 删除、history 查看执行历史、get_execution 获取某次执行的完整结果"
                     },
-                    "name": { "type": "string", "description": "Human-readable name for the job (for create)" },
+                    "name": { "type": "string", "description": "任务名称（create 时使用）" },
                     "schedule_type": {
                         "type": "string",
                         "enum": ["cron", "delay", "once"],
-                        "description": "Schedule type: 'delay' for one-time after N minutes, 'once' for specific time, 'cron' for recurring"
+                        "description": "调度类型：delay 延迟N分钟、once 指定时间、cron 周期执行"
                     },
-                    "cron": { "type": "string", "description": "Cron expression with 6 fields: sec min hour day month weekday (only for schedule_type='cron')" },
-                    "delay_minutes": { "type": "number", "description": "Minutes to delay before execution (only for schedule_type='delay')" },
-                    "schedule_at": { "type": "string", "description": "ISO 8601 datetime for one-time execution (only for schedule_type='once', e.g. '2026-03-09T21:44:00+08:00')" },
-                    "text": { "type": "string", "description": "Task content: notification text for 'notify', or prompt/instruction for 'agent'" },
-                    "task_type": { "type": "string", "enum": ["notify", "agent"], "description": "Task type: 'notify' for simple reminder/notification (no AI), 'agent' for AI-driven execution" },
-                    "id": { "type": "string", "description": "Job ID (for delete)" }
+                    "cron": { "type": "string", "description": "Cron表达式（6字段：秒 分 时 日 月 周），仅 schedule_type='cron' 时使用" },
+                    "delay_minutes": { "type": "number", "description": "延迟分钟数，仅 schedule_type='delay' 时使用" },
+                    "schedule_at": { "type": "string", "description": "执行时间（ISO 8601），仅 schedule_type='once' 时使用，如 '2026-03-09T21:44:00+08:00'" },
+                    "text": { "type": "string", "description": "任务内容：notify 类型为通知文本，agent 类型为 AI 提示词" },
+                    "task_type": { "type": "string", "enum": ["notify", "agent"], "description": "任务类型：notify 直接通知、agent 由 AI 执行" },
+                    "id": { "type": "string", "description": "任务ID（update/delete 时必填）" },
+                    "enabled": { "type": "boolean", "description": "是否启用（update 时使用）" },
+                    "enabled_only": { "type": "boolean", "description": "仅列出启用的任务（list 时使用，默认 false）" },
+                    "dispatch_targets": {
+                        "type": "array",
+                        "description": "通知目标列表。不指定时：Bot对话自动推断当前Bot+会话；App对话默认系统通知+应用内通知",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "type": { "type": "string", "enum": ["system", "app", "bot"], "description": "目标类型" },
+                                "bot_id": { "type": "string", "description": "Bot ID（type='bot' 时必填）" },
+                                "target": { "type": "string", "description": "目标ID：频道ID、群ID等（type='bot' 时必填）" }
+                            },
+                            "required": ["type"]
+                        }
+                    },
+                    "schedule_value": { "type": "string", "description": "更新调度值（update 时使用）：cron表达式、ISO 8601时间、或延迟分钟数" },
+                    "limit": { "type": "number", "description": "history 时返回的记录数（默认 20）" },
+                    "execution_index": { "type": "number", "description": "get_execution 时使用：第N次执行（1=最早，负数从最新算起，-1=最新）" },
+                    "execution_id": { "type": "number", "description": "get_execution 时使用：执行记录的数据库ID（优先于 execution_index）" }
                 },
                 "required": ["action"]
             }),
@@ -967,10 +1105,46 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
             }),
         ),
         tool_def(
+            "activate_skills",
+            "Load detailed instructions for specific skills on demand. \
+            Check the 'Available Skills' list in your system prompt and call this when you need specialized knowledge for a task. \
+            The skill content will be returned so you can follow the instructions.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "names": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Skill names to activate (from the Available Skills list)"
+                    }
+                },
+                "required": ["names"]
+            }),
+        ),
+        tool_def(
+            "request_continuation",
+            "Signal that the current task is not yet complete and requires another round to finish. \
+            Call this when you have completed a meaningful sub-step but more work remains. \
+            Do NOT call this for simple questions, single-step tasks, or when the task is already complete.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "Brief description of what remains to be done in the next round"
+                    }
+                },
+                "required": ["reason"]
+            }),
+        ),
+        tool_def(
             "claude_code",
             "Delegate a coding task to Claude Code CLI. Claude Code provides powerful code understanding, editing, searching, and terminal capabilities. \
             Use this for complex coding tasks like multi-file refactoring, feature implementation, debugging, and code analysis. \
-            Session continuity is automatic — multiple calls within the same chat session share context.",
+            Session continuity is automatic — multiple calls within the same chat session share context. \
+            IMPORTANT: After this tool completes, you MUST present the results to the user. \
+            If the output is a website/HTML page, use browser_use(headed=true) to open it so the user can see it immediately. \
+            If it's a script, run it and show the output. Never just say 'done' without showing tangible results.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1075,13 +1249,178 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
                 "required": ["agents"]
             }),
         ),
+        tool_def(
+            "create_task",
+            "当用户请求需要较长时间执行的复杂任务时，创建一个独立的后台任务。适用场景：建网站、分析长文档、批量处理文件、创建复杂项目等。不适用于简单问答或单步操作。创建后任务会在后台独立执行。",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "任务标题，简短描述任务内容"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "任务的详细描述和需求"
+                    },
+                    "plan": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "执行阶段列表，如 ['初始化项目', '编写代码', '测试']"
+                    }
+                },
+                "required": ["title", "description"]
+            }),
+        ),
+        tool_def(
+            "propose_background_task",
+            "When you determine a task will take a long time (multi-step file creation, code generation, complex analysis), call this tool to propose background execution to the user. The user can choose to run it in background or continue inline.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task_name": {
+                        "type": "string",
+                        "description": "Short task name (e.g. '\u{521b}\u{5efa}\u{4e2a}\u{4eba}\u{4f5c}\u{54c1}\u{96c6}\u{7f51}\u{7ad9}')"
+                    },
+                    "task_description": {
+                        "type": "string",
+                        "description": "Brief description of what the task involves and estimated steps"
+                    },
+                    "context_summary": {
+                        "type": "string",
+                        "description": "Summary of conversation context: user requirements, preferences, constraints. This will be passed to the background task as initial context."
+                    },
+                    "estimated_steps": {
+                        "type": "number",
+                        "description": "Estimated number of steps"
+                    }
+                },
+                "required": ["task_name", "task_description", "context_summary"]
+            }),
+        ),
+        tool_def(
+            "create_workspace_dir",
+            "Create a workspace directory for task file outputs. Call this BEFORE writing any files when the task will produce files (HTML, code, documents, etc.). The directory is created under the user's workspace (~/Documents/YiYiClaw/).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "dir_name": {
+                        "type": "string",
+                        "description": "Meaningful directory name related to the task (e.g. '个人作品集网站', 'Q1数据分析报告')"
+                    }
+                },
+                "required": ["dir_name"]
+            }),
+        ),
+        tool_def(
+            "report_progress",
+            "Report task progress. Call this after completing a significant sub-step.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "step_title": { "type": "string", "description": "Title of the completed step" },
+                    "status": { "type": "string", "enum": ["completed", "in_progress", "blocked"], "description": "Status of this step" },
+                    "summary": { "type": "string", "description": "Brief summary of what was done" }
+                },
+                "required": ["step_title", "status", "summary"]
+            }),
+        ),
+        tool_def(
+            "pty_spawn_interactive",
+            "Spawn an interactive PTY session for a CLI tool (e.g. bash, python, claude-code). Returns session_id.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string", "description": "Command to run (e.g. 'bash', 'python3', 'claude')" },
+                    "args": { "type": "array", "items": { "type": "string" }, "description": "Command arguments" },
+                    "cwd": { "type": "string", "description": "Working directory" }
+                },
+                "required": ["command"]
+            }),
+        ),
+        tool_def(
+            "pty_send_input",
+            "Send input to an interactive PTY session and wait for output.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "PTY session ID" },
+                    "input": { "type": "string", "description": "Text to send (newline appended automatically)" },
+                    "wait_ms": { "type": "integer", "description": "Milliseconds to wait for output (default: 3000)" }
+                },
+                "required": ["session_id", "input"]
+            }),
+        ),
+        tool_def(
+            "pty_read_output",
+            "Read recent output from a PTY session without sending input.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "PTY session ID" },
+                    "wait_ms": { "type": "integer", "description": "Milliseconds to wait for new output (default: 1000)" }
+                },
+                "required": ["session_id"]
+            }),
+        ),
+        tool_def(
+            "pty_close_session",
+            "Close an interactive PTY session and kill the process.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "PTY session ID to close" }
+                },
+                "required": ["session_id"]
+            }),
+        ),
     ]
 }
 
 /// Execute a tool call and return the result
 pub async fn execute_tool(call: &ToolCall) -> ToolResult {
-    let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
-        .unwrap_or(serde_json::Value::Null);
+    if is_task_cancelled() {
+        return ToolResult {
+            tool_call_id: call.id.clone(),
+            content: "[已取消]".to_string(),
+            images: vec![],
+        };
+    }
+
+    let args: serde_json::Value = match serde_json::from_str(&call.function.arguments) {
+        Ok(v) => v,
+        Err(_) => {
+            // Try lightweight JSON repair before giving up
+            match repair_json(&call.function.arguments) {
+                Some(repaired) => {
+                    log::warn!(
+                        "Repaired malformed JSON for tool '{}': {}",
+                        call.function.name,
+                        call.function.arguments.chars().take(200).collect::<String>()
+                    );
+                    repaired
+                }
+                None => {
+                    // Return error to model so it can self-correct
+                    log::warn!(
+                        "Invalid JSON arguments for tool '{}': {}",
+                        call.function.name,
+                        call.function.arguments.chars().take(200).collect::<String>()
+                    );
+                    return ToolResult {
+                        tool_call_id: call.id.clone(),
+                        content: format!(
+                            "Error: Invalid JSON in tool arguments. Please retry with valid JSON.\n\
+                            Tool: {}\nReceived: {}",
+                            call.function.name,
+                            call.function.arguments.chars().take(500).collect::<String>()
+                        ),
+                        images: vec![],
+                    };
+                }
+            }
+        }
+    };
 
     let content = match call.function.name.as_str() {
         "execute_shell" => execute_shell_tool(&args).await,
@@ -1116,7 +1455,7 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         "pip_install" => pip_install_tool(&args).await,
         "read_pdf" => {
             let path = args["path"].as_str().unwrap_or("");
-            if let Err(e) = sandbox_check(path).await {
+            if let Err(e) = access_check(path, false).await {
                 format!("Error: {}", e)
             } else {
                 doc_tools::read_pdf_text(path)
@@ -1124,7 +1463,7 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         }
         "read_spreadsheet" => {
             let path = args["path"].as_str().unwrap_or("");
-            if let Err(e) = sandbox_check(path).await {
+            if let Err(e) = access_check(path, false).await {
                 format!("Error: {}", e)
             } else {
                 let sheet = args["sheet"].as_str();
@@ -1134,7 +1473,7 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         }
         "create_spreadsheet" => {
             let path = args["path"].as_str().unwrap_or("");
-            if let Err(e) = sandbox_check(path).await {
+            if let Err(e) = access_check(path, true).await {
                 format!("Error: {}", e)
             } else {
                 let data = &args["data"];
@@ -1144,7 +1483,7 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         }
         "read_docx" => {
             let path = args["path"].as_str().unwrap_or("");
-            if let Err(e) = sandbox_check(path).await {
+            if let Err(e) = access_check(path, false).await {
                 format!("Error: {}", e)
             } else {
                 doc_tools::read_docx_text(path)
@@ -1152,7 +1491,7 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         }
         "create_docx" => {
             let path = args["path"].as_str().unwrap_or("");
-            if let Err(e) = sandbox_check(path).await {
+            if let Err(e) = access_check(path, true).await {
                 format!("Error: {}", e)
             } else {
                 let content = args["content"].as_str().unwrap_or("");
@@ -1240,13 +1579,229 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         "manage_cronjob" => manage_cronjob_tool(&args).await,
         "list_bound_bots" => list_bound_bots_tool().await,
         "manage_skill" => manage_skill_tool(&args).await,
+        "activate_skills" => activate_skills_tool(&args).await,
+        "request_continuation" => {
+            CONTINUATION_REQUESTED
+                .try_with(|c| c.store(true, std::sync::atomic::Ordering::Relaxed))
+                .ok();
+            let reason = args["reason"].as_str().unwrap_or("unspecified");
+            format!("Continuation scheduled. Remaining work: {}", reason)
+        }
         "send_bot_message" => send_bot_message_tool(&args).await,
         "manage_bot" => manage_bot_tool(&args).await,
         "send_notification" => send_notification_tool(&args),
         "add_calendar_event" => add_calendar_event_tool(&args).await,
         "claude_code" => claude_code_tool(&args).await,
         "send_file_to_user" => send_file_to_user_tool(&args).await,
+        "create_task" => create_task_tool(&args).await,
         "spawn_agents" => spawn_agents_tool(args.clone()).await,
+        "propose_background_task" => {
+            // This tool returns a special result that the frontend renders as a confirmation card.
+            // The actual background task creation happens when the user clicks "后台执行".
+            let task_name = args.get("task_name").and_then(|v| v.as_str()).unwrap_or("Untitled Task");
+            let task_description = args.get("task_description").and_then(|v| v.as_str()).unwrap_or("");
+            let context_summary = args.get("context_summary").and_then(|v| v.as_str()).unwrap_or("");
+            let estimated_steps = args.get("estimated_steps").and_then(|v| v.as_u64()).unwrap_or(0);
+
+            // Emit event so frontend can show confirmation card
+            if let Some(handle) = APP_HANDLE.get() {
+                let _ = handle.emit("task://propose_background", serde_json::json!({
+                    "task_name": task_name,
+                    "task_description": task_description,
+                    "context_summary": context_summary,
+                    "estimated_steps": estimated_steps,
+                }));
+            }
+
+            // Include workspace_path if one was created for this session
+            let session_id = get_current_session_id();
+            let workspace_path = if !session_id.is_empty() {
+                let map = task_workspace_map().lock().await;
+                map.get(&session_id).cloned()
+            } else {
+                None
+            };
+
+            serde_json::json!({
+                "__type": "propose_background_task",
+                "task_name": task_name,
+                "task_description": task_description,
+                "context_summary": context_summary,
+                "estimated_steps": estimated_steps,
+                "workspace_path": workspace_path,
+            }).to_string()
+        }
+        "create_workspace_dir" => {
+            let raw_name = args.get("dir_name").and_then(|v| v.as_str()).unwrap_or("task_output");
+            // Sanitize: strip path separators and parent-dir references
+            let dir_name: String = raw_name
+                .replace(['/', '\\'], "_")
+                .replace("..", "_")
+                .trim()
+                .to_string();
+            let dir_name = if dir_name.is_empty() { "task_output".to_string() } else { dir_name };
+
+            // Get user workspace directory
+            let workspace_base = USER_WORKSPACE
+                .get()
+                .cloned()
+                .unwrap_or_else(|| {
+                    dirs::document_dir()
+                        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default())
+                        .join("YiYiClaw")
+                });
+
+            // Create directory with dedup suffix if needed (max 100 attempts)
+            let mut target = workspace_base.join(&dir_name);
+            if target.exists() {
+                let mut suffix = 2;
+                while suffix <= 100 {
+                    target = workspace_base.join(format!("{}-{}", dir_name, suffix));
+                    if !target.exists() {
+                        break;
+                    }
+                    suffix += 1;
+                }
+            }
+
+            if let Err(e) = std::fs::create_dir_all(&target) {
+                format!("Failed to create workspace directory: {}", e)
+            } else {
+                let abs_path = target.to_string_lossy().to_string();
+
+                // Store in per-session map
+                let session_id = get_current_session_id();
+                if !session_id.is_empty() {
+                    let mut map = task_workspace_map().lock().await;
+                    map.insert(session_id, abs_path.clone());
+                }
+
+                format!("Workspace directory created: {}\nAll task output files should be written to this directory.", abs_path)
+            }
+        }
+        "report_progress" => {
+            let step_title = args["step_title"].as_str().unwrap_or("Unknown step");
+            let status = args["status"].as_str().unwrap_or("in_progress");
+            let summary = args["summary"].as_str().unwrap_or("");
+
+            // Find task for current session
+            let session_id = get_current_session_id();
+            let task_info = if let Some(db) = DATABASE.get() {
+                db.list_tasks(None, Some("running"))
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|t| t.session_id == session_id)
+            } else {
+                None
+            };
+
+            if let Some(task) = &task_info {
+                // Update progress.json
+                if let Some(wd) = WORKING_DIR.get() {
+                    let progress_dir = wd.join("tasks").join(&task.id);
+                    std::fs::create_dir_all(&progress_dir).ok();
+                    let progress = serde_json::json!({
+                        "task_id": task.id,
+                        "session_id": session_id,
+                        "status": "running",
+                        "current_step": step_title,
+                        "step_status": status,
+                        "step_summary": summary,
+                        "current_stage": task.current_stage,
+                        "total_stages": task.total_stages,
+                        "updated_at": chrono::Utc::now().timestamp(),
+                    });
+                    write_progress_json(&progress_dir, &progress);
+                }
+
+                // Emit step progress event
+                if let Some(handle) = APP_HANDLE.get() {
+                    handle.emit("task://step_progress", serde_json::json!({
+                        "taskId": task.id,
+                        "stepTitle": step_title,
+                        "status": status,
+                        "summary": summary,
+                    })).ok();
+                }
+            }
+
+            format!("Progress reported: [{}] {} - {}", status, step_title, summary)
+        }
+        "pty_spawn_interactive" => {
+            let command = args["command"].as_str().unwrap_or("bash");
+            let cmd_args: Vec<String> = args.get("args")
+                .and_then(|a| serde_json::from_value(a.clone()).ok())
+                .unwrap_or_default();
+            let cwd = args["cwd"].as_str()
+                .map(String::from)
+                .unwrap_or_else(|| get_effective_workspace().to_string_lossy().to_string());
+            let cols = args["cols"].as_u64().unwrap_or(80) as u16;
+            let rows = args["rows"].as_u64().unwrap_or(24) as u16;
+
+            match (get_pty_manager(), APP_HANDLE.get()) {
+                (Ok(mgr), Some(handle)) => {
+                    match mgr.spawn(handle, command, &cmd_args, &cwd, cols, rows).await {
+                        Ok(sid) => format!("PTY session created: {}", sid),
+                        Err(e) => format!("Error spawning PTY: {}", e),
+                    }
+                }
+                (Err(e), _) => e,
+                (_, None) => "Error: App handle not available".into(),
+            }
+        }
+        "pty_send_input" => {
+            let session_id = args["session_id"].as_str().unwrap_or("");
+            let input = args["input"].as_str().unwrap_or("");
+            let wait_ms = args["wait_ms"].as_u64().unwrap_or(3000);
+
+            let mgr = match get_pty_manager() {
+                Ok(m) => m,
+                Err(e) => { return ToolResult { tool_call_id: call.id.clone(), content: e, images: vec![] }; }
+            };
+
+            let input_with_nl = format!("{}\n", input);
+            if let Err(e) = mgr.write_stdin(session_id, input_with_nl.as_bytes()).await {
+                return ToolResult {
+                    tool_call_id: call.id.clone(),
+                    content: format!("Error writing to PTY: {}", e),
+                    images: vec![],
+                };
+            }
+
+            match mgr.read_output(session_id, wait_ms).await {
+                Ok(output) if output.is_empty() => "(no output within timeout)".into(),
+                Ok(output) => truncate_output(&output, 8000),
+                Err(e) => format!("Error reading PTY output: {}", e),
+            }
+        }
+        "pty_read_output" => {
+            let session_id = args["session_id"].as_str().unwrap_or("");
+            let wait_ms = args["wait_ms"].as_u64().unwrap_or(1000);
+
+            let mgr = match get_pty_manager() {
+                Ok(m) => m,
+                Err(e) => { return ToolResult { tool_call_id: call.id.clone(), content: e, images: vec![] }; }
+            };
+
+            match mgr.read_output(session_id, wait_ms).await {
+                Ok(output) if output.is_empty() => "(no new output)".into(),
+                Ok(output) => truncate_output(&output, 8000),
+                Err(e) => format!("Error reading PTY output: {}", e),
+            }
+        }
+        "pty_close_session" => {
+            let session_id = args["session_id"].as_str().unwrap_or("");
+
+            let mgr = match get_pty_manager() {
+                Ok(m) => m,
+                Err(e) => { return ToolResult { tool_call_id: call.id.clone(), content: e, images: vec![] }; }
+            };
+
+            match mgr.close(session_id).await {
+                Ok(()) => format!("PTY session {} closed", session_id),
+                Err(e) => format!("Error closing PTY: {}", e),
+            }
+        }
         _ => {
             // Try MCP runtime for unknown tools
             if let Some(runtime) = MCP_RUNTIME.get() {
@@ -1321,7 +1876,7 @@ async fn execute_shell_tool(args: &serde_json::Value) -> String {
     // and file-level tool checks. Defaulting to workspace is the key safety measure.
     let effective_cwd = match cwd {
         Some(dir) => Some(dir.to_string()),
-        None => WORKING_DIR.get().map(|p| p.to_string_lossy().to_string()),
+        None => Some(get_effective_workspace().to_string_lossy().to_string()),
     };
 
     let mut cmd = tokio::process::Command::new("sh");
@@ -1359,7 +1914,7 @@ async fn read_file_tool(args: &serde_json::Value) -> String {
     if path.is_empty() {
         return "Error: path is required".into();
     }
-    if let Err(e) = sandbox_check(path).await {
+    if let Err(e) = access_check(path, false).await {
         return format!("Error: {}", e);
     }
     match tokio::fs::read_to_string(path).await {
@@ -1374,7 +1929,7 @@ async fn write_file_tool(args: &serde_json::Value) -> String {
     if path.is_empty() {
         return "Error: path is required".into();
     }
-    if let Err(e) = sandbox_check(path).await {
+    if let Err(e) = access_check(path, true).await {
         return format!("Error: {}", e);
     }
     if let Some(parent) = std::path::Path::new(path).parent() {
@@ -1394,7 +1949,7 @@ async fn edit_file_tool(args: &serde_json::Value) -> String {
     if path.is_empty() || old_text.is_empty() {
         return "Error: path and old_text are required".into();
     }
-    if let Err(e) = sandbox_check(path).await {
+    if let Err(e) = access_check(path, true).await {
         return format!("Error: {}", e);
     }
 
@@ -1420,7 +1975,7 @@ async fn append_file_tool(args: &serde_json::Value) -> String {
     if path.is_empty() {
         return "Error: path is required".into();
     }
-    if let Err(e) = sandbox_check(path).await {
+    if let Err(e) = access_check(path, true).await {
         return format!("Error: {}", e);
     }
 
@@ -1447,8 +2002,8 @@ async fn delete_file_tool(args: &serde_json::Value) -> String {
         return "Error: path is required".into();
     }
 
-    // Sandbox check — will prompt user if outside workspace
-    if let Err(e) = sandbox_check(path).await {
+    // Access check — verify path is in authorized folders
+    if let Err(e) = access_check(path, true).await {
         return format!("Error: {}", e);
     }
 
@@ -1490,7 +2045,7 @@ async fn delete_file_tool(args: &serde_json::Value) -> String {
 
 async fn list_directory_tool(args: &serde_json::Value) -> String {
     let path = args["path"].as_str().unwrap_or(".");
-    if let Err(e) = sandbox_check(path).await {
+    if let Err(e) = access_check(path, false).await {
         return format!("Error: {}", e);
     }
 
@@ -1526,7 +2081,7 @@ async fn grep_search_tool(args: &serde_json::Value) -> String {
     if pattern.is_empty() {
         return "Error: pattern is required".into();
     }
-    if let Err(e) = sandbox_check(path).await {
+    if let Err(e) = access_check(path, false).await {
         return format!("Error: {}", e);
     }
 
@@ -1560,7 +2115,7 @@ async fn glob_search_tool(args: &serde_json::Value) -> String {
     if pattern.is_empty() {
         return "Error: pattern is required".into();
     }
-    if let Err(e) = sandbox_check(path).await {
+    if let Err(e) = access_check(path, false).await {
         return format!("Error: {}", e);
     }
 
@@ -1586,59 +2141,85 @@ async fn glob_search_tool(args: &serde_json::Value) -> String {
 }
 
 async fn web_search_tool(args: &serde_json::Value) -> String {
-    let query = args["query"].as_str().unwrap_or("");
+    let query = args["query"].as_str().unwrap_or("").trim();
     if query.is_empty() {
         return "Error: query is required".into();
     }
 
-    if let Ok(api_key) = std::env::var("TAVILY_API_KEY") {
-        let client = reqwest::Client::new();
-        let body = serde_json::json!({
-            "api_key": api_key,
-            "query": query,
-            "max_results": 5
-        });
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+        .build()
+        .unwrap_or_default();
 
-        match client
-            .post("https://api.tavily.com/search")
-            .json(&body)
-            .timeout(std::time::Duration::from_secs(15))
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                if let Ok(json) = resp.json::<serde_json::Value>().await {
-                    if let Some(results) = json["results"].as_array() {
-                        let formatted: Vec<String> = results
-                            .iter()
-                            .enumerate()
-                            .map(|(i, r)| {
-                                format!(
-                                    "{}. {}\n   {}\n   URL: {}",
-                                    i + 1,
-                                    r["title"].as_str().unwrap_or(""),
-                                    r["content"]
-                                        .as_str()
-                                        .unwrap_or("")
-                                        .chars()
-                                        .take(200)
-                                        .collect::<String>(),
-                                    r["url"].as_str().unwrap_or("")
-                                )
-                            })
-                            .collect();
-                        return formatted.join("\n\n");
-                    }
-                }
-                "Search returned no results".into()
-            }
-            Err(e) => format!("Search failed: {}", e),
+    let resp = match client
+        .post("https://html.duckduckgo.com/html/")
+        .form(&[("q", query)])
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return format!("Search request failed: {}", e),
+    };
+
+    let html = match resp.text().await {
+        Ok(t) => t,
+        Err(e) => return format!("Failed to read response: {}", e),
+    };
+
+    let document = scraper::Html::parse_document(&html);
+    let result_sel = scraper::Selector::parse(".result").unwrap();
+    let title_sel = scraper::Selector::parse(".result__a").unwrap();
+    let snippet_sel = scraper::Selector::parse(".result__snippet").unwrap();
+
+    let mut results = Vec::new();
+    for el in document.select(&result_sel) {
+        if results.len() >= 8 {
+            break;
         }
+        let title = el
+            .select(&title_sel)
+            .next()
+            .map(|a| a.text().collect::<String>())
+            .unwrap_or_default();
+        if title.trim().is_empty() {
+            continue;
+        }
+        let href = el
+            .select(&title_sel)
+            .next()
+            .and_then(|a| a.value().attr("href"))
+            .unwrap_or("");
+        let snippet = el
+            .select(&snippet_sel)
+            .next()
+            .map(|s| s.text().collect::<String>())
+            .unwrap_or_default();
+
+        // DuckDuckGo HTML wraps URLs in a redirect; extract the real URL
+        let url = if let Some(pos) = href.find("uddg=") {
+            let encoded = &href[pos + 5..];
+            let end = encoded.find('&').unwrap_or(encoded.len());
+            urlencoding::decode(&encoded[..end])
+                .unwrap_or_else(|_| encoded[..end].into())
+                .into_owned()
+        } else {
+            href.to_string()
+        };
+
+        results.push(format!(
+            "{}. {}\n   {}\n   URL: {}",
+            results.len() + 1,
+            title.trim(),
+            snippet.trim(),
+            url
+        ));
+    }
+
+    if results.is_empty() {
+        format!("No results found for: {}", query)
     } else {
-        format!(
-            "Web search unavailable (no TAVILY_API_KEY). Query: {}",
-            query
-        )
+        results.join("\n\n")
     }
 }
 
@@ -1653,7 +2234,7 @@ async fn get_current_time_tool() -> String {
 
 async fn desktop_screenshot_tool() -> (String, Vec<String>) {
     // Use macOS screencapture command
-    let tmp = format!("/tmp/yiclaw_screenshot_{}.png", uuid::Uuid::new_v4());
+    let tmp = format!("/tmp/yiyiclaw_screenshot_{}.png", uuid::Uuid::new_v4());
 
     let mut cmd = tokio::process::Command::new("screencapture");
     cmd.args(["-x", &tmp]);
@@ -2071,42 +2652,67 @@ fn format_timestamp(ts: i64) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// manage_cronjob — create/list/delete scheduled tasks
+// manage_cronjob — create/list/update/delete scheduled tasks
 // ---------------------------------------------------------------------------
 
 async fn manage_cronjob_tool(args: &serde_json::Value) -> String {
     let action = args["action"].as_str().unwrap_or("");
     let db = match DATABASE.get() {
         Some(db) => db,
-        None => return "Error: database not configured".into(),
+        None => return "Error: 数据库未初始化".into(),
     };
 
     match action {
         "list" => {
+            let enabled_only = args["enabled_only"].as_bool().unwrap_or(false);
             match db.list_cronjobs() {
-                Ok(jobs) if jobs.is_empty() => "No cron jobs configured.".into(),
+                Ok(jobs) if jobs.is_empty() => "当前没有定时任务。".into(),
                 Ok(jobs) => {
-                    let items: Vec<String> = jobs
+                    let filtered: Vec<_> = if enabled_only {
+                        jobs.iter().filter(|j| j.enabled).collect()
+                    } else {
+                        jobs.iter().collect()
+                    };
+                    if filtered.is_empty() {
+                        return "没有符合条件的定时任务。".into();
+                    }
+                    let items: Vec<String> = filtered
                         .iter()
                         .map(|j| {
                             let schedule: serde_json::Value = serde_json::from_str(&j.schedule_json).unwrap_or_default();
+                            let sched_type = schedule["type"].as_str().unwrap_or("cron");
+                            let sched_desc = match sched_type {
+                                "delay" => format!("延迟 {} 分钟", schedule["delay_minutes"].as_u64().unwrap_or(0)),
+                                "once" => format!("定时 {}", schedule["schedule_at"].as_str().unwrap_or("?")),
+                                _ => format!("cron: {}", schedule["cron"].as_str().unwrap_or("?")),
+                            };
+                            let dispatch_info = j.dispatch_json.as_ref().map(|d| {
+                                let spec: serde_json::Value = serde_json::from_str(d).unwrap_or_default();
+                                if let Some(targets) = spec["targets"].as_array() {
+                                    let descs: Vec<String> = targets.iter().map(|t| {
+                                        match t["type"].as_str().unwrap_or("") {
+                                            "bot" => format!("bot:{}", t["bot_id"].as_str().unwrap_or("?")),
+                                            other => other.to_string(),
+                                        }
+                                    }).collect();
+                                    format!(" | 通知: {}", descs.join(", "))
+                                } else {
+                                    String::new()
+                                }
+                            }).unwrap_or_default();
                             format!(
-                                "- [{}] {} | cron: {} | type: {} | enabled: {}",
-                                j.id,
-                                j.name,
-                                schedule["cron"].as_str().unwrap_or("?"),
-                                j.task_type,
-                                j.enabled,
+                                "- [{}] {} | {} | 类型: {} | 启用: {}{}",
+                                j.id, j.name, sched_desc, j.task_type, j.enabled, dispatch_info,
                             )
                         })
                         .collect();
-                    format!("Cron jobs ({}):\n{}", items.len(), items.join("\n"))
+                    format!("定时任务 ({}):\n{}", items.len(), items.join("\n"))
                 }
-                Err(e) => format!("Error listing jobs: {}", e),
+                Err(e) => format!("Error: 查询任务失败: {}", e),
             }
         }
         "create" => {
-            let name = args["name"].as_str().unwrap_or("Untitled Job");
+            let name = args["name"].as_str().unwrap_or("未命名任务");
             let text = args["text"].as_str().unwrap_or("");
             let task_type = args["task_type"].as_str().unwrap_or("notify");
             let schedule_type = args["schedule_type"].as_str().unwrap_or("cron");
@@ -2115,7 +2721,7 @@ async fn manage_cronjob_tool(args: &serde_json::Value) -> String {
                 "delay" => {
                     let minutes = args["delay_minutes"].as_f64().unwrap_or(0.0) as u64;
                     if minutes == 0 {
-                        return "Error: delay_minutes is required and must be > 0".into();
+                        return "Error: delay_minutes 必须大于 0".into();
                     }
                     let created_at = chrono::Utc::now().timestamp() as u64;
                     serde_json::json!({"type": "delay", "delay_minutes": minutes, "created_at": created_at})
@@ -2123,18 +2729,25 @@ async fn manage_cronjob_tool(args: &serde_json::Value) -> String {
                 "once" => {
                     let schedule_at = args["schedule_at"].as_str().unwrap_or("");
                     if schedule_at.is_empty() {
-                        return "Error: schedule_at (ISO 8601) is required for once type".into();
+                        return "Error: schedule_at (ISO 8601) 是 once 类型的必填参数".into();
+                    }
+                    // Validate ISO 8601 format
+                    if chrono::DateTime::parse_from_rfc3339(schedule_at).is_err() {
+                        return format!("Error: schedule_at 格式无效，请使用 ISO 8601 格式，如 '2026-03-09T21:44:00+08:00'");
                     }
                     serde_json::json!({"type": "once", "schedule_at": schedule_at})
                 }
                 _ => {
                     let cron = args["cron"].as_str().unwrap_or("");
                     if cron.is_empty() {
-                        return "Error: cron expression is required".into();
+                        return "Error: cron 表达式是 cron 类型的必填参数".into();
                     }
                     serde_json::json!({"type": "cron", "cron": cron})
                 }
             };
+
+            // Build dispatch spec: explicit > bot context inference > default
+            let dispatch_json = build_dispatch_json(args);
 
             let id = uuid::Uuid::new_v4().to_string();
             let row = super::db::CronJobRow {
@@ -2145,8 +2758,9 @@ async fn manage_cronjob_tool(args: &serde_json::Value) -> String {
                 task_type: task_type.to_string(),
                 text: if text.is_empty() { None } else { Some(text.to_string()) },
                 request_json: None,
-                dispatch_json: None,
+                dispatch_json,
                 runtime_json: None,
+                execution_mode: crate::engine::db::ExecutionMode::default(),
             };
 
             match db.upsert_cronjob(&row) {
@@ -2155,29 +2769,355 @@ async fn manage_cronjob_tool(args: &serde_json::Value) -> String {
                     let spec = crate::commands::cronjobs::CronJobSpec::from_row(&row);
                     schedule_created_job(spec);
 
+                    // Notify frontend to refresh
+                    if let Some(handle) = APP_HANDLE.get() {
+                        let _ = handle.emit("cronjob://refresh", ());
+                    }
+
                     let schedule_desc = match schedule_type {
-                        "delay" => format!("in {} minutes", args["delay_minutes"].as_f64().unwrap_or(0.0) as u64),
-                        "once" => format!("at {}", args["schedule_at"].as_str().unwrap_or("?")),
+                        "delay" => format!("{} 分钟后执行", args["delay_minutes"].as_f64().unwrap_or(0.0) as u64),
+                        "once" => format!("在 {} 执行", args["schedule_at"].as_str().unwrap_or("?")),
                         _ => format!("cron: {}", args["cron"].as_str().unwrap_or("?")),
                     };
-                    format!("Created {} job '{}' (id: {})\nSchedule: {}\nText: {}", schedule_type, name, id, schedule_desc, text)
+                    let dispatch_desc = if row.dispatch_json.is_some() {
+                        "\n通知目标: 已配置"
+                    } else {
+                        "\n通知目标: 系统通知 + 应用内通知（默认）"
+                    };
+                    let result_msg = format!("已创建定时任务「{}」\n调度: {}\n类型: {}\n内容: {}{}", name, schedule_desc, task_type, text, dispatch_desc);
+
+                    // Seed the cron session with creation context:
+                    // Copy the user's original message + AI creation summary into cron:{id}
+                    seed_cron_session_context(db, &id, name);
+
+                    result_msg
                 }
-                Err(e) => format!("Error saving cronjob: {}", e),
+                Err(e) => format!("Error: 保存任务失败: {}", e),
+            }
+        }
+        "update" => {
+            let id = args["id"].as_str().unwrap_or("");
+            if id.is_empty() {
+                return "Error: id 是 update 操作的必填参数".into();
+            }
+
+            // Fetch existing job
+            let existing = match db.get_cronjob(id) {
+                Ok(Some(row)) => row,
+                Ok(None) => return format!("Error: 未找到任务 '{}'", id),
+                Err(e) => return format!("Error: 查询任务失败: {}", e),
+            };
+
+            let mut updated = existing.clone();
+            let mut changes = Vec::new();
+            let mut need_reschedule = false;
+
+            // Update enabled status
+            if let Some(enabled) = args["enabled"].as_bool() {
+                updated.enabled = enabled;
+                changes.push(format!("启用状态: {}", enabled));
+                need_reschedule = true;
+            }
+
+            // Update text
+            if let Some(text) = args["text"].as_str() {
+                updated.text = if text.is_empty() { None } else { Some(text.to_string()) };
+                changes.push(format!("内容: {}", text));
+            }
+
+            // Update schedule_value (cron expression, or schedule_at for once)
+            if let Some(schedule_value) = args["schedule_value"].as_str() {
+                let mut schedule: serde_json::Value = serde_json::from_str(&updated.schedule_json).unwrap_or_default();
+                let sched_type = schedule["type"].as_str().unwrap_or("cron").to_string();
+                match sched_type.as_str() {
+                    "cron" => {
+                        schedule["cron"] = serde_json::Value::String(schedule_value.to_string());
+                        changes.push(format!("cron: {}", schedule_value));
+                    }
+                    "once" => {
+                        if chrono::DateTime::parse_from_rfc3339(schedule_value).is_err() {
+                            return format!("Error: schedule_value 格式无效（需要 ISO 8601）");
+                        }
+                        schedule["schedule_at"] = serde_json::Value::String(schedule_value.to_string());
+                        changes.push(format!("执行时间: {}", schedule_value));
+                    }
+                    "delay" => {
+                        if let Ok(mins) = schedule_value.parse::<u64>() {
+                            schedule["delay_minutes"] = serde_json::json!(mins);
+                            schedule["created_at"] = serde_json::json!(chrono::Utc::now().timestamp() as u64);
+                            changes.push(format!("延迟: {} 分钟", mins));
+                        } else {
+                            return "Error: delay 类型的 schedule_value 必须是分钟数".into();
+                        }
+                    }
+                    _ => {}
+                }
+                updated.schedule_json = schedule.to_string();
+                need_reschedule = true;
+            }
+
+            // Update dispatch targets
+            let new_dispatch = build_dispatch_json(args);
+            if new_dispatch.is_some() {
+                updated.dispatch_json = new_dispatch;
+                changes.push("通知目标: 已更新".to_string());
+            }
+
+            if changes.is_empty() {
+                return "没有需要更新的内容。请指定要修改的字段（enabled、text、schedule_value、dispatch_targets）".into();
+            }
+
+            match db.upsert_cronjob(&updated) {
+                Ok(_) => {
+                    // Re-schedule if needed
+                    if need_reschedule {
+                        // Remove old schedule
+                        remove_scheduled_job(id);
+                        // Add new schedule if enabled
+                        if updated.enabled {
+                            let spec = crate::commands::cronjobs::CronJobSpec::from_row(&updated);
+                            schedule_created_job(spec);
+                        }
+                    }
+
+                    // Notify frontend to refresh
+                    if let Some(handle) = APP_HANDLE.get() {
+                        let _ = handle.emit("cronjob://refresh", ());
+                    }
+
+                    format!("已更新任务「{}」\n变更: {}", updated.name, changes.join("、"))
+                }
+                Err(e) => format!("Error: 更新任务失败: {}", e),
             }
         }
         "delete" => {
             let id = args["id"].as_str().unwrap_or("");
             if id.is_empty() {
-                return "Error: id is required for delete".into();
+                return "Error: id 是 delete 操作的必填参数".into();
             }
 
+            // Get name before deleting
+            let job_name = db.get_cronjob(id).ok().flatten()
+                .map(|j| j.name).unwrap_or_else(|| id.to_string());
+
+            // Remove from scheduler first
+            remove_scheduled_job(id);
+
             match db.delete_cronjob(id) {
-                Ok(_) => format!("Deleted cron job '{}'", id),
-                Err(e) => format!("Error deleting cronjob: {}", e),
+                Ok(_) => {
+                    // Notify frontend to refresh
+                    if let Some(handle) = APP_HANDLE.get() {
+                        let _ = handle.emit("cronjob://refresh", ());
+                    }
+                    format!("已删除定时任务「{}」", job_name)
+                }
+                Err(e) => format!("Error: 删除任务失败: {}", e),
             }
         }
-        _ => format!("Unknown action: '{}'. Supported: create, list, delete", action),
+        "history" => {
+            let id = args["id"].as_str().unwrap_or("");
+            // In cron session context, auto-infer job_id from session
+            let job_id = if !id.is_empty() {
+                id.to_string()
+            } else if let Some(sid) = { let s = get_current_session_id(); if s.is_empty() { None } else { Some(s) } } {
+                if let Some(jid) = sid.strip_prefix("cron:") {
+                    jid.to_string()
+                } else {
+                    return "Error: id 是 history 操作的必填参数（不在 cron session 中时）".into();
+                }
+            } else {
+                return "Error: id 是 history 操作的必填参数".into();
+            };
+            let limit = args["limit"].as_u64().unwrap_or(20) as usize;
+            match db.list_executions(&job_id, limit) {
+                Ok(execs) if execs.is_empty() => "该任务暂无执行记录。".into(),
+                Ok(execs) => {
+                    let total = execs.len();
+                    // execs are ordered DESC (newest first), we display with index
+                    // Calculate total count for proper indexing
+                    let all_count = db.list_executions(&job_id, 10000).map(|v| v.len()).unwrap_or(total);
+                    let items: Vec<String> = execs.iter().enumerate().map(|(i, e)| {
+                        let idx = all_count - i; // 1-based, newest = highest
+                        let started = chrono::DateTime::from_timestamp(e.started_at, 0)
+                            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                            .unwrap_or_else(|| e.started_at.to_string());
+                        let result_preview = e.result.as_deref().unwrap_or("").chars().take(100).collect::<String>();
+                        let result_len = e.result.as_deref().map(|r| r.len()).unwrap_or(0);
+                        let truncated = if result_len > 100 { format!("... (共{}字符)", result_len) } else { String::new() };
+                        format!(
+                            "#{} [ID:{}] {} | 状态: {} | 触发: {} | 结果预览: {}{}",
+                            idx, e.id, started, e.status, e.trigger_type, result_preview, truncated,
+                        )
+                    }).collect();
+                    format!("执行历史 (最近{}/{}):\n{}", total, all_count, items.join("\n"))
+                }
+                Err(e) => format!("Error: 查询执行历史失败: {}", e),
+            }
+        }
+        "get_execution" => {
+            let id = args["id"].as_str().unwrap_or("");
+            let job_id = if !id.is_empty() {
+                id.to_string()
+            } else if let Some(sid) = { let s = get_current_session_id(); if s.is_empty() { None } else { Some(s) } } {
+                if let Some(jid) = sid.strip_prefix("cron:") {
+                    jid.to_string()
+                } else {
+                    return "Error: id (job_id) 是 get_execution 操作的必填参数（不在 cron session 中时）".into();
+                }
+            } else {
+                return "Error: id (job_id) 是 get_execution 操作的必填参数".into();
+            };
+
+            // Find the target execution: by execution_id or execution_index
+            if let Some(exec_id) = args["execution_id"].as_i64() {
+                // Direct lookup by execution record ID
+                match db.list_executions(&job_id, 10000) {
+                    Ok(execs) => {
+                        match execs.iter().find(|e| e.id == exec_id) {
+                            Some(e) => format_full_execution(e, &execs),
+                            None => format!("Error: 未找到执行记录 ID={}", exec_id),
+                        }
+                    }
+                    Err(e) => format!("Error: {}", e),
+                }
+            } else if let Some(idx) = args["execution_index"].as_i64() {
+                match db.list_executions(&job_id, 10000) {
+                    Ok(execs) if execs.is_empty() => "该任务暂无执行记录。".into(),
+                    Ok(execs) => {
+                        // execs is DESC order (newest first)
+                        // positive index: 1=oldest, 2=second oldest...
+                        // negative index: -1=newest, -2=second newest...
+                        let total = execs.len() as i64;
+                        let actual_idx = if idx > 0 {
+                            total - idx // convert 1-based ASC to DESC index
+                        } else {
+                            (-idx) - 1 // -1 → 0 (newest), -2 → 1 ...
+                        };
+                        if actual_idx < 0 || actual_idx >= total {
+                            return format!("Error: 索引 {} 超出范围，共有 {} 条执行记录", idx, total);
+                        }
+                        let e = &execs[actual_idx as usize];
+                        format_full_execution(e, &execs)
+                    }
+                    Err(e) => format!("Error: {}", e),
+                }
+            } else {
+                "Error: get_execution 需要 execution_id 或 execution_index 参数".into()
+            }
+        }
+        _ => format!("未知操作: '{}'. 支持的操作: create, list, update, delete, history, get_execution", action),
     }
+}
+
+fn format_full_execution(e: &crate::engine::db::CronJobExecutionRow, all_execs: &[crate::engine::db::CronJobExecutionRow]) -> String {
+    let total = all_execs.len();
+    let pos = all_execs.iter().position(|x| x.id == e.id).unwrap_or(0);
+    let index = total - pos; // 1-based, oldest=1
+    let started = chrono::DateTime::from_timestamp(e.started_at, 0)
+        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+        .unwrap_or_else(|| e.started_at.to_string());
+    let finished = e.finished_at
+        .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
+        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+        .unwrap_or_else(|| "进行中".into());
+    let result = e.result.as_deref().unwrap_or("(无结果)");
+    format!(
+        "执行记录 #{} (ID: {})\n\
+         开始时间: {}\n\
+         结束时间: {}\n\
+         状态: {}\n\
+         触发方式: {}\n\
+         ---\n\
+         完整结果:\n{}",
+        index, e.id, started, finished, e.status, e.trigger_type, result,
+    )
+}
+
+/// Seed a cron session (`cron:{job_id}`) with the creation context:
+/// the user's original message and an assistant summary, so that when the user
+/// navigates to the cron session they see how the task was created.
+fn seed_cron_session_context(db: &super::db::Database, job_id: &str, job_name: &str) {
+    let cron_session_id = format!("cron:{}", job_id);
+
+    // Ensure the cron session exists
+    let _ = db.ensure_session(&cron_session_id, job_name, "cronjob", Some(job_id));
+
+    // Find the user's last message in the current (source) session
+    let source_sid = get_current_session_id();
+    if source_sid.is_empty() {
+        return;
+    }
+    let messages = match db.get_recent_messages(&source_sid, 10) {
+        Ok(msgs) => msgs,
+        Err(_) => return,
+    };
+
+    // Find the last user message (the one that triggered this creation)
+    if let Some(user_msg) = messages.iter().rev().find(|m| m.role == "user") {
+        let _ = db.push_message(&cron_session_id, "user", &user_msg.content);
+        let summary = format!("好的，我已为你创建了定时任务「{}」。你可以在这里查看执行历史、修改任务设置，或基于执行结果进行进一步操作。", job_name);
+        let _ = db.push_message(&cron_session_id, "assistant", &summary);
+    }
+}
+
+/// Build dispatch JSON from tool arguments, with smart bot context inference.
+/// Priority: explicit dispatch_targets > bot context inference > None (use defaults)
+fn build_dispatch_json(args: &serde_json::Value) -> Option<String> {
+    // Check for explicit dispatch_targets
+    if let Some(targets) = args["dispatch_targets"].as_array() {
+        let dispatch_targets: Vec<serde_json::Value> = targets.iter().map(|t| {
+            serde_json::json!({
+                "type": t["type"].as_str().unwrap_or("system"),
+                "bot_id": t["bot_id"].as_str(),
+                "target": t["target"].as_str(),
+            })
+        }).collect();
+        let spec = serde_json::json!({"targets": dispatch_targets});
+        return Some(spec.to_string());
+    }
+
+    // Smart inference: if we're in a bot conversation, add the current bot as a dispatch target
+    if let Some((bot_id, conversation_id)) = get_current_bot_context() {
+        if !conversation_id.trim().is_empty() {
+            let spec = serde_json::json!({
+                "targets": [
+                    {"type": "system"},
+                    {"type": "app"},
+                    {"type": "bot", "bot_id": bot_id, "target": conversation_id}
+                ]
+            });
+            return Some(spec.to_string());
+        } else {
+            // conversation_id is empty — only add system + app targets
+            let spec = serde_json::json!({
+                "targets": [
+                    {"type": "system"},
+                    {"type": "app"}
+                ]
+            });
+            return Some(spec.to_string());
+        }
+    }
+
+    // No explicit targets and not in bot context — return None to use defaults
+    None
+}
+
+/// Remove a scheduled job from the CronScheduler (for update/delete).
+fn remove_scheduled_job(job_id: &str) {
+    let scheduler_lock = match SCHEDULER.get() {
+        Some(s) => s.clone(),
+        None => return,
+    };
+    let job_id = job_id.to_string();
+    tokio::spawn(async move {
+        let guard = scheduler_lock.read().await;
+        if let Some(ref scheduler) = *guard {
+            if let Err(e) = scheduler.remove_job(&job_id).await {
+                log::error!("Failed to remove job '{}' from scheduler: {}", job_id, e);
+            }
+        }
+    });
 }
 
 /// Schedule a newly created job by registering it with the CronScheduler.
@@ -2208,7 +3148,7 @@ fn schedule_created_job(spec: crate::commands::cronjobs::CronJobSpec) {
 // ---------------------------------------------------------------------------
 
 fn send_notification_tool(args: &serde_json::Value) -> String {
-    let title = args["title"].as_str().unwrap_or("YiClaw");
+    let title = args["title"].as_str().unwrap_or("YiYiClaw");
     let body = args["body"].as_str().unwrap_or("");
 
     if body.is_empty() {
@@ -2277,7 +3217,7 @@ async fn add_calendar_event_tool(args: &serde_json::Value) -> String {
     let mut ics = format!(
         "BEGIN:VCALENDAR\r\n\
         VERSION:2.0\r\n\
-        PRODID:-//YiClaw//Calendar//EN\r\n\
+        PRODID:-//YiYiClaw//Calendar//EN\r\n\
         CALSCALE:GREGORIAN\r\n\
         METHOD:PUBLISH\r\n\
         BEGIN:VEVENT\r\n\
@@ -2312,7 +3252,7 @@ async fn add_calendar_event_tool(args: &serde_json::Value) -> String {
     ics.push_str("END:VEVENT\r\nEND:VCALENDAR\r\n");
 
     // Write .ics file to temp directory
-    let temp_dir = std::env::temp_dir().join("yiclaw_calendar");
+    let temp_dir = std::env::temp_dir().join("yiyiclaw_calendar");
     if let Err(e) = tokio::fs::create_dir_all(&temp_dir).await {
         return format!("Error creating temp dir: {}", e);
     }
@@ -2610,6 +3550,166 @@ async fn manage_bot_tool(args: &serde_json::Value) -> String {
     }
 }
 
+async fn activate_skills_tool(args: &serde_json::Value) -> String {
+    let names = match args["names"].as_array() {
+        Some(arr) => arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>(),
+        None => return "Error: 'names' must be an array of skill names.".to_string(),
+    };
+    if names.is_empty() {
+        return "Error: provide at least one skill name.".to_string();
+    }
+
+    let skills_dir = match WORKING_DIR.get() {
+        Some(wd) => wd.join("active_skills"),
+        None => return "Error: working directory not configured.".to_string(),
+    };
+
+    let mut results = Vec::new();
+    let mut not_found = Vec::new();
+
+    for name in &names {
+        let skill_md = skills_dir.join(name).join("SKILL.md");
+        match tokio::fs::read_to_string(&skill_md).await {
+            Ok(content) => {
+                // Strip YAML frontmatter — model only needs the instructions
+                let body = strip_frontmatter(&content);
+                let skill_dir = skills_dir.join(name);
+                results.push(format!(
+                    "[Skill: {} | directory: {}]\n\n{}",
+                    name,
+                    skill_dir.to_string_lossy(),
+                    body.trim()
+                ));
+            }
+            Err(_) => not_found.push(*name),
+        }
+    }
+
+    if !not_found.is_empty() {
+        // List available skills to help the model self-correct
+        let available: Vec<String> = std::fs::read_dir(&skills_dir)
+            .ok()
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter(|e| e.path().join("SKILL.md").exists())
+                    .filter_map(|e| e.file_name().into_string().ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+        results.push(format!(
+            "Skills not found: {}. Available: {}",
+            not_found.join(", "),
+            available.join(", ")
+        ));
+    }
+
+    results.join("\n\n---\n\n")
+}
+
+/// Attempt lightweight repair of malformed JSON from LLM tool calls.
+/// Handles common issues: unclosed braces/brackets, trailing commas, markdown wrapping.
+pub fn repair_json(raw: &str) -> Option<serde_json::Value> {
+    let mut s = raw.trim().to_string();
+
+    // Strip markdown code fences: ```json ... ```
+    if s.starts_with("```") {
+        if let Some(start) = s.find('\n') {
+            s = s[start + 1..].to_string();
+        }
+        if s.ends_with("```") {
+            s.truncate(s.len() - 3);
+            s = s.trim_end().to_string();
+        }
+    }
+
+    // Remove trailing commas before } or ]
+    s = remove_trailing_commas(&s);
+
+    // Try parsing after basic cleanup
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+        return Some(v);
+    }
+
+    // Count unclosed braces/brackets and close them
+    let mut brace_depth: i32 = 0;
+    let mut bracket_depth: i32 = 0;
+    let mut in_string = false;
+    let mut prev_char = '\0';
+    for ch in s.chars() {
+        if in_string {
+            if ch == '"' && prev_char != '\\' {
+                in_string = false;
+            }
+        } else {
+            match ch {
+                '"' => in_string = true,
+                '{' => brace_depth += 1,
+                '}' => brace_depth -= 1,
+                '[' => bracket_depth += 1,
+                ']' => bracket_depth -= 1,
+                _ => {}
+            }
+        }
+        prev_char = ch;
+    }
+
+    // If we're still inside a string, close it
+    if in_string {
+        s.push('"');
+    }
+
+    // Close unclosed brackets/braces
+    for _ in 0..bracket_depth {
+        s.push(']');
+    }
+    for _ in 0..brace_depth {
+        s.push('}');
+    }
+
+    // Remove trailing commas again after closing
+    s = remove_trailing_commas(&s);
+
+    serde_json::from_str::<serde_json::Value>(&s).ok()
+}
+
+/// Remove trailing commas before closing braces/brackets: `,}` → `}`, `,]` → `]`
+fn remove_trailing_commas(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == ',' {
+            // Look ahead past whitespace for } or ]
+            let mut j = i + 1;
+            while j < chars.len() && chars[j].is_whitespace() {
+                j += 1;
+            }
+            if j < chars.len() && (chars[j] == '}' || chars[j] == ']') {
+                // Skip this comma
+                i += 1;
+                continue;
+            }
+        }
+        result.push(chars[i]);
+        i += 1;
+    }
+    result
+}
+
+/// Strip YAML frontmatter (between --- delimiters) from SKILL.md content.
+fn strip_frontmatter(content: &str) -> &str {
+    let trimmed = content.trim();
+    if !trimmed.starts_with("---") {
+        return content;
+    }
+    let rest = &trimmed[3..];
+    match rest.find("---") {
+        Some(end) => rest[end + 3..].trim_start(),
+        None => content,
+    }
+}
+
 async fn manage_skill_tool(args: &serde_json::Value) -> String {
     let action = args["action"].as_str().unwrap_or("");
     let name = args["name"].as_str().unwrap_or("");
@@ -2799,7 +3899,7 @@ async fn send_file_to_user_tool(args: &serde_json::Value) -> String {
 
             // System notification for generated file
             crate::engine::scheduler::send_notification_with_context(
-                "YiClaw",
+                "YiYiClaw",
                 &format!("{} ({:.1} KB)", filename, size as f64 / 1024.0),
                 serde_json::json!({
                     "page": "chat",
@@ -2826,7 +3926,7 @@ async fn send_file_to_user_tool(args: &serde_json::Value) -> String {
 // ============================================================================
 
 /// Per-session Claude Code session ID cache (capped at 100 entries).
-/// Key: YiClaw session_id, Value: Claude Code session_id (from --output-format json).
+/// Key: YiYiClaw session_id, Value: Claude Code session_id (from --output-format json).
 const CC_SESSIONS_MAX: usize = 100;
 static CC_SESSIONS: std::sync::LazyLock<tokio::sync::Mutex<std::collections::HashMap<String, String>>> =
     std::sync::LazyLock::new(|| tokio::sync::Mutex::new(std::collections::HashMap::new()));
@@ -2841,10 +3941,11 @@ async fn claude_code_tool(args: &serde_json::Value) -> String {
     let continue_session = args["continue_session"].as_bool().unwrap_or(true);
     let timeout_secs = args["timeout_secs"].as_u64().unwrap_or(300);
 
-    // Resolve working directory
+    // Resolve working directory: args > USER_WORKSPACE > WORKING_DIR > "."
     let working_dir = args["working_dir"]
         .as_str()
         .map(|s| s.to_string())
+        .or_else(|| USER_WORKSPACE.get().map(|p| p.to_string_lossy().to_string()))
         .or_else(|| WORKING_DIR.get().map(|p| p.to_string_lossy().to_string()))
         .unwrap_or_else(|| ".".into());
 
@@ -2872,21 +3973,17 @@ async fn claude_code_tool(args: &serde_json::Value) -> String {
 
     let mut cmd = tokio::process::Command::new(&claude_bin);
     cmd.arg("-p").arg(&final_prompt);
-    cmd.arg("--output-format").arg("json");
+    cmd.arg("--output-format").arg("stream-json");
     cmd.arg("--max-turns").arg("30");
     cmd.current_dir(&working_dir);
 
     // Non-interactive mode: skip permission prompts.
-    // YiClaw's own sandbox layer handles access control,
-    // so Claude Code doesn't need to double-gate operations.
     cmd.arg("--dangerously-skip-permissions");
 
     // Prevent "nested session" error when called from within a Claude Code context.
-    // YiClaw's Tauri process won't have this, but defensive just in case.
     cmd.env_remove("CLAUDECODE");
 
     // Inject provider API key if ANTHROPIC_API_KEY isn't already in env.
-    // This lets Claude Code reuse the user's existing provider config (e.g. coding-plan).
     if std::env::var("ANTHROPIC_API_KEY").map(|v| v.is_empty()).unwrap_or(true) {
         if let Some((api_key, base_url)) = resolve_claude_code_provider().await {
             cmd.env("ANTHROPIC_API_KEY", &api_key);
@@ -2895,10 +3992,10 @@ async fn claude_code_tool(args: &serde_json::Value) -> String {
     }
 
     // Session continuity: look up or create session ID for this chat
-    let yiclaw_session = get_current_session_id();
-    if continue_session && !yiclaw_session.is_empty() {
+    let yiyiclaw_session = get_current_session_id();
+    if continue_session && !yiyiclaw_session.is_empty() {
         let sessions = CC_SESSIONS.lock().await;
-        if let Some(cc_sid) = sessions.get(&yiclaw_session) {
+        if let Some(cc_sid) = sessions.get(&yiyiclaw_session) {
             cmd.arg("--resume").arg(cc_sid);
         }
         drop(sessions);
@@ -2907,95 +4004,237 @@ async fn claude_code_tool(args: &serde_json::Value) -> String {
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
-    // Emit progress event to frontend
-    if let Some(handle) = APP_HANDLE.get() {
-        handle
-            .emit(
-                "agent://tool_progress",
-                serde_json::json!({
-                    "tool": "claude_code",
-                    "status": "running",
-                    "message": format!("Claude Code is working on: {}",
-                        truncate_output(prompt, 80))
-                }),
-            )
-            .ok();
-    }
-
-    // Execute with timeout — use spawn + kill to avoid orphan processes
+    // Execute with timeout — use spawn + streaming read
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => return format!("Error: failed to start claude: {}", e),
     };
 
-    // Grab PID before wait_with_output() consumes the child
     let child_id = child.id();
+    let stdout = match child.stdout.take() {
+        Some(s) => s,
+        None => return "Error: failed to capture claude stdout".into(),
+    };
 
-    let result = tokio::time::timeout(
-        std::time::Duration::from_secs(timeout_secs),
-        child.wait_with_output(),
-    )
-    .await;
+    // Drain stderr in background to prevent pipe buffer from filling up and blocking the child
+    let stderr_handle = child.stderr.take().map(|stderr| {
+        tokio::spawn(async move {
+            let mut buf = String::new();
+            let mut reader = tokio::io::BufReader::new(stderr);
+            use tokio::io::AsyncReadExt;
+            reader.read_to_string(&mut buf).await.ok();
+            buf
+        })
+    });
 
-    match result {
-        Err(_) => {
-            // Timeout — kill the child process to avoid resource leak
-            if let Some(pid) = child_id {
-                let kill_cmd = if cfg!(windows) { "taskkill" } else { "kill" };
-                let kill_args: Vec<String> = if cfg!(windows) {
-                    vec!["/PID".into(), pid.to_string(), "/F".into()]
-                } else {
-                    vec![pid.to_string()]
-                };
-                std::process::Command::new(kill_cmd).args(&kill_args).output().ok();
+    // Emit initial progress event
+    let handle = APP_HANDLE.get().cloned();
+    let session_id = yiyiclaw_session.clone();
+    if let Some(h) = &handle {
+        h.emit("chat://claude_code_stream", serde_json::json!({
+            "type": "start",
+            "session_id": session_id,
+            "working_dir": working_dir,
+        })).ok();
+    }
+
+    // Stream stdout line by line (NDJSON from --output-format stream-json)
+    let reader = tokio::io::BufReader::new(stdout);
+    use tokio::io::AsyncBufReadExt;
+    let mut lines = reader.lines();
+
+    let mut final_result = String::new();
+    let mut cc_session_id = String::new();
+    let mut had_error = false;
+
+    let stream_future = async {
+        while let Ok(Some(line)) = lines.next_line().await {
+            // Check cancellation on each line
+            if is_task_cancelled() {
+                return; // Will be handled as cancellation below
             }
-            "Error: Claude Code timed out. The task may be too complex. \
-             Try breaking it into smaller steps, or increase timeout_secs."
-                .into()
-        }
-        Ok(Err(e)) => format!("Error: failed to run claude: {}", e),
-        Ok(Ok(output)) => {
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            let exit_code = output.status.code().unwrap_or(-1);
+            if line.trim().is_empty() {
+                continue;
+            }
+            let json: serde_json::Value = match serde_json::from_str(&line) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
 
-            // Try to extract session ID from JSON output for continuity
-            if !yiclaw_session.is_empty() {
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
-                    if let Some(sid) = json["session_id"].as_str() {
-                        let mut sessions = CC_SESSIONS.lock().await;
-                        // Evict oldest entries if at capacity
-                        if sessions.len() >= CC_SESSIONS_MAX {
-                            if let Some(oldest) = sessions.keys().next().cloned() {
-                                sessions.remove(&oldest);
+            let msg_type = json["type"].as_str().unwrap_or("");
+
+            match msg_type {
+                "stream_event" => {
+                    // Extract streaming text deltas and tool use events
+                    let event = &json["event"];
+                    let event_type = event["type"].as_str().unwrap_or("");
+
+                    match event_type {
+                        "content_block_delta" => {
+                            let delta = &event["delta"];
+                            let delta_type = delta["type"].as_str().unwrap_or("");
+                            if delta_type == "text_delta" {
+                                if let Some(text) = delta["text"].as_str() {
+                                    if let Some(h) = &handle {
+                                        h.emit("chat://claude_code_stream", serde_json::json!({
+                                            "type": "text_delta",
+                                            "content": text,
+                                            "session_id": session_id,
+                                        })).ok();
+                                    }
+                                }
                             }
                         }
-                        sessions.insert(yiclaw_session.clone(), sid.to_string());
+                        "content_block_start" => {
+                            let block = &event["content_block"];
+                            let block_type = block["type"].as_str().unwrap_or("");
+                            if block_type == "tool_use" {
+                                let tool_name = block["name"].as_str().unwrap_or("unknown");
+                                if let Some(h) = &handle {
+                                    h.emit("chat://claude_code_stream", serde_json::json!({
+                                        "type": "tool_start",
+                                        "tool_name": tool_name,
+                                        "session_id": session_id,
+                                    })).ok();
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
-            }
-
-            // Parse JSON output to extract the result text
-            let response_text = parse_claude_code_output(&stdout);
-
-            if exit_code == 0 {
-                if response_text.is_empty() {
-                    "(Claude Code completed with no output)".into()
-                } else {
-                    truncate_output(&response_text, 12000)
+                // tool_result messages indicate a tool has finished executing
+                "tool_result" | "tool_use_summary" => {
+                    // Claude Code emits tool_result after tool execution completes
+                    let tool_name = json["tool_name"].as_str()
+                        .or_else(|| json["name"].as_str())
+                        .unwrap_or("unknown");
+                    if let Some(h) = &handle {
+                        h.emit("chat://claude_code_stream", serde_json::json!({
+                            "type": "tool_end",
+                            "tool_name": tool_name,
+                            "session_id": session_id,
+                        })).ok();
+                    }
                 }
-            } else {
-                let error_detail = if !stderr.is_empty() {
-                    truncate_output(&stderr, 4000)
-                } else {
-                    truncate_output(&response_text, 4000)
-                };
-                format!(
-                    "Claude Code exited with code {}.\n{}",
-                    exit_code, error_detail
-                )
+                "assistant" => {
+                    // Extract session_id from assistant messages
+                    if let Some(sid) = json["session_id"].as_str() {
+                        cc_session_id = sid.to_string();
+                    }
+                }
+                "result" => {
+                    // Final result — extract text
+                    if let Some(result_text) = json["result"].as_str() {
+                        final_result = result_text.to_string();
+                    } else if let Some(blocks) = json["result"].as_array() {
+                        let texts: Vec<&str> = blocks
+                            .iter()
+                            .filter_map(|b| b["text"].as_str())
+                            .collect();
+                        if !texts.is_empty() {
+                            final_result = texts.join("\n");
+                        }
+                    }
+                    if let Some(sid) = json["session_id"].as_str() {
+                        cc_session_id = sid.to_string();
+                    }
+                }
+                _ => {}
             }
         }
+    };
+
+    // Wrap with timeout
+    let timed_out = tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs),
+        stream_future,
+    ).await.is_err();
+
+    let was_cancelled = is_task_cancelled();
+
+    // Helper to kill the child process and its descendants
+    let kill_child = |pid: u32| {
+        #[cfg(windows)]
+        {
+            // /T kills the process tree
+            std::process::Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/T", "/F"])
+                .output().ok();
+        }
+        #[cfg(unix)]
+        {
+            // Kill the process group (negative PID) to clean up child processes,
+            // then fall back to killing the PID directly if it wasn't a group leader.
+            unsafe { libc::kill(-(pid as i32), libc::SIGTERM); }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            unsafe { libc::kill(-(pid as i32), libc::SIGKILL); }
+            // Also kill the process directly in case it didn't have its own group
+            unsafe { libc::kill(pid as i32, libc::SIGKILL); }
+        }
+    };
+
+    if timed_out || was_cancelled {
+        // Kill the child process on timeout or cancellation
+        if let Some(pid) = child_id {
+            kill_child(pid);
+        }
+        had_error = true;
+        final_result = if was_cancelled {
+            "Claude Code was cancelled by user.".into()
+        } else {
+            "Error: Claude Code timed out. Try breaking the task into smaller steps.".into()
+        };
+    } else {
+        // Wait for process exit
+        match child.wait().await {
+            Ok(status) if !status.success() => {
+                had_error = true;
+                if final_result.is_empty() {
+                    // Try to include stderr for better diagnostics
+                    let stderr_text = if let Some(h) = stderr_handle {
+                        h.await.ok().unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    final_result = if stderr_text.is_empty() {
+                        format!("Claude Code exited with code {}", status.code().unwrap_or(-1))
+                    } else {
+                        format!("Claude Code exited with code {}.\n{}", status.code().unwrap_or(-1), truncate_output(&stderr_text, 4000))
+                    };
+                }
+            }
+            Err(e) => {
+                had_error = true;
+                final_result = format!("Error: failed to wait for claude: {}", e);
+            }
+            _ => {}
+        }
+    }
+
+    // Cache Claude Code session ID for continuity
+    if !cc_session_id.is_empty() && !yiyiclaw_session.is_empty() {
+        let mut sessions = CC_SESSIONS.lock().await;
+        if sessions.len() >= CC_SESSIONS_MAX {
+            if let Some(oldest) = sessions.keys().next().cloned() {
+                sessions.remove(&oldest);
+            }
+        }
+        sessions.insert(yiyiclaw_session, cc_session_id);
+    }
+
+    // Emit completion event to frontend
+    if let Some(h) = &handle {
+        h.emit("chat://claude_code_stream", serde_json::json!({
+            "type": "done",
+            "session_id": session_id,
+            "error": had_error,
+        })).ok();
+    }
+
+    if final_result.is_empty() {
+        "(Claude Code completed with no output)".into()
+    } else {
+        truncate_output(&final_result, 12000)
     }
 }
 
@@ -3086,31 +4325,6 @@ async fn resolve_claude_code_provider() -> Option<(String, String)> {
     None
 }
 
-/// Parse Claude Code JSON output to extract the meaningful result text.
-fn parse_claude_code_output(raw: &str) -> String {
-    // Claude Code --output-format json returns a JSON object with a "result" field
-    if let Ok(json) = serde_json::from_str::<serde_json::Value>(raw) {
-        // Primary: result field (text content)
-        if let Some(result) = json["result"].as_str() {
-            return result.to_string();
-        }
-        // Fallback: extract text from content blocks
-        if let Some(content) = json["result"].as_array() {
-            let texts: Vec<&str> = content
-                .iter()
-                .filter_map(|block| block["text"].as_str())
-                .collect();
-            if !texts.is_empty() {
-                return texts.join("\n");
-            }
-        }
-        // Last resort: pretty-print the JSON
-        return serde_json::to_string_pretty(&json).unwrap_or_else(|_| raw.to_string());
-    }
-    // Not valid JSON — return raw output
-    raw.to_string()
-}
-
 fn truncate_output(s: &str, max_chars: usize) -> String {
     let char_count = s.chars().count();
     if char_count > max_chars {
@@ -3161,8 +4375,8 @@ async fn try_mcp_tool(
 // spawn_agents: dynamically create and run ephemeral sub-agents in parallel
 // ---------------------------------------------------------------------------
 
-/// Depth counter for spawn_agents to prevent infinite recursion.
-/// Uses task_local so concurrent agent runs track depth independently.
+// Depth counter for spawn_agents to prevent infinite recursion.
+// Uses task_local so concurrent agent runs track depth independently.
 tokio::task_local! {
     static DELEGATION_DEPTH: u32;
 }
@@ -3177,6 +4391,406 @@ struct AgentSpec {
     task: String,
     #[serde(default)]
     skills: Vec<String>,
+}
+
+async fn create_task_tool(args: &serde_json::Value) -> String {
+    let title = args.get("title").and_then(|v| v.as_str()).unwrap_or("Untitled Task");
+    let description = args.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    let plan: Vec<String> = args
+        .get("plan")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let session_id = format!("task:{}", task_id);
+    let total_stages = plan.len() as i32;
+
+    // Get parent session id from task-local context
+    let parent_session_id = get_current_session_id();
+
+    let now = chrono::Utc::now().timestamp();
+
+    // 1. Create task session and task record in DB
+    if let Some(db) = DATABASE.get() {
+        // Create a session for this task
+        if let Err(e) = db.ensure_session(&session_id, title, "task", Some(&task_id)) {
+            return format!("Error creating task session: {}", e);
+        }
+
+        // Build plan JSON if provided
+        let plan_json = if plan.is_empty() {
+            None
+        } else {
+            Some(
+                serde_json::to_string(
+                    &plan
+                        .iter()
+                        .map(|s| serde_json::json!({"title": s, "status": "pending"}))
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap_or_default(),
+            )
+        };
+
+        // Create task record in tasks table
+        if let Err(e) = db.create_task(
+            &task_id,
+            title,
+            Some(description),
+            "pending",
+            &session_id,
+            Some(&parent_session_id),
+            plan_json.as_deref(),
+            total_stages,
+            now,
+        ) {
+            return format!("Error creating task record: {}", e);
+        }
+    } else {
+        return "Error: database not available".into();
+    }
+
+    // 2. Emit event to notify frontend
+    if let Some(app) = APP_HANDLE.get() {
+        let _ = app.emit(
+            "task://created",
+            serde_json::json!({
+                "task_id": task_id,
+                "session_id": session_id,
+                "parent_session_id": parent_session_id,
+                "title": title,
+                "description": description,
+                "plan": plan,
+                "total_stages": total_stages,
+                "source": "tool",
+            }),
+        );
+    }
+
+    // 3. Spawn async task execution
+    spawn_task_execution(
+        task_id.clone(),
+        session_id.clone(),
+        title.to_string(),
+        description.to_string(),
+        plan.clone(),
+        total_stages,
+    );
+
+    // Return result to the main conversation
+    serde_json::json!({
+        "task_id": task_id,
+        "session_id": session_id,
+        "status": "created",
+        "message": format!("任务「{}」已创建并开始执行。任务 ID: {}", title, task_id)
+    })
+    .to_string()
+}
+
+/// Background task that executes a created task via a ReAct Agent.
+/// Separated from `create_task_tool` to ensure the async block is Send + 'static.
+pub fn spawn_task_execution(
+    task_id: String,
+    session_id: String,
+    title: String,
+    description: String,
+    plan: Vec<String>,
+    total_stages: i32,
+) {
+    let sid = session_id.clone();
+    tokio::spawn(with_session_id(sid, async move {
+        // Resolve LLM config
+        let llm_config = match resolve_llm_config_from_globals().await {
+            Some(cfg) => cfg,
+            None => {
+                log::error!("Task {}: No active model configured", task_id);
+                fail_task(&task_id, &session_id, "No active model configured");
+                return;
+            }
+        };
+
+        let working_dir = match WORKING_DIR.get() {
+            Some(wd) => wd.clone(),
+            None => {
+                log::error!("Task {}: Working directory not set", task_id);
+                fail_task(&task_id, &session_id, "Working directory not set");
+                return;
+            }
+        };
+
+        let app_handle = APP_HANDLE.get().cloned();
+
+        // Create cancellation signal via APP_HANDLE -> AppState
+        let cancel_signal: Option<std::sync::Arc<std::sync::atomic::AtomicBool>> = if let Some(ref handle) = app_handle {
+            use tauri::Manager;
+            if let Some(state) = handle.try_state::<crate::state::AppState>() {
+                Some(state.get_or_create_task_cancel(&task_id))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Update task status to "running"
+        if let Some(db) = DATABASE.get() {
+            db.update_task_status(&task_id, "running").ok();
+        }
+
+        // Emit running event
+        if let Some(ref handle) = app_handle {
+            handle.emit("task://progress", serde_json::json!({
+                "task_id": task_id,
+                "session_id": session_id,
+                "status": "running",
+                "current_stage": 0,
+                "progress": 0.0,
+            })).ok();
+        }
+
+        // Load skill index + always-active skills
+        let skills_dir = working_dir.join("active_skills");
+        let mut skill_index = Vec::new();
+        let mut always_active_skills = Vec::new();
+        if let Ok(mut entries) = tokio::fs::read_dir(&skills_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                let skill_md = path.join("SKILL.md");
+                if let Ok(content) = tokio::fs::read_to_string(&skill_md).await {
+                    let name = path.file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let (description, is_always_active) = crate::commands::agent::parse_skill_frontmatter(&content);
+                    if is_always_active {
+                        always_active_skills.push(content);
+                    } else {
+                        skill_index.push(crate::commands::agent::SkillIndexEntry {
+                            name,
+                            description: description.unwrap_or_default(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Load MCP tools
+        let (mcp_tools_list, unavailable_servers) = if let Some(runtime) = MCP_RUNTIME.get() {
+            runtime.get_all_tools_with_status().await
+        } else {
+            (vec![], vec![])
+        };
+        let skill_overrides = std::collections::HashMap::new();
+        let mcp_extra: Vec<ToolDefinition> = mcp_tools_as_definitions(&mcp_tools_list, &skill_overrides);
+
+        let mcp_ref = if mcp_tools_list.is_empty() { None } else { Some(mcp_tools_list.as_slice()) };
+        let unavail_ref = if unavailable_servers.is_empty() { None } else { Some(unavailable_servers.as_slice()) };
+
+        // Build system prompt
+        let base_prompt = super::react_agent::build_system_prompt(
+            &working_dir, None, &skill_index, &always_active_skills, None, mcp_ref, unavail_ref,
+        ).await;
+
+        let plan_text = if plan.is_empty() {
+            String::new()
+        } else {
+            let steps: Vec<String> = plan.iter().enumerate()
+                .map(|(i, s)| format!("{}. {}", i + 1, s))
+                .collect();
+            format!("\n执行计划：\n{}\n", steps.join("\n"))
+        };
+
+        let system_prompt = format!(
+            "你正在执行一个独立任务。\n\n\
+            任务标题：{title}\n\
+            任务描述：{description}\n\
+            {plan_text}\n\
+            请按计划逐步执行每个阶段。每完成一个阶段，请在输出中明确标记 [STAGE_COMPLETE: N]（N 为阶段编号，从 1 开始）来指示进度。\n\
+            完成所有阶段后，总结执行结果。\n\n\
+            {base_prompt}",
+            title = title,
+            description = description,
+            plan_text = plan_text,
+            base_prompt = base_prompt,
+        );
+
+        let user_message = format!(
+            "开始执行任务「{}」。请按照计划逐步完成。",
+            title
+        );
+
+        // Track progress from agent output
+        let task_id_for_cb = task_id.clone();
+        let session_id_for_cb = session_id.clone();
+        let total_stages_for_cb = total_stages;
+        let app_handle_for_cb = app_handle.clone();
+
+        let on_event = move |evt: super::react_agent::AgentStreamEvent| {
+            match &evt {
+                super::react_agent::AgentStreamEvent::Token(text) => {
+                    // Emit streaming chunk for frontend task stream
+                    if let Some(ref handle) = app_handle_for_cb {
+                        handle.emit("task://stream_chunk", serde_json::json!({
+                            "taskId": task_id_for_cb,
+                            "text": text,
+                        })).ok();
+                    }
+
+                    // Check for [STAGE_COMPLETE: N] markers
+                    if let Some(stage) = parse_stage_complete(text) {
+                        let progress = if total_stages_for_cb > 0 {
+                            (stage as f64 / total_stages_for_cb as f64 * 100.0).min(100.0)
+                        } else {
+                            0.0
+                        };
+
+                        // Update DB progress
+                        if let Some(db) = DATABASE.get() {
+                            db.update_task_progress(&task_id_for_cb, stage, total_stages_for_cb, progress).ok();
+                        }
+
+                        // Emit progress event (camelCase for consistency)
+                        if let Some(ref handle) = app_handle_for_cb {
+                            handle.emit("task://progress", serde_json::json!({
+                                "taskId": task_id_for_cb,
+                                "sessionId": session_id_for_cb,
+                                "status": "running",
+                                "currentStage": stage,
+                                "totalStages": total_stages_for_cb,
+                                "progress": progress,
+                            })).ok();
+                        }
+                    }
+                }
+                super::react_agent::AgentStreamEvent::ToolStart { name, args_preview } => {
+                    if let Some(ref handle) = app_handle_for_cb {
+                        handle.emit("task://tool_start", serde_json::json!({
+                            "taskId": task_id_for_cb,
+                            "name": name,
+                            "preview": args_preview,
+                        })).ok();
+                    }
+                }
+                super::react_agent::AgentStreamEvent::ToolEnd { name, result_preview } => {
+                    if let Some(ref handle) = app_handle_for_cb {
+                        handle.emit("task://tool_end", serde_json::json!({
+                            "taskId": task_id_for_cb,
+                            "name": name,
+                            "preview": result_preview,
+                        })).ok();
+                    }
+                }
+                _ => {}
+            }
+        };
+
+        // Execute the agent
+        let result: Result<String, String> = if let Some(ref cancel) = cancel_signal {
+            with_cancelled(cancel.clone(), Box::pin(
+                super::react_agent::run_react_with_options_stream(
+                    &llm_config, &system_prompt, &user_message, &mcp_extra,
+                    &[], None, Some(&working_dir), on_event,
+                    Some(cancel.as_ref()), None,
+                )
+            )).await
+        } else {
+            super::react_agent::run_react_with_options_stream(
+                &llm_config, &system_prompt, &user_message, &mcp_extra,
+                &[], None, Some(&working_dir), on_event,
+                None, None,
+            ).await
+        };
+
+        // Handle result
+        match result {
+            Ok(reply) => {
+                // Save result to DB
+                if let Some(db) = DATABASE.get() {
+                    db.update_task_status(&task_id, "completed").ok();
+                    db.update_task_progress(&task_id, total_stages, total_stages, 100.0).ok();
+                    db.push_message(&session_id, "assistant", &reply).ok();
+                }
+
+                if let Some(ref handle) = app_handle {
+                    handle.emit("task://completed", serde_json::json!({
+                        "taskId": task_id,
+                        "sessionId": session_id,
+                        "status": "completed",
+                        "result": truncate_output(&reply, 3000),
+                    })).ok();
+                }
+
+                log::info!("Task {} completed successfully", task_id);
+            }
+            Err(e) => {
+                let error_msg = if e == "cancelled" {
+                    "任务已被取消"
+                } else {
+                    &e
+                };
+                let status = if e == "cancelled" { "cancelled" } else { "failed" };
+
+                fail_task_with_status(&task_id, &session_id, error_msg, status);
+                log::warn!("Task {} {}: {}", task_id, status, error_msg);
+            }
+        }
+
+        // Cleanup cancel signal
+        if let Some(ref handle) = app_handle {
+            use tauri::Manager;
+            if let Some(state) = handle.try_state::<crate::state::AppState>() {
+                state.cleanup_task_signal(&task_id);
+            }
+        }
+    }));
+}
+
+/// Parse `[STAGE_COMPLETE: N]` marker from text, returning the stage number.
+fn parse_stage_complete(text: &str) -> Option<i32> {
+    // Look for [STAGE_COMPLETE: N] pattern
+    let marker = "[STAGE_COMPLETE:";
+    if let Some(start) = text.find(marker) {
+        let rest = &text[start + marker.len()..];
+        let num_str: String = rest.chars()
+            .skip_while(|c| c.is_whitespace())
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        num_str.parse::<i32>().ok()
+    } else {
+        None
+    }
+}
+
+/// Atomically write progress.json (tmp + rename) for crash recovery.
+pub fn write_progress_json(progress_dir: &std::path::Path, data: &serde_json::Value) {
+    if let Ok(json) = serde_json::to_string_pretty(data) {
+        let tmp_path = progress_dir.join("progress.json.tmp");
+        let final_path = progress_dir.join("progress.json");
+        if std::fs::write(&tmp_path, &json).is_ok() {
+            std::fs::rename(&tmp_path, &final_path).ok();
+        }
+    }
+}
+
+/// Helper: mark task as failed with default "failed" status.
+fn fail_task(task_id: &str, session_id: &str, error_message: &str) {
+    fail_task_with_status(task_id, session_id, error_message, "failed");
+}
+
+/// Helper: mark task as failed/cancelled and emit event.
+fn fail_task_with_status(task_id: &str, session_id: &str, error_message: &str, status: &str) {
+    if let Some(db) = DATABASE.get() {
+        db.update_task_error(task_id, status, error_message).ok();
+    }
+
+    if let Some(app) = APP_HANDLE.get() {
+        let event_name = if status == "cancelled" { "task://cancelled" } else { "task://failed" };
+        app.emit(event_name, serde_json::json!({
+            "taskId": task_id,
+            "sessionId": session_id,
+            "status": status,
+            "error": error_message,
+        })).ok();
+    }
 }
 
 async fn spawn_agents_tool(args: serde_json::Value) -> String {
@@ -3242,17 +4856,25 @@ async fn spawn_agents_tool(args: serde_json::Value) -> String {
         }
     }
 
-    // Load all available skills from active_skills/
+    // Load skill index + always-active skills for sub-agents
     let skills_dir = working_dir.join("active_skills");
-    let mut all_skill_contents: Vec<(String, String)> = Vec::new(); // (name, content)
+    let mut all_skill_index: Vec<crate::commands::agent::SkillIndexEntry> = Vec::new();
+    let mut all_always_active: Vec<String> = Vec::new();
     if let Ok(mut entries) = tokio::fs::read_dir(&skills_dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
             let skill_md = path.join("SKILL.md");
             if let Ok(content) = tokio::fs::read_to_string(&skill_md).await {
                 let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                let formatted = format!("[Skill directory: {}]\n\n{}", path.to_string_lossy(), content);
-                all_skill_contents.push((name, formatted));
+                let (description, is_always_active) = crate::commands::agent::parse_skill_frontmatter(&content);
+                if is_always_active {
+                    all_always_active.push(content);
+                } else {
+                    all_skill_index.push(crate::commands::agent::SkillIndexEntry {
+                        name,
+                        description: description.unwrap_or_default(),
+                    });
+                }
             }
         }
     }
@@ -3271,9 +4893,11 @@ async fn spawn_agents_tool(args: serde_json::Value) -> String {
 
     // Launch all agents in a background tokio task — returns immediately
     let depth = current_depth + 1;
+    // Inherit the cancellation signal so spawn agents can be stopped
+    let cancelled = TASK_CANCELLED.try_with(|c| c.clone()).ok();
     spawn_agents_background(
         specs, depth, llm_config, working_dir, app_handle,
-        all_skill_contents, mcp_tools_list, unavailable_servers, mcp_extra, session_id,
+        all_skill_index, all_always_active, mcp_tools_list, unavailable_servers, mcp_extra, session_id, cancelled,
     );
 
     // Return immediately — agents run in background
@@ -3296,11 +4920,13 @@ fn spawn_agents_background(
     llm_config: super::llm_client::LLMConfig,
     working_dir: std::path::PathBuf,
     app_handle: Option<tauri::AppHandle>,
-    all_skill_contents: Vec<(String, String)>,
+    all_skill_index: Vec<crate::commands::agent::SkillIndexEntry>,
+    all_always_active: Vec<String>,
     mcp_tools_list: Vec<super::mcp_runtime::MCPTool>,
     unavailable_servers: Vec<String>,
     mcp_extra: Vec<ToolDefinition>,
     session_id: String,
+    cancelled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) {
     let sid = session_id.clone();
     tokio::spawn(with_session_id(sid, async move {
@@ -3308,21 +4934,23 @@ fn spawn_agents_background(
             let config = llm_config.clone();
             let wd = working_dir.clone();
             let mcp_extra = mcp_extra.clone();
-            let all_skills = all_skill_contents.clone();
+            let skill_idx = all_skill_index.clone();
+            let always_active = all_always_active.clone();
             let mcp_tools_for_prompt = mcp_tools_list.clone();
             let unavail_for_prompt = unavailable_servers.clone();
             let handle_for_agent = app_handle.clone();
+            let cancelled_for_agent = cancelled.clone();
             let sid_for_agent = session_id.clone();
 
             async move {
                 let agent_name = spec.name.clone();
 
-                let skill_contents: Vec<String> = if spec.skills.is_empty() {
-                    all_skills.iter().map(|(_, c)| c.clone()).collect()
+                // Filter skill index if agent specifies specific skills
+                let filtered_index: Vec<crate::commands::agent::SkillIndexEntry> = if spec.skills.is_empty() {
+                    skill_idx
                 } else {
-                    all_skills.iter()
-                        .filter(|(name, _)| spec.skills.iter().any(|s| s == name))
-                        .map(|(_, c)| c.clone())
+                    skill_idx.into_iter()
+                        .filter(|e| spec.skills.iter().any(|s| s == &e.name))
                         .collect()
                 };
 
@@ -3330,7 +4958,7 @@ fn spawn_agents_background(
                 let unavail_ref = if unavail_for_prompt.is_empty() { None } else { Some(unavail_for_prompt.as_slice()) };
 
                 let base_prompt = super::react_agent::build_system_prompt(
-                    &wd, &skill_contents, None, mcp_ref, unavail_ref,
+                    &wd, None, &filtered_index, &always_active, None, mcp_ref, unavail_ref,
                 ).await;
 
                 let system_prompt = format!(
@@ -3407,14 +5035,16 @@ fn spawn_agents_background(
                                     }
                                 }
                             }
-                            super::react_agent::AgentStreamEvent::Complete(_)
-                            | super::react_agent::AgentStreamEvent::Error(_) => {}
+                            super::react_agent::AgentStreamEvent::Complete
+                            | super::react_agent::AgentStreamEvent::Error
+                            | super::react_agent::AgentStreamEvent::Thinking(_) => {}
                         }
                     };
                     DELEGATION_DEPTH.scope(depth, Box::pin(
                         super::react_agent::run_react_with_options_stream(
                             &config, &system_prompt, &spec.task, &mcp_extra,
-                            &[], None, Some(&wd), on_event, None,
+                            &[], None, Some(&wd), on_event,
+                            cancelled_for_agent.as_ref().map(|c| c.as_ref()), None,
                         )
                     )).await
                 } else {
@@ -3456,20 +5086,35 @@ fn spawn_agents_background(
 
         let results = futures::future::join_all(futures).await;
 
-        let combined: Vec<String> = results.iter().map(|(name, text, is_err)| {
-            if *is_err {
-                format!("=== Agent: {} ===\nError: {}", name, text)
-            } else {
-                format!("=== Agent: {} ===\n{}", name, text)
-            }
+        // Build structured agent results for metadata
+        let agent_results_json: Vec<serde_json::Value> = results.iter().map(|(name, text, is_err)| {
+            serde_json::json!({
+                "name": name,
+                "result": text.chars().take(3000).collect::<String>(),
+                "is_error": is_err,
+            })
         }).collect();
-        let combined_text = combined.join("\n\n");
 
+        // Save to DB with structured metadata so frontend can render nicely
         if !session_id.is_empty() {
             if let Some(db) = DATABASE.get() {
-                db.push_message(&session_id, "assistant", &format!(
-                    "**[Team Task Complete]**\n\n{}", combined_text
-                )).ok();
+                let metadata = serde_json::json!({
+                    "spawn_agents": agent_results_json,
+                }).to_string();
+                // Content is a brief summary for LLM context
+                let summary: Vec<String> = results.iter().map(|(name, text, is_err)| {
+                    let preview: String = text.chars().take(500).collect();
+                    if *is_err {
+                        format!("[{}] Error: {}", name, preview)
+                    } else {
+                        format!("[{}] {}", name, preview)
+                    }
+                }).collect();
+                db.push_message_with_metadata(
+                    &session_id, "assistant",
+                    &summary.join("\n\n"),
+                    Some(&metadata),
+                ).ok();
             }
         }
 

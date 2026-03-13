@@ -44,7 +44,7 @@ pub fn run() {
                 let ident = if tauri::is_dev() {
                     "com.apple.Terminal" // dev: Terminal icon (matches Tauri plugin behavior)
                 } else {
-                    "com.yiclaw.desktop"
+                    "com.yiyiclaw.desktop"
                 };
                 let _ = mac_notification_sys::set_application(ident);
 
@@ -97,19 +97,52 @@ pub fn run() {
             engine::tools::set_providers(state.providers.clone());
             engine::tools::set_scheduler(state.scheduler.clone());
             engine::tools::set_streaming_state(state.streaming_state.clone());
+            engine::tools::set_user_workspace(state.user_workspace());
+            engine::tools::set_pty_manager(state.pty_manager.clone());
 
-            // Load persistent sandbox paths from database
+            // Initialize authorized folders from database
             {
-                let paths: Vec<std::path::PathBuf> = state
-                    .db
-                    .list_sandbox_paths()
-                    .into_iter()
-                    .map(std::path::PathBuf::from)
-                    .collect();
-                if !paths.is_empty() {
-                    log::info!("Loaded {} sandbox allowed paths", paths.len());
-                    tauri::async_runtime::block_on(engine::tools::init_sandbox_paths(paths));
+                let db_arc = &state.db;
+                let folders = db_arc.list_authorized_folders();
+                let sensitive = db_arc.list_sensitive_paths();
+
+                // Ensure default workspace is always in authorized folders
+                let user_ws = state.user_workspace();
+                let has_default = folders.iter().any(|f| f.is_default);
+                if !has_default {
+                    let now = chrono::Utc::now().timestamp();
+                    let default_folder = crate::engine::db::AuthorizedFolderRow {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        path: user_ws.to_string_lossy().to_string(),
+                        label: Some("Default Workspace".into()),
+                        permission: "read_write".into(),
+                        is_default: true,
+                        created_at: now,
+                        updated_at: now,
+                    };
+                    db_arc.upsert_authorized_folder(&default_folder).ok();
                 }
+
+                // Seed builtin sensitive patterns on first run
+                if sensitive.is_empty() {
+                    db_arc.seed_builtin_sensitive_patterns();
+                }
+
+                let folders = db_arc.list_authorized_folders();
+                let sensitive = db_arc.list_sensitive_paths();
+                crate::engine::tools::init_authorized_folders(folders);
+                crate::engine::tools::init_sensitive_patterns(sensitive);
+            }
+
+            // Note: sandbox_paths are migrated to authorized_folders in db.open()
+
+            // Recover interrupted tasks from previous session
+            {
+                let recovery_db = state.db.clone();
+                let recovery_working_dir = state.working_dir.clone();
+                tauri::async_runtime::spawn(async move {
+                    recover_interrupted_tasks(&recovery_db, &recovery_working_dir).await;
+                });
             }
 
             // Connect MCP clients in background
@@ -154,19 +187,7 @@ pub fn run() {
 
             // Auto-start enabled bots in background
             {
-                let bot_state = AppState {
-                    working_dir: state.working_dir.clone(),
-                    user_workspace: std::sync::RwLock::new(state.user_workspace()),
-                    secret_dir: state.secret_dir.clone(),
-                    config: state.config.clone(),
-                    providers: state.providers.clone(),
-                    db: state.db.clone(),
-                    bot_manager: state.bot_manager.clone(),
-                    mcp_runtime: state.mcp_runtime.clone(),
-                    chat_cancelled: state.chat_cancelled.clone(),
-                    scheduler: state.scheduler.clone(),
-                    streaming_state: state.streaming_state.clone(),
-                };
+                let bot_state = state.clone_shared();
                 let bot_app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     match commands::bots::start_all_bots(&bot_state, bot_app_handle).await {
@@ -207,19 +228,7 @@ pub fn run() {
             // Start cron scheduler in background
             let scheduler_holder = state.scheduler.clone();
 
-            let app_state_ref = AppState {
-                working_dir: state.working_dir.clone(),
-                user_workspace: std::sync::RwLock::new(state.user_workspace()),
-                secret_dir: state.secret_dir.clone(),
-                config: state.config.clone(),
-                providers: state.providers.clone(),
-                db: state.db.clone(),
-                bot_manager: state.bot_manager.clone(),
-                mcp_runtime: state.mcp_runtime.clone(),
-                chat_cancelled: state.chat_cancelled.clone(),
-                scheduler: state.scheduler.clone(),
-                streaming_state: state.streaming_state.clone(),
-            };
+            let app_state_ref = state.clone_shared();
 
             tauri::async_runtime::spawn(async move {
                 match CronScheduler::new().await {
@@ -264,6 +273,11 @@ pub fn run() {
             commands::system::get_user_workspace,
             commands::system::set_user_workspace,
             commands::system::check_claude_code_status,
+            commands::system::install_claude_code,
+            commands::system::check_tool_available,
+            commands::system::install_tool,
+            commands::system::check_git_available,
+            commands::system::install_git,
             commands::system::get_app_flag,
             commands::system::set_app_flag,
             // Models & Providers
@@ -293,9 +307,16 @@ pub fn run() {
             commands::workspace::upload_workspace,
             commands::workspace::download_workspace,
             commands::workspace::get_workspace_path,
-            commands::workspace::sandbox_respond,
-            commands::workspace::sandbox_list_allowed,
-            commands::workspace::sandbox_remove_path,
+            commands::workspace::list_authorized_folders,
+            commands::workspace::add_authorized_folder,
+            commands::workspace::update_authorized_folder,
+            commands::workspace::remove_authorized_folder,
+            commands::workspace::list_sensitive_patterns,
+            commands::workspace::add_sensitive_pattern,
+            commands::workspace::toggle_sensitive_pattern,
+            commands::workspace::remove_sensitive_pattern,
+            commands::workspace::pick_folder,
+            commands::workspace::list_folder_files,
             commands::workspace::list_agent_files,
             commands::workspace::read_agent_file,
             commands::workspace::write_agent_file,
@@ -312,10 +333,15 @@ pub fn run() {
             commands::bots::bots_send,
             commands::bots::bots_start,
             commands::bots::bots_stop,
+            commands::bots::bots_start_one,
+            commands::bots::bots_stop_one,
+            commands::bots::bots_running_list,
             commands::bots::bots_list_sessions,
             commands::bots::session_bind_bot,
             commands::bots::session_unbind_bot,
+            commands::bots::bots_test_connection,
             commands::bots::session_list_bots,
+            commands::bots::bots_get_status,
             // Agent & Chat
             commands::agent::chat,
             commands::agent::chat_stream_start,
@@ -327,6 +353,7 @@ pub fn run() {
             // Sessions
             commands::agent::list_sessions,
             commands::agent::create_session,
+            commands::agent::ensure_session,
             commands::agent::rename_session,
             commands::agent::delete_session,
             // Skills
@@ -382,6 +409,30 @@ pub fn run() {
             commands::mcp::update_mcp_client,
             commands::mcp::toggle_mcp_client,
             commands::mcp::delete_mcp_client,
+            // Unified Users (cross-platform identity)
+            commands::unified_users::unified_users_list,
+            commands::unified_users::unified_users_create,
+            commands::unified_users::unified_users_link,
+            commands::unified_users::unified_users_unlink,
+            // Tasks
+            commands::tasks::create_task,
+            commands::tasks::list_tasks,
+            commands::tasks::get_task_status,
+            commands::tasks::cancel_task,
+            commands::tasks::pause_task,
+            commands::tasks::send_task_message,
+            commands::tasks::delete_task,
+            commands::tasks::pin_task,
+            commands::tasks::confirm_background_task,
+            commands::tasks::convert_to_long_task,
+            commands::tasks::get_task_by_name,
+            commands::tasks::list_all_tasks_brief,
+            // PTY
+            commands::pty::pty_spawn,
+            commands::pty::pty_write,
+            commands::pty::pty_resize,
+            commands::pty::pty_close,
+            commands::pty::pty_list,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -457,6 +508,75 @@ async fn bootstrap_python_packages(handle: &tauri::AppHandle) {
         Err(e) => {
             log::warn!("Failed to check Python packages: {}", e);
         }
+    }
+}
+
+/// Recover tasks that were "running" when the app was interrupted/crashed.
+async fn recover_interrupted_tasks(
+    db: &std::sync::Arc<crate::engine::db::Database>,
+    working_dir: &std::path::Path,
+) {
+    // Find all tasks still marked as "running"
+    let running_tasks = match db.list_tasks(None, Some("running")) {
+        Ok(tasks) => tasks,
+        Err(e) => {
+            log::warn!("Failed to query running tasks for recovery: {}", e);
+            return;
+        }
+    };
+
+    if running_tasks.is_empty() {
+        return;
+    }
+
+    log::info!("Found {} interrupted task(s) to recover", running_tasks.len());
+
+    for task in running_tasks {
+        // Read progress.json if available
+        let progress_path = working_dir.join("tasks").join(&task.id).join("progress.json");
+        let progress_info = std::fs::read_to_string(&progress_path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+
+        let round_info = progress_info
+            .as_ref()
+            .and_then(|p| p["current_round"].as_u64())
+            .unwrap_or(0);
+
+        log::info!(
+            "Recovering task '{}' (id={}, round={})",
+            task.title, task.id, round_info
+        );
+
+        // Build recovery context
+        let recovery_context = format!(
+            "你正在继续执行一个被中断的任务。\n\
+            任务标题：{}\n\
+            任务描述：{}\n\
+            之前已执行到第 {} 轮。\n\
+            请继续执行未完成的部分。",
+            task.title,
+            task.description.as_deref().unwrap_or(""),
+            round_info,
+        );
+
+        // Push recovery context as system message
+        db.push_message(&task.session_id, "system", &recovery_context).ok();
+
+        // Re-spawn the task execution
+        let plan: Vec<String> = task.plan
+            .as_ref()
+            .and_then(|p| serde_json::from_str(p).ok())
+            .unwrap_or_default();
+
+        crate::engine::tools::spawn_task_execution(
+            task.id.clone(),
+            task.session_id.clone(),
+            task.title.clone(),
+            task.description.unwrap_or_default(),
+            plan,
+            task.total_stages,
+        );
     }
 }
 

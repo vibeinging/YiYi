@@ -140,7 +140,12 @@ pub async fn is_setup_complete(state: State<'_, AppState>) -> Result<bool, Strin
 /// Mark the initial setup as complete
 #[tauri::command]
 pub async fn complete_setup(state: State<'_, AppState>) -> Result<(), String> {
-    state.db.set_config("setup_complete", "true")
+    state.db.set_config("setup_complete", "true")?;
+    // Also create .bootstrap_completed flag to prevent BOOTSTRAP.md from being
+    // injected into system prompt — SetupWizard already collected persona info.
+    let flag = state.working_dir.join(".bootstrap_completed");
+    std::fs::write(&flag, "done").map_err(|e| format!("Failed to write bootstrap flag: {}", e))?;
+    Ok(())
 }
 
 /// Check if `claude` CLI is reachable. Falls back to common install paths
@@ -292,6 +297,316 @@ fn check_claude_has_auth() -> bool {
     }
 
     false
+}
+
+/// Check if npm/node is available
+fn is_npm_available() -> bool {
+    let cmd = if cfg!(windows) { "where" } else { "which" };
+    std::process::Command::new(cmd)
+        .args(["npm"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Install Claude Code CLI via npm
+#[tauri::command]
+pub async fn install_claude_code() -> Result<serde_json::Value, String> {
+    // Check if already installed
+    if is_claude_cli_available() {
+        return Ok(serde_json::json!({
+            "success": true,
+            "message": "Claude Code is already installed",
+            "already_installed": true,
+        }));
+    }
+
+    // Check if npm is available
+    if !is_npm_available() {
+        return Ok(serde_json::json!({
+            "success": false,
+            "message": "npm is not installed. Please install Node.js first from https://nodejs.org/",
+            "needs_node": true,
+        }));
+    }
+
+    // Run npm install
+    log::info!("Installing Claude Code CLI via npm...");
+    let output = tokio::process::Command::new("npm")
+        .args(["install", "-g", "@anthropic-ai/claude-code"])
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run npm: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if output.status.success() {
+        // Verify installation
+        let installed = is_claude_cli_available();
+        if installed {
+            log::info!("Claude Code CLI installed successfully");
+            Ok(serde_json::json!({
+                "success": true,
+                "message": "Claude Code installed successfully!",
+                "output": stdout.chars().take(500).collect::<String>(),
+            }))
+        } else {
+            Ok(serde_json::json!({
+                "success": false,
+                "message": "npm install succeeded but 'claude' command not found in PATH. Try restarting your terminal.",
+                "output": stdout.chars().take(500).collect::<String>(),
+            }))
+        }
+    } else {
+        let error_msg = if !stderr.is_empty() { &stderr } else { &stdout };
+        log::error!("Claude Code installation failed: {}", error_msg);
+        Ok(serde_json::json!({
+            "success": false,
+            "message": format!("Installation failed: {}", error_msg.chars().take(300).collect::<String>()),
+        }))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Generic tool detection + installation framework
+// ---------------------------------------------------------------------------
+
+/// Check if a command is available by running it with the given arguments.
+fn check_command(cmd: &str, args: &[&str]) -> bool {
+    std::process::Command::new(cmd)
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Check if a tool is available on the system.
+#[tauri::command]
+pub async fn check_tool_available(tool: String) -> Result<bool, String> {
+    let result = match tool.as_str() {
+        "git" => check_command("git", &["--version"]),
+        "python" | "python3" => {
+            check_command("python3", &["--version"]) || check_command("python", &["--version"])
+        }
+        "node" | "nodejs" => check_command("node", &["--version"]),
+        "npm" => check_command("npm", &["--version"]),
+        "pip" | "pip3" => {
+            check_command("pip3", &["--version"]) || check_command("pip", &["--version"])
+        }
+        "ffmpeg" => check_command("ffmpeg", &["-version"]),
+        "brew" => check_command("brew", &["--version"]),
+        "cargo" => check_command("cargo", &["--version"]),
+        "docker" => check_command("docker", &["--version"]),
+        // Default: try running `tool --version`
+        _ => check_command(&tool, &["--version"]),
+    };
+    Ok(result)
+}
+
+/// Try to install a package via Homebrew. Returns Some(message) on success.
+fn try_brew_install(pkg: &str) -> Option<String> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    // If brew is not installed, try to install it first
+    if !check_command("brew", &["--version"]) {
+        log::info!("brew not found, attempting to install Homebrew first...");
+        let install = std::process::Command::new("bash")
+            .args(["-c", "curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh | bash"])
+            .output();
+        match install {
+            Ok(out) if out.status.success() => {
+                log::info!("Homebrew installed successfully");
+            }
+            _ => {
+                log::warn!("Failed to install Homebrew, skipping brew strategy");
+                return None;
+            }
+        }
+    }
+    let output = std::process::Command::new("brew")
+        .args(["install", pkg])
+        .output()
+        .ok()?;
+    if output.status.success() {
+        Some(format!("installed via brew"))
+    } else {
+        None
+    }
+}
+
+/// Try to install a package via Linux package managers.
+/// Attempts apt-get, dnf, yum, pacman, zypper in order,
+/// first without sudo, then with sudo.
+fn try_linux_package_install(pkg: &str) -> Option<String> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let managers: &[(&str, &[&str])] = &[
+        ("apt-get", &["install", "-y"]),
+        ("dnf", &["install", "-y"]),
+        ("yum", &["install", "-y"]),
+        ("pacman", &["-S", "--noconfirm"]),
+        ("zypper", &["install", "-y"]),
+    ];
+    for (mgr, args) in managers {
+        if !check_command("which", &[mgr]) {
+            continue;
+        }
+        // Try without sudo first
+        let mut cmd_args: Vec<&str> = args.to_vec();
+        cmd_args.push(pkg);
+        if let Ok(out) = std::process::Command::new(mgr).args(&cmd_args).output() {
+            if out.status.success() {
+                return Some(format!("installed via {}", mgr));
+            }
+        }
+        // Try with sudo
+        let mut sudo_args: Vec<&str> = vec![mgr];
+        sudo_args.extend_from_slice(&cmd_args);
+        if let Ok(out) = std::process::Command::new("sudo").args(&sudo_args).output() {
+            if out.status.success() {
+                return Some(format!("installed via sudo {}", mgr));
+            }
+        }
+    }
+    None
+}
+
+/// Try to run an arbitrary install command. Returns Some(message) on success.
+fn try_command_install(cmd: &str, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new(cmd).args(args).output().ok()?;
+    if output.status.success() {
+        Some(format!("installation triggered via {}", cmd))
+    } else {
+        None
+    }
+}
+
+/// Install a tool on the system. Returns a message describing the result.
+/// The frontend should only call this after user explicitly authorizes the installation.
+#[tauri::command]
+pub async fn install_tool(tool: String) -> Result<String, String> {
+    // Check if already installed
+    let available = check_tool_available(tool.clone()).await?;
+    if available {
+        return Ok(format!("{} is already installed", tool));
+    }
+
+    // Try all applicable strategies in order — never give up after just one failure.
+    // Each tool defines a cascade of installation methods sorted by preference.
+    let result = match tool.as_str() {
+        "git" => {
+            None
+                .or_else(|| if cfg!(target_os = "macos") { try_command_install("xcode-select", &["--install"]) } else { None })
+                .or_else(|| try_brew_install("git"))
+                .or_else(|| try_linux_package_install("git"))
+        }
+        "python" | "python3" => {
+            None
+                .or_else(|| try_brew_install("python"))
+                .or_else(|| try_linux_package_install("python3"))
+                .or_else(|| try_linux_package_install("python"))
+        }
+        "node" | "nodejs" => {
+            None
+                .or_else(|| try_brew_install("node"))
+                .or_else(|| try_linux_package_install("nodejs"))
+                .or_else(|| try_linux_package_install("node"))
+                // Fallback: install via nvm
+                .or_else(|| try_command_install("sh", &[
+                    "-c", "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash && . ~/.nvm/nvm.sh && nvm install --lts"
+                ]))
+        }
+        "npm" => {
+            // npm ships with node
+            None
+                .or_else(|| try_brew_install("node"))
+                .or_else(|| try_linux_package_install("nodejs"))
+                .or_else(|| try_linux_package_install("npm"))
+        }
+        "pip" | "pip3" => {
+            None
+                .or_else(|| try_brew_install("python"))
+                .or_else(|| try_linux_package_install("python3-pip"))
+                .or_else(|| try_linux_package_install("python-pip"))
+                // Fallback: get-pip.py
+                .or_else(|| try_command_install("sh", &[
+                    "-c", "curl -sSL https://bootstrap.pypa.io/get-pip.py | python3"
+                ]))
+        }
+        "ffmpeg" => {
+            None
+                .or_else(|| try_brew_install("ffmpeg"))
+                .or_else(|| try_linux_package_install("ffmpeg"))
+        }
+        "cargo" | "rustc" => {
+            // Install via rustup — works on all platforms
+            None.or_else(|| try_command_install("sh", &[
+                "-c", "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
+            ]))
+        }
+        "docker" => {
+            None
+                .or_else(|| if cfg!(target_os = "macos") { try_brew_install("--cask docker") } else { None })
+                .or_else(|| try_command_install("sh", &["-c", "curl -fsSL https://get.docker.com | sh"]))
+                .or_else(|| try_linux_package_install("docker.io"))
+        }
+        "brew" => {
+            if cfg!(target_os = "macos") || cfg!(target_os = "linux") {
+                let result = try_command_install("bash", &[
+                    "-c", "curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh | bash"
+                ]);
+                if result.is_some() {
+                    return Ok("Homebrew installed successfully".to_string());
+                }
+                return Err("Homebrew installation failed. Please install manually: https://brew.sh".to_string());
+            } else {
+                return Err("Homebrew is available on macOS and Linux: https://brew.sh".to_string());
+            }
+        }
+        _ => {
+            // For unknown tools, try common installation paths anyway
+            None
+                .or_else(|| try_brew_install(&tool))
+                .or_else(|| try_linux_package_install(&tool))
+        }
+    };
+
+    match result {
+        Some(msg) => Ok(format!("{} {}", tool, msg)),
+        None => {
+            // Provide specific install guidance per tool
+            let hint = match tool.as_str() {
+                "git" => "https://git-scm.com/downloads",
+                "python" | "python3" => "https://www.python.org/downloads/",
+                "node" | "nodejs" => "https://nodejs.org/",
+                "ffmpeg" => "https://ffmpeg.org/download.html",
+                "docker" => "https://docs.docker.com/get-docker/",
+                "cargo" | "rustc" => "https://rustup.rs/",
+                _ => "https://repology.org/",
+            };
+            Err(format!(
+                "All automatic installation methods for '{}' failed. Please install manually: {}",
+                tool, hint
+            ))
+        }
+    }
+}
+
+/// Check if git is available on this system (backward-compatible wrapper)
+#[tauri::command]
+pub async fn check_git_available() -> Result<bool, String> {
+    check_tool_available("git".to_string()).await
+}
+
+/// Install git based on the current operating system (backward-compatible wrapper)
+#[tauri::command]
+pub async fn install_git() -> Result<String, String> {
+    install_tool("git".to_string()).await
 }
 
 /// Get a persistent app flag from the database

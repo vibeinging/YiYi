@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Mutex;
@@ -42,13 +42,63 @@ pub struct ChatMessage {
     pub metadata: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthorizedFolderRow {
+    pub id: String,
+    pub path: String,
+    pub label: Option<String>,
+    pub permission: String, // "read_only" | "read_write"
+    pub is_default: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SensitivePathRow {
+    pub id: String,
+    pub pattern: String,
+    pub is_builtin: bool,
+    pub enabled: bool,
+    pub created_at: i64,
+}
+
 pub struct Database {
     conn: Mutex<Connection>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskInfo {
+    pub id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub status: String,
+    pub session_id: String,
+    pub parent_session_id: Option<String>,
+    pub plan: Option<String>, // JSON string
+    pub current_stage: i32,
+    pub total_stages: i32,
+    pub progress: f64,
+    pub error_message: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub completed_at: Option<i64>,
+    #[serde(default = "default_task_type")]
+    pub task_type: String,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub last_activity_at: i64,
+    pub workspace_path: Option<String>,
+}
+
+fn default_task_type() -> String {
+    "oneoff".to_string()
+}
+
 impl Database {
     pub fn open(working_dir: &Path) -> Result<Self, String> {
-        let db_path = working_dir.join("yiclaw.db");
+        let db_path = working_dir.join("yiyiclaw.db");
         let conn = Connection::open(&db_path)
             .map_err(|e| format!("Failed to open database: {}", e))?;
 
@@ -66,6 +116,7 @@ impl Database {
         db.init_tables()?;
         db.migrate_tables()?;
         db.migrate_from_json(working_dir)?;
+        db.migrate_sandbox_to_authorized_folders();
         Ok(db)
     }
 
@@ -181,6 +232,26 @@ impl Database {
                 created_at INTEGER NOT NULL
             );
 
+            -- Authorized folders (workspace authorization)
+            CREATE TABLE IF NOT EXISTS authorized_folders (
+                id TEXT PRIMARY KEY,
+                path TEXT NOT NULL UNIQUE,
+                label TEXT,
+                permission TEXT NOT NULL DEFAULT 'read_write',
+                is_default INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+
+            -- Sensitive path patterns
+            CREATE TABLE IF NOT EXISTS sensitive_paths (
+                id TEXT PRIMARY KEY,
+                pattern TEXT NOT NULL UNIQUE,
+                is_builtin INTEGER NOT NULL DEFAULT 0,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL
+            );
+
             -- Memory entries (structured knowledge store)
             CREATE TABLE IF NOT EXISTS memories (
                 id TEXT PRIMARY KEY,
@@ -192,7 +263,27 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
             CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id);
-            CREATE INDEX IF NOT EXISTS idx_memories_updated ON memories(updated_at);",
+            CREATE INDEX IF NOT EXISTS idx_memories_updated ON memories(updated_at);
+
+            -- Unified users: cross-platform identity linkage
+            CREATE TABLE IF NOT EXISTS unified_users (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS user_identities (
+                platform TEXT NOT NULL,
+                platform_user_id TEXT NOT NULL,
+                unified_user_id TEXT NOT NULL,
+                bot_id TEXT NOT NULL,
+                display_name TEXT,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (platform, platform_user_id, bot_id),
+                FOREIGN KEY (unified_user_id) REFERENCES unified_users(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_user_identities_unified ON user_identities(unified_user_id);
+            CREATE INDEX IF NOT EXISTS idx_user_identities_lookup ON user_identities(platform, platform_user_id, bot_id);",
         )
         .map_err(|e| format!("Failed to create tables: {}", e))?;
 
@@ -230,6 +321,77 @@ impl Database {
             END;"
         )
         .map_err(|e| format!("Failed to create FTS triggers: {}", e))?;
+
+        // Persistent agents tables
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS persistent_agents (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                task_description TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'planning',
+                workspace_dir TEXT NOT NULL,
+                config TEXT NOT NULL DEFAULT '{}',
+                task_plan TEXT,
+                total_steps INTEGER DEFAULT 0,
+                completed_steps INTEGER DEFAULT 0,
+                total_tokens_used INTEGER DEFAULT 0,
+                total_cost_usd REAL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                started_at TEXT,
+                completed_at TEXT,
+                session_id TEXT,
+                heartbeat_job_id TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS agent_progress (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id TEXT NOT NULL,
+                step_index INTEGER NOT NULL,
+                step_title TEXT NOT NULL,
+                status TEXT NOT NULL,
+                result_summary TEXT,
+                tokens_used INTEGER DEFAULT 0,
+                duration_secs INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_agent_progress_agent ON agent_progress(agent_id);
+
+            CREATE TABLE IF NOT EXISTS agent_feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id TEXT NOT NULL,
+                message TEXT NOT NULL,
+                processed INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_agent_feedback_agent ON agent_feedback(agent_id);",
+        )
+        .map_err(|e| format!("Failed to create persistent agent tables: {}", e))?;
+
+        // Tasks table
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS tasks (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                session_id TEXT NOT NULL,
+                parent_session_id TEXT,
+                plan TEXT,
+                current_stage INTEGER DEFAULT 0,
+                total_stages INTEGER DEFAULT 0,
+                progress REAL DEFAULT 0.0,
+                error_message TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                completed_at INTEGER,
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id);
+            CREATE INDEX IF NOT EXISTS idx_tasks_parent_session ON tasks(parent_session_id);
+            CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);",
+        )
+        .map_err(|e| format!("Failed to create tasks table: {}", e))?;
 
         Ok(())
     }
@@ -269,6 +431,45 @@ impl Database {
                 "ALTER TABLE session_bots ADD COLUMN last_conversation_id TEXT DEFAULT NULL;"
             ).map_err(|e| format!("Migration error (session_bots): {}", e))?;
             log::info!("Migrated session_bots table: added last_conversation_id column");
+        }
+
+        // Add execution_mode to cronjobs table
+        let has_execution_mode: bool = conn
+            .prepare("SELECT execution_mode FROM cronjobs LIMIT 0")
+            .is_ok();
+        if !has_execution_mode {
+            conn.execute_batch(
+                "ALTER TABLE cronjobs ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'shared';"
+            ).map_err(|e| format!("Migration error (cronjobs execution_mode): {}", e))?;
+            log::info!("Migrated cronjobs table: added execution_mode column");
+        }
+
+        // Add task_type, pinned, last_activity_at to tasks table
+        let has_task_type: bool = conn
+            .prepare("SELECT task_type FROM tasks LIMIT 0")
+            .is_ok();
+        if !has_task_type {
+            conn.execute_batch(
+                "ALTER TABLE tasks ADD COLUMN task_type TEXT DEFAULT 'oneoff';
+                 ALTER TABLE tasks ADD COLUMN pinned INTEGER DEFAULT 0;
+                 ALTER TABLE tasks ADD COLUMN last_activity_at INTEGER DEFAULT 0;"
+            ).map_err(|e| format!("Migration error (tasks new fields): {}", e))?;
+            // Backfill last_activity_at from updated_at
+            conn.execute_batch(
+                "UPDATE tasks SET last_activity_at = updated_at WHERE last_activity_at = 0;"
+            ).map_err(|e| format!("Migration backfill error: {}", e))?;
+            log::info!("Migrated tasks table: added task_type, pinned, last_activity_at columns");
+        }
+
+        // Add workspace_path to tasks table
+        let has_workspace_path: bool = conn
+            .prepare("SELECT workspace_path FROM tasks LIMIT 0")
+            .is_ok();
+        if !has_workspace_path {
+            conn.execute_batch(
+                "ALTER TABLE tasks ADD COLUMN workspace_path TEXT;"
+            ).map_err(|e| format!("Migration error (tasks workspace_path): {}", e))?;
+            log::info!("Migrated tasks table: added workspace_path column");
         }
 
         Ok(())
@@ -497,7 +698,9 @@ impl Database {
         Ok(messages)
     }
 
-    /// Get recent N messages for LLM context
+    /// Get recent N messages for LLM context.
+    /// Stops at the most recent `context_reset` boundary so earlier messages
+    /// are excluded from the conversation context sent to the LLM.
     pub fn get_recent_messages(
         &self,
         session_id: &str,
@@ -512,7 +715,8 @@ impl Database {
             )
             .map_err(|e| format!("Query error: {}", e))?;
 
-        let mut messages: Vec<ChatMessage> = stmt
+        let mut messages: Vec<ChatMessage> = Vec::new();
+        let rows: Vec<ChatMessage> = stmt
             .query_map(params![session_id, limit as i64], |row| {
                 Ok(ChatMessage {
                     id: row.get(0)?,
@@ -526,6 +730,14 @@ impl Database {
             .map_err(|e| format!("Query error: {}", e))?
             .filter_map(|r| r.ok())
             .collect();
+
+        // rows are DESC order — stop when hitting a context_reset marker
+        for msg in rows {
+            if msg.role == "context_reset" {
+                break;
+            }
+            messages.push(msg);
+        }
 
         messages.reverse(); // chronological order
         Ok(messages)
@@ -549,15 +761,17 @@ impl Database {
     ) -> Result<i64, String> {
         let now = now_ts();
         let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()
+            .map_err(|e| format!("Failed to begin transaction: {}", e))?;
 
         // Auto-create session if not exists
-        conn.execute(
+        tx.execute(
             "INSERT OR IGNORE INTO sessions (id, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
             params![session_id, session_id, now, now],
         )
         .map_err(|e| format!("Failed to ensure session: {}", e))?;
 
-        conn.execute(
+        tx.execute(
             "INSERT INTO messages (session_id, role, content, timestamp, metadata) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![session_id, role, content, now, metadata],
         )
@@ -566,11 +780,14 @@ impl Database {
         let msg_id = conn.last_insert_rowid();
 
         // Update session timestamp
-        conn.execute(
+        tx.execute(
             "UPDATE sessions SET updated_at = ?1 WHERE id = ?2",
             params![now, session_id],
         )
         .map_err(|e| format!("Failed to update session: {}", e))?;
+
+        tx.commit()
+            .map_err(|e| format!("Failed to commit transaction: {}", e))?;
 
         Ok(msg_id)
     }
@@ -605,23 +822,6 @@ impl Database {
     }
 
     // === Provider Settings ===
-
-    pub fn get_provider_setting(&self, provider_id: &str) -> Option<ProviderSettingRow> {
-        let conn = self.conn.lock().unwrap();
-        conn.query_row(
-            "SELECT provider_id, api_key, base_url, extra_models FROM provider_settings WHERE provider_id = ?1",
-            params![provider_id],
-            |row| {
-                Ok(ProviderSettingRow {
-                    provider_id: row.get(0)?,
-                    api_key: row.get(1)?,
-                    base_url: row.get(2)?,
-                    extra_models_json: row.get(3)?,
-                })
-            },
-        )
-        .ok()
-    }
 
     pub fn get_all_provider_settings(&self) -> Vec<ProviderSettingRow> {
         let conn = self.conn.lock().unwrap();
@@ -911,17 +1111,6 @@ impl Database {
         Ok(())
     }
 
-    pub fn set_bot_enabled(&self, id: &str, enabled: bool) -> Result<(), String> {
-        let now = now_ts();
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "UPDATE bots SET enabled = ?1, updated_at = ?2 WHERE id = ?3",
-            params![enabled, now, id],
-        )
-        .map_err(|e| format!("Failed to update bot: {}", e))?;
-        Ok(())
-    }
-
     // === Session-Bot Bindings ===
 
     /// Bind a bot to a session. A bot can only be bound to one session at a time —
@@ -1038,7 +1227,7 @@ impl Database {
     pub fn list_cronjobs(&self) -> Result<Vec<CronJobRow>, String> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
-            .prepare("SELECT id, name, enabled, schedule_json, task_type, text, request_json, dispatch_json, runtime_json FROM cronjobs")
+            .prepare("SELECT id, name, enabled, schedule_json, task_type, text, request_json, dispatch_json, runtime_json, execution_mode FROM cronjobs")
             .map_err(|e| format!("Query error: {}", e))?;
         let rows = stmt
             .query_map([], |row| {
@@ -1052,6 +1241,7 @@ impl Database {
                     request_json: row.get(6)?,
                     dispatch_json: row.get(7)?,
                     runtime_json: row.get(8)?,
+                    execution_mode: ExecutionMode::from_str_lossy(&row.get::<_, String>(9)?),
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?
@@ -1063,7 +1253,7 @@ impl Database {
     pub fn get_cronjob(&self, id: &str) -> Result<Option<CronJobRow>, String> {
         let conn = self.conn.lock().unwrap();
         let result = conn.query_row(
-            "SELECT id, name, enabled, schedule_json, task_type, text, request_json, dispatch_json, runtime_json FROM cronjobs WHERE id = ?1",
+            "SELECT id, name, enabled, schedule_json, task_type, text, request_json, dispatch_json, runtime_json, execution_mode FROM cronjobs WHERE id = ?1",
             params![id],
             |row| {
                 Ok(CronJobRow {
@@ -1076,6 +1266,7 @@ impl Database {
                     request_json: row.get(6)?,
                     dispatch_json: row.get(7)?,
                     runtime_json: row.get(8)?,
+                    execution_mode: ExecutionMode::from_str_lossy(&row.get::<_, String>(9)?),
                 })
             },
         );
@@ -1089,9 +1280,9 @@ impl Database {
     pub fn upsert_cronjob(&self, row: &CronJobRow) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT OR REPLACE INTO cronjobs (id, name, enabled, schedule_json, task_type, text, request_json, dispatch_json, runtime_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![row.id, row.name, row.enabled, row.schedule_json, row.task_type, row.text, row.request_json, row.dispatch_json, row.runtime_json],
+            "INSERT OR REPLACE INTO cronjobs (id, name, enabled, schedule_json, task_type, text, request_json, dispatch_json, runtime_json, execution_mode)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![row.id, row.name, row.enabled, row.schedule_json, row.task_type, row.text, row.request_json, row.dispatch_json, row.runtime_json, row.execution_mode.to_string()],
         )
         .map_err(|e| format!("Failed to save cronjob: {}", e))?;
         Ok(())
@@ -1099,10 +1290,19 @@ impl Database {
 
     pub fn delete_cronjob(&self, id: &str) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM cronjob_executions WHERE job_id = ?1", params![id])
+        let tx = conn.unchecked_transaction()
+            .map_err(|e| format!("Failed to begin transaction: {}", e))?;
+        let session_id = format!("cron:{}", id);
+        tx.execute("DELETE FROM messages WHERE session_id = ?1", params![session_id])
+            .map_err(|e| format!("Failed to delete cron messages: {}", e))?;
+        tx.execute("DELETE FROM sessions WHERE id = ?1", params![session_id])
+            .map_err(|e| format!("Failed to delete cron session: {}", e))?;
+        tx.execute("DELETE FROM cronjob_executions WHERE job_id = ?1", params![id])
             .map_err(|e| format!("Failed to delete executions: {}", e))?;
-        conn.execute("DELETE FROM cronjobs WHERE id = ?1", params![id])
+        tx.execute("DELETE FROM cronjobs WHERE id = ?1", params![id])
             .map_err(|e| format!("Failed to delete cronjob: {}", e))?;
+        tx.commit()
+            .map_err(|e| format!("Failed to commit transaction: {}", e))?;
         Ok(())
     }
 
@@ -1127,6 +1327,25 @@ impl Database {
             params![now, status, result, exec_id],
         )
         .map_err(|e| format!("Failed to update execution: {}", e))?;
+
+        // Prune old executions: keep only the latest 100 for the affected job
+        // First, look up the job_id from the execution record
+        let job_id: Option<String> = conn.query_row(
+            "SELECT job_id FROM cronjob_executions WHERE id = ?1",
+            params![exec_id],
+            |row| row.get(0),
+        ).ok();
+
+        if let Some(job_id) = job_id {
+            conn.execute(
+                "DELETE FROM cronjob_executions WHERE job_id = ?1 AND id NOT IN (
+                    SELECT id FROM cronjob_executions WHERE job_id = ?1 ORDER BY started_at DESC LIMIT 100
+                )",
+                params![job_id],
+            )
+            .map_err(|e| format!("Failed to prune old executions: {}", e))?;
+        }
+
         Ok(())
     }
 
@@ -1154,16 +1373,6 @@ impl Database {
             .filter_map(|r| r.ok())
             .collect();
         Ok(rows)
-    }
-
-    pub fn delete_executions_by_job(&self, job_id: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "DELETE FROM cronjob_executions WHERE job_id = ?1",
-            params![job_id],
-        )
-        .map_err(|e| format!("Failed to delete executions: {}", e))?;
-        Ok(())
     }
 
     pub fn get_last_execution(&self, job_id: &str) -> Result<Option<CronJobExecutionRow>, String> {
@@ -1288,6 +1497,7 @@ impl Database {
                     request_json: job.get("request").map(|v| v.to_string()),
                     dispatch_json: job.get("dispatch").map(|v| v.to_string()),
                     runtime_json: job.get("runtime").map(|v| v.to_string()),
+                    execution_mode: ExecutionMode::from_str_lossy(job["execution_mode"].as_str().unwrap_or("shared")),
                 };
                 self.upsert_cronjob(&row)?;
             }
@@ -1422,35 +1632,218 @@ impl Database {
 
     // --- Sandbox paths ---
 
-    pub fn save_sandbox_path(&self, path: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "INSERT OR IGNORE INTO sandbox_paths (path, created_at) VALUES (?1, ?2)",
-            params![path, now_ts()],
-        )
-        .map_err(|e| format!("Failed to save sandbox path: {}", e))?;
-        Ok(())
-    }
+    // --- Authorized folders CRUD ---
 
-    pub fn remove_sandbox_path(&self, path: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "DELETE FROM sandbox_paths WHERE path = ?1",
-            params![path],
-        )
-        .map_err(|e| format!("Failed to remove sandbox path: {}", e))?;
-        Ok(())
-    }
-
-    pub fn list_sandbox_paths(&self) -> Vec<String> {
+    pub fn list_authorized_folders(&self) -> Vec<AuthorizedFolderRow> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
-            .prepare("SELECT path FROM sandbox_paths ORDER BY created_at")
+            .prepare(
+                "SELECT id, path, label, permission, is_default, created_at, updated_at
+                 FROM authorized_folders ORDER BY created_at",
+            )
             .unwrap();
-        stmt.query_map([], |row| row.get(0))
-            .unwrap()
-            .flatten()
-            .collect()
+        stmt.query_map([], |row| {
+            Ok(AuthorizedFolderRow {
+                id: row.get(0)?,
+                path: row.get(1)?,
+                label: row.get(2)?,
+                permission: row.get(3)?,
+                is_default: row.get::<_, i32>(4)? != 0,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
+        })
+        .unwrap()
+        .flatten()
+        .collect()
+    }
+
+    pub fn get_authorized_folder(&self, id: &str) -> Result<Option<AuthorizedFolderRow>, String> {
+        let conn = self.conn.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT id, path, label, permission, is_default, created_at, updated_at
+             FROM authorized_folders WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(AuthorizedFolderRow {
+                    id: row.get(0)?,
+                    path: row.get(1)?,
+                    label: row.get(2)?,
+                    permission: row.get(3)?,
+                    is_default: row.get::<_, i32>(4)? != 0,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                })
+            },
+        );
+        match result {
+            Ok(row) => Ok(Some(row)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(format!("Query error: {}", e)),
+        }
+    }
+
+    pub fn upsert_authorized_folder(&self, folder: &AuthorizedFolderRow) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO authorized_folders (id, path, label, permission, is_default, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(id) DO UPDATE SET path=excluded.path, label=excluded.label,
+             permission=excluded.permission, is_default=excluded.is_default, updated_at=excluded.updated_at",
+            params![
+                folder.id,
+                folder.path,
+                folder.label,
+                folder.permission,
+                folder.is_default as i32,
+                folder.created_at,
+                folder.updated_at,
+            ],
+        )
+        .map_err(|e| format!("Failed to upsert authorized folder: {}", e))?;
+        Ok(())
+    }
+
+    pub fn remove_authorized_folder(&self, id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM authorized_folders WHERE id = ?1",
+            params![id],
+        )
+        .map_err(|e| format!("Failed to remove authorized folder: {}", e))?;
+        Ok(())
+    }
+
+    // --- Sensitive paths CRUD ---
+
+    pub fn list_sensitive_paths(&self) -> Vec<SensitivePathRow> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, pattern, is_builtin, enabled, created_at
+                 FROM sensitive_paths ORDER BY created_at",
+            )
+            .unwrap();
+        stmt.query_map([], |row| {
+            Ok(SensitivePathRow {
+                id: row.get(0)?,
+                pattern: row.get(1)?,
+                is_builtin: row.get::<_, i32>(2)? != 0,
+                enabled: row.get::<_, i32>(3)? != 0,
+                created_at: row.get(4)?,
+            })
+        })
+        .unwrap()
+        .flatten()
+        .collect()
+    }
+
+    pub fn upsert_sensitive_path(&self, row: &SensitivePathRow) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO sensitive_paths (id, pattern, is_builtin, enabled, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(id) DO UPDATE SET pattern=excluded.pattern, is_builtin=excluded.is_builtin,
+             enabled=excluded.enabled",
+            params![
+                row.id,
+                row.pattern,
+                row.is_builtin as i32,
+                row.enabled as i32,
+                row.created_at,
+            ],
+        )
+        .map_err(|e| format!("Failed to upsert sensitive path: {}", e))?;
+        Ok(())
+    }
+
+    pub fn remove_sensitive_path(&self, id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM sensitive_paths WHERE id = ?1",
+            params![id],
+        )
+        .map_err(|e| format!("Failed to remove sensitive path: {}", e))?;
+        Ok(())
+    }
+
+    pub fn toggle_sensitive_path(&self, id: &str, enabled: bool) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE sensitive_paths SET enabled = ?1 WHERE id = ?2",
+            params![enabled as i32, id],
+        )
+        .map_err(|e| format!("Failed to toggle sensitive path: {}", e))?;
+        Ok(())
+    }
+
+    /// Seed built-in sensitive path patterns (idempotent).
+    pub fn seed_builtin_sensitive_patterns(&self) {
+        let builtin_patterns = [
+            "**/.env",
+            "**/.env.*",
+            "**/*.pem",
+            "**/*.key",
+            "**/credentials.json",
+            "**/service_account*.json",
+            "~/.ssh/**",
+            "~/.gnupg/**",
+            "~/.aws/credentials",
+            "~/.npmrc",
+            "~/.pypirc",
+        ];
+        let conn = self.conn.lock().unwrap();
+        for pattern in &builtin_patterns {
+            let exists: bool = conn
+                .prepare("SELECT 1 FROM sensitive_paths WHERE pattern = ?1")
+                .and_then(|mut stmt| stmt.exists(params![pattern]))
+                .unwrap_or(false);
+            if !exists {
+                conn.execute(
+                    "INSERT INTO sensitive_paths (id, pattern, is_builtin, enabled, created_at)
+                     VALUES (?1, ?2, 1, 1, ?3)",
+                    params![uuid::Uuid::new_v4().to_string(), pattern, now_ts()],
+                )
+                .ok();
+            }
+        }
+    }
+
+    /// Migrate old sandbox_paths entries to authorized_folders (one-time).
+    fn migrate_sandbox_to_authorized_folders(&self) {
+        let conn = self.conn.lock().unwrap();
+        let sandbox_paths: Vec<String> = conn
+            .prepare("SELECT path FROM sandbox_paths")
+            .and_then(|mut stmt| {
+                stmt.query_map([], |row| row.get::<_, String>(0))
+                    .map(|rows| rows.flatten().collect())
+            })
+            .unwrap_or_default();
+
+        if sandbox_paths.is_empty() {
+            return;
+        }
+
+        let now = now_ts();
+        for path in &sandbox_paths {
+            let exists: bool = conn
+                .prepare("SELECT 1 FROM authorized_folders WHERE path = ?1")
+                .and_then(|mut stmt| stmt.exists(params![path]))
+                .unwrap_or(false);
+            if !exists {
+                conn.execute(
+                    "INSERT INTO authorized_folders (id, path, label, permission, is_default, created_at, updated_at)
+                     VALUES (?1, ?2, NULL, 'read_write', 0, ?3, ?4)",
+                    params![uuid::Uuid::new_v4().to_string(), path, now, now],
+                )
+                .ok();
+            }
+        }
+
+        log::info!(
+            "Migrated {} sandbox_paths entries to authorized_folders",
+            sandbox_paths.len()
+        );
     }
 
     // === Memory CRUD (FTS5-backed) ===
@@ -1606,29 +1999,6 @@ impl Database {
     }
 
     /// Update a memory entry's content (and bump updated_at).
-    pub fn memory_update(
-        &self,
-        id: &str,
-        content: &str,
-        category: Option<&str>,
-    ) -> Result<bool, String> {
-        let now = now_ts();
-        let conn = self.conn.lock().unwrap();
-        let changed = if let Some(cat) = category {
-            conn.execute(
-                "UPDATE memories SET content = ?1, category = ?2, updated_at = ?3 WHERE id = ?4",
-                params![content, cat, now, id],
-            )
-        } else {
-            conn.execute(
-                "UPDATE memories SET content = ?1, updated_at = ?2 WHERE id = ?3",
-                params![content, now, id],
-            )
-        }
-        .map_err(|e| format!("Failed to update memory: {}", e))?;
-        Ok(changed > 0)
-    }
-
     /// Count total memories, optionally by category.
     pub fn memory_count(&self, category: Option<&str>) -> Result<i64, String> {
         let conn = self.conn.lock().unwrap();
@@ -1645,15 +2015,434 @@ impl Database {
         Ok(count)
     }
 
-    /// Rebuild FTS index (useful after bulk operations or migration).
-    pub fn memory_rebuild_fts(&self) -> Result<(), String> {
+    // Agent CRUD methods removed — switched to dynamic agent spawning.
+
+    // === Unified Users (cross-platform identity) ===
+
+    pub fn create_unified_user(&self, display_name: Option<&str>) -> Result<UnifiedUserRow, String> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = now_ts();
         let conn = self.conn.lock().unwrap();
-        conn.execute_batch("INSERT INTO memories_fts(memories_fts) VALUES('rebuild');")
-            .map_err(|e| format!("Failed to rebuild FTS index: {}", e))?;
+        conn.execute(
+            "INSERT INTO unified_users (id, display_name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
+            params![id, display_name, now, now],
+        )
+        .map_err(|e| format!("Failed to create unified user: {}", e))?;
+        Ok(UnifiedUserRow {
+            id,
+            display_name: display_name.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub fn get_unified_user(&self, id: &str) -> Result<Option<UnifiedUserRow>, String> {
+        let conn = self.conn.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT id, display_name, created_at, updated_at FROM unified_users WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(UnifiedUserRow {
+                    id: row.get(0)?,
+                    display_name: row.get(1)?,
+                    created_at: row.get(2)?,
+                    updated_at: row.get(3)?,
+                })
+            },
+        );
+        match result {
+            Ok(row) => Ok(Some(row)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(format!("Query error: {}", e)),
+        }
+    }
+
+    pub fn list_unified_users(&self) -> Result<Vec<UnifiedUserRow>, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, display_name, created_at, updated_at FROM unified_users ORDER BY updated_at DESC")
+            .map_err(|e| format!("Query error: {}", e))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(UnifiedUserRow {
+                    id: row.get(0)?,
+                    display_name: row.get(1)?,
+                    created_at: row.get(2)?,
+                    updated_at: row.get(3)?,
+                })
+            })
+            .map_err(|e| format!("Query error: {}", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// Link a platform identity to a unified user.
+    /// If the identity already exists for this (platform, platform_user_id, bot_id),
+    /// it is re-linked to the new unified_user_id.
+    pub fn link_identity(
+        &self,
+        platform: &str,
+        platform_user_id: &str,
+        bot_id: &str,
+        unified_user_id: &str,
+        display_name: Option<&str>,
+    ) -> Result<(), String> {
+        let now = now_ts();
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()
+            .map_err(|e| format!("Failed to begin transaction: {}", e))?;
+        tx.execute(
+            "INSERT OR REPLACE INTO user_identities (platform, platform_user_id, unified_user_id, bot_id, display_name, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![platform, platform_user_id, unified_user_id, bot_id, display_name, now],
+        )
+        .map_err(|e| format!("Failed to link identity: {}", e))?;
+
+        // Touch the unified user's updated_at
+        tx.execute(
+            "UPDATE unified_users SET updated_at = ?1 WHERE id = ?2",
+            params![now, unified_user_id],
+        )
+        .map_err(|e| format!("Failed to update unified user: {}", e))?;
+        tx.commit()
+            .map_err(|e| format!("Failed to commit transaction: {}", e))?;
+
         Ok(())
     }
 
-    // Agent CRUD methods removed — switched to dynamic agent spawning.
+    pub fn unlink_identity(
+        &self,
+        platform: &str,
+        platform_user_id: &str,
+        bot_id: &str,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM user_identities WHERE platform = ?1 AND platform_user_id = ?2 AND bot_id = ?3",
+            params![platform, platform_user_id, bot_id],
+        )
+        .map_err(|e| format!("Failed to unlink identity: {}", e))?;
+        Ok(())
+    }
+
+    /// Look up the unified_user_id for a given platform identity.
+    pub fn get_unified_user_by_identity(
+        &self,
+        platform: &str,
+        platform_user_id: &str,
+        bot_id: &str,
+    ) -> Result<Option<String>, String> {
+        let conn = self.conn.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT unified_user_id FROM user_identities WHERE platform = ?1 AND platform_user_id = ?2 AND bot_id = ?3",
+            params![platform, platform_user_id, bot_id],
+            |row| row.get::<_, String>(0),
+        );
+        match result {
+            Ok(id) => Ok(Some(id)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(format!("Query error: {}", e)),
+        }
+    }
+
+    /// List all identities linked to a unified user.
+    pub fn list_user_identities(&self, unified_user_id: &str) -> Result<Vec<UserIdentityRow>, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT platform, platform_user_id, unified_user_id, bot_id, display_name, created_at
+                 FROM user_identities WHERE unified_user_id = ?1 ORDER BY created_at"
+            )
+            .map_err(|e| format!("Query error: {}", e))?;
+        let rows = stmt
+            .query_map(params![unified_user_id], |row| {
+                Ok(UserIdentityRow {
+                    platform: row.get(0)?,
+                    platform_user_id: row.get(1)?,
+                    unified_user_id: row.get(2)?,
+                    bot_id: row.get(3)?,
+                    display_name: row.get(4)?,
+                    created_at: row.get(5)?,
+                })
+            })
+            .map_err(|e| format!("Query error: {}", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    // --- Tasks CRUD ---
+
+    pub fn create_task(
+        &self,
+        id: &str,
+        title: &str,
+        description: Option<&str>,
+        status: &str,
+        session_id: &str,
+        parent_session_id: Option<&str>,
+        plan: Option<&str>,
+        total_stages: i32,
+        created_at: i64,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO tasks (id, title, description, status, session_id, parent_session_id, plan, total_stages, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+            params![id, title, description, status, session_id, parent_session_id, plan, total_stages, created_at],
+        )
+        .map_err(|e| format!("Failed to create task: {}", e))?;
+        Ok(())
+    }
+
+    pub fn update_task_workspace_path(&self, task_id: &str, path: &str) -> Result<(), String> {
+        let now = now_ts();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE tasks SET workspace_path = ?1, updated_at = ?2 WHERE id = ?3",
+            params![path, now, task_id],
+        )
+        .map_err(|e| format!("Failed to update workspace path: {}", e))?;
+        Ok(())
+    }
+
+    pub fn search_tasks_by_name(&self, query: &str) -> Result<Option<TaskInfo>, String> {
+        let conn = self.conn.lock().unwrap();
+        let pattern = format!("%{}%", query);
+        conn.query_row(
+            "SELECT id, title, description, status, session_id, parent_session_id, plan,
+                    current_stage, total_stages, progress, error_message,
+                    created_at, updated_at, completed_at, task_type, pinned, last_activity_at, workspace_path
+             FROM tasks WHERE title LIKE ?1 ORDER BY last_activity_at DESC LIMIT 1",
+            params![pattern],
+            |row| {
+                let pinned_int: i32 = row.get(15)?;
+                Ok(TaskInfo {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    description: row.get(2)?,
+                    status: row.get(3)?,
+                    session_id: row.get(4)?,
+                    parent_session_id: row.get(5)?,
+                    plan: row.get(6)?,
+                    current_stage: row.get(7)?,
+                    total_stages: row.get(8)?,
+                    progress: row.get(9)?,
+                    error_message: row.get(10)?,
+                    created_at: row.get(11)?,
+                    updated_at: row.get(12)?,
+                    completed_at: row.get(13)?,
+                    task_type: row.get::<_, Option<String>>(14)?.unwrap_or_else(|| "oneoff".to_string()),
+                    pinned: pinned_int != 0,
+                    last_activity_at: row.get::<_, Option<i64>>(16)?.unwrap_or(0),
+                    workspace_path: row.get(17)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| format!("Failed to search tasks: {}", e))
+    }
+
+    pub fn get_task(&self, task_id: &str) -> Result<Option<TaskInfo>, String> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, title, description, status, session_id, parent_session_id, plan,
+                    current_stage, total_stages, progress, error_message,
+                    created_at, updated_at, completed_at, task_type, pinned, last_activity_at, workspace_path
+             FROM tasks WHERE id = ?1",
+            params![task_id],
+            |row| {
+                let pinned_int: i32 = row.get(15)?;
+                Ok(TaskInfo {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    description: row.get(2)?,
+                    status: row.get(3)?,
+                    session_id: row.get(4)?,
+                    parent_session_id: row.get(5)?,
+                    plan: row.get(6)?,
+                    current_stage: row.get(7)?,
+                    total_stages: row.get(8)?,
+                    progress: row.get(9)?,
+                    error_message: row.get(10)?,
+                    created_at: row.get(11)?,
+                    updated_at: row.get(12)?,
+                    completed_at: row.get(13)?,
+                    task_type: row.get::<_, Option<String>>(14)?.unwrap_or_else(|| "oneoff".to_string()),
+                    pinned: pinned_int != 0,
+                    last_activity_at: row.get::<_, Option<i64>>(16)?.unwrap_or(0),
+                    workspace_path: row.get(17)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| format!("Failed to get task: {}", e))
+    }
+
+    pub fn list_tasks(
+        &self,
+        parent_session_id: Option<&str>,
+        status: Option<&str>,
+    ) -> Result<Vec<TaskInfo>, String> {
+        let conn = self.conn.lock().unwrap();
+
+        let mut sql = String::from(
+            "SELECT id, title, description, status, session_id, parent_session_id, plan,
+                    current_stage, total_stages, progress, error_message,
+                    created_at, updated_at, completed_at, task_type, pinned, last_activity_at, workspace_path
+             FROM tasks WHERE 1=1"
+        );
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(pid) = parent_session_id {
+            sql.push_str(&format!(" AND parent_session_id = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(pid.to_string()));
+        }
+        if let Some(st) = status {
+            sql.push_str(&format!(" AND status = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(st.to_string()));
+        }
+        sql.push_str(" ORDER BY created_at DESC");
+
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+
+        let mut stmt = conn.prepare(&sql).map_err(|e| format!("Query error: {}", e))?;
+        let tasks = stmt
+            .query_map(param_refs.as_slice(), |row| {
+                let pinned_int: i32 = row.get(15)?;
+                Ok(TaskInfo {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    description: row.get(2)?,
+                    status: row.get(3)?,
+                    session_id: row.get(4)?,
+                    parent_session_id: row.get(5)?,
+                    plan: row.get(6)?,
+                    current_stage: row.get(7)?,
+                    total_stages: row.get(8)?,
+                    progress: row.get(9)?,
+                    error_message: row.get(10)?,
+                    created_at: row.get(11)?,
+                    updated_at: row.get(12)?,
+                    completed_at: row.get(13)?,
+                    task_type: row.get::<_, Option<String>>(14)?.unwrap_or_else(|| "oneoff".to_string()),
+                    pinned: pinned_int != 0,
+                    last_activity_at: row.get::<_, Option<i64>>(16)?.unwrap_or(0),
+                    workspace_path: row.get(17)?,
+                })
+            })
+            .map_err(|e| format!("Query error: {}", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(tasks)
+    }
+
+    pub fn update_task_status(&self, task_id: &str, status: &str) -> Result<(), String> {
+        let now = now_ts();
+        let conn = self.conn.lock().unwrap();
+        let completed_at: Option<i64> = if status == "completed" || status == "cancelled" {
+            Some(now)
+        } else {
+            None
+        };
+        conn.execute(
+            "UPDATE tasks SET status = ?1, updated_at = ?2, completed_at = COALESCE(?3, completed_at) WHERE id = ?4",
+            params![status, now, completed_at, task_id],
+        )
+        .map_err(|e| format!("Failed to update task status: {}", e))?;
+        Ok(())
+    }
+
+    pub fn update_task_progress(
+        &self,
+        task_id: &str,
+        current_stage: i32,
+        total_stages: i32,
+        progress: f64,
+    ) -> Result<(), String> {
+        let now = now_ts();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE tasks SET current_stage = ?1, total_stages = ?2, progress = ?3, updated_at = ?4 WHERE id = ?5",
+            params![current_stage, total_stages, progress, now, task_id],
+        )
+        .map_err(|e| format!("Failed to update task progress: {}", e))?;
+        Ok(())
+    }
+
+    pub fn update_task_error(
+        &self,
+        task_id: &str,
+        status: &str,
+        error_message: &str,
+    ) -> Result<(), String> {
+        let now = now_ts();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE tasks SET status = ?1, error_message = ?2, updated_at = ?3 WHERE id = ?4",
+            params![status, error_message, now, task_id],
+        )
+        .map_err(|e| format!("Failed to update task error: {}", e))?;
+        Ok(())
+    }
+
+    pub fn pin_task(&self, task_id: &str, pinned: bool) -> Result<(), String> {
+        let now = now_ts();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE tasks SET pinned = ?1, last_activity_at = ?2, updated_at = ?2 WHERE id = ?3",
+            params![pinned as i32, now, task_id],
+        )
+        .map_err(|e| format!("Failed to pin task: {}", e))?;
+        Ok(())
+    }
+
+    pub fn delete_task(&self, task_id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        // Get the session_id for this task so we can cascade-delete the session
+        let session_id: Option<String> = conn
+            .query_row(
+                "SELECT session_id FROM tasks WHERE id = ?1",
+                params![task_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to find task: {}", e))?;
+
+        conn.execute("DELETE FROM tasks WHERE id = ?1", params![task_id])
+            .map_err(|e| format!("Failed to delete task: {}", e))?;
+
+        // Delete associated session (messages will cascade)
+        if let Some(sid) = session_id {
+            conn.execute("DELETE FROM messages WHERE session_id = ?1", params![sid])
+                .map_err(|e| format!("Failed to delete task messages: {}", e))?;
+            conn.execute("DELETE FROM sessions WHERE id = ?1", params![sid])
+                .map_err(|e| format!("Failed to delete task session: {}", e))?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnifiedUserRow {
+    pub id: String,
+    pub display_name: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserIdentityRow {
+    pub platform: String,
+    pub platform_user_id: String,
+    pub unified_user_id: String,
+    pub bot_id: String,
+    pub display_name: Option<String>,
+    pub created_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1687,6 +2476,37 @@ fn build_fts_query(query: &str) -> String {
     tokens.join(" OR ")
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionMode {
+    Shared,
+    Isolated,
+}
+
+impl Default for ExecutionMode {
+    fn default() -> Self {
+        Self::Shared
+    }
+}
+
+impl std::fmt::Display for ExecutionMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Shared => write!(f, "shared"),
+            Self::Isolated => write!(f, "isolated"),
+        }
+    }
+}
+
+impl ExecutionMode {
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s {
+            "isolated" => Self::Isolated,
+            _ => Self::Shared,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CronJobRow {
     pub id: String,
@@ -1698,6 +2518,9 @@ pub struct CronJobRow {
     pub request_json: Option<String>,
     pub dispatch_json: Option<String>,
     pub runtime_json: Option<String>,
+    /// Execution mode: Shared (default) runs in global context,
+    /// Isolated runs in a dedicated cron session with its own history.
+    pub execution_mode: ExecutionMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1793,5 +2616,120 @@ fn infer_category_from_topic(topic: &str) -> &str {
         "fact"
     } else {
         "note"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn setup_db() -> (Database, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "yiyiclaw_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).expect("Failed to create temp dir");
+        let db = Database::open(&dir).expect("Failed to open test db");
+        (db, dir)
+    }
+
+    #[test]
+    fn test_execution_mode_serde() {
+        let shared = ExecutionMode::Shared;
+        let isolated = ExecutionMode::Isolated;
+
+        assert_eq!(serde_json::to_string(&shared).unwrap(), "\"shared\"");
+        assert_eq!(serde_json::to_string(&isolated).unwrap(), "\"isolated\"");
+
+        let parsed: ExecutionMode = serde_json::from_str("\"shared\"").unwrap();
+        assert_eq!(parsed, ExecutionMode::Shared);
+
+        let parsed: ExecutionMode = serde_json::from_str("\"isolated\"").unwrap();
+        assert_eq!(parsed, ExecutionMode::Isolated);
+
+        // Unknown value fallback to Shared
+        assert_eq!(ExecutionMode::from_str_lossy("unknown"), ExecutionMode::Shared);
+        assert_eq!(ExecutionMode::default(), ExecutionMode::Shared);
+    }
+
+    #[test]
+    fn test_unified_user_lifecycle() {
+        let (db, dir) = setup_db();
+
+        // Create
+        let user = db.create_unified_user(Some("Test User"))
+            .expect("create should succeed");
+        let user_id = user.id;
+        assert!(!user_id.is_empty());
+
+        // Get
+        let fetched = db.get_unified_user(&user_id)
+            .expect("get should succeed")
+            .expect("user should exist");
+        assert_eq!(fetched.display_name.as_deref(), Some("Test User"));
+
+        // Link identity
+        db.link_identity("telegram", "tg_user_123", "bot_abc", &user_id, Some("Alice"))
+            .expect("link should succeed");
+
+        // Lookup by identity
+        let found = db.get_unified_user_by_identity("telegram", "tg_user_123", "bot_abc")
+            .expect("lookup should succeed");
+        assert_eq!(found.as_deref(), Some(user_id.as_str()));
+
+        // Idempotent re-link (same identity again)
+        db.link_identity("telegram", "tg_user_123", "bot_abc", &user_id, Some("Alice Updated"))
+            .expect("re-link should succeed");
+
+        // Unlink
+        db.unlink_identity("telegram", "tg_user_123", "bot_abc")
+            .expect("unlink should succeed");
+        let not_found = db.get_unified_user_by_identity("telegram", "tg_user_123", "bot_abc")
+            .expect("lookup after unlink should succeed");
+        assert!(not_found.is_none());
+
+        // Delete
+        db.delete_unified_user(&user_id)
+            .expect("delete should succeed");
+        let deleted = db.get_unified_user(&user_id)
+            .expect("get after delete should succeed");
+        assert!(deleted.is_none());
+
+        // Cleanup temp dir
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_link_identity_cross_platform() {
+        let (db, dir) = setup_db();
+
+        let user = db.create_unified_user(Some("Cross Platform User"))
+            .expect("create should succeed");
+        let user_id = user.id;
+
+        // Link multiple platforms
+        db.link_identity("telegram", "tg123", "bot1", &user_id, None)
+            .expect("telegram link should succeed");
+        db.link_identity("discord", "dc456", "bot2", &user_id, None)
+            .expect("discord link should succeed");
+
+        // Both should resolve to the same user
+        let tg_uid = db.get_unified_user_by_identity("telegram", "tg123", "bot1")
+            .unwrap()
+            .unwrap();
+        let dc_uid = db.get_unified_user_by_identity("discord", "dc456", "bot2")
+            .unwrap()
+            .unwrap();
+        assert_eq!(tg_uid, dc_uid);
+        assert_eq!(tg_uid, user_id);
+
+        // List identities
+        let identities = db.list_user_identities(&user_id)
+            .expect("list should succeed");
+        assert_eq!(identities.len(), 2);
+
+        // Cleanup temp dir
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

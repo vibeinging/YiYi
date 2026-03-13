@@ -1,13 +1,15 @@
 /**
  * Chat Page
  * Chrome-style session tabs + rich empty state
+ *
+ * SINGLE_WINDOW_MODE: When true, hides session tabs and auto-creates/selects
+ * a default "main" session. The multi-session data layer is preserved.
  */
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Send,
-  Sparkles,
   User,
   Bot,
   Copy,
@@ -18,7 +20,6 @@ import {
   MessageSquare,
   Zap,
   Puzzle,
-  Clock,
   Terminal,
   Link2,
   Unlink,
@@ -30,13 +31,20 @@ import {
   FileText,
   Mic,
   CheckCircle2,
+  Square,
+  Brain,
+  ClipboardList,
+  Clock,
+  BarChart3,
 } from 'lucide-react';
 import {
   chatStreamStart,
+  chatStreamStop,
   onChatComplete,
   onChatError,
   listSessions,
   createSession,
+  ensureSession,
   deleteSession,
   getHistory,
   clearHistory,
@@ -54,16 +62,21 @@ import {
 } from '../api/bots';
 
 import { listWorkspaceFiles, loadWorkspaceFile, getWorkspacePath, type WorkspaceFile } from '../api/workspace';
-import { getActiveLlm } from '../api/models';
 import { listSkills } from '../api/skills';
-import { createCronJob } from '../api/cronjobs';
 import { MentionPicker, buildMentionList } from '../components/MentionPicker';
 import { MentionInput, type MentionInputHandle, type MentionTag } from '../components/MentionInput';
 import { SlashCommandPicker, filterCommands, SLASH_COMMANDS, type SlashCommand } from '../components/SlashCommandPicker';
 import { SpawnAgentPanel } from '../components/SpawnAgentPanel';
+import { ToolCallPanel, HistorySpawnAgentsPanel } from '../components/ToolCallPanel';
+import { TaskCard } from '../components/TaskCard';
+import { LongTaskProgressPanel, RoundDivider } from '../components/LongTaskPanel';
+import { BackgroundTaskCard } from '../components/BackgroundTaskCard';
+import { CronJobSessionView } from '../components/CronJobSessionView';
+import { listAllTasksBrief, getTaskByName } from '../api/tasks';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { useChatStreamStore } from '../stores/chatStreamStore';
+import { useTaskSidebarStore } from '../stores/taskSidebarStore';
 import { useDragRegion } from '../hooks/useDragRegion';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import ReactMarkdown from 'react-markdown';
@@ -71,10 +84,74 @@ import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 
 import type { SpawnAgent } from '../stores/chatStreamStore';
+import logoImg from '../assets/yiyi-logo.png';
+import logoFaceRight from '../assets/yiyi-logo-face-right.png';
+
+interface BackgroundTaskProposal {
+  task_name: string;
+  task_description: string;
+  context_summary: string;
+  estimated_steps?: number;
+}
+
+interface ProcessedMsg {
+  msg: ChatMessage;
+  historyTools?: { id: number; name: string; status: 'done'; preview?: string; resultPreview?: string }[];
+  historyAgents?: { name: string; result: string; is_error?: boolean }[];
+  /** Task IDs extracted from create_task tool calls in this message chain */
+  taskIds?: string[];
+  /** Background task proposals extracted from propose_background_task tool calls */
+  backgroundProposals?: BackgroundTaskProposal[];
+}
 
 interface ChatPageProps {
   consumeNotifContext?: () => Record<string, unknown> | null;
 }
+
+/** Collapsible thinking/reasoning block for assistant messages */
+function ThinkingBlock({ content, streaming }: { content: string; streaming?: boolean }) {
+  const [collapsed, setCollapsed] = useState(true);
+  return (
+    <div
+      className="rounded-xl text-[13px] overflow-hidden"
+      style={{
+        background: 'var(--color-bg-elevated)',
+        border: '1px solid var(--color-border)',
+      }}
+    >
+      <button
+        onClick={() => setCollapsed((v) => !v)}
+        className="flex items-center gap-1.5 w-full px-3 py-2 text-left"
+        style={{ color: 'var(--color-text-muted)' }}
+      >
+        {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+        <Brain size={14} />
+        <span>{streaming ? '思考中…' : '思考过程'}</span>
+      </button>
+      {!collapsed && (
+        <div
+          className="px-3 pb-2 whitespace-pre-wrap break-words leading-relaxed"
+          style={{
+            color: 'var(--color-text-muted)',
+            maxHeight: '200px',
+            overflowY: 'auto',
+          }}
+        >
+          {content}
+          {streaming && (
+            <span className="yiyi-working">
+              <img src={logoFaceRight} alt="" width={24} height={24} />
+              <span className="yiyi-dots"><span /><span /><span /></span>
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Hide session tab bar and auto-select a single main session */
+const SINGLE_WINDOW_MODE = true;
 
 export function ChatPage({ consumeNotifContext }: ChatPageProps) {
   const { t } = useTranslation();
@@ -86,18 +163,130 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
   // const { status: voiceStatus, modelProgress, toggleRecording, error: voiceError } = useVoiceInput(handleVoiceResult);
   const [sessions, setSessions] = useState<ApiChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState('');
+  const [mainSessionId, setMainSessionId] = useState(''); // always tracks the "home" session
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [message, setMessage] = useState('');
-  const loading = useChatStreamStore((s) => s.loading);
+
+  // Process messages: merge consecutive assistant(tool_calls)+tool sequences into one block
+  const processedMessages = useMemo<ProcessedMsg[]>(() => {
+    const result: ProcessedMsg[] = [];
+    let i = 0;
+    while (i < messages.length) {
+      const msg = messages[i];
+      if (msg.role === 'tool') { i++; continue; } // handled as part of parent
+
+      // Detect a ReAct chain: consecutive assistant(tool_calls) → tool(s) → ... → assistant(final)
+      if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
+        const allTools: ProcessedMsg['historyTools'] & {} = [];
+        let toolIdCounter = 0;
+        let j = i;
+
+        // Walk through the chain: assistant(tc) + tool results + assistant(tc) + tool results + ...
+        while (j < messages.length) {
+          const cur = messages[j];
+          if (cur.role === 'assistant' && cur.tool_calls && cur.tool_calls.length > 0) {
+            for (const tc of cur.tool_calls) {
+              toolIdCounter++;
+              const toolMsg = messages.slice(j + 1).find(
+                (m) => m.role === 'tool' && m.tool_call_id === tc.id
+              );
+              allTools.push({
+                id: toolIdCounter,
+                name: tc.name,
+                status: 'done' as const,
+                preview: tc.arguments.length > 100 ? tc.arguments.slice(0, 100) + '...' : tc.arguments,
+                resultPreview: toolMsg?.content?.slice(0, 200),
+              });
+            }
+            j++;
+          } else if (cur.role === 'tool') {
+            j++; // skip tool messages (already collected above)
+          } else {
+            break; // hit a non-tool-chain message
+          }
+        }
+
+        // Extract task IDs and background proposals from tool calls
+        const taskIds: string[] = [];
+        const backgroundProposals: BackgroundTaskProposal[] = [];
+        const regularTools = allTools.filter((tool) => {
+          if (tool.name === 'create_task' && tool.resultPreview) {
+            try {
+              const parsed = JSON.parse(tool.resultPreview);
+              if (parsed.id) { taskIds.push(parsed.id); return false; }
+            } catch { /* result may not be JSON, keep as regular tool */ }
+          }
+          if (tool.name === 'propose_background_task' && tool.resultPreview) {
+            try {
+              const parsed = JSON.parse(tool.resultPreview);
+              if (parsed.__type === 'propose_background_task') {
+                backgroundProposals.push(parsed as BackgroundTaskProposal);
+                return false;
+              }
+            } catch { /* keep as regular tool */ }
+          }
+          return true;
+        });
+
+        // The final message in the chain: either the next assistant(no tools) or the last assistant(with tools)
+        // Find the final text response that follows this tool chain
+        const finalMsg = (j < messages.length && messages[j].role === 'assistant' && !messages[j].tool_calls?.length)
+          ? messages[j] : null;
+
+        if (finalMsg) {
+          result.push({
+            msg: finalMsg,
+            historyTools: regularTools,
+            historyAgents: finalMsg.spawn_agents?.length ? finalMsg.spawn_agents : undefined,
+            taskIds: taskIds.length > 0 ? taskIds : undefined,
+            backgroundProposals: backgroundProposals.length > 0 ? backgroundProposals : undefined,
+          });
+          i = j + 1;
+        } else {
+          // No final text reply yet (chain ended at last tool-calling assistant)
+          // Use the last assistant message's content
+          result.push({
+            msg: messages[j - 1],
+            historyTools: regularTools,
+            taskIds: taskIds.length > 0 ? taskIds : undefined,
+            backgroundProposals: backgroundProposals.length > 0 ? backgroundProposals : undefined,
+          });
+          i = j;
+        }
+        continue;
+      }
+      // Assistant with spawn_agents → render as team results panel
+      if (msg.role === 'assistant' && msg.spawn_agents && msg.spawn_agents.length > 0) {
+        result.push({ msg, historyAgents: msg.spawn_agents });
+      } else {
+        result.push({ msg });
+      }
+      i++;
+    }
+    return result;
+  }, [messages]);
+
+  const streamLoading = useChatStreamStore((s) => s.loading);
   const streamingContent = useChatStreamStore((s) => s.streamingContent);
+  const streamingThinking = useChatStreamStore((s) => s.streamingThinking);
   const activeTools = useChatStreamStore((s) => s.activeTools);
+  const claudeCode = useChatStreamStore((s) => s.claudeCode);
   const spawnAgents = useChatStreamStore((s) => s.spawnAgents);
   const collapsedAgents = useChatStreamStore((s) => s.collapsedAgents);
   const toggleCollapseAgent = useChatStreamStore((s) => s.toggleCollapseAgent);
+  const streamError = useChatStreamStore((s) => s.errorMessage);
+  const longTask = useChatStreamStore((s) => s.longTask);
+  const focusedTask = useChatStreamStore((s) => s.focusedTask);
+  // Treat as loading when streaming OR spawn agents are still running
+  const spawnRunning = spawnAgents.some((a) => a.status === 'running');
+
+  const loading = streamLoading || spawnRunning;
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const isAtBottomRef = useRef(true);
   const inputRef = useRef<MentionInputHandle>(null);
-  const [aiName, setAiName] = useState('YiClaw');
+  const [aiName, setAiName] = useState('YiYiClaw');
   const [boundBots, setBoundBots] = useState<BotInfo[]>([]);
   const [allBots, setAllBots] = useState<BotInfo[]>([]);
   const [showBotPopover, setShowBotPopover] = useState(false);
@@ -120,6 +309,19 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
   const [showCommandPicker, setShowCommandPicker] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
   const [commandPickerIndex, setCommandPickerIndex] = useState(0);
+
+  // /focus task suggestion state
+  const [showTaskPicker, setShowTaskPicker] = useState(false);
+  const [taskPickerQuery, setTaskPickerQuery] = useState('');
+  const [taskPickerIndex, setTaskPickerIndex] = useState(0);
+  const [taskSuggestions, setTaskSuggestions] = useState<{ id: string; title: string; status: string; sessionId: string }[]>([]);
+  const skipTaskPickerCloseRef = useRef(false);
+
+  // Session ID to return to when unfocusing from a task
+  const preFocusSessionIdRef = useRef<string>('');
+  // Always-fresh ref for currentSessionId (avoids stale closures in effects)
+  const currentSessionIdRef = useRef(currentSessionId);
+  currentSessionIdRef.current = currentSessionId;
 
   // Close lightbox on Escape
   useEffect(() => {
@@ -271,32 +473,93 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
     return () => { unlisten.then(fn => fn()); };
   }, []);
 
-  // Load sessions from DB on mount, then check for pending notification navigation
+  // Load sessions + handle pending navigation (cron job clicks, notifications)
+  const cronJobs = useTaskSidebarStore((s) => s.cronJobs);
+  const pendingSessionId = useTaskSidebarStore((s) => s.pendingSessionId);
+  const sessionsLoadedRef = useRef(false);
+
+  // Reusable: navigate to a specific session with focus/unfocus support
+  // mainSessionId can be passed explicitly (e.g. right after loadSessions before re-render)
+  const navigateToSession = useCallback(async (targetSessionId: string, mainSessionId?: string) => {
+    try {
+      const isCron = targetSessionId.startsWith('cron:');
+      const jobId = isCron ? targetSessionId.slice(5) : targetSessionId;
+
+      // Resolve display name: cron job name or task title
+      let displayName: string;
+      if (isCron) {
+        displayName = useTaskSidebarStore.getState().cronJobs.find((j) => j.id === jobId)?.name ?? jobId;
+      } else {
+        const matchedTask = useTaskSidebarStore.getState().tasks.find((t) => t.sessionId === targetSessionId);
+        displayName = matchedTask?.title ?? targetSessionId;
+      }
+
+      const sessionName = isCron ? `[Cron] ${displayName}` : displayName;
+      await ensureSession(
+        targetSessionId,
+        sessionName,
+        isCron ? 'cronjob' : 'chat',
+        isCron ? jobId : undefined,
+      );
+      const mainId = mainSessionId || currentSessionIdRef.current;
+      if (mainId && mainId !== targetSessionId) {
+        preFocusSessionIdRef.current = mainId;
+        useChatStreamStore.getState().focusTask(targetSessionId, displayName, targetSessionId);
+      }
+      setCurrentSessionId(targetSessionId);
+    } catch (err) {
+      console.error('Failed to navigate to session:', err);
+    }
+  }, []);
+
+  // On mount: load sessions, then handle pending navigation
   useEffect(() => {
-    loadSessions().then(() => {
+    (async () => {
+      const mainId = await loadSessions();
+      sessionsLoadedRef.current = true;
+
       const ctx = consumeNotifContext?.();
       if (ctx?.page === 'chat' && ctx?.session_id) {
         setCurrentSessionId(ctx.session_id as string);
+        return;
       }
-    });
+      // Consume pending session set before mount (e.g. page switch from settings)
+      const pending = useTaskSidebarStore.getState().consumePendingSession();
+      if (pending) await navigateToSession(pending, mainId);
+    })();
   }, []);
 
-  const loadSessions = async () => {
+  const loadSessions = async (): Promise<string> => {
     try {
       const list = await listSessions();
+      let id: string;
       if (list.length === 0) {
-        // Create default session
-        const session = await createSession(t('chat.defaultSession'));
+        const name = SINGLE_WINDOW_MODE ? t('chat.defaultSession') : t('chat.defaultSession');
+        const session = await createSession(name);
         setSessions([session]);
-        setCurrentSessionId(session.id);
+        id = session.id;
       } else {
         setSessions(list);
-        setCurrentSessionId(list[0].id);
+        // Pick the first non-cron session as main, fallback to first
+        const main = list.find((s) => !s.id.startsWith('cron:')) || list[0];
+        id = main.id;
       }
+      setCurrentSessionId(id);
+      setMainSessionId(id);
+      currentSessionIdRef.current = id;
+      return id;
     } catch (error) {
       console.error('Failed to load sessions:', error);
+      return '';
     }
   };
+
+  // Handle pending session changes while already on chat page
+  useEffect(() => {
+    if (!pendingSessionId || !sessionsLoadedRef.current) return;
+    useTaskSidebarStore.getState().consumePendingSession();
+    navigateToSession(pendingSessionId);
+  }, [pendingSessionId, navigateToSession]);
 
   // Load messages and bound bots when session changes; sync store session
   useEffect(() => {
@@ -406,6 +669,7 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
   const loadMessages = async (sessionId: string) => {
     try {
       const msgs = await getHistory(sessionId);
+      isAtBottomRef.current = true; // new session → scroll to bottom
       setMessages(msgs);
     } catch (error) {
       console.error('Failed to load messages:', error);
@@ -414,23 +678,60 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
   };
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamingContent, activeTools, spawnAgents]);
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const handleScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = container;
+      isAtBottomRef.current = scrollHeight - scrollTop - clientHeight < 80;
+    };
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  useEffect(() => {
+    if (isAtBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, streamingContent, activeTools, claudeCode, spawnAgents]);
 
   // Sync message state from MentionInput (for send button disabled state)
-  // Also detect /command trigger
+  // Also detect /command trigger and /focus task suggestions
   const handleMentionInput = useCallback((text: string) => {
     setMessage(text);
 
-    // Detect /command at the very start of input
     const trimmed = text.trimStart();
+
+    // Detect /command at the very start of input (no space yet)
     if (trimmed.startsWith('/') && !trimmed.includes(' ') && !trimmed.includes('\n')) {
       const query = trimmed.slice(1);
       setCommandQuery(query);
       setCommandPickerIndex(0);
       setShowCommandPicker(true);
-    } else {
-      setShowCommandPicker(false);
+      setShowTaskPicker(false);
+      return;
+    }
+
+    setShowCommandPicker(false);
+
+    // Detect /task <query> — show task suggestions
+    const focusMatch = trimmed.match(/^\/task\s(.*)$/i);
+    if (focusMatch) {
+      const q = focusMatch[1];
+      setTaskPickerQuery(q);
+      setTaskPickerIndex(0);
+      setShowTaskPicker(true);
+      listAllTasksBrief().then((tasks) => {
+        const filtered = q
+          ? tasks.filter((t) => t.title.toLowerCase().includes(q.toLowerCase()))
+          : tasks;
+        setTaskSuggestions(filtered.map((t) => ({ id: t.id, title: t.title, status: t.status, sessionId: t.sessionId })));
+      }).catch(() => setTaskSuggestions([]));
+      return;
+    }
+
+    // Don't close task picker during selectCommand's clear → insertText transition
+    if (!skipTaskPickerCloseRef.current) {
+      setShowTaskPicker(false);
     }
   }, []);
 
@@ -479,6 +780,9 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
     const inputEmpty = inputRef.current?.isEmpty() ?? true;
 
     if ((inputEmpty && pendingImages.length === 0) || loading) return;
+
+    // User actively sent a message — force scroll to bottom
+    isAtBottomRef.current = true;
 
     // Intercept /command typed directly (with optional args)
     const trimmed = plainText.trim();
@@ -537,21 +841,21 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
       await runStreamingChat(userMessage, currentSessionId, userAttachments);
 
       // Reload from DB to get persisted messages (including assistant reply)
-      useChatStreamStore.setState({ streamingContent: '', activeTools: [] });
       await loadMessages(currentSessionId);
       // Refresh sessions list to update names/timestamps
       const list = await listSessions();
       setSessions(list);
     } catch (error) {
       console.error('Failed to send message:', error);
-      useChatStreamStore.setState({ streamingContent: '', activeTools: [] });
       setMessages(prev => [...prev, {
         role: 'assistant' as const,
         content: `Error: ${String(error)}`,
         timestamp: Date.now(),
       }]);
     } finally {
+      useChatStreamStore.getState().clearStreamState();
       useChatStreamStore.getState().endStream();
+      useChatStreamStore.getState().longTaskReset();
     }
   };
 
@@ -569,13 +873,13 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
     try {
       await runStreamingChat(prompt, currentSessionId);
 
-      useChatStreamStore.setState({ streamingContent: '', activeTools: [] });
+      useChatStreamStore.getState().clearStreamState();
       await loadMessages(currentSessionId);
       const list = await listSessions();
       setSessions(list);
     } catch (error) {
       console.error('Failed to send quick prompt:', error);
-      useChatStreamStore.setState({ streamingContent: '', activeTools: [] });
+      useChatStreamStore.getState().clearStreamState();
       setMessages(prev => [...prev, {
         role: 'assistant' as const,
         content: `Error: ${String(error)}`,
@@ -680,6 +984,59 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
     }
   };
 
+  // Fill the picked command into the input (don't execute yet)
+  const selectCommand = useCallback((cmd: SlashCommand) => {
+    setShowCommandPicker(false);
+
+    // For /task, load task suggestions immediately
+    if (cmd.name === 'task') {
+      skipTaskPickerCloseRef.current = true;
+      inputRef.current?.clear();
+      setTimeout(() => {
+        inputRef.current?.insertText(`/${cmd.name} `);
+        inputRef.current?.focus();
+        // Allow handleMentionInput to manage task picker again after insert settles
+        setTimeout(() => { skipTaskPickerCloseRef.current = false; }, 50);
+      }, 0);
+      setMessage(`/${cmd.name} `);
+      setTaskPickerQuery('');
+      setTaskPickerIndex(0);
+      setShowTaskPicker(true);
+      listAllTasksBrief().then((tasks) => {
+        setTaskSuggestions(tasks.map((t) => ({ id: t.id, title: t.title, status: t.status, sessionId: t.sessionId })));
+      }).catch(() => setTaskSuggestions([]));
+      return;
+    }
+
+    inputRef.current?.clear();
+    // Use setTimeout so the clear() flushes first
+    setTimeout(() => {
+      inputRef.current?.insertText(`/${cmd.name} `);
+      inputRef.current?.focus();
+    }, 0);
+    setMessage(`/${cmd.name} `);
+  }, []);
+
+  // Select a task from the task suggestion picker → execute focus immediately
+  const selectTask = useCallback((task: { id: string; title: string; sessionId: string }) => {
+    inputRef.current?.clear();
+    setMessage('');
+    setShowTaskPicker(false);
+    preFocusSessionIdRef.current = currentSessionId;
+    useChatStreamStore.getState().focusTask(task.id, task.title, task.sessionId);
+    setCurrentSessionId(task.sessionId);
+  }, [currentSessionId]);
+
+  // Unfocus from a task and return to the main conversation
+  const handleUnfocus = useCallback(() => {
+    const store = useChatStreamStore.getState();
+    store.unfocusTask();
+    if (preFocusSessionIdRef.current) {
+      setCurrentSessionId(preFocusSessionIdRef.current);
+      preFocusSessionIdRef.current = '';
+    }
+  }, []);
+
   // Slash command execution
   const executeCommand = useCallback(async (cmd: SlashCommand, args?: string) => {
     inputRef.current?.clear();
@@ -696,23 +1053,14 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
 
     switch (cmd.name) {
       case 'clear':
-        await handleClearAll();
+        // Insert a context reset marker — history is preserved but LLM context resets
+        await clearHistory(currentSessionId);
+        setMessages((prev) => [...prev, {
+          role: 'context_reset',
+          content: '',
+          timestamp: Date.now(),
+        }]);
         break;
-      case 'new':
-        await handleNewSession();
-        break;
-      case 'model': {
-        try {
-          const info = await getActiveLlm();
-          const model = info.model
-            ? `**${t('chat.command.currentModel')}**: \`${info.provider_id}/${info.model}\``
-            : t('chat.command.noModel');
-          showSystemMsg(model);
-        } catch {
-          showSystemMsg(t('chat.command.noModel'));
-        }
-        break;
-      }
       case 'skills': {
         try {
           const skills = await listSkills({ enabledOnly: true });
@@ -729,49 +1077,42 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
         }
         break;
       }
-      case 'cron': {
+      case 'task': {
         if (!args?.trim()) {
-          showSystemMsg(`${t('chat.command.cronUsage')}\n\n${t('chat.command.cronExamples')}`);
+          showSystemMsg(t('chat.command.taskUsage'));
           break;
         }
-        // Parse: /cron 5m 提醒我喝水
-        const cronMatch = args.trim().match(/^(\d+)(m|h)\s+(.+)$/);
-        if (!cronMatch) {
-          showSystemMsg(`${t('chat.command.cronUsage')}\n\n${t('chat.command.cronExamples')}`);
-          break;
-        }
-        const [, amount, unit, taskText] = cronMatch;
-        const delayMinutes = unit === 'h' ? parseInt(amount) * 60 : parseInt(amount);
         try {
-          await createCronJob({
-            id: '',
-            name: taskText.slice(0, 30),
-            enabled: true,
-            schedule: {
-              type: 'delay',
-              cron: '',
-              delay_minutes: delayMinutes,
-            },
-            text: taskText,
-            dispatch: {
-              targets: [{ type: 'app' }],
-            },
-          });
-          showSystemMsg(`${t('chat.command.cronCreated')}: **${taskText}** (${amount}${unit})`);
-        } catch {
-          showSystemMsg(t('chat.command.cronFailed'));
+          const task = await getTaskByName(args.trim());
+          if (task) {
+            preFocusSessionIdRef.current = currentSessionId;
+            useChatStreamStore.getState().focusTask(task.id, task.title, task.sessionId);
+            setCurrentSessionId(task.sessionId);
+          } else {
+            try {
+              const allTasks = await listAllTasksBrief();
+              if (allTasks.length > 0) {
+                const taskNames = allTasks.map((tk) => `  · ${tk.title}`).join('\n');
+                showSystemMsg(`${t('chat.command.taskNotFound')}: "${args.trim()}"\n\n可用任务:\n${taskNames}`);
+              } else {
+                showSystemMsg(`${t('chat.command.taskNotFound')}: "${args.trim()}"\n\n当前没有任何任务`);
+              }
+            } catch {
+              showSystemMsg(`${t('chat.command.taskNotFound')}: "${args.trim()}"`);
+            }
+          }
+        } catch (err) {
+          console.error('task command error:', err);
+          showSystemMsg(`${t('chat.command.taskNotFound')}: "${args.trim()}" (${err})`);
         }
         break;
       }
-      case 'help': {
-        const helpLines = SLASH_COMMANDS.map(
-          (c) => `  /${c.name} — ${t(c.description)}`
-        ).join('\n');
-        showSystemMsg(`**${t('chat.command.helpTitle')}**\n\n${helpLines}`);
+      case 'back': {
+        handleUnfocus();
         break;
       }
     }
-  }, [handleClearAll, handleNewSession, t]);
+  }, [handleClearAll, handleNewSession, t, currentSessionId]);
 
   const handleCloseSession = async (sessionId: string) => {
     if (sessions.length <= 1) return;
@@ -806,12 +1147,38 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
       if (e.key === 'Enter' || e.key === 'Tab') {
         e.preventDefault();
         const selected = cmds[commandPickerIndex];
-        if (selected) executeCommand(selected);
+        if (selected) selectCommand(selected);
         return;
       }
       if (e.key === 'Escape') {
         e.preventDefault();
         setShowCommandPicker(false);
+        return;
+      }
+    }
+
+    // When task suggestion picker is open, intercept navigation keys
+    if (showTaskPicker && taskSuggestions.length > 0) {
+      const maxIdx = taskSuggestions.length - 1;
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setTaskPickerIndex(prev => Math.min(prev + 1, maxIdx));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setTaskPickerIndex(prev => Math.max(prev - 1, 0));
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        const selected = taskSuggestions[taskPickerIndex];
+        if (selected) selectTask(selected);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowTaskPicker(false);
         return;
       }
     }
@@ -845,6 +1212,9 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
         return;
       }
     }
+    // Ignore Enter during IME composition (e.g. Chinese input method selecting a word)
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -918,11 +1288,45 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
       ],
       color: '#d97706',
     },
+    {
+      icon: FileText,
+      label: t('chat.quick.writing'),
+      desc: t('chat.quick.writingDesc'),
+      examples: [
+        t('chat.quick.writingEx1'),
+        t('chat.quick.writingEx2'),
+        t('chat.quick.writingEx3'),
+      ],
+      color: '#e11d48',
+    },
+    {
+      icon: BarChart3,
+      label: t('chat.quick.analysis'),
+      desc: t('chat.quick.analysisDesc'),
+      examples: [
+        t('chat.quick.analysisEx1'),
+        t('chat.quick.analysisEx2'),
+        t('chat.quick.analysisEx3'),
+      ],
+      color: '#0891b2',
+    },
   ];
+
+  // Detect cron job session for header rendering
+  const isCronSession = currentSessionId.startsWith('cron:');
+  const cronJobId = isCronSession ? currentSessionId.slice(5) : '';
+
+  const handleBackToMain = useCallback(() => {
+    useChatStreamStore.getState().unfocusTask();
+    if (mainSessionId) {
+      setCurrentSessionId(mainSessionId);
+    }
+  }, [mainSessionId]);
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden">
-      {/* Chrome-style session tabs — no scroll, compress when many */}
+      {/* Chrome-style session tabs — hidden in single-window mode */}
+      {!SINGLE_WINDOW_MODE && (
       <div
         className="flex items-end shrink-0 overflow-hidden app-drag-region"
         onMouseDown={drag.onMouseDown}
@@ -996,6 +1400,7 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
           <span>{t('common.new')}</span>
         </button>
       </div>
+      )}
 
       {/* Bot binding bar */}
       <div
@@ -1135,47 +1540,116 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
         )}
       </div>
 
+      {/* Focus banner — shown when viewing a task/cron session */}
+      {(focusedTask || isCronSession) && (
+        <div className="shrink-0 flex items-center justify-between px-4 py-2 rounded-lg mx-2 mt-1.5 mb-0.5"
+          style={{
+            background: 'color-mix(in srgb, var(--color-primary) 10%, transparent)',
+            border: '1px solid color-mix(in srgb, var(--color-primary) 25%, transparent)',
+          }}>
+          <div className="flex items-center gap-2">
+            <ClipboardList size={14} style={{ color: 'var(--color-primary)' }} />
+            <span className="text-[13px] font-medium" style={{ color: 'var(--color-primary)' }}>
+              当前任务：{isCronSession ? (cronJobId && cronJobs.find(j => j.id === cronJobId)?.name) || focusedTask?.taskName || '' : focusedTask?.taskName || ''}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[11px]" style={{ color: 'var(--color-text-tertiary)' }}>
+              /back 返回
+            </span>
+            <button
+              onClick={() => isCronSession ? handleBackToMain() : handleUnfocus()}
+              className="text-[12px] px-2.5 py-1 rounded-md transition-colors font-medium"
+              style={{
+                color: 'var(--color-primary)',
+                background: 'color-mix(in srgb, var(--color-primary) 15%, transparent)',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'color-mix(in srgb, var(--color-primary) 25%, transparent)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'color-mix(in srgb, var(--color-primary) 15%, transparent)'; }}
+            >
+              返回主对话
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Cron job task info card — shown below focus banner */}
+      {isCronSession && cronJobId && (
+        <CronJobSessionView jobId={cronJobId} onUnfocus={handleBackToMain} />
+      )}
+
       {/* Messages area */}
-      <div className="flex-1 overflow-y-auto" style={{ background: 'var(--color-bg)' }}>
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto" style={{ background: 'var(--color-bg)' }}>
         {messages.length === 0 && !loading ? (
-          /* Empty state - welcome screen with expandable action cards */
+          (focusedTask || isCronSession) ? (
+            /* Task/Cron empty state */
+            <div className="h-full flex flex-col items-center justify-center px-6">
+              <div className="text-center space-y-3">
+                <div
+                  className="w-12 h-12 rounded-2xl flex items-center justify-center mx-auto"
+                  style={{ background: 'color-mix(in srgb, var(--color-primary) 12%, transparent)' }}
+                >
+                  <Clock size={22} style={{ color: 'var(--color-primary)' }} />
+                </div>
+                <p className="text-[15px] font-medium" style={{ color: 'var(--color-text)' }}>
+                  {isCronSession ? '定时任务尚未执行' : focusedTask?.taskName || '任务'}
+                </p>
+                <p className="text-[13px]" style={{ color: 'var(--color-text-muted)' }}>
+                  {isCronSession ? '任务将在预定时间自动执行，请耐心等待' : '暂无对话记录，发送消息开始交互'}
+                </p>
+              </div>
+            </div>
+          ) : (
+          /* Empty state - welcome screen */
           <div
             className="h-full flex flex-col items-center justify-center px-6"
             onClick={() => expandedAction !== null && setExpandedAction(null)}
           >
-            <div className="max-w-lg w-full text-center">
-              {/* Logo / Icon — hide when expanded */}
+            <div className="max-w-[520px] w-full">
+              {/* Hero: Mascot + Greeting */}
               <div
-                className="transition-all duration-700 ease-out"
+                className="transition-all duration-500 ease-out"
                 style={{
                   opacity: expandedAction !== null ? 0 : 1,
                   maxHeight: expandedAction !== null ? 0 : '280px',
                   overflow: 'hidden',
                 }}
               >
-                <div
-                  className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-8"
-                  style={{
-                    background: 'linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-end) 100%)',
-                    boxShadow: '0 4px 24px rgba(255, 107, 107, 0.2)',
-                  }}
-                >
-                  <Sparkles size={28} className="text-white" />
+                <div className="flex items-center gap-4 mb-8">
+                  <div className="relative shrink-0">
+                    <img
+                      src={logoImg}
+                      alt="YiYi"
+                      className="w-14 h-14 rounded-2xl"
+                      style={{ boxShadow: '0 4px 20px rgba(255, 180, 80, 0.2)' }}
+                    />
+                    <div
+                      className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full flex items-center justify-center"
+                      style={{ background: 'var(--color-success)', boxShadow: '0 0 0 2.5px var(--color-bg)' }}
+                    >
+                      <div className="w-[5px] h-[5px] rounded-full bg-white" />
+                    </div>
+                  </div>
+                  <div>
+                    <h1
+                      className="text-[22px] font-bold tracking-tight"
+                      style={{ fontFamily: 'var(--font-display)', color: 'var(--color-text)' }}
+                    >
+                      {(() => {
+                        const h = new Date().getHours();
+                        const greeting = h < 6 ? '夜深了' : h < 12 ? '早上好' : h < 18 ? '下午好' : '晚上好';
+                        return `${greeting} 👋`;
+                      })()}
+                    </h1>
+                    <p className="text-[13.5px] mt-0.5" style={{ color: 'var(--color-text-secondary)' }}>
+                      {(t('chat.empty.description') as string).replace('YiYiClaw', aiName).replace(/我是.*?。/, '')}
+                    </p>
+                  </div>
                 </div>
-
-                <h1
-                  className="text-2xl font-bold mb-2 tracking-tight"
-                  style={{ fontFamily: 'var(--font-display)', color: 'var(--color-text)' }}
-                >
-                  {t('chat.empty.title')}
-                </h1>
-                <p className="text-[14px] mb-6" style={{ color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
-                  {(t('chat.empty.description') as string).replace('YiClaw', aiName)}
-                </p>
               </div>
 
-              {/* Quick action cards */}
-              <div className="grid grid-cols-2 gap-3 mb-6">
+              {/* Quick action cards — 3x2 grid that expands on click */}
+              <div className="grid grid-cols-3 gap-2.5 mb-5">
                 {quickActions.map((action, idx) => {
                   const Icon = action.icon;
                   const isExpanded = expandedAction === idx;
@@ -1184,11 +1658,11 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
                   return (
                     <div
                       key={idx}
-                      className="transition-all duration-700 ease-out"
+                      className="transition-all duration-500 ease-out"
                       style={{
                         gridColumn: isExpanded ? '1 / -1' : undefined,
                         opacity: isHidden ? 0 : 1,
-                        transform: isHidden ? 'scale(0.9)' : 'scale(1)',
+                        transform: isHidden ? 'scale(0.95)' : 'scale(1)',
                         pointerEvents: isHidden ? 'none' : 'auto',
                         maxHeight: isHidden ? 0 : '400px',
                         overflow: 'hidden',
@@ -1199,78 +1673,65 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
                           e.stopPropagation();
                           setExpandedAction(isExpanded ? null : idx);
                         }}
-                        className="w-full text-left rounded-xl transition-all duration-600"
+                        className="w-full text-left rounded-2xl transition-all duration-300"
                         style={{
                           background: isExpanded
                             ? 'var(--color-bg-elevated)'
                             : 'var(--color-bg-elevated)',
                           boxShadow: isExpanded
-                            ? `0 8px 32px ${action.color}20, 0 0 0 1px ${action.color}30`
-                            : 'none',
+                            ? `0 8px 32px ${action.color}15, 0 0 0 1px ${action.color}25`
+                            : '0 1px 3px rgba(0,0,0,0.04)',
                         }}
                         onMouseEnter={(e) => {
-                          if (!isExpanded) e.currentTarget.style.transform = 'translateY(-2px)';
+                          if (!isExpanded) {
+                            e.currentTarget.style.transform = 'translateY(-1px)';
+                            e.currentTarget.style.boxShadow = `0 4px 16px ${action.color}12, 0 0 0 1px ${action.color}18`;
+                          }
                         }}
                         onMouseLeave={(e) => {
-                          if (!isExpanded) e.currentTarget.style.transform = 'translateY(0)';
+                          if (!isExpanded) {
+                            e.currentTarget.style.transform = 'translateY(0)';
+                            e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.04)';
+                          }
                         }}
                       >
                         {/* Card header */}
-                        <div className="flex items-center gap-3 p-3.5">
+                        <div className="flex items-center gap-3 p-3">
                           <div
-                            className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-all duration-700"
+                            className="w-8 h-8 rounded-[10px] flex items-center justify-center shrink-0 transition-all duration-500"
                             style={{
-                              background: isExpanded
-                                ? `${action.color}20`
-                                : 'var(--color-primary-subtle)',
-                              transform: isExpanded ? 'scale(1.1)' : 'scale(1)',
+                              background: isExpanded ? `${action.color}18` : `${action.color}0C`,
                             }}
                           >
-                            <Icon
-                              size={16}
-                              style={{ color: isExpanded ? action.color : 'var(--color-primary)' }}
-                            />
+                            <Icon size={15} style={{ color: action.color }} />
                           </div>
-                          <div className="min-w-0 flex-1">
-                            <span
-                              className="text-[13px] font-medium block"
-                              style={{ color: isExpanded ? 'var(--color-text)' : 'var(--color-text-secondary)' }}
-                            >
-                              {action.label}
-                            </span>
-                            {isExpanded && (
-                              <span
-                                className="text-[12px] block mt-0.5 animate-fade-in"
-                                style={{ color: 'var(--color-text-muted)' }}
-                              >
-                                {action.desc}
-                              </span>
-                            )}
-                          </div>
+                          <span
+                            className="text-[13px] font-semibold flex-1"
+                            style={{ color: 'var(--color-text)' }}
+                          >
+                            {action.label}
+                          </span>
                           <div
-                            className="transition-transform duration-700"
+                            className="transition-transform duration-500"
                             style={{
                               transform: isExpanded ? 'rotate(45deg)' : 'rotate(0)',
                               color: 'var(--color-text-tertiary)',
                             }}
                           >
-                            <Plus size={14} />
+                            <Plus size={13} />
                           </div>
                         </div>
 
-                        {/* Expanded: example prompts */}
+                        {/* Expanded examples */}
                         {isExpanded && (
-                          <div className="px-3.5 pb-3.5 space-y-1.5 animate-fade-in">
-                            <div
-                              className="text-[11px] font-medium uppercase tracking-wider mb-2 px-1"
-                              style={{ color: 'var(--color-text-tertiary)' }}
-                            >
-                              {t('chat.empty.tip1').includes('Enter') ? 'Try asking' : '试试这些'}
-                            </div>
+                          <div className="px-3 pb-3 space-y-1 animate-fade-in">
+                            <p className="text-[12px] px-1 mb-2" style={{ color: 'var(--color-text-muted)' }}>
+                              {action.desc}
+                            </p>
                             {action.examples.map((ex, eidx) => (
                               <div
                                 key={eidx}
-                                className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-[13px] transition-all duration-150 cursor-pointer"
+                                className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-[13px] transition-all duration-150 cursor-pointer"
                                 style={{
                                   background: 'var(--color-bg-subtle)',
                                   color: 'var(--color-text-secondary)',
@@ -1278,11 +1739,10 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   setExpandedAction(null);
-                                  // Directly send the example prompt
                                   sendQuickPrompt(ex);
                                 }}
                                 onMouseEnter={(e) => {
-                                  e.currentTarget.style.background = `${action.color}12`;
+                                  e.currentTarget.style.background = `${action.color}0E`;
                                   e.currentTarget.style.color = 'var(--color-text)';
                                 }}
                                 onMouseLeave={(e) => {
@@ -1290,7 +1750,7 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
                                   e.currentTarget.style.color = 'var(--color-text-secondary)';
                                 }}
                               >
-                                <Zap size={12} style={{ color: action.color, opacity: 0.7 }} className="shrink-0" />
+                                <span className="w-1 h-1 rounded-full shrink-0" style={{ background: action.color, opacity: 0.5 }} />
                                 <span>{ex}</span>
                               </div>
                             ))}
@@ -1302,31 +1762,27 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
                 })}
               </div>
 
-              {/* Tips — hide when expanded */}
+              {/* Keyboard hints */}
               <div
-                className="text-[12px] space-y-1.5 transition-all duration-700 ease-out"
+                className="text-[12px] text-center transition-all duration-500 ease-out"
                 style={{
                   color: 'var(--color-text-tertiary)',
-                  opacity: expandedAction !== null ? 0 : 1,
-                  maxHeight: expandedAction !== null ? 0 : '60px',
+                  opacity: expandedAction !== null ? 0 : 0.6,
+                  maxHeight: expandedAction !== null ? 0 : '40px',
                   overflow: 'hidden',
                 }}
               >
-                <p>{t('chat.empty.tip1')}</p>
-                <p>{t('chat.empty.tip2')}</p>
+                <span>{t('chat.empty.tip1')}</span>
               </div>
 
-              {/* Back hint when expanded */}
               {expandedAction !== null && (
-                <div
-                  className="text-[11px] animate-fade-in"
-                  style={{ color: 'var(--color-text-tertiary)', opacity: 0.6 }}
-                >
+                <div className="text-[11px] text-center animate-fade-in" style={{ color: 'var(--color-text-tertiary)', opacity: 0.5 }}>
                   {t('chat.empty.backHint')}
                 </div>
               )}
             </div>
           </div>
+          )
         ) : (
           /* Message list */
           <div className="w-full py-6 px-8 space-y-6">
@@ -1343,7 +1799,19 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
                 </button>
               </div>
             )}
-            {messages.filter(m => m.role !== 'tool').map((msg, idx) => {
+            {processedMessages.map(({ msg, historyTools, historyAgents, taskIds, backgroundProposals }, idx) => {
+              // Context reset divider
+              if (msg.role === 'context_reset') {
+                return (
+                  <div key={idx} className="flex items-center gap-3 py-3 px-4">
+                    <div className="flex-1 h-px" style={{ background: 'var(--color-border)' }} />
+                    <span className="text-[11px] font-medium shrink-0" style={{ color: 'var(--color-text-muted)' }}>
+                      {t('chat.contextReset') || '上下文已重置'}
+                    </span>
+                    <div className="flex-1 h-px" style={{ background: 'var(--color-border)' }} />
+                  </div>
+                );
+              }
               return (
               <div
                 key={idx}
@@ -1352,13 +1820,44 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
                 {msg.role === 'assistant' && (
                   <div
                     className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5"
-                    style={{ background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)' }}
                   >
-                    <Bot size={16} style={{ color: 'var(--color-primary)' }} />
+                    <img src={logoFaceRight} alt="YiYi" width={28} height={28} />
                   </div>
                 )}
 
-                <div className={`max-w-[80%] ${msg.role === 'user' ? '' : ''}`}>
+                <div className={`max-w-[80%] space-y-2 ${msg.role === 'user' ? '' : ''}`}>
+                  {/* Historical tool calls panel */}
+                  {/* Historical tool calls */}
+                  {historyTools && historyTools.length > 0 && (
+                    <ToolCallPanel tools={historyTools} isHistory />
+                  )}
+                  {/* Historical task cards from create_task tool calls */}
+                  {taskIds && taskIds.length > 0 && (
+                    <div className="space-y-2">
+                      {taskIds.map((tid) => (
+                        <TaskCard key={tid} taskId={tid} />
+                      ))}
+                    </div>
+                  )}
+                  {/* Background task proposals */}
+                  {backgroundProposals && backgroundProposals.length > 0 && (
+                    backgroundProposals.map((proposal, pi) => (
+                      <BackgroundTaskCard
+                        key={`bg-${pi}`}
+                        proposal={proposal}
+                        sessionId={currentSessionId}
+                        originalMessage={[...messages].reverse().find((m: ChatMessage) => m.role === 'user')?.content || ''}
+                      />
+                    ))
+                  )}
+                  {/* Historical spawn agent results */}
+                  {historyAgents && historyAgents.length > 0 && (
+                    <HistorySpawnAgentsPanel agents={historyAgents} />
+                  )}
+                  {/* Historical thinking/reasoning content */}
+                  {msg.role === 'assistant' && msg.thinking && (
+                    <ThinkingBlock content={msg.thinking} />
+                  )}
                   <div
                     className="py-2.5 px-4 rounded-2xl text-[14px] leading-relaxed"
                     style={msg.role === 'user' ? {
@@ -1496,39 +1995,60 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
             })}
 
             {/* Active tool calls + streaming response */}
-            {loading && (
+            {streamLoading && (
               <div className="flex gap-3 justify-start">
                 <div
                   className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5"
-                  style={{ background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)' }}
                 >
-                  <Bot size={16} style={{ color: 'var(--color-primary)' }} />
+                  <img src={logoFaceRight} alt="YiYi" width={28} height={28} />
                 </div>
                 <div className="max-w-[80%] space-y-2">
-                  {/* Tool status chips */}
-                  {activeTools.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
-                      {activeTools.map((tool) => (
-                        <div
-                          key={tool.id}
-                          className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px]"
-                          style={{
-                            background: 'var(--color-bg-elevated)',
-                            border: '1px solid var(--color-border)',
-                            color: 'var(--color-text-muted)',
-                          }}
-                        >
-                          {tool.status === 'running' ? (
-                            <Loader2 size={11} className="animate-spin" style={{ color: 'var(--color-primary)' }} />
-                          ) : (
-                            <CheckCircle2 size={11} style={{ color: 'var(--color-success, #22c55e)' }} />
-                          )}
-                          <span className="font-medium" style={{ color: 'var(--color-text-secondary)' }}>
-                            {tool.name}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
+                  {/* Tool call panel (includes Claude Code live panel) */}
+                  {(activeTools.length > 0 || claudeCode) && (() => {
+                    // Separate create_task and propose_background_task tools
+                    const taskCards: string[] = [];
+                    const bgProposals: BackgroundTaskProposal[] = [];
+                    const filteredTools = activeTools.filter((t) => {
+                      if (t.name === 'create_task' && t.status === 'done' && t.resultPreview) {
+                        try {
+                          const parsed = JSON.parse(t.resultPreview);
+                          if (parsed.id) { taskCards.push(parsed.id); return false; }
+                        } catch { /* keep as regular tool */ }
+                      }
+                      if (t.name === 'propose_background_task' && t.status === 'done' && t.resultPreview) {
+                        try {
+                          const parsed = JSON.parse(t.resultPreview);
+                          if (parsed.__type === 'propose_background_task') {
+                            bgProposals.push(parsed as BackgroundTaskProposal);
+                            return false;
+                          }
+                        } catch { /* keep as regular tool */ }
+                      }
+                      return true;
+                    });
+                    return (
+                      <>
+                        {(filteredTools.length > 0 || claudeCode) && (
+                          <ToolCallPanel tools={filteredTools} />
+                        )}
+                        {taskCards.map((tid) => (
+                          <TaskCard key={tid} taskId={tid} />
+                        ))}
+                        {bgProposals.map((proposal, pi) => (
+                          <BackgroundTaskCard
+                            key={`bg-stream-${pi}`}
+                            proposal={proposal}
+                            sessionId={currentSessionId}
+                            originalMessage={[...messages].reverse().find((m: ChatMessage) => m.role === 'user')?.content || ''}
+                          />
+                        ))}
+                      </>
+                    );
+                  })()}
+
+                  {/* Thinking/reasoning content (collapsible) */}
+                  {streamingThinking && (
+                    <ThinkingBlock content={streamingThinking} streaming />
                   )}
 
                   {/* Streaming content */}
@@ -1545,25 +2065,62 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
                       <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
                         {streamingContent}
                       </ReactMarkdown>
-                      <span className="inline-block w-1.5 h-4 ml-0.5 animate-pulse rounded-sm" style={{ background: 'var(--color-primary)', verticalAlign: 'text-bottom' }} />
+                      <span className="yiyi-working">
+                        <img src={logoFaceRight} alt="" width={28} height={28} />
+                        <span className="yiyi-dots"><span /><span /><span /></span>
+                      </span>
                     </div>
                   ) : (
-                    /* Loading dots (before first chunk) */
+                    /* Loading: simple dots */
                     <div
-                      className="py-3 px-4 rounded-2xl inline-block"
+                      className="py-2.5 px-4 rounded-2xl inline-flex items-center"
                       style={{
                         background: 'var(--color-bg-elevated)',
                         border: '1px solid var(--color-border)',
                         borderBottomLeftRadius: '6px',
                       }}
                     >
-                      <div className="flex gap-1.5">
-                        <span className="w-2 h-2 rounded-full animate-bounce" style={{ background: 'var(--color-text-tertiary)', animationDelay: '0ms' }} />
-                        <span className="w-2 h-2 rounded-full animate-bounce" style={{ background: 'var(--color-text-tertiary)', animationDelay: '150ms' }} />
-                        <span className="w-2 h-2 rounded-full animate-bounce" style={{ background: 'var(--color-text-tertiary)', animationDelay: '300ms' }} />
-                      </div>
+                      <span className="yiyi-dots"><span /><span /><span /></span>
                     </div>
                   )}
+                </div>
+              </div>
+            )}
+
+            {/* Error message from LLM */}
+            {streamError && !streamLoading && (
+              <div className="flex gap-3 justify-start">
+                <div
+                  className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5"
+                >
+                  <img src={logoFaceRight} alt="YiYi" width={28} height={28} style={{ opacity: 0.6 }} />
+                </div>
+                <div
+                  className="py-2.5 px-4 rounded-2xl text-[13px] leading-relaxed max-w-[80%]"
+                  style={{
+                    background: 'rgba(var(--color-error-rgb, 255,69,58), 0.08)',
+                    border: '1px solid var(--color-error)',
+                    borderBottomLeftRadius: '6px',
+                    color: 'var(--color-error)',
+                  }}
+                >
+                  <div className="font-semibold mb-1">{t('common.error') || 'Error'}</div>
+                  <div style={{ color: 'var(--color-text-secondary)', wordBreak: 'break-word' }}>{streamError}</div>
+                </div>
+              </div>
+            )}
+
+            {/* Long task round divider */}
+            {longTask.status !== 'idle' && longTask.currentRound > 1 && (
+              <RoundDivider round={longTask.currentRound} maxRounds={longTask.maxRounds} />
+            )}
+
+            {/* Long task progress panel */}
+            {longTask.status !== 'idle' && (
+              <div className="flex gap-3 justify-start px-2">
+                <div className="shrink-0" style={{ width: '32px' }} />
+                <div className="flex-1 min-w-0">
+                  <LongTaskProgressPanel />
                 </div>
               </div>
             )}
@@ -1599,9 +2156,59 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
               <SlashCommandPicker
                 query={commandQuery}
                 selectedIndex={commandPickerIndex}
-                onSelect={executeCommand}
+                onSelect={selectCommand}
                 t={t}
               />
+            )}
+
+            {/* /focus task suggestion picker */}
+            {showTaskPicker && !showCommandPicker && taskSuggestions.length > 0 && (
+              <div
+                className="absolute left-0 right-0 bottom-full mb-1 rounded-xl overflow-hidden z-50"
+                style={{
+                  background: 'var(--color-bg-elevated)',
+                  border: '1px solid var(--color-border-strong)',
+                  boxShadow: 'var(--shadow-lg)',
+                  maxHeight: '240px',
+                  overflowY: 'auto',
+                }}
+              >
+                <div className="px-3 pt-2 pb-1">
+                  <span className="text-[11px] font-medium uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>
+                    选择任务
+                  </span>
+                </div>
+                {taskSuggestions.map((task, i) => {
+                  const isActive = i === taskPickerIndex;
+                  const statusIcon = task.status === 'running' ? '●' : task.status === 'completed' ? '✓' : task.status === 'failed' ? '✗' : '○';
+                  return (
+                    <div
+                      key={task.id}
+                      onClick={() => selectTask(task)}
+                      className="flex items-center gap-2.5 px-3 py-2 mx-1 rounded-lg cursor-pointer transition-colors"
+                      style={{
+                        background: isActive ? 'var(--color-primary-subtle)' : 'transparent',
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!isActive) e.currentTarget.style.background = 'var(--color-bg-muted)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = isActive ? 'var(--color-primary-subtle)' : 'transparent';
+                      }}
+                    >
+                      <span className="text-[13px]" style={{ color: 'var(--color-text-muted)' }}>{statusIcon}</span>
+                      <span className="text-[13px] font-medium" style={{ color: isActive ? 'var(--color-text)' : 'var(--color-text-secondary)' }}>
+                        {task.title}
+                      </span>
+                    </div>
+                  );
+                })}
+                <div className="px-3 pt-1 pb-2">
+                  <span className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+                    ↑↓ 导航 · Enter 选择 · Esc 关闭
+                  </span>
+                </div>
+              </div>
             )}
 
             {/* @-mention picker dropdown (bots + files) */}
@@ -1615,6 +2222,7 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
                 onSelectFile={handleFileSelect}
               />
             )}
+
 
             {/* Image preview strip */}
             {pendingImages.length > 0 && (
@@ -1704,21 +2312,36 @@ export function ChatPage({ consumeNotifContext }: ChatPageProps) {
                 }
               </button>
               */}
-              <button
-                type="submit"
-                disabled={loading || (!message.trim() && pendingImages.length === 0)}
-                className="w-9 h-9 flex items-center justify-center rounded-xl shrink-0 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-                style={{
-                  background: (message.trim() || pendingImages.length > 0) ? 'var(--color-primary)' : 'transparent',
-                  color: (message.trim() || pendingImages.length > 0) ? '#FFFFFF' : 'var(--color-text-muted)',
-                }}
-              >
               {loading ? (
-                <Loader2 size={18} className="animate-spin" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    chatStreamStop();
+                    useChatStreamStore.getState().endStream();
+                    useChatStreamStore.getState().spawnComplete();
+                  }}
+                  className="w-9 h-9 flex items-center justify-center rounded-xl shrink-0 transition-all"
+                  style={{
+                    background: 'var(--color-error)',
+                    color: '#FFFFFF',
+                  }}
+                  title={t('chat.stop', '停止')}
+                >
+                  <Square size={14} fill="currentColor" />
+                </button>
               ) : (
-                <Send size={16} />
+                <button
+                  type="submit"
+                  disabled={!message.trim() && pendingImages.length === 0}
+                  className="w-9 h-9 flex items-center justify-center rounded-xl shrink-0 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                  style={{
+                    background: (message.trim() || pendingImages.length > 0) ? 'var(--color-primary)' : 'transparent',
+                    color: (message.trim() || pendingImages.length > 0) ? '#FFFFFF' : 'var(--color-text-muted)',
+                  }}
+                >
+                  <Send size={16} />
+                </button>
               )}
-            </button>
             </div>
           </div>
         </form>

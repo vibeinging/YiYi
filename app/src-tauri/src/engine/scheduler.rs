@@ -10,7 +10,7 @@ use crate::commands::cronjobs::{CronJobSpec, DispatchSpec, default_dispatch_targ
 use crate::engine::db::Database;
 use crate::state::AppState;
 
-use super::llm_client::LLMConfig;
+use super::llm_client::{LLMConfig, LLMMessage, MessageContent};
 use super::react_agent;
 
 /// Format a Duration into a human-readable string
@@ -56,13 +56,20 @@ pub async fn resolve_llm_config(
             .and_then(|s| s.api_key.clone())
     };
     let api_key = api_key.or_else(|| std::env::var(&p.api_key_prefix).ok())?;
+    let native_tools = crate::state::providers::resolve_native_injections(&p.native_tools, &active.model);
 
     Some(LLMConfig {
         base_url,
         api_key,
         model: active.model.clone(),
+        provider_id: active.provider_id.clone(),
+        native_tools,
     })
 }
+
+/// Maximum number of history message pairs to load for isolated cron sessions.
+/// This prevents context from growing unboundedly across executions.
+const ISOLATED_HISTORY_LIMIT: usize = 20;
 
 /// Execute a cron/delay job task (unified entry point).
 /// Returns (result, db_clone, exec_id) for the caller to finalize after dispatch.
@@ -89,9 +96,16 @@ pub async fn execute_job_task(
             match llm_config.as_ref() {
                 None => Err(format!("CronJob '{}': no LLM configured", spec.id)),
                 Some(config) => {
-                    let prompt = react_agent::build_system_prompt(working_dir, &[], None, None, None).await;
+                    let prompt = react_agent::build_system_prompt(working_dir, None, &[], &[], None, None, None).await;
                     let input = if text.is_empty() { "Execute the scheduled task." } else { text };
-                    react_agent::run_react(config, &prompt, input, &[]).await
+
+                    if spec.execution_mode == crate::engine::db::ExecutionMode::Isolated {
+                        // Isolated mode: run in a dedicated session with its own history
+                        execute_isolated(spec, config, &prompt, input, db).await
+                    } else {
+                        // Shared mode (default): run in global context without history
+                        react_agent::run_react(config, &prompt, input, &[]).await
+                    }
                 }
             }
         }
@@ -109,6 +123,147 @@ pub async fn execute_job_task(
     }
 
     (result, db.cloned(), exec_id)
+}
+
+/// Execute an agent task in isolated mode with a dedicated session.
+///
+/// Uses session_id `cron:{job_id}` to maintain separate conversation history.
+/// Loads recent history (up to ISOLATED_HISTORY_LIMIT messages) as context,
+/// then saves both the user input and assistant response back to the session.
+async fn execute_isolated(
+    spec: &CronJobSpec,
+    config: &LLMConfig,
+    system_prompt: &str,
+    input: &str,
+    db: Option<&Arc<Database>>,
+) -> Result<String, String> {
+    let session_id = format!("cron:{}", spec.id);
+    let short_id = &spec.id[..8.min(spec.id.len())];
+    let session_name = format!("[Cron] {} ({})", spec.name, short_id);
+
+    // Ensure the isolated session exists
+    if let Some(db) = db {
+        let _ = db.ensure_session(&session_id, &session_name, "cronjob", Some(&spec.id));
+    }
+
+    // Create a Task record so this execution appears in the Task panel
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let task_title = format!("[Cron] {}", spec.name);
+    if let Some(db) = db {
+        let _ = db.create_task(
+            &task_id,
+            &task_title,
+            Some(&format!("Scheduled execution of cron job: {}", spec.name)),
+            "running",
+            &session_id,
+            None,
+            None,
+            0,
+            chrono::Utc::now().timestamp(),
+        );
+        // Only emit event if DB write succeeded (task record exists)
+        if let Some(handle) = crate::engine::tools::get_app_handle() {
+            use tauri::Emitter;
+            let _ = handle.emit("task://created", serde_json::json!({
+                "taskId": &task_id,
+                "title": &task_title,
+                "source": "cron",
+            }));
+        }
+    }
+
+    // Load recent conversation history for context continuity
+    let history = if let Some(db) = db {
+        let all_messages = db.get_recent_messages(&session_id, 200)
+            .unwrap_or_default();
+        // Filter to user/assistant only, take the most recent N, preserving order
+        let user_assistant: Vec<_> = all_messages.iter()
+            .filter(|msg| matches!(msg.role.as_str(), "user" | "assistant"))
+            .collect();
+        let filtered: Vec<LLMMessage> = user_assistant.iter()
+            .rev()
+            .take(ISOLATED_HISTORY_LIMIT)
+            .rev()
+            .map(|msg| LLMMessage {
+                role: msg.role.clone(),
+                content: Some(MessageContent::text(&msg.content)),
+                tool_calls: None,
+                tool_call_id: None,
+            })
+            .collect();
+        filtered
+    } else {
+        vec![]
+    };
+
+    // Save the user input to the isolated session
+    if let Some(db) = db {
+        let _ = db.push_message(&session_id, "user", input);
+    }
+
+    // Run the agent with history context
+    let result = react_agent::run_react_with_options(
+        config,
+        system_prompt,
+        input,
+        &[],      // no extra tools
+        &history,
+        None,     // default max iterations
+        None,     // no working_dir for compact summaries
+    ).await;
+
+    // Save the assistant response to the isolated session
+    if let Some(db) = db {
+        match &result {
+            Ok(output) if !output.is_empty() && output != "(no response)" => {
+                let _ = db.push_message(&session_id, "assistant", output);
+            }
+            Ok(_) => {} // empty or "(no response)" — skip saving
+            Err(err) => {
+                let _ = db.push_message(&session_id, "assistant", &format!("[Error] {}", err));
+            }
+        }
+    }
+
+    // Update Task status based on execution result
+    if let Some(db) = db {
+        match &result {
+            Ok(_) => {
+                let _ = db.update_task_status(&task_id, "completed");
+                if let Some(handle) = crate::engine::tools::get_app_handle() {
+                    use tauri::Emitter;
+                    let _ = handle.emit("task://completed", serde_json::json!({
+                        "taskId": &task_id,
+                        "title": &task_title,
+                    }));
+                }
+                send_notification_with_context(
+                    &task_title,
+                    "任务已完成",
+                    serde_json::json!({ "page": "chat", "task_id": &task_id }),
+                );
+            }
+            Err(err_msg) => {
+                let _ = db.update_task_error(&task_id, "failed", err_msg);
+                if let Some(handle) = crate::engine::tools::get_app_handle() {
+                    use tauri::Emitter;
+                    let _ = handle.emit("task://failed", serde_json::json!({
+                        "taskId": &task_id,
+                        "title": &task_title,
+                        "error": err_msg,
+                    }));
+                }
+                let preview = if err_msg.len() > 100 { &err_msg[..100] } else { err_msg.as_str() };
+                send_notification_with_context(
+                    &format!("{} - 失败", task_title),
+                    preview,
+                    serde_json::json!({ "page": "chat", "task_id": &task_id }),
+                );
+            }
+        }
+    }
+
+    result
 }
 
 /// Finalize execution record: update with result + dispatch errors.
@@ -184,24 +339,42 @@ pub async fn dispatch_job_result(
             }
             "bot" => {
                 if let (Some(bid), Some(bt)) = (&target.bot_id, &target.target) {
-                    // Check if the bot is enabled
-                    let bot_enabled = db.get_bot(bid)
-                        .ok()
-                        .flatten()
-                        .map(|b| b.enabled)
-                        .unwrap_or(false);
-                    if !bot_enabled {
-                        let err = format!("[dispatch] Bot '{}' is disabled", bid);
-                        log::warn!("{}", err);
-                        errors.push(err);
-                        continue;
+                    match db.get_bot(bid) {
+                        Ok(Some(bot)) if bot.enabled => {
+                            let msg = format!("[{}] {}", job_name, &preview);
+                            if let Err(e) = crate::commands::bots::send_to_bot(db, bid, bt, &msg).await {
+                                let err = format!(
+                                    "[dispatch] 发送到 Bot '{}' ({}) 失败: {}",
+                                    bot.name, bid, e
+                                );
+                                log::warn!("{}", err);
+                                errors.push(err);
+                            }
+                        }
+                        Ok(Some(bot)) => {
+                            let err = format!(
+                                "[dispatch] Bot '{}' ({}) 已禁用，消息未发送。请启用该 Bot 或更新任务的投递目标。",
+                                bot.name, bid
+                            );
+                            log::warn!("{}", err);
+                            errors.push(err);
+                        }
+                        Ok(None) => {
+                            let err = format!(
+                                "[dispatch] Bot '{}' 已被删除，消息未发送。请更新任务的投递目标。",
+                                bid
+                            );
+                            log::warn!("{}", err);
+                            errors.push(err);
+                        }
+                        Err(e) => {
+                            let err = format!("[dispatch] 查询 Bot '{}' 失败: {}", bid, e);
+                            log::warn!("{}", err);
+                            errors.push(err);
+                        }
                     }
-                    let msg = format!("[{}] {}", job_name, &preview);
-                    if let Err(e) = crate::commands::bots::send_to_bot(db, bid, bt, &msg).await {
-                        let err = format!("[dispatch] Bot '{}' send failed: {}", bid, e);
-                        log::warn!("{}", err);
-                        errors.push(err);
-                    }
+                } else {
+                    errors.push("[dispatch] Bot dispatch target 缺少 bot_id 或 target".to_string());
                 }
             }
             _ => {}
@@ -419,7 +592,7 @@ impl CronScheduler {
 
         // Spawn the scheduled task
         let handle = tokio::spawn(async move {
-            let sleep_duration = Duration::from_secs(duration.num_seconds() as u64);
+            let sleep_duration = Duration::from_secs(duration.num_seconds().max(0) as u64);
             log::info!(
                 "One-time job '{}' ({}) scheduled, waiting {}",
                 spec_id,
@@ -509,7 +682,7 @@ impl CronScheduler {
             let job_type = spec.schedule.r#type.clone();
 
             let handle = tokio::spawn(async move {
-                let sleep_duration = Duration::from_secs(duration.num_seconds() as u64);
+                let sleep_duration = Duration::from_secs(duration.num_seconds().max(0) as u64);
                 log::info!(
                     "One-time job '{}' ({}) scheduled, waiting {}",
                     spec_id, job_type, duration_display

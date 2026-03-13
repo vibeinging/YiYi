@@ -18,6 +18,9 @@ pub struct Skill {
     pub references: Option<serde_json::Value>,
     #[serde(default)]
     pub scripts: Option<serde_json::Value>,
+    /// System-internal skills cannot be edited, disabled, or deleted by users.
+    #[serde(default)]
+    pub system: bool,
 }
 
 fn skills_dir(working_dir: &Path, source: &str) -> PathBuf {
@@ -31,12 +34,22 @@ fn skills_dir(working_dir: &Path, source: &str) -> PathBuf {
 /// Embedded skills directory (complete with scripts, references, etc.)
 static EMBEDDED_SKILLS: Dir = include_dir!("$CARGO_MANIFEST_DIR/skills");
 
+/// System-internal skills — cannot be edited, disabled, or deleted by users.
+const SYSTEM_SKILL_NAMES: &[&str] = &[
+    "auto_continue",
+    "task_proposer",
+];
+
+/// Returns true if the skill is a system-internal skill.
+pub fn is_system_skill(name: &str) -> bool {
+    SYSTEM_SKILL_NAMES.contains(&name)
+}
+
 /// Names of all builtin skills
 const BUILTIN_SKILL_NAMES: &[&str] = &[
     "bot_setup",
     "browser_visible",
     "coding_assistant",
-    "claude_code",
     "file_reader",
     "news",
     "himalaya",
@@ -45,6 +58,15 @@ const BUILTIN_SKILL_NAMES: &[&str] = &[
     "pptx",
     "xlsx",
     "cron",
+    "skill_creator",
+    "algorithmic_art",
+    "canvas_design",
+    "doc_coauthoring",
+    "frontend_design",
+    "mcp_builder",
+    "theme_factory",
+    "webapp_testing",
+    "auto_continue",
 ];
 
 /// Seed builtin skills into active_skills/ if not already present.
@@ -58,11 +80,37 @@ pub fn seed_builtin_skills(working_dir: &Path) {
         let skill_md = skill_dir.join("SKILL.md");
         if !skill_md.exists() {
             if let Some(dir) = EMBEDDED_SKILLS.get_dir(name) {
-                // Use include_dir's built-in extract (writes to active_dir/<name>/...)
+                // Ensure the target directory exists before extracting
+                std::fs::create_dir_all(&skill_dir).ok();
                 if let Err(e) = dir.extract(&active_dir) {
                     log::error!("Failed to seed skill '{}': {}", name, e);
                 }
             }
+        }
+    }
+
+    // Migration: remove deprecated claude_code skill (merged into coding_assistant)
+    let deprecated = active_dir.join("claude_code");
+    if deprecated.exists() {
+        std::fs::remove_dir_all(&deprecated).ok();
+        log::info!("Removed deprecated 'claude_code' skill (merged into coding_assistant)");
+    }
+
+    // Always refresh system-internal skills to ensure they stay up-to-date
+    for name in SYSTEM_SKILL_NAMES {
+        if let Some(dir) = EMBEDDED_SKILLS.get_dir(name) {
+            std::fs::create_dir_all(active_dir.join(name)).ok();
+            if let Err(e) = dir.extract(&active_dir) {
+                log::error!("Failed to refresh system skill '{}': {}", name, e);
+            }
+        }
+    }
+
+    // Always refresh coding_assistant SKILL.md to pick up merged content
+    if let Some(dir) = EMBEDDED_SKILLS.get_dir("coding_assistant") {
+        std::fs::create_dir_all(active_dir.join("coding_assistant")).ok();
+        if let Err(e) = dir.extract(&active_dir) {
+            log::error!("Failed to refresh coding_assistant skill: {}", e);
         }
     }
 }
@@ -91,13 +139,14 @@ fn discover_skills(dir: &Path, source: &str) -> Vec<Skill> {
             let scripts = build_dir_tree(&path.join("scripts"));
 
             skills.push(Skill {
-                name,
+                name: name.clone(),
                 source: source.to_string(),
                 enabled: true,
                 content,
                 path: path.to_string_lossy().to_string(),
                 references: refs,
                 scripts,
+                system: is_system_skill(&name),
             });
         }
     }
@@ -204,6 +253,7 @@ fn builtin_skills_with_status(active_dir: &Path) -> Vec<Skill> {
                 path: skill_dir.to_string_lossy().to_string(),
                 references: refs,
                 scripts,
+                system: is_system_skill(name),
             })
         })
         .collect()
@@ -263,7 +313,8 @@ pub async fn enable_skill(
         if src.exists() {
             copy_dir_all(&src, &dst)?;
         } else if let Some(dir) = EMBEDDED_SKILLS.get_dir(&name) {
-            // Extract from embedded skills
+            // Ensure the target directory exists before extracting
+            std::fs::create_dir_all(&dst).ok();
             if let Err(e) = dir.extract(&active_dir) {
                 return Err(format!("Failed to extract skill '{}': {}", name, e));
             }
@@ -278,6 +329,9 @@ pub async fn disable_skill(
     state: State<'_, AppState>,
     name: String,
 ) -> Result<serde_json::Value, String> {
+    if is_system_skill(&name) {
+        return Err(format!("System skill '{}' cannot be disabled", name));
+    }
     let active_dir = skills_dir(&state.working_dir, "active");
     let path = active_dir.join(&name);
 
@@ -295,6 +349,9 @@ pub async fn update_skill(
     name: String,
     content: String,
 ) -> Result<serde_json::Value, String> {
+    if is_system_skill(&name) {
+        return Err(format!("System skill '{}' cannot be edited", name));
+    }
     let active_dir = skills_dir(&state.working_dir, "active");
     let custom_dir = skills_dir(&state.working_dir, "customized");
 
@@ -305,7 +362,7 @@ pub async fn update_skill(
         let skill_dir = active_dir.join(&name);
         if !skill_dir.exists() {
             // Extract from embedded first
-            std::fs::create_dir_all(&active_dir).ok();
+            std::fs::create_dir_all(&skill_dir).ok();
             if let Some(dir) = EMBEDDED_SKILLS.get_dir(&name) {
                 dir.extract(&active_dir)
                     .map_err(|e| format!("Failed to extract skill '{}': {}", name, e))?;
@@ -361,6 +418,9 @@ pub async fn delete_skill(
     state: State<'_, AppState>,
     name: String,
 ) -> Result<serde_json::Value, String> {
+    if is_system_skill(&name) {
+        return Err(format!("System skill '{}' cannot be deleted", name));
+    }
     let custom_dir = skills_dir(&state.working_dir, "customized");
     let active_dir = skills_dir(&state.working_dir, "active");
 
@@ -442,6 +502,7 @@ pub async fn import_skill(
         path: skill_custom.to_string_lossy().to_string(),
         references: None,
         scripts: None,
+        system: false,
     };
 
     Ok(serde_json::json!({
@@ -496,7 +557,7 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), String> {
 // AI Skill Generation
 // ============================================================================
 
-const SKILL_GENERATION_PROMPT: &str = r#"You are a skill author for YiClaw, an AI assistant platform. Generate a complete SKILL.md file based on the user's description.
+const SKILL_GENERATION_PROMPT: &str = r#"You are a skill author for YiYiClaw, an AI assistant platform. Generate a complete SKILL.md file based on the user's description.
 
 A SKILL.md has this structure:
 1. YAML frontmatter (between --- markers) with: name, description, metadata (emoji, requires)
@@ -518,7 +579,7 @@ name: weather
 description: "Query weather information for any city worldwide"
 metadata:
   {
-    "yiclaw":
+    "yiyiclaw":
       {
         "emoji": "🌤️",
         "requires": {}
@@ -561,14 +622,15 @@ pub async fn generate_skill_ai(
         match llm_client::chat_completion_stream(
             &config,
             &messages,
-            &[], // no tools needed
+            &[],
             move |evt| match evt {
                 llm_client::StreamEvent::ContentDelta(text) => {
                     handle.emit("skill-gen://chunk", &text).ok();
                 }
-                llm_client::StreamEvent::Done(_) => {
+                llm_client::StreamEvent::Done => {
                     handle.emit("skill-gen://done", "").ok();
                 }
+                _ => {}
             },
             None,
         )

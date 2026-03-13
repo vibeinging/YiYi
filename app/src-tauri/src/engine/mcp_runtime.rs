@@ -10,6 +10,20 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::state::config::MCPClientConfig;
 
+// ---------------------------------------------------------------------------
+// Shared HTTP client for MCP HTTP transport — reuses connection pool & TLS
+// ---------------------------------------------------------------------------
+
+fn mcp_http_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .pool_max_idle_per_host(5)
+            .build()
+            .expect("Failed to build MCP HTTP client")
+    })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MCPTool {
     pub name: String,
@@ -215,7 +229,7 @@ impl MCPRuntime {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
                 "clientInfo": {
-                    "name": "yiclaw",
+                    "name": "yiyiclaw",
                     "version": "0.1.0"
                 }
             }
@@ -277,7 +291,7 @@ impl MCPRuntime {
             .as_ref()
             .ok_or("No URL specified for HTTP transport")?;
 
-        let client = reqwest::Client::new();
+        let client = mcp_http_client();
         let init_req = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -286,7 +300,7 @@ impl MCPRuntime {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
                 "clientInfo": {
-                    "name": "yiclaw",
+                    "name": "yiyiclaw",
                     "version": "0.1.0"
                 }
             }
@@ -567,7 +581,7 @@ impl MCPRuntime {
                 // Drop the read lock before awaiting
                 drop(processes);
 
-                let client = reqwest::Client::new();
+                let client = mcp_http_client();
                 let mut http_req = client.post(&url).json(&req);
                 for (k, v) in &headers {
                     http_req = http_req.header(k, v);

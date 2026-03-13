@@ -24,7 +24,7 @@ pub struct TrayMenuState {
 
 /// Create and configure the system tray icon with menu.
 pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let show_item = MenuItemBuilder::with_id(MENU_SHOW, "打开 YiClaw").build(app)?;
+    let show_item = MenuItemBuilder::with_id(MENU_SHOW, "打开 YiYiClaw").build(app)?;
     let new_session_item =
         MenuItemBuilder::with_id(MENU_NEW_SESSION, "新对话").build(app)?;
     let bot_status_item = MenuItemBuilder::with_id(MENU_BOT_STATUS, "Bot 状态: 检查中...")
@@ -51,13 +51,13 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     };
     app.manage(Arc::new(RwLock::new(tray_state)));
 
-    // Load the tray icon from the embedded 32x32 PNG
-    let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))
+    // Load the tray icon from the embedded transparent PNG (face-right variant)
+    let icon = Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
         .expect("failed to load embedded tray icon");
 
     TrayIconBuilder::with_id("main")
         .icon(icon)
-        .tooltip("YiClaw")
+        .tooltip("YiYiClaw")
         .menu(&menu)
         .on_menu_event(|app, event| {
             handle_menu_event(app, event.id().as_ref());
@@ -145,22 +145,9 @@ async fn toggle_all_bots(app: &AppHandle) {
         log::info!("All bots paused via tray menu");
     } else {
         // Re-start the bot manager consumer loop
-        let app_state = AppState {
-            working_dir: state.working_dir.clone(),
-            user_workspace: std::sync::RwLock::new(state.user_workspace()),
-            secret_dir: state.secret_dir.clone(),
-            config: state.config.clone(),
-            providers: state.providers.clone(),
-            db: state.db.clone(),
-            bot_manager: state.bot_manager.clone(),
-            mcp_runtime: state.mcp_runtime.clone(),
-            chat_cancelled: state.chat_cancelled.clone(),
-            scheduler: state.scheduler.clone(),
-            streaming_state: state.streaming_state.clone(),
-        };
         let app_handle = app.clone();
         manager
-            .start(std::sync::Arc::new(app_state), app_handle)
+            .start(std::sync::Arc::new(state.clone_shared()), app_handle)
             .await;
         log::info!("All bots resumed via tray menu");
     }

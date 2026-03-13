@@ -37,7 +37,7 @@ pub struct StreamingSnapshot {
 }
 
 pub struct AppState {
-    pub working_dir: PathBuf,       // Internal app data (~/.yiclaw)
+    pub working_dir: PathBuf,       // Internal app data (~/.yiyiclaw)
     pub user_workspace: std::sync::RwLock<PathBuf>,  // User-facing workspace
     pub secret_dir: PathBuf,
     pub config: Arc<RwLock<Config>>,
@@ -48,9 +48,34 @@ pub struct AppState {
     pub chat_cancelled: Arc<AtomicBool>,
     pub scheduler: Arc<RwLock<Option<CronScheduler>>>,
     pub streaming_state: Arc<std::sync::Mutex<HashMap<String, StreamingSnapshot>>>,
+    pub task_cancellations: Arc<std::sync::Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    pub pty_manager: Arc<crate::engine::pty_manager::PtyManager>,
 }
 
 impl AppState {
+    /// Create a shallow clone that shares all `Arc` fields with the original.
+    ///
+    /// The only non-Arc field (`user_workspace`) is snapshot-copied via a new
+    /// `RwLock`, so the clone is safe to move into a background task without
+    /// risking deadlocks on the original's lock.
+    pub fn clone_shared(&self) -> Self {
+        Self {
+            working_dir: self.working_dir.clone(),
+            user_workspace: std::sync::RwLock::new(self.user_workspace()),
+            secret_dir: self.secret_dir.clone(),
+            config: self.config.clone(),
+            providers: self.providers.clone(),
+            db: self.db.clone(),
+            bot_manager: self.bot_manager.clone(),
+            mcp_runtime: self.mcp_runtime.clone(),
+            chat_cancelled: self.chat_cancelled.clone(),
+            scheduler: self.scheduler.clone(),
+            streaming_state: self.streaming_state.clone(),
+            task_cancellations: self.task_cancellations.clone(),
+            pty_manager: self.pty_manager.clone(),
+        }
+    }
+
     /// Get the current user workspace path
     pub fn user_workspace(&self) -> PathBuf {
         self.user_workspace.read().unwrap().clone()
@@ -61,19 +86,45 @@ impl AppState {
         *self.user_workspace.write().unwrap() = path;
     }
 
+    /// Get or create a cancellation signal for a task
+    pub fn get_or_create_task_cancel(&self, task_id: &str) -> Arc<AtomicBool> {
+        let mut cancellations = self.task_cancellations.lock().unwrap();
+        cancellations
+            .entry(task_id.to_string())
+            .or_insert_with(|| Arc::new(AtomicBool::new(false)))
+            .clone()
+    }
+
+    /// Set the cancellation signal for a task
+    pub fn cancel_task_signal(&self, task_id: &str) -> bool {
+        let cancellations = self.task_cancellations.lock().unwrap();
+        if let Some(signal) = cancellations.get(task_id) {
+            signal.store(true, std::sync::atomic::Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Clean up the cancellation signal for a completed/cancelled task
+    pub fn cleanup_task_signal(&self, task_id: &str) {
+        let mut cancellations = self.task_cancellations.lock().unwrap();
+        cancellations.remove(task_id);
+    }
+
     pub fn new() -> Self {
-        let working_dir = std::env::var("YICLAW_WORKING_DIR")
+        let working_dir = std::env::var("YIYICLAW_WORKING_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
                 dirs::home_dir()
                     .unwrap_or_else(|| PathBuf::from("."))
-                    .join(".yiclaw")
+                    .join(".yiyiclaw")
             });
 
         let secret_dir = working_dir
             .parent()
             .unwrap_or(&working_dir)
-            .join(".yiclaw.secret");
+            .join(".yiyiclaw.secret");
 
         // Ensure directories exist
         std::fs::create_dir_all(&working_dir).ok();
@@ -87,17 +138,17 @@ impl AppState {
 
         let config = Config::load(&working_dir);
 
-        // Resolve user workspace: config > env > ~/Documents/YiClaw
+        // Resolve user workspace: config > env > ~/Documents/YiYiClaw
         let user_workspace = config
             .agents
             .workspace_dir
             .as_ref()
             .map(PathBuf::from)
-            .or_else(|| std::env::var("YICLAW_WORKSPACE").ok().map(PathBuf::from))
+            .or_else(|| std::env::var("YIYICLAW_WORKSPACE").ok().map(PathBuf::from))
             .unwrap_or_else(|| {
                 dirs::document_dir()
                     .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
-                    .join("YiClaw")
+                    .join("YiYiClaw")
             });
         std::fs::create_dir_all(&user_workspace).ok();
 
@@ -135,6 +186,8 @@ impl AppState {
             chat_cancelled: Arc::new(AtomicBool::new(false)),
             scheduler: Arc::new(RwLock::new(None)),
             streaming_state: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            task_cancellations: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            pty_manager: Arc::new(crate::engine::pty_manager::PtyManager::new()),
         }
     }
 }

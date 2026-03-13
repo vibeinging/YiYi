@@ -56,6 +56,36 @@ export async function checkClaudeCodeStatus(): Promise<ClaudeCodeStatus> {
   return await invoke<ClaudeCodeStatus>('check_claude_code_status');
 }
 
+export interface InstallClaudeCodeResult {
+  success: boolean;
+  message: string;
+  already_installed?: boolean;
+  needs_node?: boolean;
+  output?: string;
+}
+
+export async function installClaudeCode(): Promise<InstallClaudeCodeResult> {
+  return await invoke<InstallClaudeCodeResult>('install_claude_code');
+}
+
+export async function checkToolAvailable(tool: string): Promise<boolean> {
+  return invoke<boolean>('check_tool_available', { tool });
+}
+
+export async function installTool(tool: string): Promise<string> {
+  return invoke<string>('install_tool', { tool });
+}
+
+/** @deprecated Use checkToolAvailable('git') instead */
+export async function checkGitAvailable(): Promise<boolean> {
+  return checkToolAvailable('git');
+}
+
+/** @deprecated Use installTool('git') instead */
+export async function installGit(): Promise<string> {
+  return installTool('git');
+}
+
 export async function getAppFlag(key: string): Promise<string | null> {
   return await invoke<string | null>('get_app_flag', { key });
 }

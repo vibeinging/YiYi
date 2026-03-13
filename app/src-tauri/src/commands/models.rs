@@ -7,11 +7,130 @@ use crate::state::providers::{
     ProviderPlugin, ProviderSettings, ProviderTemplate,
 };
 
+/// Extract reply text from various LLM response formats.
+/// Prioritizes the final answer over reasoning/thinking content.
+/// Returns Some even if only reasoning_content exists (model responded but thinking used all tokens).
+fn extract_reply(text: &str) -> Option<String> {
+    let body: serde_json::Value = serde_json::from_str(text).ok()?;
+    let msg = &body["choices"][0]["message"];
+
+    // 1. OpenAI-compatible: choices[0].message.content (string)
+    if let Some(s) = msg["content"].as_str() {
+        if !s.is_empty() {
+            return Some(s.to_string());
+        }
+    }
+    // 2. content is array: choices[0].message.content[0].text
+    if let Some(arr) = msg["content"].as_array() {
+        let parts: Vec<&str> = arr.iter()
+            .filter_map(|item| item["text"].as_str())
+            .collect();
+        if !parts.is_empty() {
+            return Some(parts.join(""));
+        }
+    }
+    // 3. Anthropic native: content[0].text
+    if let Some(arr) = body["content"].as_array() {
+        let parts: Vec<&str> = arr.iter()
+            .filter_map(|item| item["text"].as_str())
+            .collect();
+        if !parts.is_empty() {
+            return Some(parts.join(""));
+        }
+    }
+    // 4. If reasoning_content exists but content is empty, the model
+    //    did respond (thinking used all tokens). Still counts as connected.
+    if msg["reasoning_content"].as_str().is_some_and(|s| !s.is_empty()) {
+        return Some("(模型已响应，思考内容已返回)".to_string());
+    }
+
+    None
+}
+
+/// Send a single test chat completion request.
+/// `enable_thinking` — if Some, adds the parameter to the body.
+async fn send_test_request(
+    client: &reqwest::Client,
+    url: &str,
+    model: &str,
+    api_key: &Option<String>,
+    enable_thinking: Option<bool>,
+) -> Result<TestConnectionResponse, String> {
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "Reply in one short sentence."},
+            {"role": "user", "content": "Say hi and tell me your model name."},
+        ],
+        "max_tokens": 300,
+        "stream": false,
+    });
+    if let Some(v) = enable_thinking {
+        body["enable_thinking"] = serde_json::json!(v);
+    }
+
+    let mut req = client.post(url)
+        .header("Content-Type", "application/json")
+        .json(&body);
+    if let Some(key) = api_key {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    if crate::engine::llm_client::needs_coding_agent_ua(url) {
+        req = req.header("User-Agent", crate::engine::llm_client::CODING_AGENT_UA);
+    }
+
+    let start = std::time::Instant::now();
+    match req.timeout(std::time::Duration::from_secs(30)).send().await {
+        Ok(resp) => {
+            let latency = start.elapsed().as_millis() as u64;
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            if status.is_success() {
+                let reply = extract_reply(&text);
+                if reply.is_some() {
+                    Ok(TestConnectionResponse {
+                        success: true,
+                        message: format!("{}ms", latency),
+                        latency_ms: Some(latency),
+                        reply,
+                    })
+                } else {
+                    Ok(TestConnectionResponse {
+                        success: false,
+                        message: "模型已响应但未返回有效内容（可能 token 不足或格式不兼容）".to_string(),
+                        latency_ms: Some(latency),
+                        reply: None,
+                    })
+                }
+            } else {
+                let err_msg = serde_json::from_str::<serde_json::Value>(&text)
+                    .ok()
+                    .and_then(|v| v["error"]["message"].as_str().map(String::from))
+                    .unwrap_or(text);
+                Ok(TestConnectionResponse {
+                    success: false,
+                    message: err_msg,
+                    latency_ms: Some(latency),
+                    reply: None,
+                })
+            }
+        }
+        Err(e) => Ok(TestConnectionResponse {
+            success: false,
+            message: format!("Connection failed: {}", e),
+            latency_ms: None,
+            reply: None,
+        }),
+    }
+}
+
 #[derive(Serialize)]
 pub struct TestConnectionResponse {
     pub success: bool,
     pub message: String,
     pub latency_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -71,6 +190,7 @@ pub async fn test_provider(
     provider_id: String,
     api_key: Option<String>,
     base_url: Option<String>,
+    model_id: Option<String>,
 ) -> Result<TestConnectionResponse, String> {
     // Resolve API key and base URL: use provided values, fallback to saved config
     let providers = state.providers.read().await;
@@ -94,40 +214,69 @@ pub async fn test_provider(
             provider.and_then(|p| std::env::var(&p.api_key_prefix).ok())
         });
 
-    drop(providers);
+    // Pick model: explicit > selected > first available
+    let resolved_model = model_id.or_else(|| {
+        provider.and_then(|p| p.models.first().map(|m| m.id.clone()))
+    });
 
-    let test_url = format!("{}/models", resolved_url.trim_end_matches('/'));
+    drop(providers);
 
     let client = reqwest::Client::new();
     let start = std::time::Instant::now();
 
-    let mut req = client.get(&test_url);
-    if let Some(key) = resolved_key {
-        req = req.header("Authorization", format!("Bearer {}", key));
-    }
+    // Send a real chat completion with "hello"
+    if let Some(model) = resolved_model {
+        let url = format!("{}/chat/completions", resolved_url.trim_end_matches('/'));
 
-    match req.timeout(std::time::Duration::from_secs(10)).send().await {
-        Ok(resp) => {
-            let latency = start.elapsed().as_millis() as u64;
-            if resp.status().is_success() {
-                Ok(TestConnectionResponse {
-                    success: true,
-                    message: "Connection successful".to_string(),
-                    latency_ms: Some(latency),
-                })
-            } else {
-                Ok(TestConnectionResponse {
-                    success: false,
-                    message: format!("HTTP {}", resp.status()),
-                    latency_ms: Some(latency),
-                })
+        // First attempt: normal request
+        let result = send_test_request(&client, &url, &model, &resolved_key, None).await;
+
+        // If model responded (HTTP 200) but no extractable content,
+        // retry with enable_thinking=false — the model may be a thinking model
+        // that consumed all tokens on reasoning.
+        if let Ok(ref resp) = result {
+            if !resp.success && resp.latency_ms.is_some() && resp.reply.is_none() {
+                let retry = send_test_request(&client, &url, &model, &resolved_key, Some(false)).await;
+                if let Ok(ref r) = retry {
+                    if r.success { return retry; }
+                }
             }
         }
-        Err(e) => Ok(TestConnectionResponse {
-            success: false,
-            message: format!("Connection failed: {}", e),
-            latency_ms: None,
-        }),
+
+        result
+    } else {
+        // No model available, fallback to /models endpoint check
+        let test_url = format!("{}/models", resolved_url.trim_end_matches('/'));
+        let mut req = client.get(&test_url);
+        if let Some(key) = resolved_key {
+            req = req.header("Authorization", format!("Bearer {}", key));
+        }
+        match req.timeout(std::time::Duration::from_secs(10)).send().await {
+            Ok(resp) => {
+                let latency = start.elapsed().as_millis() as u64;
+                if resp.status().is_success() {
+                    Ok(TestConnectionResponse {
+                        success: true,
+                        message: format!("{}ms (no model selected)", latency),
+                        latency_ms: Some(latency),
+                        reply: None,
+                    })
+                } else {
+                    Ok(TestConnectionResponse {
+                        success: false,
+                        message: format!("HTTP {}", resp.status()),
+                        latency_ms: Some(latency),
+                        reply: None,
+                    })
+                }
+            }
+            Err(e) => Ok(TestConnectionResponse {
+                success: false,
+                message: format!("Connection failed: {}", e),
+                latency_ms: None,
+                reply: None,
+            }),
+        }
     }
 }
 
@@ -150,6 +299,7 @@ pub async fn create_custom_provider(
         models,
         is_custom: true,
         is_local: false,
+        native_tools: vec![],
     };
 
     providers.custom_providers.insert(
@@ -261,46 +411,18 @@ pub async fn test_model(
 
     let client = reqwest::Client::new();
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-    let start = std::time::Instant::now();
+    let api_key_opt = Some(api_key);
 
-    let body = serde_json::json!({
-        "model": model_id,
-        "messages": [{"role": "user", "content": "Hi"}],
-        "max_tokens": 5,
-    });
-
-    match client
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .timeout(std::time::Duration::from_secs(30))
-        .send()
-        .await
-    {
-        Ok(resp) => {
-            let latency = start.elapsed().as_millis() as u64;
-            if resp.status().is_success() {
-                Ok(TestConnectionResponse {
-                    success: true,
-                    message: format!("Model '{}' is working", model_id),
-                    latency_ms: Some(latency),
-                })
-            } else {
-                let text = resp.text().await.unwrap_or_default();
-                Ok(TestConnectionResponse {
-                    success: false,
-                    message: format!("Model test failed: {}", text),
-                    latency_ms: Some(latency),
-                })
+    let result = send_test_request(&client, &url, &model_id, &api_key_opt, None).await;
+    if let Ok(ref resp) = result {
+        if !resp.success && resp.latency_ms.is_some() && resp.reply.is_none() {
+            let retry = send_test_request(&client, &url, &model_id, &api_key_opt, Some(false)).await;
+            if let Ok(ref r) = retry {
+                if r.success { return retry; }
             }
         }
-        Err(e) => Ok(TestConnectionResponse {
-            success: false,
-            message: format!("Connection failed: {}", e),
-            latency_ms: None,
-        }),
     }
+    result
 }
 
 #[tauri::command]
@@ -372,6 +494,7 @@ pub async fn export_provider_config(
             is_local: def.is_local,
             models: def.models.clone(),
             description: None,
+            native_tools: def.native_tools.clone(),
         });
     }
 
@@ -387,6 +510,7 @@ pub async fn export_provider_config(
             is_local: def.is_local,
             models: def.models.clone(),
             description: None,
+            native_tools: def.native_tools.clone(),
         });
     }
 

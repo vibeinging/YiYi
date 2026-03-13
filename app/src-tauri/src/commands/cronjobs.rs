@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::engine::db::{CronJobRow, CronJobExecutionRow};
-use crate::engine::scheduler::CronScheduler;
+use crate::engine::db::{CronJobRow, CronJobExecutionRow, ExecutionMode};
 use crate::state::AppState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,6 +21,11 @@ pub struct CronJobSpec {
     pub dispatch: Option<DispatchSpec>,
     #[serde(default)]
     pub runtime: Option<JobRuntimeSpec>,
+    /// Execution mode: Shared (default) runs in global context,
+    /// In Isolated mode, agent tasks run in a dedicated session `cron:{id}`
+    /// with their own conversation history, avoiding pollution of the main chat.
+    #[serde(default)]
+    pub execution_mode: ExecutionMode,
 }
 
 fn default_task_type() -> String {
@@ -113,6 +117,7 @@ impl CronJobSpec {
             request_json: self.request.as_ref().map(|v| v.to_string()),
             dispatch_json: self.dispatch.as_ref().and_then(|d| serde_json::to_string(d).ok()),
             runtime_json: self.runtime.as_ref().and_then(|r| serde_json::to_string(r).ok()),
+            execution_mode: self.execution_mode.clone(),
         }
     }
 
@@ -127,6 +132,7 @@ impl CronJobSpec {
             request: row.request_json.as_ref().and_then(|s| serde_json::from_str(s).ok()),
             dispatch: row.dispatch_json.as_ref().and_then(|s| serde_json::from_str(s).ok()),
             runtime: row.runtime_json.as_ref().and_then(|s| serde_json::from_str(s).ok()),
+            execution_mode: row.execution_mode.clone(),
         }
     }
 }

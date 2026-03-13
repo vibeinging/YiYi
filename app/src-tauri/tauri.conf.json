@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "YiClaw",
+  "productName": "YiYiClaw",
   "version": "0.1.0",
-  "identifier": "com.yiclaw.desktop",
+  "identifier": "com.yiyiclaw.desktop",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "YiClaw",
+        "title": "YiYiClaw",
         "width": 1500,
         "height": 1000,
         "minWidth": 900,

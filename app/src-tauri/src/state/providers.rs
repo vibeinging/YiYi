@@ -3,11 +3,85 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::engine::db::{CustomProviderRow, Database};
+use crate::engine::llm_client::NativeToolInjection;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelInfo {
     pub id: String,
     pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NativeToolConfig {
+    pub tool_type: String,
+    pub tool_config: serde_json::Value,
+    #[serde(default = "default_inject_mode")]
+    pub inject_mode: String,
+    #[serde(default)]
+    pub supported_models: Vec<String>,
+    #[serde(default = "default_true")]
+    pub enabled_by_default: bool,
+}
+
+impl NativeToolConfig {
+    pub fn to_injection(&self) -> NativeToolInjection {
+        NativeToolInjection {
+            config: self.tool_config.clone(),
+            inject_mode: self.inject_mode.clone(),
+        }
+    }
+}
+
+/// Resolve enabled native tool injections for a given model from a list of configs.
+pub fn resolve_native_injections(native_tools: &[NativeToolConfig], model: &str) -> Vec<NativeToolInjection> {
+    native_tools
+        .iter()
+        .filter(|nt| {
+            nt.enabled_by_default
+                && (nt.supported_models.is_empty()
+                    || nt.supported_models.iter().any(|m| m == model))
+        })
+        .map(|nt| nt.to_injection())
+        .collect()
+}
+
+fn default_inject_mode() -> String { "tools_array".into() }
+fn default_true() -> bool { true }
+
+fn zhipu_native_tools() -> Vec<NativeToolConfig> {
+    vec![NativeToolConfig {
+        tool_type: "web_search".into(),
+        tool_config: serde_json::json!({
+            "type": "web_search",
+            "web_search": { "enable": "True", "search_engine": "search-prime" }
+        }),
+        inject_mode: "tools_array".into(),
+        supported_models: vec![],
+        enabled_by_default: true,
+    }]
+}
+
+fn dashscope_native_tools() -> Vec<NativeToolConfig> {
+    vec![NativeToolConfig {
+        tool_type: "web_search".into(),
+        tool_config: serde_json::json!({ "enable_search": true }),
+        inject_mode: "extra_body".into(),
+        supported_models: vec![],
+        enabled_by_default: true,
+    }]
+}
+
+fn moonshot_native_tools() -> Vec<NativeToolConfig> {
+    vec![NativeToolConfig {
+        tool_type: "web_search".into(),
+        tool_config: serde_json::json!({
+            "type": "builtin_function",
+            "function": { "name": "$web_search" }
+        }),
+        inject_mode: "tools_array".into(),
+        supported_models: vec![],
+        enabled_by_default: true,
+    }]
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +98,8 @@ pub struct ProviderDefinition {
     pub is_custom: bool,
     #[serde(default)]
     pub is_local: bool,
+    #[serde(default)]
+    pub native_tools: Vec<NativeToolConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -53,6 +129,7 @@ impl Default for ProviderDefinition {
             models: Vec::new(),
             is_custom: false,
             is_local: false,
+            native_tools: Vec::new(),
         }
     }
 }
@@ -75,6 +152,8 @@ pub struct ProviderInfo {
     pub is_local: bool,
     pub configured: bool,
     pub base_url: Option<String>,
+    #[serde(default)]
+    pub native_tools: Vec<NativeToolConfig>,
 }
 
 /// In-memory providers state backed by SQLite.
@@ -119,6 +198,7 @@ impl ProvidersState {
                         models,
                         is_custom: true,
                         is_local: row.is_local,
+                        native_tools: vec![],
                     },
                     settings: ProviderSettings {
                         api_key: row.api_key,
@@ -203,6 +283,7 @@ impl ProvidersState {
                     is_local: def.is_local,
                     configured: settings.map_or(false, |s| s.api_key.is_some()),
                     base_url: settings.and_then(|s| s.base_url.clone()),
+                    native_tools: def.native_tools,
                 }
             })
             .collect();
@@ -220,6 +301,7 @@ impl ProvidersState {
                 is_local: def.is_local,
                 configured: custom.settings.api_key.is_some(),
                 base_url: custom.settings.base_url.clone(),
+                native_tools: def.native_tools.clone(),
             });
         }
 
@@ -230,6 +312,20 @@ impl ProvidersState {
 // Built-in providers
 pub fn builtin_providers() -> Vec<ProviderDefinition> {
     vec![
+        ProviderDefinition {
+            id: "minimax".into(),
+            name: "MiniMax".into(),
+            default_base_url: "https://api.minimax.io/v1".into(),
+            api_key_prefix: "MINIMAX_API_KEY".into(),
+            models: vec![
+                ModelInfo { id: "MiniMax-M2.5".into(), name: "MiniMax M2.5".into() },
+                ModelInfo { id: "MiniMax-M2.5-highspeed".into(), name: "MiniMax M2.5 Highspeed".into() },
+                ModelInfo { id: "MiniMax-M2.1".into(), name: "MiniMax M2.1".into() },
+            ],
+            is_custom: false,
+            is_local: false,
+            native_tools: vec![],
+        },
         ProviderDefinition {
             id: "openai".into(),
             name: "OpenAI".into(),
@@ -245,6 +341,7 @@ pub fn builtin_providers() -> Vec<ProviderDefinition> {
             ],
             is_custom: false,
             is_local: false,
+            native_tools: vec![],
         },
         ProviderDefinition {
             id: "anthropic".into(),
@@ -258,6 +355,7 @@ pub fn builtin_providers() -> Vec<ProviderDefinition> {
             ],
             is_custom: false,
             is_local: false,
+            native_tools: vec![],
         },
         ProviderDefinition {
             id: "google".into(),
@@ -270,6 +368,7 @@ pub fn builtin_providers() -> Vec<ProviderDefinition> {
             ],
             is_custom: false,
             is_local: false,
+            native_tools: vec![],
         },
         ProviderDefinition {
             id: "deepseek".into(),
@@ -282,6 +381,7 @@ pub fn builtin_providers() -> Vec<ProviderDefinition> {
             ],
             is_custom: false,
             is_local: false,
+            native_tools: vec![],
         },
         ProviderDefinition {
             id: "dashscope".into(),
@@ -295,6 +395,7 @@ pub fn builtin_providers() -> Vec<ProviderDefinition> {
             ],
             is_custom: false,
             is_local: false,
+            native_tools: dashscope_native_tools(),
         },
         ProviderDefinition {
             id: "modelscope".into(),
@@ -309,6 +410,7 @@ pub fn builtin_providers() -> Vec<ProviderDefinition> {
             ],
             is_custom: false,
             is_local: false,
+            native_tools: vec![],
         },
         ProviderDefinition {
             id: "coding-plan".into(),
@@ -327,6 +429,7 @@ pub fn builtin_providers() -> Vec<ProviderDefinition> {
             ],
             is_custom: false,
             is_local: false,
+            native_tools: dashscope_native_tools(),
         },
         ProviderDefinition {
             id: "moonshot".into(),
@@ -340,23 +443,11 @@ pub fn builtin_providers() -> Vec<ProviderDefinition> {
             ],
             is_custom: false,
             is_local: false,
-        },
-        ProviderDefinition {
-            id: "minimax".into(),
-            name: "MiniMax".into(),
-            default_base_url: "https://api.minimax.io/v1".into(),
-            api_key_prefix: "MINIMAX_API_KEY".into(),
-            models: vec![
-                ModelInfo { id: "MiniMax-M2.5".into(), name: "MiniMax M2.5".into() },
-                ModelInfo { id: "MiniMax-M2.5-highspeed".into(), name: "MiniMax M2.5 Highspeed".into() },
-                ModelInfo { id: "MiniMax-M2.1".into(), name: "MiniMax M2.1".into() },
-            ],
-            is_custom: false,
-            is_local: false,
+            native_tools: moonshot_native_tools(),
         },
         ProviderDefinition {
             id: "zhipu".into(),
-            name: "Zhipu AI (CN)".into(),
+            name: "智谱 AI".into(),
             default_base_url: "https://open.bigmodel.cn/api/paas/v4".into(),
             api_key_prefix: "ZHIPU_API_KEY".into(),
             models: vec![
@@ -367,20 +458,7 @@ pub fn builtin_providers() -> Vec<ProviderDefinition> {
             ],
             is_custom: false,
             is_local: false,
-        },
-        ProviderDefinition {
-            id: "zhipu-intl".into(),
-            name: "Z.AI (Zhipu Intl)".into(),
-            default_base_url: "https://api.z.ai/api/paas/v4".into(),
-            api_key_prefix: "ZAI_API_KEY".into(),
-            models: vec![
-                ModelInfo { id: "glm-5".into(), name: "GLM-5".into() },
-                ModelInfo { id: "glm-4.7".into(), name: "GLM-4.7".into() },
-                ModelInfo { id: "glm-4-plus".into(), name: "GLM-4 Plus".into() },
-                ModelInfo { id: "glm-4-flash".into(), name: "GLM-4 Flash".into() },
-            ],
-            is_custom: false,
-            is_local: false,
+            native_tools: zhipu_native_tools(),
         },
     ]
 }
@@ -413,6 +491,8 @@ pub struct ProviderPlugin {
     /// Optional description
     #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
+    pub native_tools: Vec<NativeToolConfig>,
 }
 
 fn default_api_compat() -> String {
@@ -475,6 +555,7 @@ fn plugin_to_custom_data(plugin: &ProviderPlugin) -> CustomProviderData {
             models: plugin.models.clone(),
             is_custom: true,
             is_local: plugin.is_local,
+            native_tools: plugin.native_tools.clone(),
         },
         settings: ProviderSettings::default(),
     }
@@ -491,16 +572,6 @@ pub fn save_plugin_file(working_dir: &Path, plugin: &ProviderPlugin) -> Result<P
     std::fs::write(&file_path, json)
         .map_err(|e| format!("Failed to write plugin file: {}", e))?;
     Ok(file_path)
-}
-
-/// Delete a plugin JSON file from the plugins directory.
-pub fn delete_plugin_file(working_dir: &Path, plugin_id: &str) -> Result<(), String> {
-    let file_path = plugins_dir(working_dir).join(format!("{}.json", plugin_id));
-    if file_path.exists() {
-        std::fs::remove_file(&file_path)
-            .map_err(|e| format!("Failed to delete plugin file: {}", e))?;
-    }
-    Ok(())
 }
 
 /// Built-in provider templates for common third-party services.
@@ -525,6 +596,7 @@ pub fn builtin_templates() -> Vec<ProviderTemplate> {
                     ModelInfo { id: "deepseek/deepseek-r1".into(), name: "DeepSeek R1".into() },
                 ],
                 description: Some("Unified API gateway for 200+ models".into()),
+                native_tools: vec![],
             },
         },
         ProviderTemplate {
@@ -544,6 +616,7 @@ pub fn builtin_templates() -> Vec<ProviderTemplate> {
                     ModelInfo { id: "deepseek-ai/DeepSeek-R1".into(), name: "DeepSeek R1".into() },
                 ],
                 description: Some("Fast inference for open-source models".into()),
+                native_tools: vec![],
             },
         },
         ProviderTemplate {
@@ -564,6 +637,7 @@ pub fn builtin_templates() -> Vec<ProviderTemplate> {
                     ModelInfo { id: "gemma2-9b-it".into(), name: "Gemma2 9B".into() },
                 ],
                 description: Some("Ultra-fast LPU inference".into()),
+                native_tools: vec![],
             },
         },
         ProviderTemplate {
@@ -584,6 +658,7 @@ pub fn builtin_templates() -> Vec<ProviderTemplate> {
                     ModelInfo { id: "gemma3:27b".into(), name: "Gemma 3 27B".into() },
                 ],
                 description: Some("Run models locally with Ollama".into()),
+                native_tools: vec![],
             },
         },
         ProviderTemplate {
@@ -601,6 +676,7 @@ pub fn builtin_templates() -> Vec<ProviderTemplate> {
                     ModelInfo { id: "local-model".into(), name: "Local Model".into() },
                 ],
                 description: Some("Run local models via LM Studio".into()),
+                native_tools: vec![],
             },
         },
         ProviderTemplate {
@@ -620,6 +696,7 @@ pub fn builtin_templates() -> Vec<ProviderTemplate> {
                     ModelInfo { id: "Qwen/Qwen2.5-72B-Instruct".into(), name: "Qwen2.5 72B".into() },
                 ],
                 description: Some("Chinese cloud inference platform".into()),
+                native_tools: vec![],
             },
         },
     ]
@@ -676,16 +753,6 @@ impl ProvidersState {
             .ok_or_else(|| "Failed to register plugin provider".into())
     }
 
-    /// Remove a plugin provider: delete from DB and file system.
-    pub fn remove_plugin(
-        &mut self,
-        working_dir: &Path,
-        plugin_id: &str,
-    ) -> Result<(), String> {
-        self.custom_providers.remove(plugin_id);
-        delete_plugin_file(working_dir, plugin_id)?;
-        Ok(())
-    }
 }
 
 // ── Plugin Directory Watcher ────────────────────────────────────────

@@ -1,6 +1,6 @@
 /**
  * Setup Wizard - AI-guided onboarding flow
- * Steps: Language → Model → Persona
+ * Steps: Language → Model → Workspace → Persona
  * Layout: vertical progress rail on left + content area on right
  */
 
@@ -18,18 +18,31 @@ import {
   Loader2,
   ExternalLink,
   Sparkles,
+  FolderOpen,
+  Shield,
 } from 'lucide-react';
+import yiyiLogo from '../assets/yiyi-logo.png';
 import {
   configureProvider,
   testProvider,
   setActiveLlm,
   createCustomProvider,
+  ZHIPU_SITES,
+  type TestConnectionResponse,
 } from '../api/models';
+import {
+  getWorkspacePath,
+  pickFolder,
+  listAuthorizedFolders,
+  addAuthorizedFolder,
+  removeAuthorizedFolder,
+  type AuthorizedFolder,
+} from '../api/workspace';
 
 // Built-in provider IDs from backend (providers.rs builtin_providers)
 const BUILTIN_PROVIDER_IDS = [
   'openai', 'anthropic', 'google', 'deepseek', 'dashscope',
-  'modelscope', 'coding-plan', 'moonshot', 'minimax', 'zhipu', 'zhipu-intl',
+  'modelscope', 'coding-plan', 'moonshot', 'minimax', 'zhipu',
 ];
 import { completeSetup } from '../api/system';
 
@@ -240,19 +253,6 @@ const QUICK_PROVIDERS = [
     ],
     group: 'intl',
   },
-  {
-    id: 'zhipu-intl', name: 'Z.AI (Zhipu Intl)',
-    desc: { zh: 'GLM-5 / GLM-4.7 国际版', en: 'GLM-5 / GLM-4.7 International' },
-    color: '#1A3A5C', baseUrl: 'https://api.z.ai/api/paas/v4',
-    signupUrl: 'https://www.z.ai/',
-    models: [
-      { id: 'glm-5', name: 'GLM-5', tag: { zh: '推荐', en: 'Pick' } },
-      { id: 'glm-4.7', name: 'GLM-4.7', tag: null },
-      { id: 'glm-4-plus', name: 'GLM-4 Plus', tag: null },
-      { id: 'glm-4-flash', name: 'GLM-4 Flash', tag: null },
-    ],
-    group: 'intl',
-  },
 ];
 
 // Tone style options
@@ -275,6 +275,7 @@ const ROLE_PRESETS = [
 const STEP_META = [
   { id: 'language' as const, icon: Globe, labelKey: { zh: '语言', en: 'Language' } },
   { id: 'model' as const, icon: Cpu, labelKey: { zh: '模型', en: 'Model' } },
+  { id: 'workspace' as const, icon: FolderOpen, labelKey: { zh: '工作空间', en: 'Workspace' } },
   { id: 'persona' as const, icon: User, labelKey: { zh: '人格', en: 'Persona' } },
 ];
 
@@ -287,7 +288,7 @@ function buildSoulContent(
   customDesc: string,
   lang: 'zh' | 'en',
 ): string {
-  const name = aiName.trim() || 'YiClaw';
+  const name = aiName.trim() || 'YiYiClaw';
   const owner = ownerName.trim();
 
   const toneMap: Record<string, { zh: string; en: string }> = {
@@ -351,8 +352,8 @@ function buildSoulContent(
   return parts.join('\n\n');
 }
 
-type Step = 'language' | 'model' | 'persona';
-const STEPS: Step[] = ['language', 'model', 'persona'];
+type Step = 'language' | 'model' | 'workspace' | 'persona';
+const STEPS: Step[] = ['language', 'model', 'workspace', 'persona'];
 
 export function SetupWizard({ onComplete }: SetupWizardProps) {
   const { t } = useTranslation();
@@ -375,11 +376,16 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
   const [baseUrl, setBaseUrl] = useState('');
   const [showBaseUrl, setShowBaseUrl] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [testResult, setTestResult] = useState<TestConnectionResponse | null>(null);
   const [modelSaving, setModelSaving] = useState(false);
 
+  // Workspace step
+  const [workspacePath, setWorkspacePath] = useState('');
+  const [authorizedFolders, setAuthorizedFolders] = useState<AuthorizedFolder[]>([]);
+  const [workspaceLoading, setWorkspaceLoading] = useState(false);
+
   // Persona step
-  const [aiName, setAiName] = useState('YiClaw');
+  const [aiName, setAiName] = useState('YiYiClaw');
   const [ownerName, setOwnerName] = useState('');
   const [toneStyle, setToneStyle] = useState('balanced');
   const [selectedRole, setSelectedRole] = useState('assistant');
@@ -414,6 +420,40 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     }
   }, [currentStep]);
 
+  // Load workspace info when entering workspace step
+  useEffect(() => {
+    if (currentStep === 'workspace' && !workspacePath) {
+      getWorkspacePath().then(setWorkspacePath).catch(() => {});
+      listAuthorizedFolders().then(setAuthorizedFolders).catch(() => {});
+    }
+  }, [currentStep]);
+
+  const handlePickFolder = async () => {
+    const path = await pickFolder();
+    if (path) {
+      // Check if already in list
+      if (authorizedFolders.some(f => f.path === path)) return;
+      setWorkspaceLoading(true);
+      try {
+        const folder = await addAuthorizedFolder(path, undefined, 'read_write');
+        setAuthorizedFolders(prev => [...prev, folder]);
+      } catch (e) {
+        console.error('Failed to add folder:', e);
+      } finally {
+        setWorkspaceLoading(false);
+      }
+    }
+  };
+
+  const handleRemoveFolder = async (id: string) => {
+    try {
+      await removeAuthorizedFolder(id);
+      setAuthorizedFolders(prev => prev.filter(f => f.id !== id));
+    } catch (e) {
+      console.error('Failed to remove folder:', e);
+    }
+  };
+
   const handleLangSelect = (lng: string) => {
     setSelectedLang(lng);
     i18n.changeLanguage(lng);
@@ -427,10 +467,11 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     setTesting(true);
     setTestResult(null);
     try {
-      const result = await testProvider(provider.id, apiKey.trim(), baseUrl || provider.baseUrl);
-      setTestResult({ ok: result.success, msg: result.message });
+      const modelId = selectedModel || provider.models[0]?.id;
+      const result = await testProvider(provider.id, apiKey.trim(), baseUrl || provider.baseUrl, modelId);
+      setTestResult(result);
     } catch (e: any) {
-      setTestResult({ ok: false, msg: e.toString() });
+      setTestResult({ success: false, message: e.toString() });
     } finally {
       setTesting(false);
     }
@@ -452,15 +493,13 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
           provider.id.toUpperCase().replace(/-/g, '_') + '_API_KEY',
           provider.models.map(m => ({ id: m.id, name: m.name })),
         );
-      } else {
-        await configureProvider(provider.id, apiKey.trim(), baseUrl || provider.baseUrl);
       }
       // Configure API key (needed for both custom and builtin)
       await configureProvider(provider.id, apiKey.trim(), baseUrl || provider.baseUrl);
       await setActiveLlm(provider.id, modelId);
-      transitionTo('persona');
+      transitionTo('workspace');
     } catch (e: any) {
-      setTestResult({ ok: false, msg: e.toString() });
+      setTestResult({ success: false, message: e.toString() });
     } finally {
       setModelSaving(false);
     }
@@ -471,18 +510,17 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     try {
       // Build and write SOUL.md
       const soulContent = buildSoulContent(aiName, ownerName, toneStyle, selectedRole, customSoul, lang);
+      const { invoke } = await import('@tauri-apps/api/core');
 
       if (soulContent.trim()) {
-        const { invoke } = await import('@tauri-apps/api/core');
         await invoke('save_workspace_file', {
           filename: 'SOUL.md',
-          content: `---\nname: ${aiName.trim() || 'YiClaw'}\n---\n\n${soulContent}`,
+          content: `---\nname: ${aiName.trim() || 'YiYiClaw'}\n---\n\n${soulContent}`,
         });
       }
 
       // Write language config
-      const { invoke: inv } = await import('@tauri-apps/api/core');
-      await inv('save_agents_config', { language: selectedLang });
+      await invoke('save_agents_config', { language: selectedLang });
 
       await completeSetup();
       onComplete();
@@ -500,6 +538,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     switch (currentStep) {
       case 'language': return true;
       case 'model': return !!selectedProvider && !!apiKey.trim() && (useCustomModel ? !!customModelId.trim() : !!selectedModel);
+      case 'workspace': return true; // workspace has defaults, always can proceed
       case 'persona': return selectedRole !== 'custom' || customSoul.trim().length > 0;
     }
   };
@@ -507,12 +546,14 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
   const goNext = () => {
     if (currentStep === 'language') transitionTo('model');
     else if (currentStep === 'model') handleModelSave();
+    else if (currentStep === 'workspace') transitionTo('persona');
     else if (currentStep === 'persona') handleFinish();
   };
 
   const goBack = () => {
     if (currentStep === 'model') transitionTo('language');
-    else if (currentStep === 'persona') transitionTo('model');
+    else if (currentStep === 'workspace') transitionTo('model');
+    else if (currentStep === 'persona') transitionTo('workspace');
   };
 
   // Slide animation style
@@ -529,24 +570,25 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     >
       {/* Left: Vertical progress rail */}
       <div
-        className="w-[200px] shrink-0 flex flex-col items-center pt-16 pb-8"
+        className="w-[260px] shrink-0 flex flex-col items-center pt-20 pb-10 px-6"
         style={{
           background: 'var(--color-bg-elevated)',
           borderRight: '1px solid var(--color-border)',
         }}
       >
         {/* Brand */}
-        <div className="mb-12 text-center">
-          <div className="text-[18px] font-bold" style={{ color: 'var(--color-text)' }}>
-            YiClaw
+        <div className="mb-16 text-center">
+          <img src={yiyiLogo} alt="YiYiClaw" className="w-14 h-14 rounded-2xl mx-auto mb-3" />
+          <div className="text-[20px] font-extrabold tracking-tight" style={{ color: 'var(--color-text)' }}>
+            YiYiClaw
           </div>
-          <div className="text-[11px] mt-1" style={{ color: 'var(--color-text-muted)' }}>
+          <div className="text-[12px] mt-1 font-medium tracking-wide" style={{ color: 'var(--color-text-muted)' }}>
             {lang === 'zh' ? '初始设置' : 'Setup'}
           </div>
         </div>
 
         {/* Steps */}
-        <div className="flex flex-col items-start gap-0 pl-10">
+        <div className="flex flex-col items-start gap-0 w-full pl-6">
           {STEP_META.map((step, i) => {
             const Icon = step.icon;
             const isActive = i === stepIndex;
@@ -557,25 +599,25 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                 {/* Dot + Line column */}
                 <div className="flex flex-col items-center">
                   <div
-                    className={`w-9 h-9 rounded-full flex items-center justify-center transition-all duration-300 ${
+                    className={`w-11 h-11 rounded-full flex items-center justify-center transition-all duration-300 ${
                       isDone ? 'bg-[var(--color-success)]' :
                       isActive ? 'bg-[var(--color-primary)]' :
                       'bg-[var(--color-bg-subtle)]'
                     }`}
                     style={{
-                      boxShadow: isActive ? '0 0 0 4px var(--color-primary-subtle)' : 'none',
+                      boxShadow: isActive ? '0 0 0 5px var(--color-primary-subtle)' : 'none',
                     }}
                   >
                     {isDone ? (
-                      <Check size={16} className="text-white" />
+                      <Check size={18} className="text-white" />
                     ) : (
-                      <Icon size={16} className={isActive ? 'text-white' : ''} style={{ color: isActive ? undefined : 'var(--color-text-muted)' }} />
+                      <Icon size={18} className={isActive ? 'text-white' : ''} style={{ color: isActive ? undefined : 'var(--color-text-muted)' }} />
                     )}
                   </div>
                   {/* Connecting line */}
                   {i < STEP_META.length - 1 && (
                     <div
-                      className="w-0.5 h-10 transition-colors duration-300"
+                      className="w-0.5 h-14 transition-colors duration-300"
                       style={{
                         background: isDone ? 'var(--color-success)' : 'var(--color-border)',
                       }}
@@ -584,9 +626,9 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                 </div>
 
                 {/* Label */}
-                <div className="ml-3 pt-1.5">
+                <div className="ml-4 pt-2.5">
                   <div
-                    className={`text-[13px] font-medium transition-colors duration-300`}
+                    className={`text-[14px] font-semibold transition-colors duration-300`}
                     style={{
                       color: isActive ? 'var(--color-text)' : isDone ? 'var(--color-success)' : 'var(--color-text-muted)',
                     }}
@@ -603,7 +645,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         <div className="flex-1" />
 
         {/* Version */}
-        <div className="text-[10px]" style={{ color: 'var(--color-text-tertiary)' }}>
+        <div className="text-[11px] font-medium" style={{ color: 'var(--color-text-tertiary)' }}>
           v0.1.0
         </div>
       </div>
@@ -615,21 +657,19 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
           ref={contentRef}
           className="flex-1 overflow-hidden"
         >
-          <div className="h-full max-w-3xl mx-auto px-5 py-5 flex flex-col" style={contentStyle}>
+          <div className="h-full mx-auto px-12 py-10 flex flex-col" style={{ ...contentStyle, maxWidth: '1100px' }}>
             {/* Step: Language */}
             {currentStep === 'language' && (
-              <div className="text-center pt-16">
-                <div className="w-16 h-16 rounded-2xl bg-[var(--color-primary-subtle)] flex items-center justify-center mx-auto mb-6">
-                  <Globe size={28} className="text-[var(--color-primary)]" />
-                </div>
-                <h1 className="text-2xl font-bold mb-2" style={{ color: 'var(--color-text)' }}>
-                  {lang === 'zh' ? '欢迎使用 YiClaw' : 'Welcome to YiClaw'}
+              <div className="text-center pt-20">
+                <img src={yiyiLogo} alt="YiYiClaw" className="w-24 h-24 rounded-3xl mx-auto mb-8" style={{ boxShadow: '0 8px 32px rgba(0,0,0,0.12)' }} />
+                <h1 className="text-4xl font-extrabold mb-4 tracking-tight" style={{ color: 'var(--color-text)' }}>
+                  {lang === 'zh' ? '欢迎使用 YiYiClaw' : 'Welcome to YiYiClaw'}
                 </h1>
-                <p className="text-[14px] mb-8" style={{ color: 'var(--color-text-secondary)' }}>
+                <p className="text-[16px] mb-12" style={{ color: 'var(--color-text-secondary)' }}>
                   {lang === 'zh' ? '选择你偏好的语言' : 'Choose your preferred language'}
                 </p>
 
-                <div className="flex gap-4 justify-center">
+                <div className="flex gap-6 justify-center">
                   {[
                     { id: 'zh', label: '中文', sub: 'Chinese' },
                     { id: 'en', label: 'English', sub: '英语' },
@@ -637,21 +677,21 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                     <button
                       key={l.id}
                       onClick={() => handleLangSelect(l.id)}
-                      className="w-40 p-5 rounded-2xl border-2 transition-all text-center relative"
+                      className="w-52 p-7 rounded-2xl border-2 transition-all text-center relative"
                       style={{
                         background: selectedLang === l.id ? 'var(--color-primary)' : 'var(--color-bg-elevated)',
                         borderColor: selectedLang === l.id ? 'var(--color-primary)' : 'var(--color-border)',
                         color: selectedLang === l.id ? '#fff' : 'var(--color-text)',
-                        boxShadow: selectedLang === l.id ? '0 4px 20px rgba(var(--color-primary-rgb), 0.3)' : 'none',
+                        boxShadow: selectedLang === l.id ? '0 8px 32px rgba(var(--color-primary-rgb), 0.3)' : 'var(--shadow-sm)',
                       }}
                     >
                       {selectedLang === l.id && (
-                        <div className="absolute top-2 right-2">
-                          <Check size={14} />
+                        <div className="absolute top-3 right-3">
+                          <Check size={16} />
                         </div>
                       )}
-                      <div className="text-lg font-semibold mb-1">{l.label}</div>
-                      <div className="text-[12px]" style={{ color: selectedLang === l.id ? 'rgba(255,255,255,0.8)' : 'var(--color-text-muted)' }}>{l.sub}</div>
+                      <div className="text-xl font-bold mb-1.5">{l.label}</div>
+                      <div className="text-[13px]" style={{ color: selectedLang === l.id ? 'rgba(255,255,255,0.8)' : 'var(--color-text-muted)' }}>{l.sub}</div>
                     </button>
                   ))}
                 </div>
@@ -662,49 +702,61 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
             {currentStep === 'model' && (
               <div>
                 <div className="text-center mb-8">
-                  <h1 className="text-2xl font-bold mb-2" style={{ color: 'var(--color-text)' }}>
-                    {t('models.quickSetup') || (lang === 'zh' ? '配置 AI 模型' : 'Configure AI Model')}
+                  <h1 className="text-4xl font-extrabold mb-3 tracking-tight" style={{ color: 'var(--color-text)' }}>
+                    {lang === 'zh' ? '选择你的 AI 引擎' : 'Choose Your AI Engine'}
                   </h1>
-                  <p className="text-[14px]" style={{ color: 'var(--color-text-secondary)' }}>
-                    {lang === 'zh' ? '选择一个 AI 提供商并填入 API Key' : 'Pick a provider and enter your API Key'}
+                  <p className="text-[15px] leading-relaxed max-w-[500px] mx-auto" style={{ color: 'var(--color-text-secondary)' }}>
+                    {lang === 'zh'
+                      ? 'YiYiClaw 本身是一个助手框架，它需要连接一个 AI 模型才能工作 —— 就像给它装上一颗会思考的大脑。选一个你喜欢的，填上 Key 就行'
+                      : 'YiYiClaw is an assistant framework — it needs an AI model to work, like giving it a brain that can think. Just pick one you like and enter the API Key'}
                   </p>
                 </div>
 
-                <div className="flex gap-6 flex-1 min-h-0">
+                <div className="flex gap-10 flex-1 min-h-0">
                   {/* Left: Provider list (scrollable) */}
-                  <div className="w-[210px] shrink-0 relative">
+                  <div className="w-[280px] shrink-0 relative">
                     <div className="overflow-y-auto pr-1 h-full scrollbar-visible" style={{ maxHeight: 'calc(100vh - 280px)' }} id="provider-list">
                     {/* Group: Special */}
                     {QUICK_PROVIDERS.filter(p => p.group === 'special').length > 0 && (
                       <>
-                        <div className="text-[10px] font-bold uppercase tracking-wider mb-2 px-1" style={{ color: 'var(--color-text-tertiary)' }}>
+                        <div className="text-[11px] font-bold uppercase tracking-wider mb-3 px-1" style={{ color: 'var(--color-text-tertiary)' }}>
                           {lang === 'zh' ? '特惠套餐' : 'Special'}
                         </div>
-                        <div className="space-y-1.5 mb-4">
+                        <div className="space-y-2 mb-5">
                           {QUICK_PROVIDERS.filter(p => p.group === 'special').map((p) => (
                             <button
                               key={p.id}
                               onClick={() => {
-                                setSelectedProvider(p.id);
-                                setSelectedModel(p.models[0].id);
-                                setCustomModelId('');
-                                setUseCustomModel(false);
-                                setApiKey('');
-                                setBaseUrl(p.baseUrl);
-                                setShowBaseUrl(false);
-                                setTestResult(null);
+                                if (selectedProvider === p.id) {
+                                  setSelectedProvider(null);
+                                  setSelectedModel(null);
+                                  setApiKey('');
+                                  setTestResult(null);
+                                } else {
+                                  setSelectedProvider(p.id);
+                                  setSelectedModel(p.models[0].id);
+                                  setCustomModelId('');
+                                  setUseCustomModel(false);
+                                  setApiKey('');
+                                  setBaseUrl(p.baseUrl);
+                                  setShowBaseUrl(false);
+                                  setTestResult(null);
+                                }
                               }}
-                              className="w-full p-2.5 rounded-lg border-2 text-left transition-all relative"
+                              className="w-full p-3.5 rounded-xl border-2 text-left transition-all relative"
                               style={{
                                 background: selectedProvider === p.id ? 'var(--color-primary)' : 'var(--color-bg-elevated)',
                                 borderColor: selectedProvider === p.id ? 'var(--color-primary)' : 'var(--color-border)',
                                 boxShadow: selectedProvider === p.id ? '0 2px 12px rgba(var(--color-primary-rgb), 0.25)' : 'none',
                               }}
                             >
-                              <div className="flex items-center gap-2">
-                                <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: p.color }} />
-                                <span className="font-semibold text-[12px] truncate" style={{ color: selectedProvider === p.id ? '#fff' : 'var(--color-text)' }}>{p.name}</span>
-                                {selectedProvider === p.id && <Check size={12} className="ml-auto text-white/80" />}
+                              <div className="flex items-center gap-3">
+                                <div className="w-3.5 h-3.5 rounded-full shrink-0" style={{ background: p.color }} />
+                                <div className="flex-1 min-w-0">
+                                  <span className="font-semibold text-[13px] block truncate" style={{ color: selectedProvider === p.id ? '#fff' : 'var(--color-text)' }}>{p.name}</span>
+                                  <span className="text-[10px] block truncate" style={{ color: selectedProvider === p.id ? 'rgba(255,255,255,0.65)' : 'var(--color-text-tertiary)' }}>{p.desc[lang]}</span>
+                                </div>
+                                {selectedProvider === p.id && <Check size={14} className="shrink-0 text-white/80" />}
                               </div>
                             </button>
                           ))}
@@ -712,10 +764,10 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                       </>
                     )}
                     {/* Group: CN */}
-                    <div className="text-[10px] font-bold uppercase tracking-wider mb-2 px-1" style={{ color: 'var(--color-text-tertiary)' }}>
+                    <div className="text-[11px] font-bold uppercase tracking-wider mb-3 px-1" style={{ color: 'var(--color-text-tertiary)' }}>
                       {lang === 'zh' ? '国内' : 'China'}
                     </div>
-                    <div className="space-y-1.5 mb-4">
+                    <div className="space-y-2 mb-5">
                       {QUICK_PROVIDERS.filter(p => p.group === 'cn').map((p) => (
                         <button
                           key={p.id}
@@ -729,7 +781,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                             setShowBaseUrl(false);
                             setTestResult(null);
                           }}
-                          className="w-full p-2.5 rounded-lg border-2 text-left transition-all"
+                          className="w-full p-3.5 rounded-xl border-2 text-left transition-all"
                           style={{
                             background: selectedProvider === p.id ? 'var(--color-primary)' : 'var(--color-bg-elevated)',
                             borderColor: selectedProvider === p.id ? 'var(--color-primary)' : 'var(--color-border)',
@@ -737,18 +789,21 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                           }}
                         >
                           <div className="flex items-center gap-2">
-                            <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: p.color }} />
-                            <span className="font-semibold text-[12px] truncate" style={{ color: selectedProvider === p.id ? '#fff' : 'var(--color-text)' }}>{p.name}</span>
-                            {selectedProvider === p.id && <Check size={12} className="ml-auto text-white/80" />}
+                            <div className="w-3 h-3 rounded-full shrink-0" style={{ background: p.color }} />
+                            <div className="flex-1 min-w-0">
+                              <span className="font-semibold text-[12px] block truncate" style={{ color: selectedProvider === p.id ? '#fff' : 'var(--color-text)' }}>{p.name}</span>
+                              <span className="text-[10px] block truncate" style={{ color: selectedProvider === p.id ? 'rgba(255,255,255,0.6)' : 'var(--color-text-tertiary)' }}>{p.desc[lang]}</span>
+                            </div>
+                            {selectedProvider === p.id && <Check size={12} className="shrink-0 text-white/80" />}
                           </div>
                         </button>
                       ))}
                     </div>
                     {/* Group: Intl */}
-                    <div className="text-[10px] font-bold uppercase tracking-wider mb-2 px-1" style={{ color: 'var(--color-text-tertiary)' }}>
+                    <div className="text-[11px] font-bold uppercase tracking-wider mb-3 px-1" style={{ color: 'var(--color-text-tertiary)' }}>
                       {lang === 'zh' ? '国际' : 'International'}
                     </div>
-                    <div className="space-y-1.5 pb-10">
+                    <div className="space-y-2 pb-10">
                       {QUICK_PROVIDERS.filter(p => p.group === 'intl').map((p) => (
                         <button
                           key={p.id}
@@ -762,7 +817,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                             setShowBaseUrl(false);
                             setTestResult(null);
                           }}
-                          className="w-full p-2.5 rounded-lg border-2 text-left transition-all"
+                          className="w-full p-3.5 rounded-xl border-2 text-left transition-all"
                           style={{
                             background: selectedProvider === p.id ? 'var(--color-primary)' : 'var(--color-bg-elevated)',
                             borderColor: selectedProvider === p.id ? 'var(--color-primary)' : 'var(--color-border)',
@@ -770,9 +825,12 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                           }}
                         >
                           <div className="flex items-center gap-2">
-                            <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: p.color }} />
-                            <span className="font-semibold text-[12px] truncate" style={{ color: selectedProvider === p.id ? '#fff' : 'var(--color-text)' }}>{p.name}</span>
-                            {selectedProvider === p.id && <Check size={12} className="ml-auto text-white/80" />}
+                            <div className="w-3 h-3 rounded-full shrink-0" style={{ background: p.color }} />
+                            <div className="flex-1 min-w-0">
+                              <span className="font-semibold text-[12px] block truncate" style={{ color: selectedProvider === p.id ? '#fff' : 'var(--color-text)' }}>{p.name}</span>
+                              <span className="text-[10px] block truncate" style={{ color: selectedProvider === p.id ? 'rgba(255,255,255,0.6)' : 'var(--color-text-tertiary)' }}>{p.desc[lang]}</span>
+                            </div>
+                            {selectedProvider === p.id && <Check size={12} className="shrink-0 text-white/80" />}
                           </div>
                         </button>
                       ))}
@@ -790,21 +848,62 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                   {/* Right: Configuration */}
                   <div className="flex-1 min-w-0">
                     {!selectedProvider ? (
-                      <div className="h-full flex items-center justify-center rounded-2xl border border-dashed" style={{ borderColor: 'var(--color-border)', minHeight: '380px' }}>
-                        <p className="text-[14px]" style={{ color: 'var(--color-text-muted)' }}>
-                          {lang === 'zh' ? '← 选择一个提供商开始配置' : '← Pick a provider to start'}
+                      <div className="h-full flex flex-col justify-center px-8" style={{ minHeight: 'calc(100vh - 300px)' }}>
+                        {/* Coding plan tip */}
+                        <div
+                          className="rounded-2xl px-7 py-6 mb-10 flex items-start gap-4"
+                          style={{ background: 'rgba(255,106,0,0.05)', border: '1px solid rgba(255,106,0,0.10)' }}
+                        >
+                          <Sparkles size={20} className="shrink-0 mt-1" style={{ color: '#FF6A00' }} />
+                          <div>
+                            <div className="text-[15px] font-bold mb-1.5" style={{ color: 'var(--color-text)' }}>
+                              {lang === 'zh' ? '不知道选哪个？' : 'Not sure which to pick?'}
+                            </div>
+                            <p className="text-[14px] leading-[1.7]" style={{ color: 'var(--color-text-secondary)' }}>
+                              {lang === 'zh'
+                                ? '试试左侧「特惠套餐」—— 一个 Key 就能用多个模型，不用逐个注册，适合刚上手。'
+                                : 'Try "Special Plans" on the left — one Key for multiple models, no need to register each. Great for getting started.'}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Model guide */}
+                        <div className="text-[13px] font-bold uppercase tracking-wider mb-6 px-1" style={{ color: 'var(--color-text-tertiary)' }}>
+                          {lang === 'zh' ? '选型参考' : 'Quick Reference'}
+                        </div>
+
+                        <div className="space-y-5 mb-12">
+                          {([
+                            { name: { zh: '编程套餐', en: 'Coding Plans' }, hint: { zh: '一个 Key 用多个模型，新手首选', en: 'One key, multiple models — best for beginners' }, color: '#FF6A00' },
+                            { name: { zh: 'DeepSeek', en: 'DeepSeek' }, hint: { zh: '推理强，价格低', en: 'Strong reasoning, low cost' }, color: '#5B6EF5' },
+                            { name: { zh: 'Qwen', en: 'Qwen' }, hint: { zh: '中文好，工具调用稳定', en: 'Best Chinese, stable tool use' }, color: '#6236FF' },
+                            { name: { zh: 'MiniMax', en: 'MiniMax' }, hint: { zh: '速度快，综合能力强', en: 'Fast, strong overall' }, color: '#FF4F81' },
+                            { name: { zh: 'OpenAI', en: 'OpenAI' }, hint: { zh: '行业标杆，生态完善', en: 'Industry standard, rich ecosystem' }, color: '#10A37F' },
+                            { name: { zh: 'Claude', en: 'Claude' }, hint: { zh: '编程最强，输出质量高', en: 'Best coding, high quality output' }, color: '#D97757' },
+                            { name: { zh: 'Gemini', en: 'Gemini' }, hint: { zh: '多模态领先，免费额度大', en: 'Best multimodal, generous free tier' }, color: '#4285F4' },
+                          ]).map((m, i) => (
+                            <div key={i} className="flex items-center gap-4">
+                              <div className="w-3 h-3 rounded-full shrink-0" style={{ background: m.color }} />
+                              <span className="text-[15px] font-semibold shrink-0 w-[90px]" style={{ color: 'var(--color-text)' }}>{m.name[lang]}</span>
+                              <span className="text-[14px]" style={{ color: 'var(--color-text-tertiary)' }}>{m.hint[lang]}</span>
+                            </div>
+                          ))}
+                        </div>
+
+                        <p className="text-[13px] text-center" style={{ color: 'var(--color-text-muted)' }}>
+                          {lang === 'zh' ? '← 从左侧选择一个提供商开始' : '← Pick a provider from the left'}
                         </p>
                       </div>
                     ) : (() => {
                       const provider = QUICK_PROVIDERS.find(p => p.id === selectedProvider)!;
                       return (
-                        <div className="space-y-5">
+                        <div className="space-y-6">
                           {/* API Key + Base URL */}
-                          <div className="p-5 rounded-2xl border" style={{ background: 'var(--color-bg-elevated)', borderColor: 'var(--color-border)' }}>
-                            <div className="flex items-center justify-between mb-3">
-                              <div className="flex items-center gap-2">
-                                <Key size={14} className="text-[var(--color-primary)]" />
-                                <span className="text-[13px] font-medium" style={{ color: 'var(--color-text)' }}>
+                          <div className="p-7 rounded-2xl border" style={{ background: 'var(--color-bg-elevated)', borderColor: 'var(--color-border)' }}>
+                            <div className="flex items-center justify-between mb-4">
+                              <div className="flex items-center gap-2.5">
+                                <Key size={16} className="text-[var(--color-primary)]" />
+                                <span className="text-[15px] font-semibold" style={{ color: 'var(--color-text)' }}>
                                   API Key
                                 </span>
                               </div>
@@ -814,10 +913,10 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                                   e.preventDefault();
                                   import('@tauri-apps/plugin-shell').then(m => m.open(provider.signupUrl));
                                 }}
-                                className="text-[12px] flex items-center gap-1"
+                                className="text-[13px] flex items-center gap-1.5 font-medium"
                                 style={{ color: 'var(--color-primary)' }}
                               >
-                                {lang === 'zh' ? '获取 Key' : 'Get Key'} <ExternalLink size={11} />
+                                {lang === 'zh' ? '获取 Key' : 'Get Key'} <ExternalLink size={13} />
                               </a>
                             </div>
                             <input
@@ -825,7 +924,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                               value={apiKey}
                               onChange={(e) => { setApiKey(e.target.value); setTestResult(null); }}
                               placeholder={lang === 'zh' ? '粘贴你的 API Key...' : 'Paste your API Key...'}
-                              className="w-full px-4 py-2.5 rounded-lg text-[13px] outline-none"
+                              className="w-full px-5 py-3.5 rounded-xl text-[14px] outline-none"
                               style={{
                                 background: 'var(--color-bg-subtle)',
                                 color: 'var(--color-text)',
@@ -835,19 +934,43 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
 
                             {/* Base URL (collapsible) */}
                             <div className="mt-3">
-                              <button
-                                onClick={() => setShowBaseUrl(!showBaseUrl)}
-                                className="text-[11px] font-medium flex items-center gap-1"
-                                style={{ color: 'var(--color-text-muted)' }}
-                              >
-                                <ChevronRight size={12} className={`transition-transform ${showBaseUrl ? 'rotate-90' : ''}`} />
-                                Base URL
-                                {!showBaseUrl && (
-                                  <span className="ml-1 text-[10px] font-normal" style={{ color: 'var(--color-text-tertiary)' }}>
-                                    {baseUrl}
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => setShowBaseUrl(!showBaseUrl)}
+                                  className="text-[11px] font-medium flex items-center gap-1"
+                                  style={{ color: 'var(--color-text-muted)' }}
+                                >
+                                  <ChevronRight size={12} className={`transition-transform ${showBaseUrl ? 'rotate-90' : ''}`} />
+                                  Base URL
+                                  {!showBaseUrl && (
+                                    <span className="ml-1 text-[10px] font-normal" style={{ color: 'var(--color-text-tertiary)' }}>
+                                      {baseUrl}
+                                    </span>
+                                  )}
+                                </button>
+                                {(provider.id === 'zhipu' || provider.id === 'zhipu-coding') && (
+                                  <span className="ml-auto flex gap-1">
+                                    {(['cn', 'intl'] as const).map(siteKey => {
+                                      const site = ZHIPU_SITES[siteKey];
+                                      const url = provider.id === 'zhipu-coding' ? site.codingBaseUrl : site.baseUrl;
+                                      return (
+                                        <button
+                                          key={siteKey}
+                                          onClick={() => setBaseUrl(url)}
+                                          className="px-2 py-0.5 rounded-md text-[10px] font-medium transition-all"
+                                          style={{
+                                            background: baseUrl === url ? provider.color + '20' : 'transparent',
+                                            color: baseUrl === url ? provider.color : 'var(--color-text-muted)',
+                                            border: `1px solid ${baseUrl === url ? provider.color + '40' : 'transparent'}`,
+                                          }}
+                                        >
+                                          {site.label}
+                                        </button>
+                                      );
+                                    })}
                                   </span>
                                 )}
-                              </button>
+                              </div>
                               {showBaseUrl && (
                                 <input
                                   value={baseUrl}
@@ -866,9 +989,9 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                           </div>
 
                           {/* Model selection */}
-                          <div className="p-5 rounded-2xl border" style={{ background: 'var(--color-bg-elevated)', borderColor: 'var(--color-border)' }}>
-                            <div className="flex items-center justify-between mb-3">
-                              <div className="text-[13px] font-medium" style={{ color: 'var(--color-text)' }}>
+                          <div className="p-7 rounded-2xl border" style={{ background: 'var(--color-bg-elevated)', borderColor: 'var(--color-border)' }}>
+                            <div className="flex items-center justify-between mb-4">
+                              <div className="text-[15px] font-semibold" style={{ color: 'var(--color-text)' }}>
                                 {lang === 'zh' ? '选择模型' : 'Choose Model'}
                               </div>
                               <button
@@ -891,12 +1014,12 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                             </div>
 
                             {!useCustomModel ? (
-                              <div className="space-y-2 max-h-[185px] overflow-y-auto pr-1">
+                              <div className="space-y-2.5 max-h-[220px] overflow-y-auto pr-1">
                                 {provider.models.map((m) => (
                                   <button
                                     key={m.id}
                                     onClick={() => setSelectedModel(m.id)}
-                                    className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl border-2 text-left transition-all"
+                                    className="w-full flex items-center gap-3.5 px-4 py-3 rounded-xl border-2 text-left transition-all"
                                     style={{
                                       background: selectedModel === m.id ? 'var(--color-primary)' : 'transparent',
                                       borderColor: selectedModel === m.id ? 'var(--color-primary)' : 'var(--color-border)',
@@ -904,16 +1027,16 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                                     }}
                                   >
                                     <div className="flex-1 min-w-0">
-                                      <span className="text-[13px] font-medium" style={{ color: selectedModel === m.id ? '#fff' : 'var(--color-text)' }}>
+                                      <span className="text-[14px] font-medium" style={{ color: selectedModel === m.id ? '#fff' : 'var(--color-text)' }}>
                                         {m.name}
                                       </span>
-                                      <span className="text-[11px] ml-2" style={{ color: selectedModel === m.id ? 'rgba(255,255,255,0.7)' : 'var(--color-text-tertiary)' }}>
+                                      <span className="text-[12px] ml-2" style={{ color: selectedModel === m.id ? 'rgba(255,255,255,0.7)' : 'var(--color-text-tertiary)' }}>
                                         {m.id}
                                       </span>
                                     </div>
                                     {m.tag && (
                                       <span
-                                        className="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                                        className="shrink-0 text-[11px] font-semibold px-2.5 py-1 rounded-full"
                                         style={{
                                           background: selectedModel === m.id ? 'rgba(255,255,255,0.2)' : 'var(--color-primary-subtle)',
                                           color: selectedModel === m.id ? '#fff' : 'var(--color-primary)',
@@ -947,22 +1070,42 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                           </div>
 
                           {/* Test connection - after both key and model are set */}
-                          <div className="flex items-center gap-3">
+                          <div className="flex items-center gap-4">
                             <button
                               onClick={handleTestConnection}
                               disabled={!apiKey.trim() || (!selectedModel && !customModelId.trim()) || testing}
-                              className="px-4 py-2.5 rounded-xl text-[12px] font-medium transition-opacity disabled:opacity-40 flex items-center gap-2"
-                              style={{ background: 'var(--color-bg-elevated)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+                              className={`px-6 py-3 rounded-xl text-[14px] font-medium flex items-center gap-2.5 transition-all ${!testing ? 'disabled:opacity-40' : ''}`}
+                              style={{
+                                background: testing ? provider.color + '10' : 'var(--color-bg-elevated)',
+                                color: testing ? provider.color : 'var(--color-text)',
+                                border: `1px solid ${testing ? provider.color + '40' : 'var(--color-border)'}`,
+                              }}
                             >
-                              {testing ? <Loader2 size={13} className="animate-spin" /> : null}
-                              {lang === 'zh' ? '测试连接' : 'Test Connection'}
+                              {testing ? <Loader2 size={15} className="animate-spin" /> : null}
+                              {testing
+                                ? (lang === 'zh' ? '测试中...' : 'Testing...')
+                                : (lang === 'zh' ? '测试连接' : 'Test Connection')}
                             </button>
-                            {testResult && (
-                              <span className={`text-[12px] ${testResult.ok ? 'text-[var(--color-success)]' : 'text-[var(--color-error)]'}`}>
-                                {testResult.ok ? (lang === 'zh' ? '连接成功 ✓' : 'Connected ✓') : testResult.msg}
+                            {testResult && !testing && (
+                              <span className={`text-[14px] font-medium ${testResult.success ? 'text-[var(--color-success)]' : 'text-[var(--color-error)]'}`}>
+                                {testResult.success ? `OK · ${testResult.message}` : testResult.message}
                               </span>
                             )}
                           </div>
+                          {testResult?.reply && !testing && (
+                            <div
+                              className="p-3 rounded-xl text-[13px] leading-relaxed whitespace-pre-wrap"
+                              style={{
+                                background: testResult.success ? provider.color + '08' : 'rgba(239,68,68,0.08)',
+                                border: `1px solid ${testResult.success ? provider.color + '20' : 'rgba(239,68,68,0.2)'}`,
+                                color: 'var(--color-text)',
+                                maxHeight: '120px',
+                                overflowY: 'auto',
+                              }}
+                            >
+                              {testResult.reply}
+                            </div>
+                          )}
                         </div>
                       );
                     })()}
@@ -971,29 +1114,157 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
               </div>
             )}
 
+            {/* Step: Workspace */}
+            {currentStep === 'workspace' && (
+              <div className="pt-10">
+                <div className="text-center mb-10">
+                  <div className="w-20 h-20 rounded-3xl bg-[var(--color-primary-subtle)] flex items-center justify-center mx-auto mb-8">
+                    <FolderOpen size={36} className="text-[var(--color-primary)]" />
+                  </div>
+                  <h1 className="text-4xl font-extrabold mb-4 tracking-tight" style={{ color: 'var(--color-text)' }}>
+                    {lang === 'zh' ? '工作空间设置' : 'Workspace Setup'}
+                  </h1>
+                  <p className="text-[16px]" style={{ color: 'var(--color-text-secondary)' }}>
+                    {lang === 'zh'
+                      ? 'Agent 生成的文件将保存到默认工作目录，你也可以授权额外的文件夹'
+                      : 'Agent-generated files are saved to the default workspace. You can also authorize additional folders.'}
+                  </p>
+                </div>
+
+                {/* Default workspace */}
+                <div className="mb-8">
+                  <div className="text-[13px] font-semibold mb-3 uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>
+                    {lang === 'zh' ? '默认工作目录' : 'Default Workspace'}
+                  </div>
+                  <div
+                    className="flex items-center gap-4 px-5 py-4 rounded-xl"
+                    style={{ background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)' }}
+                  >
+                    <FolderOpen size={20} style={{ color: 'var(--color-primary)' }} />
+                    <code className="text-[14px] flex-1 truncate" style={{ color: 'var(--color-text)' }}>
+                      {workspacePath || '~/Documents/YiYiClaw'}
+                    </code>
+                    <div
+                      className="px-3 py-1 rounded-lg text-[11px] font-semibold"
+                      style={{ background: 'var(--color-success)', color: '#fff' }}
+                    >
+                      {lang === 'zh' ? '读写' : 'R/W'}
+                    </div>
+                  </div>
+                  <p className="text-[12px] mt-2" style={{ color: 'var(--color-text-tertiary)' }}>
+                    {lang === 'zh'
+                      ? '此目录由系统管理，Agent 会将产物（代码、文档、图片等）保存到这里'
+                      : 'Managed by the system. Agent saves generated files (code, docs, images) here.'}
+                  </p>
+                </div>
+
+                {/* Authorized folders */}
+                <div className="mb-6">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-[12px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>
+                      {lang === 'zh' ? '授权文件夹' : 'Authorized Folders'}
+                    </div>
+                    <button
+                      onClick={handlePickFolder}
+                      disabled={workspaceLoading}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
+                      style={{ background: 'var(--color-primary)', color: '#fff' }}
+                    >
+                      {workspaceLoading ? <Loader2 size={12} className="animate-spin" /> : <>+ {lang === 'zh' ? '添加文件夹' : 'Add Folder'}</>}
+                    </button>
+                  </div>
+
+                  {authorizedFolders.filter(f => !f.is_default).length === 0 ? (
+                    <div
+                      className="px-4 py-6 rounded-xl text-center text-[13px]"
+                      style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-tertiary)', border: '1px dashed var(--color-border)' }}
+                    >
+                      {lang === 'zh'
+                        ? '暂无额外授权文件夹。Agent 仅能访问默认工作目录。'
+                        : 'No extra folders authorized. Agent can only access the default workspace.'}
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {authorizedFolders.filter(f => !f.is_default).map(folder => (
+                        <div
+                          key={folder.id}
+                          className="flex items-center gap-3 px-4 py-2.5 rounded-xl group"
+                          style={{ background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)' }}
+                        >
+                          <FolderOpen size={16} style={{ color: 'var(--color-text-muted)' }} />
+                          <code className="text-[12px] flex-1 truncate" style={{ color: 'var(--color-text)' }}>
+                            {folder.path}
+                          </code>
+                          <div
+                            className="px-2 py-0.5 rounded text-[10px] font-medium"
+                            style={{
+                              background: folder.permission === 'read_write' ? 'var(--color-success)' : 'var(--color-warning)',
+                              color: '#fff',
+                            }}
+                          >
+                            {folder.permission === 'read_write' ? (lang === 'zh' ? '读写' : 'R/W') : (lang === 'zh' ? '只读' : 'R/O')}
+                          </div>
+                          <button
+                            onClick={() => handleRemoveFolder(folder.id)}
+                            className="opacity-0 group-hover:opacity-100 text-[12px] px-1.5 py-0.5 rounded transition-opacity"
+                            style={{ color: 'var(--color-danger)' }}
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <p className="text-[11px] mt-1.5" style={{ color: 'var(--color-text-tertiary)' }}>
+                    {lang === 'zh'
+                      ? '授权后 Agent 可读写这些文件夹。可随时在设置中修改。'
+                      : 'Agent can read/write these folders once authorized. Adjustable in Settings anytime.'}
+                  </p>
+                </div>
+
+                {/* Security note */}
+                <div
+                  className="flex items-start gap-3 px-4 py-3 rounded-xl"
+                  style={{ background: 'var(--color-bg-subtle)', border: '1px solid var(--color-border)' }}
+                >
+                  <Shield size={18} className="shrink-0 mt-0.5" style={{ color: 'var(--color-warning)' }} />
+                  <div>
+                    <div className="text-[12px] font-semibold mb-0.5" style={{ color: 'var(--color-text)' }}>
+                      {lang === 'zh' ? '敏感文件保护' : 'Sensitive File Protection'}
+                    </div>
+                    <div className="text-[11px] leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>
+                      {lang === 'zh'
+                        ? '系统内置了 .env、.ssh、.pem 等敏感文件的保护规则，即使在授权文件夹中也会被拦截。可在设置中查看和管理。'
+                        : 'Built-in protection rules for .env, .ssh, .pem and other sensitive files. These are blocked even in authorized folders. Manage in Settings.'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Step: Persona */}
             {currentStep === 'persona' && (
               <div className="flex-1 overflow-y-auto min-h-0">
-                <div className="text-center mb-8">
-                  <h1 className="text-2xl font-bold mb-2" style={{ color: 'var(--color-text)' }}>
+                <div className="text-center mb-10">
+                  <h1 className="text-4xl font-extrabold mb-4 tracking-tight" style={{ color: 'var(--color-text)' }}>
                     {lang === 'zh' ? '设定你的 AI 助手' : 'Set Up Your AI Assistant'}
                   </h1>
-                  <p className="text-[14px]" style={{ color: 'var(--color-text-secondary)' }}>
+                  <p className="text-[16px]" style={{ color: 'var(--color-text-secondary)' }}>
                     {lang === 'zh' ? '给 AI 起个名字，告诉它你是谁' : 'Give your AI a name and introduce yourself'}
                   </p>
                 </div>
 
                 {/* Names row */}
-                <div className="grid grid-cols-2 gap-4 mb-6">
-                  <div className="p-4 rounded-xl border" style={{ background: 'var(--color-bg-elevated)', borderColor: 'var(--color-border)' }}>
-                    <label className="text-[12px] font-medium block mb-2" style={{ color: 'var(--color-text-muted)' }}>
+                <div className="grid grid-cols-2 gap-6 mb-8">
+                  <div className="p-6 rounded-2xl border" style={{ background: 'var(--color-bg-elevated)', borderColor: 'var(--color-border)' }}>
+                    <label className="text-[13px] font-semibold block mb-3" style={{ color: 'var(--color-text-muted)' }}>
                       {lang === 'zh' ? 'AI 的名字' : 'AI Name'}
                     </label>
                     <input
                       value={aiName}
                       onChange={(e) => setAiName(e.target.value)}
-                      placeholder="YiClaw"
-                      className="w-full px-3 py-2 rounded-lg text-[14px] font-medium outline-none"
+                      placeholder="YiYiClaw"
+                      className="w-full px-4 py-3 rounded-xl text-[15px] font-medium outline-none"
                       style={{
                         background: 'var(--color-bg-subtle)',
                         color: 'var(--color-text)',
@@ -1001,15 +1272,15 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                       }}
                     />
                   </div>
-                  <div className="p-4 rounded-xl border" style={{ background: 'var(--color-bg-elevated)', borderColor: 'var(--color-border)' }}>
-                    <label className="text-[12px] font-medium block mb-2" style={{ color: 'var(--color-text-muted)' }}>
+                  <div className="p-6 rounded-2xl border" style={{ background: 'var(--color-bg-elevated)', borderColor: 'var(--color-border)' }}>
+                    <label className="text-[13px] font-semibold block mb-3" style={{ color: 'var(--color-text-muted)' }}>
                       {lang === 'zh' ? '你的称呼（主人名字）' : 'Your Name (Owner)'}
                     </label>
                     <input
                       value={ownerName}
                       onChange={(e) => setOwnerName(e.target.value)}
                       placeholder={lang === 'zh' ? '你的名字或昵称' : 'Your name or nickname'}
-                      className="w-full px-3 py-2 rounded-lg text-[14px] font-medium outline-none"
+                      className="w-full px-4 py-3 rounded-xl text-[15px] font-medium outline-none"
                       style={{
                         background: 'var(--color-bg-subtle)',
                         color: 'var(--color-text)',
@@ -1020,24 +1291,24 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                 </div>
 
                 {/* Tone style */}
-                <div className="mb-6">
-                  <div className="text-[12px] font-medium mb-3" style={{ color: 'var(--color-text-muted)' }}>
+                <div className="mb-8">
+                  <div className="text-[13px] font-semibold mb-4" style={{ color: 'var(--color-text-muted)' }}>
                     {lang === 'zh' ? '回复语气' : 'Response Tone'}
                   </div>
-                  <div className="grid grid-cols-4 gap-2.5">
+                  <div className="grid grid-cols-4 gap-3.5">
                     {TONE_STYLES.map((t) => (
                       <button
                         key={t.id}
                         onClick={() => setToneStyle(t.id)}
-                        className="p-3 rounded-xl border-2 text-center transition-all"
+                        className="p-4 rounded-2xl border-2 text-center transition-all"
                         style={{
                           background: toneStyle === t.id ? 'var(--color-primary)' : 'var(--color-bg-elevated)',
                           borderColor: toneStyle === t.id ? 'var(--color-primary)' : 'var(--color-border)',
                           boxShadow: toneStyle === t.id ? '0 2px 12px rgba(var(--color-primary-rgb), 0.25)' : 'none',
                         }}
                       >
-                        <div className="text-xl mb-1">{t.emoji}</div>
-                        <div className="text-[11px] font-semibold" style={{ color: toneStyle === t.id ? '#fff' : 'var(--color-text)' }}>
+                        <div className="text-2xl mb-2">{t.emoji}</div>
+                        <div className="text-[12px] font-semibold" style={{ color: toneStyle === t.id ? '#fff' : 'var(--color-text)' }}>
                           {t.name[lang]}
                         </div>
                       </button>
@@ -1046,24 +1317,24 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                 </div>
 
                 {/* Role preset */}
-                <div className="mb-6">
-                  <div className="text-[12px] font-medium mb-3" style={{ color: 'var(--color-text-muted)' }}>
+                <div className="mb-8">
+                  <div className="text-[13px] font-semibold mb-4" style={{ color: 'var(--color-text-muted)' }}>
                     {lang === 'zh' ? '角色定位' : 'Role'}
                   </div>
-                  <div className="grid grid-cols-4 gap-2.5">
+                  <div className="grid grid-cols-4 gap-3.5">
                     {ROLE_PRESETS.map((r) => (
                       <button
                         key={r.id}
                         onClick={() => setSelectedRole(r.id)}
-                        className="p-3 rounded-xl border-2 text-center transition-all"
+                        className="p-4 rounded-2xl border-2 text-center transition-all"
                         style={{
                           background: selectedRole === r.id ? 'var(--color-primary)' : 'var(--color-bg-elevated)',
                           borderColor: selectedRole === r.id ? 'var(--color-primary)' : 'var(--color-border)',
                           boxShadow: selectedRole === r.id ? '0 2px 12px rgba(var(--color-primary-rgb), 0.25)' : 'none',
                         }}
                       >
-                        <div className="text-xl mb-1">{r.emoji}</div>
-                        <div className="text-[11px] font-semibold" style={{ color: selectedRole === r.id ? '#fff' : 'var(--color-text)' }}>
+                        <div className="text-2xl mb-2">{r.emoji}</div>
+                        <div className="text-[12px] font-semibold" style={{ color: selectedRole === r.id ? '#fff' : 'var(--color-text)' }}>
                           {r.name[lang]}
                         </div>
                       </button>
@@ -1114,7 +1385,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
 
         {/* Bottom navigation bar */}
         <div
-          className="shrink-0 px-5 py-3 flex items-center justify-between"
+          className="shrink-0 px-8 py-5 flex items-center justify-between"
           style={{ borderTop: '1px solid var(--color-border)' }}
         >
           <div>
@@ -1122,23 +1393,23 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
               <button
                 onClick={goBack}
                 disabled={animating}
-                className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-[13px] font-medium transition-colors disabled:opacity-40"
+                className="flex items-center gap-2.5 px-6 py-3 rounded-xl text-[14px] font-medium transition-colors disabled:opacity-40"
                 style={{ color: 'var(--color-text-secondary)' }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-subtle)'; }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
               >
-                <ChevronLeft size={16} />
+                <ChevronLeft size={18} />
                 {t('common.back')}
               </button>
             )}
           </div>
 
-          <div className="flex items-center gap-3">
-            {currentStep === 'model' && (
+          <div className="flex items-center gap-4">
+            {(currentStep === 'model' || currentStep === 'workspace') && (
               <button
-                onClick={() => transitionTo('persona')}
+                onClick={() => transitionTo(currentStep === 'model' ? 'workspace' : 'persona')}
                 disabled={animating}
-                className="px-5 py-2.5 rounded-xl text-[13px] font-medium disabled:opacity-40"
+                className="px-6 py-3 rounded-xl text-[14px] font-medium disabled:opacity-40"
                 style={{ color: 'var(--color-text-muted)' }}
               >
                 {lang === 'zh' ? '跳过' : 'Skip'}
@@ -1147,19 +1418,19 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
             <button
               onClick={goNext}
               disabled={!canProceed() || modelSaving || finishing || animating}
-              className="flex items-center gap-2 px-6 py-2.5 rounded-xl text-[13px] font-semibold text-white transition-all disabled:opacity-40"
-              style={{ background: 'var(--color-primary)' }}
+              className="flex items-center gap-2.5 px-8 py-3 rounded-xl text-[14px] font-bold text-white transition-all disabled:opacity-40"
+              style={{ background: 'var(--color-primary)', boxShadow: '0 4px 16px rgba(var(--color-primary-rgb), 0.3)' }}
             >
-              {(modelSaving || finishing) && <Loader2 size={14} className="animate-spin" />}
+              {(modelSaving || finishing) && <Loader2 size={16} className="animate-spin" />}
               {currentStep === 'persona' ? (
                 <>
-                  <Sparkles size={14} />
+                  <Sparkles size={16} />
                   {lang === 'zh' ? '开始使用' : 'Get Started'}
                 </>
               ) : (
                 <>
                   {t('common.next')}
-                  <ChevronRight size={16} />
+                  <ChevronRight size={18} />
                 </>
               )}
             </button>

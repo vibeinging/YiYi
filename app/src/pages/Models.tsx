@@ -40,6 +40,9 @@ import {
   type ModelInfo,
   type ProviderTemplate,
   type ProviderPlugin,
+  type TestConnectionResponse,
+  ZHIPU_SITES,
+  type ZhipuSiteKey,
 } from '../api/models';
 import { PageHeader } from '../components/PageHeader';
 import { toast, confirm } from '../components/Toast';
@@ -116,7 +119,7 @@ const PROVIDER_LIST: ProviderMeta[] = [
     tag: '国内', tagColor: '#FF4F81',
   },
   {
-    id: 'zhipu', name: '智谱 AI (国内)', desc: 'GLM-5, GLM-4.7, GLM-4 Plus/Flash',
+    id: 'zhipu', name: '智谱 AI', desc: 'GLM-5, GLM-4.7, GLM-4 Plus/Flash',
     color: '#3366FF', baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     signupUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
     signupLabel: '获取 API Key',
@@ -125,16 +128,6 @@ const PROVIDER_LIST: ProviderMeta[] = [
       { id: 'glm-4-plus', name: 'GLM-4 Plus' }, { id: 'glm-4-flash', name: 'GLM-4 Flash' },
     ],
     tag: '国内', tagColor: '#3366FF',
-  },
-  {
-    id: 'zhipu-intl', name: 'Z.AI (智谱国际)', desc: 'GLM-5, GLM-4.7, GLM-4 Plus/Flash',
-    color: '#1A3A5C', baseUrl: 'https://api.z.ai/api/paas/v4',
-    signupUrl: 'https://www.z.ai/',
-    signupLabel: 'Get API Key',
-    models: [
-      { id: 'glm-5', name: 'GLM-5' }, { id: 'glm-4.7', name: 'GLM-4.7' },
-      { id: 'glm-4-plus', name: 'GLM-4 Plus' }, { id: 'glm-4-flash', name: 'GLM-4 Flash' },
-    ],
   },
   {
     id: 'modelscope', name: 'ModelScope', desc: '魔搭社区模型推理',
@@ -193,6 +186,9 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const [customModelInput, setCustomModelInput] = useState<Record<string, string>>({});
   const [selectedModel, setSelectedModel] = useState<Record<string, string>>({});
 
+  // Zhipu site switcher (CN / Intl)
+  const [zhipuSite, setZhipuSite] = useState<ZhipuSiteKey>('cn');
+
   // Custom provider dialog
   const [showCustomDialog, setShowCustomDialog] = useState(false);
   const [customForm, setCustomForm] = useState({
@@ -213,6 +209,11 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
     try {
       const [providersData, activeData] = await Promise.all([listProviders(), getActiveLlm()]);
       setProviders(providersData);
+      // Detect zhipu site from saved base URL
+      const zhipuProvider = providersData.find((p: ProviderDisplay) => p.id === 'zhipu');
+      if (zhipuProvider?.current_base_url?.includes('z.ai')) {
+        setZhipuSite('intl');
+      }
       if (activeData.provider_id && activeData.model) {
         setActiveLlm({ provider_id: activeData.provider_id, model: activeData.model });
       } else {
@@ -240,20 +241,24 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
     } finally { setSaving(null); }
   };
 
+  const [testResults, setTestResults] = useState<Record<string, TestConnectionResponse>>({});
+
   const handleTestConnection = async (providerId: string) => {
     setTesting(providerId);
+    setTestResults(prev => { const next = { ...prev }; delete next[providerId]; return next; });
     try {
       const apiKey = apiKeyInputs[providerId];
       const baseUrl = baseUrlInputs[providerId];
-      const result = await testProvider(providerId, apiKey || undefined, baseUrl || undefined);
-      const message = result.latency_ms ? `${result.message} (${result.latency_ms}ms)` : result.message;
-      if (result.success) {
-        toast.success(message);
-      } else {
-        toast.error(message);
+      const modelId = selectedModel[providerId] || (activeLlm?.provider_id === providerId ? activeLlm.model : undefined);
+      const result = await testProvider(providerId, apiKey || undefined, baseUrl || undefined, modelId);
+      setTestResults(prev => ({ ...prev, [providerId]: { success: result.success, message: result.message, reply: result.reply } }));
+      if (!result.success) {
+        toast.error(result.message);
       }
     } catch (error: any) {
-      toast.error(error?.toString() || 'Test failed');
+      const msg = error?.toString() || 'Test failed';
+      setTestResults(prev => ({ ...prev, [providerId]: { success: false, message: msg } }));
+      toast.error(msg);
     } finally { setTesting(null); }
   };
 
@@ -447,7 +452,11 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
                       </div>
                       {!isExpanded && (
                         <button
-                          onClick={(e) => { e.stopPropagation(); open(meta.signupUrl); }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const url = meta.id === 'zhipu' ? ZHIPU_SITES[zhipuSite].signupUrl : meta.signupUrl;
+                            open(url);
+                          }}
                           className="flex-shrink-0 p-1.5 rounded-lg transition-all"
                           style={{ color: meta.color }}
                           onMouseEnter={(e) => { e.currentTarget.style.background = meta.color + '10'; }}
@@ -484,6 +493,27 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
                             <label className="flex items-center gap-1.5 text-[12px] font-medium mb-1.5"
                               style={{ color: 'var(--color-text-secondary)' }}>
                               <Globe size={12} /> Base URL
+                              {meta.id === 'zhipu' && (
+                                <span className="ml-auto flex gap-1">
+                                  {(['cn', 'intl'] as const).map(site => (
+                                    <button
+                                      key={site}
+                                      onClick={() => {
+                                        setZhipuSite(site);
+                                        setBaseUrlInputs(prev => ({ ...prev, zhipu: ZHIPU_SITES[site].baseUrl }));
+                                      }}
+                                      className="px-2 py-0.5 rounded-md text-[10px] font-medium transition-all"
+                                      style={{
+                                        background: zhipuSite === site ? meta.color + '20' : 'transparent',
+                                        color: zhipuSite === site ? meta.color : 'var(--color-text-muted)',
+                                        border: `1px solid ${zhipuSite === site ? meta.color + '40' : 'transparent'}`,
+                                      }}
+                                    >
+                                      {ZHIPU_SITES[site].label}
+                                    </button>
+                                  ))}
+                                </span>
+                              )}
                             </label>
                             <input
                               type="text"
@@ -586,16 +616,21 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
                           <button
                             onClick={() => handleTestConnection(meta.id)}
                             disabled={testing === meta.id}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-50"
-                            style={{ color: 'var(--color-text-secondary)' }}
-                            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-elevated)'; }}
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors ${testing !== meta.id ? 'disabled:opacity-50' : ''}`}
+                            style={{
+                              color: testing === meta.id ? meta.color : 'var(--color-text-secondary)',
+                            }}
+                            onMouseEnter={(e) => { if (testing !== meta.id) e.currentTarget.style.background = 'var(--color-bg-elevated)'; }}
                             onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                           >
                             {testing === meta.id ? <Loader2 size={13} className="animate-spin" /> : <TestTube size={13} />}
-                            {t('models.test')}
+                            {testing === meta.id ? t('models.testingConnection') : t('models.test')}
                           </button>
                           <button
-                            onClick={() => open(meta.signupUrl)}
+                            onClick={() => {
+                              const url = meta.id === 'zhipu' ? ZHIPU_SITES[zhipuSite].signupUrl : meta.signupUrl;
+                              open(url);
+                            }}
                             className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-all"
                             style={{ color: meta.color }}
                             onMouseEnter={(e) => { e.currentTarget.style.background = meta.color + '10'; }}
@@ -628,6 +663,40 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
                           </button>
                         </div>
                       </div>
+
+                      {/* Test result reply */}
+                      {testResults[meta.id] && (
+                        <div
+                          className="p-3 rounded-xl text-[12px] leading-relaxed"
+                          style={{
+                            background: testResults[meta.id].success ? meta.color + '08' : 'rgba(239,68,68,0.08)',
+                            border: `1px solid ${testResults[meta.id].success ? meta.color + '20' : 'rgba(239,68,68,0.2)'}`,
+                            color: 'var(--color-text-secondary)',
+                          }}
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <span style={{ color: testResults[meta.id].success ? meta.color : '#ef4444', fontWeight: 600, fontSize: '11px' }}>
+                              {testResults[meta.id].success ? `OK · ${testResults[meta.id].message}` : 'Failed'}
+                            </span>
+                            {!testResults[meta.id].success && (
+                              <span className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>{testResults[meta.id].message}</span>
+                            )}
+                          </div>
+                          {testResults[meta.id].reply && (
+                            <div
+                              className="mt-2 pt-2 text-[12px] whitespace-pre-wrap"
+                              style={{
+                                borderTop: `1px solid ${meta.color}15`,
+                                color: 'var(--color-text)',
+                                maxHeight: '120px',
+                                overflowY: 'auto',
+                              }}
+                            >
+                              {testResults[meta.id].reply}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

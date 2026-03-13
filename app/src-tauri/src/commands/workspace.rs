@@ -2,7 +2,7 @@ use serde::Serialize;
 use std::io::{Read as IoRead, Write as IoWrite};
 use tauri::State;
 
-use crate::engine::tools::{SandboxResponse, sandbox_respond as engine_sandbox_respond};
+use crate::engine::db::{AuthorizedFolderRow, SensitivePathRow};
 use crate::state::AppState;
 
 #[derive(Serialize)]
@@ -287,29 +287,163 @@ pub async fn get_workspace_path(state: State<'_, AppState>) -> Result<String, St
     Ok(state.user_workspace().to_string_lossy().to_string())
 }
 
-// --- Sandbox access control ---
+// --- Workspace authorization ---
 
 #[tauri::command]
-pub async fn sandbox_respond(req_id: String, response: String) -> Result<(), String> {
-    let r = match response.as_str() {
-        "allow_once" => SandboxResponse::AllowOnce,
-        "allow_permanent" => SandboxResponse::AllowPermanent,
-        "deny" => SandboxResponse::Deny,
-        _ => return Err(format!("Invalid sandbox response: {}", response)),
+pub async fn list_authorized_folders(
+    state: State<'_, AppState>,
+) -> Result<Vec<AuthorizedFolderRow>, String> {
+    Ok(state.db.list_authorized_folders())
+}
+
+#[tauri::command]
+pub async fn add_authorized_folder(
+    state: State<'_, AppState>,
+    path: String,
+    label: Option<String>,
+    permission: Option<String>,
+) -> Result<AuthorizedFolderRow, String> {
+    let p = std::path::Path::new(&path);
+    if !p.is_absolute() {
+        return Err("Path must be absolute".into());
+    }
+    std::fs::create_dir_all(p).map_err(|e| format!("Failed to create directory: {}", e))?;
+    let now = chrono::Utc::now().timestamp();
+    let folder = AuthorizedFolderRow {
+        id: uuid::Uuid::new_v4().to_string(),
+        path: p.canonicalize().unwrap_or(p.to_path_buf()).to_string_lossy().to_string(),
+        label,
+        permission: permission.unwrap_or_else(|| "read_write".into()),
+        is_default: false,
+        created_at: now,
+        updated_at: now,
     };
-    engine_sandbox_respond(&req_id, r).await
+    state.db.upsert_authorized_folder(&folder)?;
+    let all = state.db.list_authorized_folders();
+    crate::engine::tools::refresh_authorized_folders(all).await;
+    Ok(folder)
 }
 
 #[tauri::command]
-pub async fn sandbox_list_allowed() -> Result<serde_json::Value, String> {
-    let paths = crate::engine::tools::get_persistent_sandbox_paths().await;
-    let strs: Vec<String> = paths.iter().map(|p| p.to_string_lossy().to_string()).collect();
-    Ok(serde_json::json!(strs))
+pub async fn update_authorized_folder(
+    state: State<'_, AppState>,
+    id: String,
+    label: Option<String>,
+    permission: Option<String>,
+) -> Result<(), String> {
+    let mut target = state.db.get_authorized_folder(&id)?
+        .ok_or("Folder not found")?;
+    if let Some(l) = label { target.label = Some(l); }
+    if let Some(p) = permission { target.permission = p; }
+    target.updated_at = chrono::Utc::now().timestamp();
+    state.db.upsert_authorized_folder(&target)?;
+    let all = state.db.list_authorized_folders();
+    crate::engine::tools::refresh_authorized_folders(all).await;
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn sandbox_remove_path(path: String) -> Result<(), String> {
-    crate::engine::tools::remove_sandbox_path(&path).await
+pub async fn remove_authorized_folder(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    let folders = state.db.list_authorized_folders();
+    if let Some(f) = folders.iter().find(|f| f.id == id) {
+        if f.is_default {
+            return Err("Cannot remove the default workspace folder".into());
+        }
+    }
+    state.db.remove_authorized_folder(&id)?;
+    let all = state.db.list_authorized_folders();
+    crate::engine::tools::refresh_authorized_folders(all).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn list_sensitive_patterns(
+    state: State<'_, AppState>,
+) -> Result<Vec<SensitivePathRow>, String> {
+    Ok(state.db.list_sensitive_paths())
+}
+
+#[tauri::command]
+pub async fn add_sensitive_pattern(
+    state: State<'_, AppState>,
+    pattern: String,
+) -> Result<SensitivePathRow, String> {
+    let now = chrono::Utc::now().timestamp();
+    let row = SensitivePathRow {
+        id: uuid::Uuid::new_v4().to_string(),
+        pattern,
+        is_builtin: false,
+        enabled: true,
+        created_at: now,
+    };
+    state.db.upsert_sensitive_path(&row)?;
+    let all = state.db.list_sensitive_paths();
+    crate::engine::tools::refresh_sensitive_patterns(all).await;
+    Ok(row)
+}
+
+#[tauri::command]
+pub async fn toggle_sensitive_pattern(
+    state: State<'_, AppState>,
+    id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    state.db.toggle_sensitive_path(&id, enabled)?;
+    let all = state.db.list_sensitive_paths();
+    crate::engine::tools::refresh_sensitive_patterns(all).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn remove_sensitive_pattern(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    state.db.remove_sensitive_path(&id)?;
+    let all = state.db.list_sensitive_paths();
+    crate::engine::tools::refresh_sensitive_patterns(all).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn pick_folder() -> Result<Option<String>, String> {
+    let handle = rfd::AsyncFileDialog::new()
+        .set_title("Select folder to authorize")
+        .pick_folder()
+        .await;
+    Ok(handle.map(|h| h.path().to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+pub async fn list_folder_files(
+    state: State<'_, AppState>,
+    folder_path: String,
+) -> Result<Vec<WorkspaceFile>, String> {
+    let folders = state.db.list_authorized_folders();
+    let canonical = std::path::Path::new(&folder_path)
+        .canonicalize()
+        .map_err(|e| format!("Invalid path: {}", e))?;
+    let authorized = folders.iter().any(|f| {
+        let fp = std::path::Path::new(&f.path)
+            .canonicalize()
+            .unwrap_or_else(|_| std::path::PathBuf::from(&f.path));
+        canonical.starts_with(&fp)
+    });
+    if !authorized {
+        return Err("Path is not in any authorized folder".into());
+    }
+    walk_workspace_files(&canonical).await
+}
+
+/// Walk a directory and return a flat list of files, reusing the same logic as list_workspace_files.
+async fn walk_workspace_files(dir: &std::path::Path) -> Result<Vec<WorkspaceFile>, String> {
+    let mut files = Vec::new();
+    walk_dir(dir, dir, &mut files).await?;
+    files.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name)));
+    Ok(files)
 }
 
 // --- Agent/Memory file management ---

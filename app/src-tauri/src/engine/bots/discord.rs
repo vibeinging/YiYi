@@ -1,4 +1,4 @@
-use super::{now_ts, ContentPart, IncomingMessage};
+use super::{now_ts, update_bot_status, BotConnectionState, ContentPart, IncomingMessage};
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
@@ -20,6 +20,11 @@ impl DiscordBot {
         }
     }
 
+    /// Get the shared running flag for external stop control.
+    pub fn running_flag(&self) -> std::sync::Arc<tokio::sync::RwLock<bool>> {
+        self.running.clone()
+    }
+
     pub async fn start(&self, tx: mpsc::Sender<IncomingMessage>) {
         let token = self.bot_token.clone();
         let bot_id = self.bot_id.clone();
@@ -32,7 +37,7 @@ impl DiscordBot {
 
         tokio::spawn(async move {
             // Get gateway URL
-            let client = reqwest::Client::new();
+            let client = super::http_client();
             let gateway_url = match client
                 .get("https://discord.com/api/v10/gateway/bot")
                 .header("Authorization", format!("Bot {}", token))
@@ -55,6 +60,7 @@ impl DiscordBot {
             let ws_url = format!("{}/?v=10&encoding=json", gateway_url);
 
             log::info!("Discord connecting to gateway: {}", ws_url);
+            update_bot_status(&bot_id, BotConnectionState::Connecting, Some("Connecting to gateway".into()));
 
             loop {
                 {
@@ -106,8 +112,8 @@ impl DiscordBot {
                                                                     "intents": 33281, // GUILDS + GUILD_MESSAGES + DM_MESSAGES + MESSAGE_CONTENT
                                                                     "properties": {
                                                                         "os": "macos",
-                                                                        "browser": "yiclaw",
-                                                                        "device": "yiclaw"
+                                                                        "browser": "yiyiclaw",
+                                                                        "device": "yiyiclaw"
                                                                     }
                                                                 }
                                                             });
@@ -115,6 +121,7 @@ impl DiscordBot {
                                                                 serde_json::to_string(&identify).unwrap().into()
                                                             )).await.ok();
                                                             identified = true;
+                                                            update_bot_status(&bot_id, BotConnectionState::Connected, Some("Identified with gateway".into()));
                                                         }
                                                     }
                                                     11 => {
@@ -227,6 +234,7 @@ impl DiscordBot {
                     }
                     Err(e) => {
                         log::error!("Discord connect failed: {}", e);
+                        update_bot_status(&bot_id, BotConnectionState::Error, Some(format!("Connect failed: {}", e)));
                     }
                 }
 
@@ -237,9 +245,11 @@ impl DiscordBot {
                 }
                 drop(r);
                 log::info!("Discord reconnecting in 5s...");
+                update_bot_status(&bot_id, BotConnectionState::Reconnecting, Some("Reconnecting in 5s".into()));
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             }
 
+            update_bot_status(&bot_id, BotConnectionState::Disconnected, Some("Stopped".into()));
             log::info!("Discord gateway stopped");
         });
     }
@@ -250,23 +260,15 @@ impl DiscordBot {
     }
 
     pub async fn send(&self, channel_id: &str, content: &str) -> Result<(), String> {
-        let client = reqwest::Client::new();
+        let client = super::http_client();
         let url = format!(
             "https://discord.com/api/v10/channels/{}/messages",
             channel_id
         );
 
-        // Discord has 2000 char limit
-        let chunks: Vec<String> = if content.len() > 2000 {
-            content
-                .chars()
-                .collect::<Vec<char>>()
-                .chunks(2000)
-                .map(|c| c.iter().collect::<String>())
-                .collect()
-        } else {
-            vec![content.to_string()]
-        };
+        // Discord natively supports Markdown. Split on paragraph boundaries
+        // to respect the 2000-char limit without breaking mid-word.
+        let chunks = super::formatter::format_discord(content);
 
         for chunk in chunks {
             let body = serde_json::json!({ "content": chunk });
@@ -283,5 +285,31 @@ impl DiscordBot {
         }
 
         Ok(())
+    }
+}
+
+/// Test Discord bot credentials by calling GET /users/@me.
+pub async fn test_connection(bot_token: &str) -> Result<String, String> {
+    let client = super::http_client();
+
+    let resp = client
+        .get("https://discord.com/api/v10/users/@me")
+        .header("Authorization", format!("Bot {}", bot_token))
+        .send()
+        .await
+        .map_err(|e| format!("Discord request failed: {}", e))?;
+
+    let status = resp.status();
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Discord response parse failed: {}", e))?;
+
+    if status.is_success() {
+        let username = json["username"].as_str().unwrap_or("unknown");
+        Ok(format!("Discord bot verified: {}", username))
+    } else {
+        let msg = json["message"].as_str().unwrap_or("Invalid token");
+        Err(format!("Discord auth failed: {}", msg))
     }
 }

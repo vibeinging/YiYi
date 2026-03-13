@@ -1,15 +1,20 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::path::PathBuf;
 use tauri::{Emitter, State};
+
+use std::sync::Arc;
 
 use crate::engine::db;
 use crate::engine::llm_client::{LLMConfig, LLMMessage, MessageContent};
 use crate::engine::react_agent;
-use crate::engine::tools::mcp_tools_as_definitions;
+use crate::engine::react_agent::{PersistToolFn, ToolPersistEvent};
+use crate::engine::tools::{mcp_tools_as_definitions, ToolDefinition};
 use crate::state::app_state::{StreamingSnapshot, ToolSnapshot};
 use crate::state::AppState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Attachment {
     pub mime_type: String,
     pub data: String, // base64
@@ -18,6 +23,7 @@ pub struct Attachment {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MessageSource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub via: Option<String>,
@@ -32,6 +38,21 @@ pub struct MessageSource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallInfo {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpawnAgentResult {
+    pub name: String,
+    pub result: String,
+    #[serde(default)]
+    pub is_error: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub id: Option<i64>,
     pub role: String,
@@ -42,108 +63,145 @@ pub struct ChatMessage {
     pub attachments: Option<Vec<Attachment>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<MessageSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCallInfo>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spawn_agents: Option<Vec<SpawnAgentResult>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
 }
 
 /// Resolve LLM config from app state
 pub async fn resolve_llm_config(state: &AppState) -> Result<LLMConfig, String> {
     let providers = state.providers.read().await;
-
-    let active = providers
-        .active_llm
-        .as_ref()
-        .ok_or("No active model configured. Please set a model first.")?;
-
-    let all_providers = providers.get_all_providers();
-    let provider = all_providers
-        .iter()
-        .find(|p| p.id == active.provider_id)
-        .ok_or_else(|| format!("Provider '{}' not found", active.provider_id))?;
-
-    let base_url = provider
-        .base_url
-        .as_deref()
-        .unwrap_or(&provider.default_base_url)
-        .to_string();
-
-    let api_key = if let Some(custom) = providers.custom_providers.get(&active.provider_id) {
-        custom.settings.api_key.clone()
-    } else {
-        providers
-            .providers
-            .get(&active.provider_id)
-            .and_then(|s| s.api_key.clone())
-    };
-
-    let api_key_prefix = provider.api_key_prefix.clone();
-    let model = active.model.clone();
-    let provider_id = active.provider_id.clone();
-
-    let api_key = api_key
-        .or_else(|| std::env::var(&api_key_prefix).ok())
-        .ok_or_else(|| format!("No API key configured for provider '{}'", provider_id))?;
-
-    Ok(LLMConfig {
-        base_url,
-        api_key,
-        model,
-    })
+    crate::engine::llm_client::resolve_config_from_providers(&providers)
 }
 
-/// Load active skill contents and names for the system prompt.
-/// Returns (contents, names) where indices correspond.
-async fn load_skill_prompts_with_names(state: &AppState) -> (Vec<String>, Vec<String>) {
+/// Skill index entry — name + one-line description for the system prompt.
+#[derive(Clone)]
+pub struct SkillIndexEntry {
+    pub name: String,
+    pub description: String,
+}
+
+/// Load skill index (name + description) and always-active skill contents.
+///
+/// Returns:
+/// - `index`: compact list for the system prompt (model uses `activate_skills` tool to load full content)
+/// - `always_active`: full content of skills marked `always_active: true` (injected directly)
+async fn load_skill_index(state: &AppState) -> (Vec<SkillIndexEntry>, Vec<String>) {
     let skills_dir = state.working_dir.join("active_skills");
-    let mut prompts = Vec::new();
-    let mut names = Vec::new();
+    let mut index = Vec::new();
+    let mut always_active = Vec::new();
 
     let mut entries = match tokio::fs::read_dir(&skills_dir).await {
         Ok(entries) => entries,
-        Err(_) => return (prompts, names),
+        Err(_) => return (index, always_active),
     };
 
     while let Ok(Some(entry)) = entries.next_entry().await {
         let path = entry.path();
         let skill_md = path.join("SKILL.md");
         if let Ok(content) = tokio::fs::read_to_string(&skill_md).await {
-            let skill_dir = path.to_string_lossy();
             let name = path.file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
-            prompts.push(format!(
-                "[Skill directory: {}]\n\n{}",
-                skill_dir, content
-            ));
-            names.push(name);
+            let (description, is_always_active) = parse_skill_frontmatter(&content);
+
+            if is_always_active {
+                let skill_dir = path.to_string_lossy();
+                always_active.push(format!(
+                    "[Skill directory: {}]\n\n{}",
+                    skill_dir, content
+                ));
+            } else {
+                index.push(SkillIndexEntry {
+                    name,
+                    description: description.unwrap_or_default(),
+                });
+            }
         }
     }
 
-    (prompts, names)
+    (index, always_active)
+}
+
+/// Parse SKILL.md YAML frontmatter to extract description and always_active flag.
+pub fn parse_skill_frontmatter(content: &str) -> (Option<String>, bool) {
+    let trimmed = content.trim();
+    if !trimmed.starts_with("---") {
+        return (None, false);
+    }
+    let rest = &trimmed[3..];
+    let end = match rest.find("---") {
+        Some(e) => e,
+        None => return (None, false),
+    };
+    let frontmatter = &rest[..end];
+    let mut description = None;
+    let mut always_active = false;
+
+    for line in frontmatter.lines() {
+        let line = line.trim();
+        if let Some(desc) = line.strip_prefix("description:") {
+            description = Some(desc.trim().trim_matches('"').trim_matches('\'').to_string());
+        }
+        if line.contains("always_active") && line.contains("true") {
+            always_active = true;
+        }
+    }
+
+    (description, always_active)
+}
+
+/// Create a persist callback that saves tool calls to the database.
+fn make_persist_fn(db: Arc<db::Database>, session_id: String) -> PersistToolFn {
+    Arc::new(move |evt: ToolPersistEvent| {
+        match evt {
+            ToolPersistEvent::AssistantWithToolCalls { content, tool_calls_json } => {
+                let metadata = serde_json::json!({
+                    "tool_calls": serde_json::from_str::<serde_json::Value>(&tool_calls_json).unwrap_or_default()
+                }).to_string();
+                db.push_message_with_metadata(&session_id, "assistant", &content, Some(&metadata)).ok();
+            }
+            ToolPersistEvent::ToolResult { tool_call_id, tool_name, result_content } => {
+                let metadata = serde_json::json!({
+                    "tool_call_id": tool_call_id,
+                    "tool_name": tool_name,
+                }).to_string();
+                db.push_message_with_metadata(&session_id, "tool", &result_content, Some(&metadata)).ok();
+            }
+        }
+    })
 }
 
 /// Convert db messages to LLMMessages for conversation context.
 /// Reconstructs multimodal content for image attachments only (files are referenced via path hints in text).
+/// Also reconstructs tool_calls and tool_call_id from metadata.
 fn db_messages_to_llm(internal_dir: &Path, workspace_dir: &Path, messages: &[db::ChatMessage]) -> Vec<LLMMessage> {
     messages
         .iter()
         .map(|m| {
-            let content = if let Some(meta_str) = &m.metadata {
-                if let Ok(meta) = serde_json::from_str::<serde_json::Value>(meta_str) {
-                    if let Some(att_arr) = meta["attachments"].as_array() {
-                        let refs: Vec<AttachmentRef> = att_arr
-                            .iter()
-                            .filter_map(|a| serde_json::from_value(a.clone()).ok())
-                            .collect();
-                        // Only images become vision content; files are already in text as path hints
-                        let image_uris: Vec<String> = refs
-                            .iter()
-                            .filter(|r| is_image_mime(&r.mime_type))
-                            .filter_map(|r| attachment_ref_to_data_uri(internal_dir, workspace_dir, r))
-                            .collect();
-                        if !image_uris.is_empty() {
-                            Some(MessageContent::with_images(&m.content, &image_uris))
-                        } else {
-                            Some(MessageContent::text(&m.content))
-                        }
+            let meta: Option<serde_json::Value> = m.metadata.as_ref()
+                .and_then(|s| serde_json::from_str(s).ok());
+
+            let content = if let Some(ref meta_val) = meta {
+                if let Some(att_arr) = meta_val["attachments"].as_array() {
+                    let refs: Vec<AttachmentRef> = att_arr
+                        .iter()
+                        .filter_map(|a| serde_json::from_value(a.clone()).ok())
+                        .collect();
+                    let image_uris: Vec<String> = refs
+                        .iter()
+                        .filter(|r| is_image_mime(&r.mime_type))
+                        .filter_map(|r| attachment_ref_to_data_uri(internal_dir, workspace_dir, r))
+                        .collect();
+                    if !image_uris.is_empty() {
+                        Some(MessageContent::with_images(&m.content, &image_uris))
                     } else {
                         Some(MessageContent::text(&m.content))
                     }
@@ -153,11 +211,49 @@ fn db_messages_to_llm(internal_dir: &Path, workspace_dir: &Path, messages: &[db:
             } else {
                 Some(MessageContent::text(&m.content))
             };
+
+            // Reconstruct tool_calls for assistant messages
+            let tool_calls = if m.role == "assistant" {
+                meta.as_ref().and_then(|mv| {
+                    let arr = mv["tool_calls"].as_array()?;
+                    let calls: Vec<crate::engine::tools::ToolCall> = arr.iter().filter_map(|tc| {
+                        Some(crate::engine::tools::ToolCall {
+                            id: tc["id"].as_str()?.to_string(),
+                            r#type: "function".into(),
+                            function: crate::engine::tools::FunctionCall {
+                                name: tc["name"].as_str()?.to_string(),
+                                arguments: {
+                                    let raw = tc["arguments"].as_str().unwrap_or("{}");
+                                    // Validate JSON — some providers reject invalid arguments
+                                    if serde_json::from_str::<serde_json::Value>(raw).is_ok() {
+                                        raw.to_string()
+                                    } else if let Some(repaired) = crate::engine::tools::repair_json(raw) {
+                                        serde_json::to_string(&repaired).unwrap_or_else(|_| "{}".to_string())
+                                    } else {
+                                        "{}".to_string()
+                                    }
+                                },
+                            },
+                        })
+                    }).collect();
+                    if calls.is_empty() { None } else { Some(calls) }
+                })
+            } else {
+                None
+            };
+
+            // Reconstruct tool_call_id for tool messages
+            let tool_call_id = if m.role == "tool" {
+                meta.as_ref().and_then(|mv| mv["tool_call_id"].as_str().map(|s| s.to_string()))
+            } else {
+                None
+            };
+
             LLMMessage {
                 role: m.role.clone(),
                 content,
-                tool_calls: None,
-                tool_call_id: None,
+                tool_calls,
+                tool_call_id,
             }
         })
         .collect()
@@ -206,6 +302,152 @@ fn recall_memories(db: &db::Database, user_message: &str) -> Option<String> {
     }
     context.push_str("[/Recalled memories]\n");
     Some(context)
+}
+
+/// Simple token count estimation.
+/// English text averages ~4 chars/token, Chinese ~2 chars/token.
+/// Uses a rough 3/4 multiplier as a middle ground.
+fn estimate_tokens_simple(text: &str) -> u64 {
+    let chars = text.chars().count() as u64;
+    (chars * 3) / 4
+}
+
+/// All pre-processed data needed before invoking the ReAct agent.
+struct ChatContext {
+    config: LLMConfig,
+    system_prompt: String,
+    agent_message: String,
+    augmented_message: String,
+    extra_tools: Vec<ToolDefinition>,
+    llm_history: Vec<LLMMessage>,
+    max_iter: Option<usize>,
+    working_dir: PathBuf,
+    is_first_message: bool,
+}
+
+/// Build additional context for special session types (cron jobs, tasks, bots).
+/// Returns None for regular chat sessions.
+async fn build_session_context(state: &AppState, session_id: &str) -> Option<String> {
+    // Cron job session: cron:{job_id}
+    if let Some(job_id) = session_id.strip_prefix("cron:") {
+        if let Ok(Some(job)) = state.db.get_cronjob(job_id) {
+            let schedule_info: serde_json::Value = serde_json::from_str(&job.schedule_json).unwrap_or_default();
+            let schedule_type = schedule_info.get("type").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let cron_expr = schedule_info.get("cron").and_then(|v| v.as_str()).unwrap_or("");
+            let task_content = job.text.as_deref().unwrap_or("(no task content)");
+
+            let mut ctx = format!(
+                "## Current Session Context\n\
+                 You are in a cron job session. The user is managing this specific scheduled task:\n\
+                 - **Job ID**: {}\n\
+                 - **Job Name**: {}\n\
+                 - **Status**: {}\n\
+                 - **Task Type**: {}\n\
+                 - **Schedule Type**: {}\n",
+                job_id,
+                job.name,
+                if job.enabled { "enabled (running)" } else { "paused" },
+                job.task_type,
+                schedule_type,
+            );
+            if !cron_expr.is_empty() {
+                ctx.push_str(&format!("- **Cron Expression**: {}\n", cron_expr));
+            }
+            if let Some(delay) = schedule_info.get("delay_minutes").and_then(|v| v.as_u64()) {
+                ctx.push_str(&format!("- **Delay**: {} minutes\n", delay));
+            }
+            if let Some(at) = schedule_info.get("schedule_at").and_then(|v| v.as_str()) {
+                ctx.push_str(&format!("- **Scheduled At**: {}\n", at));
+            }
+            ctx.push_str(&format!("- **Task Content**: {}\n", task_content));
+            ctx.push_str("\nWhen the user asks about \"this task\" or \"this job\", they are referring to the above cron job. \
+                          You can directly use the cron job management tools to modify it without needing to search for it.\n\
+                          To view execution history, use manage_cronjob with action='history' (id is auto-inferred in this session).\n\
+                          To get the full result of a specific execution, use action='get_execution' with execution_index (e.g. 5 for the 5th run, -1 for latest).");
+            return Some(ctx);
+        }
+    }
+    None
+}
+
+/// Shared pre-processing for `chat` and `chat_stream_start`.
+///
+/// Resolves LLM config, saves attachments, pushes user message to DB,
+/// loads skills & MCP tools, builds conversation history, recalls memories,
+/// and constructs the system prompt.
+async fn prepare_chat_context(
+    state: &AppState,
+    sid: &str,
+    message: &str,
+    attachments: &Option<Vec<Attachment>>,
+) -> Result<ChatContext, String> {
+    let config = resolve_llm_config(state).await?;
+    let working_dir = state.working_dir.clone();
+    let user_workspace = state.user_workspace();
+
+    // Save attachments to filesystem, store paths in metadata
+    let save = save_attachments_to_disk(&working_dir, &user_workspace, sid, attachments);
+    let augmented_message = if save.file_hints.is_empty() {
+        message.to_string()
+    } else {
+        format!("{}\n\n{}", message, save.file_hints.join("\n"))
+    };
+    state.db.push_message_with_metadata(sid, "user", &augmented_message, save.metadata_json.as_deref())?;
+
+    let (skill_index, always_active_skills) = load_skill_index(state).await;
+    let (lang, max_iter) = {
+        let cfg = state.config.read().await;
+        let lang = cfg.agents.language.clone();
+        let max_iter = cfg.agents.max_iterations;
+        (lang, max_iter)
+    };
+    let (mcp_tools, unavailable_servers) = state.mcp_runtime.get_all_tools_with_status().await;
+    let skill_overrides = {
+        let cfg = state.config.read().await;
+        crate::engine::tools::build_mcp_skill_overrides(&cfg.mcp, &working_dir)
+    };
+    let extra_tools = mcp_tools_as_definitions(&mcp_tools, &skill_overrides);
+
+    // Build system prompt with skill index (on-demand) + always-active skills (injected)
+    let unavail = if unavailable_servers.is_empty() { None } else { Some(unavailable_servers.as_slice()) };
+    let mut system_prompt = react_agent::build_system_prompt(
+        &working_dir, Some(&user_workspace), &skill_index, &always_active_skills,
+        lang.as_deref(), Some(&mcp_tools), unavail,
+    ).await;
+
+    // Inject session context for special session types (e.g. cron jobs)
+    if let Some(context) = build_session_context(state, sid).await {
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(&context);
+    }
+
+    // Build conversation history (exclude the message we just pushed)
+    let history_messages = state.db.get_recent_messages(sid, 50).unwrap_or_default();
+    let llm_history: Vec<LLMMessage> = if history_messages.len() > 1 {
+        db_messages_to_llm(&working_dir, &user_workspace, &history_messages[..history_messages.len() - 1])
+    } else {
+        vec![]
+    };
+    let is_first_message = llm_history.is_empty();
+
+    // Recall relevant memories and inject into context
+    let agent_message = if let Some(mem_context) = recall_memories(&state.db, message) {
+        format!("{mem_context}\n{augmented_message}")
+    } else {
+        augmented_message.clone()
+    };
+
+    Ok(ChatContext {
+        config,
+        system_prompt,
+        agent_message,
+        augmented_message,
+        extra_tools,
+        llm_history,
+        max_iter,
+        working_dir,
+        is_first_message,
+    })
 }
 
 /// Handle system commands that start with /
@@ -261,6 +503,17 @@ pub async fn create_session(
     name: String,
 ) -> Result<db::ChatSession, String> {
     state.db.create_session(&name)
+}
+
+#[tauri::command]
+pub async fn ensure_session(
+    state: State<'_, AppState>,
+    id: String,
+    name: String,
+    source: String,
+    source_meta: Option<String>,
+) -> Result<db::ChatSession, String> {
+    state.db.ensure_session(&id, &name, &source, source_meta.as_deref())
 }
 
 #[tauri::command]
@@ -355,8 +608,8 @@ struct SaveResult {
 }
 
 /// Save attachments to filesystem and return metadata + file path hints for non-image files.
-/// `internal_dir` = app data dir (~/.yiclaw) for image attachments
-/// `workspace_dir` = user workspace (~/Documents/YiClaw) for file uploads
+/// `internal_dir` = app data dir (~/.yiyiclaw) for image attachments
+/// `workspace_dir` = user workspace (~/Documents/YiYiClaw) for file uploads
 fn save_attachments_to_disk(
     internal_dir: &Path,
     workspace_dir: &Path,
@@ -479,75 +732,34 @@ pub async fn chat(
         }
     }
 
-    // Use global LLM config
-    let config = resolve_llm_config(&state).await?;
-
-    // Save attachments to filesystem, store paths in metadata
-    let save = save_attachments_to_disk(&state.working_dir, &state.user_workspace(), &sid, &attachments);
-    // Augment message with file path hints so the agent knows where files are
-    let augmented_message = if save.file_hints.is_empty() {
-        message.clone()
-    } else {
-        format!("{}\n\n{}", message, save.file_hints.join("\n"))
-    };
-    state.db.push_message_with_metadata(&sid, "user", &augmented_message, save.metadata_json.as_deref())?;
-
-    let (skills, _skill_names) = load_skill_prompts_with_names(&state).await;
-    let (lang, max_iter) = {
-        let cfg = state.config.read().await;
-        let lang = cfg.agents.language.clone();
-        let max_iter = cfg.agents.max_iterations;
-        (lang, max_iter)
-    };
-    let (mcp_tools, unavailable_servers) = state.mcp_runtime.get_all_tools_with_status().await;
-    let skill_overrides = {
-        let cfg = state.config.read().await;
-        crate::engine::tools::build_mcp_skill_overrides(&cfg.mcp, &state.working_dir)
-    };
-    let extra_tools = mcp_tools_as_definitions(&mcp_tools, &skill_overrides);
-
-    let unavail = if unavailable_servers.is_empty() { None } else { Some(unavailable_servers.as_slice()) };
-    let system_prompt = react_agent::build_system_prompt(
-        &state.working_dir, &skills, lang.as_deref(), Some(&mcp_tools), unavail,
-    ).await;
-
-    // Get conversation history for this session (exclude the message we just pushed)
-    let history_messages = state.db.get_recent_messages(&sid, 50).unwrap_or_default();
-    let llm_history: Vec<LLMMessage> = if history_messages.len() > 1 {
-        db_messages_to_llm(&state.working_dir, &state.user_workspace(), &history_messages[..history_messages.len() - 1])
-    } else {
-        vec![]
-    };
-
-    // Recall relevant memories and inject into context
-    let agent_message = if let Some(mem_context) = recall_memories(&state.db, &message) {
-        format!("{mem_context}\n{augmented_message}")
-    } else {
-        augmented_message.clone()
-    };
+    let ctx = prepare_chat_context(&state, &sid, &message, &attachments).await?;
 
     // Run agent with session-scoped context (task_local) so tools see the correct session
+    let persist_fn = Some(make_persist_fn(state.db.clone(), sid.clone()));
     let reply = crate::engine::tools::with_session_id(
         sid.clone(),
-        react_agent::run_react_with_options(
-            &config,
-            &system_prompt,
-            &agent_message,
-            &extra_tools,
-            &llm_history,
-            max_iter,
-            Some(&state.working_dir),
+        react_agent::run_react_with_options_persist(
+            &ctx.config,
+            &ctx.system_prompt,
+            &ctx.agent_message,
+            &ctx.extra_tools,
+            &ctx.llm_history,
+            ctx.max_iter,
+            Some(&ctx.working_dir),
+            persist_fn,
         ),
     )
     .await?;
 
-    // Save assistant reply
-    state.db.push_message(&sid, "assistant", &reply)?;
+    // Save assistant reply (final text-only response)
+    if !reply.is_empty() && reply != "(no response)" {
+        state.db.push_message(&sid, "assistant", &reply)?;
+    }
 
     // Auto-extract memories in background
     {
-        let config_clone = config.clone();
-        let msg_clone = augmented_message.clone();
+        let config_clone = ctx.config.clone();
+        let msg_clone = ctx.augmented_message.clone();
         let reply_clone = reply.clone();
         let sid_clone = sid.clone();
         tokio::spawn(async move {
@@ -562,7 +774,7 @@ pub async fn chat(
     }
 
     // Set session title from user's first message
-    if llm_history.is_empty() {
+    if ctx.is_first_message {
         let title = extract_title_from_message(&message);
         state.db.rename_session(&sid, &title).ok();
     }
@@ -577,6 +789,9 @@ pub async fn chat_stream_start(
     message: String,
     session_id: Option<String>,
     attachments: Option<Vec<Attachment>>,
+    _auto_continue: Option<bool>,
+    max_rounds: Option<usize>,
+    token_budget: Option<u64>,
 ) -> Result<(), String> {
     let sid = resolve_session_id(&session_id);
 
@@ -591,53 +806,17 @@ pub async fn chat_stream_start(
         }
     }
 
-    // Use global LLM config
-    let config = resolve_llm_config(&state).await?;
+    let ctx = prepare_chat_context(&state, &sid, &message, &attachments).await?;
+
+    // Auto-continue limits — the model decides via [CONTINUE] marker (see auto_continue skill)
+    let max_r = max_rounds.unwrap_or(200);
+    let budget = token_budget.unwrap_or(10_000_000);
+
     let db = state.db.clone();
-    let working_dir = state.working_dir.clone();
-    let user_workspace = state.user_workspace();
     let cancelled = state.chat_cancelled.clone();
 
     // Reset cancellation flag for new stream
     cancelled.store(false, std::sync::atomic::Ordering::Relaxed);
-
-    let (skills, _skill_names) = load_skill_prompts_with_names(&state).await;
-    let (lang, max_iter) = {
-        let cfg = state.config.read().await;
-        let lang = cfg.agents.language.clone();
-        let max_iter = cfg.agents.max_iterations;
-        (lang, max_iter)
-    };
-    let (mcp_tools, unavailable_servers) = state.mcp_runtime.get_all_tools_with_status().await;
-    let skill_overrides = {
-        let cfg = state.config.read().await;
-        crate::engine::tools::build_mcp_skill_overrides(&cfg.mcp, &state.working_dir)
-    };
-    let extra_tools = mcp_tools_as_definitions(&mcp_tools, &skill_overrides);
-
-    // Save attachments to filesystem, store paths in metadata
-    let save = save_attachments_to_disk(&working_dir, &user_workspace, &sid, &attachments);
-    let augmented_message = if save.file_hints.is_empty() {
-        message.clone()
-    } else {
-        format!("{}\n\n{}", message, save.file_hints.join("\n"))
-    };
-    db.push_message_with_metadata(&sid, "user", &augmented_message, save.metadata_json.as_deref())?;
-
-    // Recall relevant memories and inject into context
-    let agent_message = if let Some(mem_context) = recall_memories(&db, &message) {
-        format!("{mem_context}\n{augmented_message}")
-    } else {
-        augmented_message.clone()
-    };
-
-    // Snapshot history for the spawned task
-    let history_messages = db.get_recent_messages(&sid, 50).unwrap_or_default();
-    let llm_history: Vec<LLMMessage> = if history_messages.len() > 1 {
-        db_messages_to_llm(&working_dir, &user_workspace, &history_messages[..history_messages.len() - 1])
-    } else {
-        vec![]
-    };
 
     let streaming_state = state.streaming_state.clone();
 
@@ -652,20 +831,24 @@ pub async fn chat_stream_start(
         });
     }
 
+    let working_dir = state.working_dir.clone();
+    let user_workspace = state.user_workspace();
     let app_handle = app.clone();
     let sid_clone = sid.clone();
+    let continuation_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
     tokio::spawn(async move {
-        // Wrap entire agent run in with_session_id so all tool calls see the correct session
+        // Wrap entire agent run in with_session_id + with_cancelled + with_continuation_flag
+        // so all tool calls see the session, cancellation, and continuation signals
         let sid_for_scope = sid_clone.clone();
-        crate::engine::tools::with_session_id(sid_for_scope, async {
-        let unavail = if unavailable_servers.is_empty() { None } else { Some(unavailable_servers.as_slice()) };
-        let system_prompt = react_agent::build_system_prompt(
-            &working_dir, &skills, lang.as_deref(), Some(&mcp_tools), unavail,
-        ).await;
+        let cancelled_for_scope = cancelled.clone();
+        let cont_flag = continuation_flag.clone();
+        crate::engine::tools::with_continuation_flag(cont_flag, crate::engine::tools::with_cancelled(cancelled_for_scope, crate::engine::tools::with_session_id(sid_for_scope, async {
 
         let handle = app_handle.clone();
         let ss_for_event = streaming_state.clone();
         let sid_for_event = sid_clone.clone();
+        let thinking_buf = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let thinking_buf_for_event = thinking_buf.clone();
         let on_event = move |evt: react_agent::AgentStreamEvent| {
             match &evt {
                 react_agent::AgentStreamEvent::Token(text) => {
@@ -677,6 +860,15 @@ pub async fn chat_stream_start(
                         if let Some(snap) = ss.get_mut(&sid_for_event) {
                             snap.accumulated_text.push_str(text);
                         }
+                    }
+                }
+                react_agent::AgentStreamEvent::Thinking(text) => {
+                    handle.emit("chat://thinking", serde_json::json!({
+                        "text": text,
+                        "session_id": sid_for_event,
+                    })).ok();
+                    if let Ok(mut buf) = thinking_buf_for_event.lock() {
+                        buf.push_str(text);
                     }
                 }
                 react_agent::AgentStreamEvent::ToolStart { name, args_preview } => {
@@ -727,86 +919,240 @@ pub async fn chat_stream_start(
                         }
                     }
                 }
-                react_agent::AgentStreamEvent::Complete(_)
-                | react_agent::AgentStreamEvent::Error(_) => {}
+                react_agent::AgentStreamEvent::Complete
+                | react_agent::AgentStreamEvent::Error => {}
             }
         };
 
-        match react_agent::run_react_with_options_stream(
-            &config,
-            &system_prompt,
-            &agent_message,
-            &extra_tools,
-            &llm_history,
-            max_iter,
-            Some(&working_dir),
-            on_event,
-            Some(&cancelled),
-        )
-        .await
         {
-            Ok(reply) => {
-                db.push_message(&sid_clone, "assistant", &reply).ok();
+            // ── Auto-continue loop (always active, model decides via [CONTINUE]) ──
+            let mut round: usize = 0;
+            let mut total_tokens: u64 = 0;
+            let mut last_reply: String;
+            let task_started_at = chrono::Utc::now().timestamp();
 
-                if llm_history.is_empty() {
-                    let title = extract_title_from_message(&augmented_message);
-                    db.rename_session(&sid_clone, &title).ok();
-                }
+            // Check if this session belongs to a task (for progress persistence)
+            let task_for_progress: Option<(String, std::path::PathBuf)> = {
+                let tasks = db.list_tasks(None, Some("running")).unwrap_or_default();
+                tasks.into_iter()
+                    .find(|t| t.session_id == sid_clone)
+                    .map(|t| {
+                        let progress_dir = working_dir.join("tasks").join(&t.id);
+                        std::fs::create_dir_all(&progress_dir).ok();
+                        (t.id.clone(), progress_dir)
+                    })
+            };
 
-                app_handle.emit("chat://complete", serde_json::json!({
-                    "text": reply,
-                    "session_id": sid_clone,
-                })).ok();
+            loop {
+                round += 1;
 
-                let preview: String = reply.chars().take(100).collect();
-                crate::engine::scheduler::send_notification_with_context(
-                    "YiClaw",
-                    &preview,
-                    serde_json::json!({
-                        "page": "chat",
-                        "session_id": sid_clone,
-                    }),
-                );
+                // Reset continuation flag for this round
+                crate::engine::tools::reset_continuation_flag();
 
-                // Auto-extract memories in background
-                {
-                    let config_bg = config.clone();
-                    let msg_bg = augmented_message.clone();
-                    let reply_bg = reply.clone();
-                    let sid_bg = sid_clone.clone();
-                    tokio::spawn(async move {
-                        react_agent::extract_memories_from_conversation(
-                            &config_bg,
-                            &msg_bg,
-                            &reply_bg,
-                            Some(&sid_bg),
-                        )
-                        .await;
-                    });
-                }
-            }
-            Err(e) => {
-                if e == "cancelled" {
-                    app_handle.emit("chat://complete", serde_json::json!({
-                        "text": "",
+                // Only emit round_start from round 2 onward — round 1 is silent
+                // so simple Q&A doesn't flash the long task progress panel
+                if round >= 2 {
+                    app_handle.emit("chat://auto_continue", serde_json::json!({
+                        "type": "round_start",
+                        "round": round,
+                        "max_rounds": max_r,
+                        "total_tokens": total_tokens,
+                        "token_budget": budget,
                         "session_id": sid_clone,
                     })).ok();
+                }
+
+                // Build message and history for this round
+                let (round_message, history) = if round == 1 {
+                    (ctx.agent_message.clone(), ctx.llm_history.clone())
                 } else {
-                    app_handle.emit("chat://error", serde_json::json!({
-                        "text": e,
-                        "session_id": sid_clone,
-                    })).ok();
-                    let err_preview: String = e.chars().take(100).collect();
-                    crate::engine::scheduler::send_notification_with_context(
-                        "YiClaw",
-                        &format!("Agent error: {}", err_preview),
-                        serde_json::json!({
-                            "page": "chat",
+                    // Push a "continue" user message into DB
+                    let continue_msg = "请继续执行任务。".to_string();
+                    db.push_message(&sid_clone, "user", &continue_msg).ok();
+
+                    // Reload full conversation history from DB
+                    let raw_msgs = db.get_recent_messages(&sid_clone, 50).unwrap_or_default();
+                    // Exclude the last message (the continue_msg we just pushed) since
+                    // run_react_with_options_stream will include user_message as current turn
+                    let hist = if raw_msgs.len() > 1 {
+                        db_messages_to_llm(&working_dir, &user_workspace, &raw_msgs[..raw_msgs.len() - 1])
+                    } else {
+                        vec![]
+                    };
+                    (continue_msg, hist)
+                };
+
+                let persist_fn = Some(make_persist_fn(db.clone(), sid_clone.clone()));
+
+                match react_agent::run_react_with_options_stream(
+                    &ctx.config,
+                    &ctx.system_prompt,
+                    &round_message,
+                    &ctx.extra_tools,
+                    &history,
+                    ctx.max_iter,
+                    Some(&ctx.working_dir),
+                    on_event.clone(),
+                    Some(&cancelled),
+                    persist_fn,
+                )
+                .await
+                {
+                    Ok(reply) => {
+                        if !reply.is_empty() && reply != "(no response)" {
+                            let thinking_text = thinking_buf.lock().ok()
+                                .map(|mut b| std::mem::take(&mut *b))
+                                .unwrap_or_default();
+                            if thinking_text.is_empty() {
+                                db.push_message(&sid_clone, "assistant", &reply).ok();
+                            } else {
+                                let meta = serde_json::json!({ "thinking": thinking_text }).to_string();
+                                db.push_message_with_metadata(&sid_clone, "assistant", &reply, Some(&meta)).ok();
+                            }
+                        } else {
+                            // Clear thinking buffer even if no reply
+                            if let Ok(mut b) = thinking_buf.lock() { b.clear(); }
+                        }
+
+                        if round == 1 && ctx.is_first_message {
+                            let title = extract_title_from_message(&ctx.augmented_message);
+                            db.rename_session(&sid_clone, &title).ok();
+                        }
+
+                        total_tokens += estimate_tokens_simple(&reply);
+                        last_reply = reply;
+
+                        // Check if the model called request_continuation tool during this round
+                        let should_continue = crate::engine::tools::is_continuation_requested();
+
+                        let should_stop = !should_continue
+                            || round >= max_r
+                            || total_tokens >= budget
+                            || cancelled.load(std::sync::atomic::Ordering::Relaxed);
+
+                        if should_stop {
+                            let stop_reason = if !should_continue { "task_complete" }
+                                else if round >= max_r { "max_rounds" }
+                                else if total_tokens >= budget { "token_budget" }
+                                else { "cancelled" };
+
+                            // Write final progress.json for task completion
+                            if let Some((ref tid, ref progress_dir)) = task_for_progress {
+                                let progress = serde_json::json!({
+                                    "task_id": tid,
+                                    "session_id": sid_clone,
+                                    "status": stop_reason,
+                                    "current_round": round,
+                                    "total_tokens": total_tokens,
+                                    "last_output_preview": last_reply.chars().take(200).collect::<String>(),
+                                    "updated_at": chrono::Utc::now().timestamp(),
+                                });
+                                crate::engine::tools::write_progress_json(progress_dir, &progress);
+                            }
+
+                            // Only emit finished if we ever emitted round_start (round >= 2)
+                            if round >= 2 {
+                                app_handle.emit("chat://auto_continue", serde_json::json!({
+                                    "type": "finished",
+                                    "round": round,
+                                    "total_tokens": total_tokens,
+                                    "stop_reason": stop_reason,
+                                    "session_id": sid_clone,
+                                })).ok();
+                            }
+
+                            app_handle.emit("chat://complete", serde_json::json!({
+                                "text": last_reply,
+                                "session_id": sid_clone,
+                            })).ok();
+
+                            let preview: String = last_reply.chars().take(100).collect();
+                            crate::engine::scheduler::send_notification_with_context(
+                                "YiYiClaw",
+                                &preview,
+                                serde_json::json!({
+                                    "page": "chat",
+                                    "session_id": sid_clone,
+                                }),
+                            );
+
+                            // Auto-extract memories in background
+                            {
+                                let config_bg = ctx.config.clone();
+                                let msg_bg = ctx.augmented_message.clone();
+                                let reply_bg = last_reply.clone();
+                                let sid_bg = sid_clone.clone();
+                                tokio::spawn(async move {
+                                    react_agent::extract_memories_from_conversation(
+                                        &config_bg,
+                                        &msg_bg,
+                                        &reply_bg,
+                                        Some(&sid_bg),
+                                    )
+                                    .await;
+                                });
+                            }
+
+                            break;
+                        }
+
+                        // Emit round_complete, prepare for next round
+                        app_handle.emit("chat://auto_continue", serde_json::json!({
+                            "type": "round_complete",
+                            "round": round,
+                            "total_tokens": total_tokens,
                             "session_id": sid_clone,
-                        }),
-                    );
+                        })).ok();
+
+                        // Write progress.json for crash recovery
+                        if let Some((ref tid, ref progress_dir)) = task_for_progress {
+                            let progress = serde_json::json!({
+                                "task_id": tid,
+                                "session_id": sid_clone,
+                                "status": "running",
+                                "current_round": round,
+                                "total_tokens": total_tokens,
+                                "last_output_preview": last_reply.chars().take(200).collect::<String>(),
+                                "started_at": task_started_at,
+                                "updated_at": chrono::Utc::now().timestamp(),
+                            });
+                            crate::engine::tools::write_progress_json(progress_dir, &progress);
+                        }
+                    }
+                    Err(e) => {
+                        if e == "cancelled" {
+                            if round >= 2 {
+                                app_handle.emit("chat://auto_continue", serde_json::json!({
+                                    "type": "finished",
+                                    "round": round,
+                                    "total_tokens": total_tokens,
+                                    "stop_reason": "cancelled",
+                                    "session_id": sid_clone,
+                                })).ok();
+                            }
+                            app_handle.emit("chat://complete", serde_json::json!({
+                                "text": "",
+                                "session_id": sid_clone,
+                            })).ok();
+                        } else {
+                            app_handle.emit("chat://error", serde_json::json!({
+                                "text": e,
+                                "session_id": sid_clone,
+                            })).ok();
+                            let err_preview: String = e.chars().take(100).collect();
+                            crate::engine::scheduler::send_notification_with_context(
+                                "YiYiClaw",
+                                &format!("Agent error: {}", err_preview),
+                                serde_json::json!({
+                                    "page": "chat",
+                                    "session_id": sid_clone,
+                                }),
+                            );
+                        }
+                        break;
+                    }
                 }
-            }
+            } // end auto-continue loop
         }
 
         // Mark snapshot as inactive, then schedule cleanup after 30s for recovery window
@@ -829,7 +1175,7 @@ pub async fn chat_stream_start(
                 }
             });
         }
-        }).await; // end with_session_id
+        }))).await; // end with_session_id + with_cancelled + with_continuation_flag
     });
 
     Ok(())
@@ -848,15 +1194,16 @@ pub async fn get_history(
     Ok(messages
         .into_iter()
         .map(|m| {
-            let attachments = m.metadata.as_ref().and_then(|meta_str| {
-                let meta: serde_json::Value = serde_json::from_str(meta_str).ok()?;
+            let meta: Option<serde_json::Value> = m.metadata.as_ref()
+                .and_then(|s| serde_json::from_str(s).ok());
+
+            let attachments = meta.as_ref().and_then(|mv| {
                 let refs: Vec<AttachmentRef> =
-                    serde_json::from_value(meta["attachments"].clone()).ok()?;
+                    serde_json::from_value(mv["attachments"].clone()).ok()?;
                 let atts: Vec<Attachment> = refs
                     .iter()
                     .filter_map(|r| {
                         if is_image_mime(&r.mime_type) {
-                            // Images: read base64 for thumbnail display
                             let b64 = read_attachment_as_base64(internal_dir, workspace_dir, &r.path)?;
                             Some(Attachment {
                                 mime_type: r.mime_type.clone(),
@@ -864,7 +1211,6 @@ pub async fn get_history(
                                 name: r.name.clone(),
                             })
                         } else {
-                            // Files: return empty data, frontend only needs name + mimeType
                             Some(Attachment {
                                 mime_type: r.mime_type.clone(),
                                 data: String::new(),
@@ -875,20 +1221,65 @@ pub async fn get_history(
                     .collect();
                 if atts.is_empty() { None } else { Some(atts) }
             });
-            let source = m.metadata.as_ref().and_then(|meta_str| {
-                let meta: serde_json::Value = serde_json::from_str(meta_str).ok()?;
-                if meta["via"].as_str() == Some("bot") {
+
+            let source = meta.as_ref().and_then(|mv| {
+                if mv["via"].as_str() == Some("bot") {
                     Some(MessageSource {
                         via: Some("bot".into()),
-                        platform: meta["platform"].as_str().map(|s| s.into()),
-                        bot_id: meta["bot_id"].as_str().map(|s| s.into()),
-                        sender_id: meta["sender_id"].as_str().map(|s| s.into()),
-                        sender_name: meta["sender_name"].as_str().map(|s| s.into()),
+                        platform: mv["platform"].as_str().map(|s| s.into()),
+                        bot_id: mv["bot_id"].as_str().map(|s| s.into()),
+                        sender_id: mv["sender_id"].as_str().map(|s| s.into()),
+                        sender_name: mv["sender_name"].as_str().map(|s| s.into()),
                     })
                 } else {
                     None
                 }
             });
+
+            // Extract tool_calls for assistant messages with tool invocations
+            let tool_calls_info = if m.role == "assistant" {
+                meta.as_ref().and_then(|mv| {
+                    let arr = mv["tool_calls"].as_array()?;
+                    let infos: Vec<ToolCallInfo> = arr.iter().filter_map(|tc| {
+                        Some(ToolCallInfo {
+                            id: tc["id"].as_str()?.to_string(),
+                            name: tc["name"].as_str()?.to_string(),
+                            arguments: tc["arguments"].as_str().unwrap_or("{}").to_string(),
+                        })
+                    }).collect();
+                    if infos.is_empty() { None } else { Some(infos) }
+                })
+            } else {
+                None
+            };
+
+            // Extract tool info for tool result messages
+            let (tool_call_id, tool_name) = if m.role == "tool" {
+                let tcid = meta.as_ref().and_then(|mv| mv["tool_call_id"].as_str().map(|s| s.to_string()));
+                let tname = meta.as_ref().and_then(|mv| mv["tool_name"].as_str().map(|s| s.to_string()));
+                (tcid, tname)
+            } else {
+                (None, None)
+            };
+
+            // Extract spawn_agents for team task results
+            let spawn_agents = meta.as_ref().and_then(|mv| {
+                let arr = mv["spawn_agents"].as_array()?;
+                let agents: Vec<SpawnAgentResult> = arr.iter().filter_map(|a| {
+                    Some(SpawnAgentResult {
+                        name: a["name"].as_str()?.to_string(),
+                        result: a["result"].as_str().unwrap_or("").to_string(),
+                        is_error: a["is_error"].as_bool().unwrap_or(false),
+                    })
+                }).collect();
+                if agents.is_empty() { None } else { Some(agents) }
+            });
+
+            // Extract thinking/reasoning content
+            let thinking = meta.as_ref().and_then(|mv| {
+                mv["thinking"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_string())
+            });
+
             ChatMessage {
                 id: Some(m.id),
                 role: m.role,
@@ -896,6 +1287,11 @@ pub async fn get_history(
                 timestamp: Some(m.timestamp as u64),
                 attachments,
                 source,
+                tool_calls: tool_calls_info,
+                tool_call_id,
+                tool_name,
+                spawn_agents,
+                thinking,
             }
         })
         .collect())
@@ -924,7 +1320,11 @@ pub async fn clear_history(
     session_id: Option<String>,
 ) -> Result<(), String> {
     let sid = resolve_session_id(&session_id);
-    state.db.clear_messages(&sid)
+    // Insert a context_reset marker instead of deleting messages.
+    // get_recent_messages will stop at this boundary, effectively
+    // resetting the LLM context while preserving chat history.
+    state.db.push_message(&sid, "context_reset", "")?;
+    Ok(())
 }
 
 #[tauri::command]

@@ -9,7 +9,7 @@
 //! ## OpenClaw / ClawHub compatibility
 //!
 //! ClawHub skills use `metadata.openclaw` (aliases: `metadata.clawdbot`, `metadata.clawdis`)
-//! in their SKILL.md frontmatter. YiClaw uses `metadata.yiclaw`. This module handles
+//! in their SKILL.md frontmatter. YiYiClaw uses `metadata.yiyiclaw`. This module handles
 //! transparent conversion between the two formats during install.
 
 use reqwest::Client;
@@ -89,13 +89,17 @@ struct SkillBundle {
     files: HashMap<String, String>,
 }
 
-/// HTTP client with retry support
-fn make_client() -> Client {
-    Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .user_agent("yiclaw-skills-hub/1.0")
-        .build()
-        .unwrap_or_default()
+/// Shared HTTP client for skills hub — reuses connection pool across all hub requests.
+fn hub_client() -> &'static Client {
+    static CLIENT: std::sync::OnceLock<Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .user_agent("yiyiclaw-skills-hub/1.0")
+            .pool_max_idle_per_host(5)
+            .build()
+            .unwrap_or_default()
+    })
 }
 
 /// Search skills from hub (supports ClawHub v1 API and generic formats)
@@ -109,7 +113,7 @@ pub async fn search_hub_skills(
     limit: usize,
     config: &HubConfig,
 ) -> Result<Vec<HubSkill>, String> {
-    let client = make_client();
+    let client = hub_client();
     let url = format!("{}{}", config.base_url.trim_end_matches('/'), config.search_path);
 
     let resp = client
@@ -195,7 +199,7 @@ pub async fn list_hub_skills(
     sort: Option<&str>,
     config: &HubConfig,
 ) -> Result<(Vec<HubSkill>, Option<String>), String> {
-    let client = make_client();
+    let client = hub_client();
     let url = format!("{}{}", config.base_url.trim_end_matches('/'), config.list_path);
 
     let mut query_params: Vec<(&str, String)> = vec![("limit", limit.to_string())];
@@ -273,7 +277,7 @@ fn parse_hub_requires(item: &serde_json::Value) -> Option<HubSkillRequires> {
     let requires = item["requires"].as_object()
         .or_else(|| item["metadata"]["requires"].as_object())
         .or_else(|| item["metadata"]["openclaw"]["requires"].as_object())
-        .or_else(|| item["metadata"]["yiclaw"]["requires"].as_object());
+        .or_else(|| item["metadata"]["yiyiclaw"]["requires"].as_object());
 
     let requires = match requires {
         Some(r) => r,
@@ -425,7 +429,7 @@ async fn fetch_from_github_repo(
     skill_path: &str,
     branch: &str,
 ) -> Result<(SkillBundle, String), String> {
-    let client = make_client();
+    let client = hub_client();
 
     // Normalize skill_path - remove trailing /SKILL.md
     let skill_path = skill_path.trim_end_matches("/SKILL.md").trim_start_matches('/');
@@ -516,7 +520,7 @@ async fn fetch_github_directory_inner(
     path: &str,
     branch: &str,
 ) -> Result<HashMap<String, String>, String> {
-    let client = make_client();
+    let client = hub_client();
     let api_url = format!(
         "https://api.github.com/repos/{}/{}/contents/{}?ref={}",
         owner, repo, path, branch
@@ -573,7 +577,7 @@ async fn fetch_github_directory_inner(
 /// Flow:
 /// 1. `GET /api/v1/skills/{slug}` to get skill detail + latest version info
 /// 2. `GET /api/v1/skills/{slug}/file?path=SKILL.md&version=...` to get file contents
-/// 3. Convert OpenClaw metadata format to YiClaw format in SKILL.md
+/// 3. Convert OpenClaw metadata format to YiYiClaw format in SKILL.md
 async fn fetch_from_clawhub(
     slug: &str,
     version: Option<&str>,
@@ -583,7 +587,7 @@ async fn fetch_from_clawhub(
         return Err("Slug is required for ClawHub install".into());
     }
 
-    let client = make_client();
+    let client = hub_client();
     let detail_url = format!(
         "{}{}",
         config.base_url.trim_end_matches('/'),
@@ -720,9 +724,9 @@ async fn fetch_from_clawhub(
         return Err("No skill files found from ClawHub".into());
     }
 
-    // Convert OpenClaw metadata format to YiClaw format in SKILL.md
+    // Convert OpenClaw metadata format to YiYiClaw format in SKILL.md
     if let Some(skill_md) = files.get_mut("SKILL.md") {
-        *skill_md = convert_openclaw_to_yiclaw(skill_md);
+        *skill_md = convert_openclaw_to_yiyiclaw(skill_md);
     }
 
     let source_url = format!("{}/skills/{}", config.base_url.trim_end_matches('/'), slug);
@@ -731,7 +735,7 @@ async fn fetch_from_clawhub(
 
 /// Fetch bundle from direct URL
 async fn fetch_bundle_direct(url: &str) -> Result<(SkillBundle, String), String> {
-    let client = make_client();
+    let client = hub_client();
 
     let resp = client
         .get(url)
@@ -819,7 +823,7 @@ fn extract_clawhub_slug(url: &str) -> String {
 
 /// Create skill from bundle.
 ///
-/// Supports both YiClaw and OpenClaw/ClawHub bundle file layouts.
+/// Supports both YiYiClaw and OpenClaw/ClawHub bundle file layouts.
 /// ClawHub bundles may have flat file paths (e.g., "utils.py") alongside "SKILL.md".
 fn create_skill_from_bundle(
     bundle: &SkillBundle,
@@ -918,7 +922,7 @@ fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
 // OpenClaw / ClawHub format conversion
 // ============================================================================
 
-/// Convert OpenClaw SKILL.md metadata format to YiClaw format.
+/// Convert OpenClaw SKILL.md metadata format to YiYiClaw format.
 ///
 /// OpenClaw uses `metadata.openclaw` (or `metadata.clawdbot`, `metadata.clawdis`):
 /// ```yaml
@@ -932,17 +936,17 @@ fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
 ///     homepage: "..."
 /// ```
 ///
-/// YiClaw uses `metadata.yiclaw`:
+/// YiYiClaw uses `metadata.yiyiclaw`:
 /// ```yaml
 /// metadata:
-///   yiclaw:
+///   yiyiclaw:
 ///     emoji: "..."
 ///     requires: {}
 /// ```
 ///
-/// This function preserves the original content and adds a `metadata.yiclaw` block
+/// This function preserves the original content and adds a `metadata.yiyiclaw` block
 /// if the SKILL.md uses OpenClaw format. If both formats exist, it does nothing.
-pub fn convert_openclaw_to_yiclaw(content: &str) -> String {
+pub fn convert_openclaw_to_yiyiclaw(content: &str) -> String {
     // Check if content has frontmatter
     if !content.starts_with("---") {
         return content.to_string();
@@ -956,8 +960,8 @@ pub fn convert_openclaw_to_yiclaw(content: &str) -> String {
     let frontmatter = &content[3..end_idx];
     let body = &content[end_idx + 3..];
 
-    // Already has yiclaw metadata — no conversion needed
-    if frontmatter.contains("\"yiclaw\"") || frontmatter.contains("yiclaw:") {
+    // Already has yiyiclaw metadata — no conversion needed
+    if frontmatter.contains("\"yiyiclaw\"") || frontmatter.contains("yiyiclaw:") {
         return content.to_string();
     }
 
@@ -981,7 +985,7 @@ pub fn convert_openclaw_to_yiclaw(content: &str) -> String {
     let requires_env = extract_metadata_array(frontmatter, "env");
     let requires_bins = extract_metadata_array(frontmatter, "bins");
 
-    // Build YiClaw requires object
+    // Build YiYiClaw requires object
     let mut requires_parts = Vec::new();
     if !requires_env.is_empty() {
         let envs: Vec<String> = requires_env.iter().map(|e| format!("\"{}\"", e)).collect();
@@ -998,27 +1002,27 @@ pub fn convert_openclaw_to_yiclaw(content: &str) -> String {
         format!("{{{}}}", requires_parts.join(", "))
     };
 
-    // Build the yiclaw metadata line
+    // Build the yiyiclaw metadata line
     let emoji_str = emoji.as_deref().unwrap_or("");
-    let yiclaw_metadata = format!(
-        "\"yiclaw\":\n      {{\n        \"emoji\": \"{}\",\n        \"requires\": {}\n      }}",
+    let yiyiclaw_metadata = format!(
+        "\"yiyiclaw\":\n      {{\n        \"emoji\": \"{}\",\n        \"requires\": {}\n      }}",
         emoji_str, requires_str
     );
 
-    // Insert yiclaw metadata alongside openclaw metadata in the frontmatter
-    // Strategy: find the metadata block and add yiclaw after the existing openclaw block
+    // Insert yiyiclaw metadata alongside openclaw metadata in the frontmatter
+    // Strategy: find the metadata block and add yiyiclaw after the existing openclaw block
     let new_frontmatter = if frontmatter.contains("metadata:") {
-        // Find the metadata section and append yiclaw block
+        // Find the metadata section and append yiyiclaw block
         let metadata_line_end = frontmatter.find("metadata:").unwrap() + "metadata:".len();
         let before_metadata = &frontmatter[..metadata_line_end];
         let after_metadata = &frontmatter[metadata_line_end..];
 
         // Find the closing of the metadata block (look for the openclaw/clawdbot/clawdis block end)
-        // Simple approach: add yiclaw at the same indentation level as openclaw
+        // Simple approach: add yiyiclaw at the same indentation level as openclaw
         format!(
             "{}\n    {}\n{}",
             before_metadata.trim_end(),
-            yiclaw_metadata,
+            yiyiclaw_metadata,
             after_metadata.trim_start_matches(|c: char| c == '\n' || c == '\r'),
         )
     } else {
@@ -1026,7 +1030,7 @@ pub fn convert_openclaw_to_yiclaw(content: &str) -> String {
         format!(
             "{}\nmetadata:\n  {{\n    {}\n  }}",
             frontmatter.trim_end(),
-            yiclaw_metadata
+            yiyiclaw_metadata
         )
     };
 
@@ -1109,17 +1113,17 @@ fn extract_metadata_array(frontmatter: &str, field: &str) -> Vec<String> {
 /// Get default hub config from environment
 pub fn get_default_hub_config() -> HubConfig {
     HubConfig {
-        base_url: std::env::var("YICLAW_SKILLS_HUB_BASE_URL")
+        base_url: std::env::var("YIYICLAW_SKILLS_HUB_BASE_URL")
             .unwrap_or_else(|_| "https://clawhub.ai".into()),
-        search_path: std::env::var("YICLAW_SKILLS_HUB_SEARCH_PATH")
+        search_path: std::env::var("YIYICLAW_SKILLS_HUB_SEARCH_PATH")
             .unwrap_or_else(|_| "/api/v1/search".into()),
-        detail_path: std::env::var("YICLAW_SKILLS_HUB_DETAIL_PATH")
+        detail_path: std::env::var("YIYICLAW_SKILLS_HUB_DETAIL_PATH")
             .unwrap_or_else(|_| "/api/v1/skills/{slug}".into()),
-        file_path: std::env::var("YICLAW_SKILLS_HUB_FILE_PATH")
+        file_path: std::env::var("YIYICLAW_SKILLS_HUB_FILE_PATH")
             .unwrap_or_else(|_| "/api/v1/skills/{slug}/file".into()),
-        download_path: std::env::var("YICLAW_SKILLS_HUB_DOWNLOAD_PATH")
+        download_path: std::env::var("YIYICLAW_SKILLS_HUB_DOWNLOAD_PATH")
             .unwrap_or_else(|_| "/api/v1/download".into()),
-        list_path: std::env::var("YICLAW_SKILLS_HUB_LIST_PATH")
+        list_path: std::env::var("YIYICLAW_SKILLS_HUB_LIST_PATH")
             .unwrap_or_else(|_| "/api/v1/skills".into()),
     }
 }

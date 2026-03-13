@@ -20,8 +20,10 @@ import {
   ChevronRight,
   MessageSquare,
   ExternalLink,
+  Sparkles,
 } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-shell';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { Select } from '../components/Select';
 import {
   listBots,
@@ -32,13 +34,17 @@ import {
   sendToBot,
   startBots,
   stopBots,
+  getBotStatuses,
   type BotInfo,
   type PlatformType,
   type PlatformInfo,
+  type BotStatusInfo,
+  type BotConnectionState,
 } from '../api/bots';
 import { PageHeader } from '../components/PageHeader';
 import { SessionsPanel } from './Sessions';
 import { toast, confirm } from '../components/Toast';
+import { BotSetupGuide, hasSetupGuide } from '../components/BotSetupGuide';
 
 type BotsTab = 'bots' | 'sessions';
 
@@ -86,8 +92,8 @@ const PLATFORM_META: Record<string, PlatformMeta> = {
     docUrl: 'https://open.dingtalk.com/document/orgapp/robot-overview',
     docLabel: 'DingTalk Bot Docs',
     configFields: [
-      { key: 'webhook_url', label: 'Webhook URL', placeholder: 'https://oapi.dingtalk.com/robot/send?access_token=xxx' },
-      { key: 'secret', label: 'Secret', placeholder: 'SECxxxxxxxx', secret: true },
+      { key: 'client_id', label: 'Client ID (AppKey)', placeholder: 'dingxxxxxxxxx' },
+      { key: 'client_secret', label: 'Client Secret (AppSecret)', placeholder: 'xxxxx', secret: true },
     ],
   },
   feishu: {
@@ -98,7 +104,6 @@ const PLATFORM_META: Record<string, PlatformMeta> = {
     configFields: [
       { key: 'app_id', label: 'App ID', placeholder: 'cli_xxxxx' },
       { key: 'app_secret', label: 'App Secret', placeholder: 'xxxxx', secret: true },
-      { key: 'webhook_url', label: 'Webhook URL', placeholder: 'https://open.feishu.cn/open-apis/bot/v2/hook/xxx' },
     ],
   },
   wecom: {
@@ -123,6 +128,34 @@ const PLATFORM_META: Record<string, PlatformMeta> = {
     ],
   },
 };
+
+/** Colored dot indicating bot connection status */
+function StatusDot({ state, message }: { state: BotConnectionState; message?: string | null }) {
+  const dotStyle: Record<BotConnectionState, { bg: string; pulse: boolean; label: string }> = {
+    connected:    { bg: 'var(--color-success)',      pulse: true,  label: 'Connected' },
+    connecting:   { bg: 'var(--color-warning, #EAB308)', pulse: false, label: 'Connecting' },
+    reconnecting: { bg: 'var(--color-warning, #EAB308)', pulse: false, label: 'Reconnecting' },
+    error:        { bg: 'var(--color-error)',         pulse: false, label: 'Error' },
+    disconnected: { bg: 'var(--color-text-muted)',    pulse: false, label: 'Disconnected' },
+  };
+  const info = dotStyle[state] || dotStyle.disconnected;
+  const title = message ? `${info.label}: ${message}` : info.label;
+
+  return (
+    <span className="relative inline-flex items-center" title={title}>
+      {info.pulse && (
+        <span
+          className="absolute inline-flex h-full w-full rounded-full opacity-60 animate-ping"
+          style={{ background: info.bg }}
+        />
+      )}
+      <span
+        className="relative inline-block w-2 h-2 rounded-full"
+        style={{ background: info.bg }}
+      />
+    </span>
+  );
+}
 
 interface BotDialog {
   open: boolean;
@@ -159,10 +192,37 @@ export function BotsPage({ consumeNotifContext }: BotsPageProps) {
   const [botsRunning, setBotsRunning] = useState(false);
   const [expandedBot, setExpandedBot] = useState<string | null>(null);
 
+  // Bot connection status
+  const [botStatuses, setBotStatuses] = useState<Record<string, BotStatusInfo>>({});
+
   // Send message state
   const [showSendModal, setShowSendModal] = useState(false);
   const [sendForm, setSendForm] = useState({ botId: '', target: '', content: '' });
   const [sending, setSending] = useState(false);
+
+  // Listen for bot status events from backend
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+
+    // Fetch initial statuses
+    getBotStatuses().then((statuses) => {
+      const map: Record<string, BotStatusInfo> = {};
+      for (const s of statuses) {
+        map[s.bot_id] = s;
+      }
+      setBotStatuses(map);
+    }).catch(() => {});
+
+    // Subscribe to live updates
+    listen<BotStatusInfo>('bot://status', (event) => {
+      setBotStatuses((prev) => ({
+        ...prev,
+        [event.payload.bot_id]: event.payload,
+      }));
+    }).then((fn) => { unlisten = fn; });
+
+    return () => { unlisten?.(); };
+  }, []);
 
   const getPlatformName = (platform: string): string => {
     const key = `bots.${platform}` as any;
@@ -504,6 +564,11 @@ export function BotsPage({ consumeNotifContext }: BotsPageProps) {
                             <span className="font-semibold text-[15px]" style={{ color: 'var(--color-text)' }}>
                               {bot.name}
                             </span>
+                            {/* Connection status dot */}
+                            <StatusDot
+                              state={botStatuses[bot.id]?.state || ('disconnected')}
+                              message={botStatuses[bot.id]?.message}
+                            />
                             <span
                               className="text-[11px] px-2 py-0.5 rounded-full font-medium"
                               style={{
@@ -625,10 +690,15 @@ export function BotsPage({ consumeNotifContext }: BotsPageProps) {
       )}
 
       {/* Create/Edit dialog */}
-      {dialog.open && (
+      {dialog.open && (() => {
+        const showGuide = dialog.mode === 'create' && hasSetupGuide(dialog.platform);
+        const isZh = t('bots.title') !== 'Bots';
+        return (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div
-            className="rounded-3xl p-6 w-full max-w-md shadow-2xl border max-h-[85vh] overflow-y-auto"
+            className={`rounded-3xl p-6 w-full shadow-2xl border max-h-[85vh] overflow-y-auto transition-all ${
+              showGuide ? 'max-w-2xl' : 'max-w-md'
+            }`}
             style={{ background: 'var(--color-bg-elevated)', borderColor: 'var(--color-border)' }}
           >
             <div className="flex items-center justify-between mb-5">
@@ -662,78 +732,131 @@ export function BotsPage({ consumeNotifContext }: BotsPageProps) {
                 />
               </div>
 
-              {/* Platform */}
+              {/* Platform — card-style selector for create mode */}
               <div>
                 <label className="block text-[13px] font-medium mb-2" style={{ color: 'var(--color-text-secondary)' }}>
                   {t('bots.platform')} *
                 </label>
-                <Select
-                  value={dialog.platform}
-                  onChange={(v) => setDialog({ ...dialog, platform: v as PlatformType, config: {} })}
-                  options={Object.keys(PLATFORM_META).map((p) => ({
-                    value: p,
-                    label: `${PLATFORM_META[p].icon} ${getPlatformName(p)}`,
-                  }))}
-                  fullWidth
-                  disabled={dialog.mode === 'edit'}
+                {dialog.mode === 'create' ? (
+                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                    {Object.keys(PLATFORM_META).map((p) => {
+                      const meta = PLATFORM_META[p];
+                      const isActive = dialog.platform === p;
+                      const hasGuide = hasSetupGuide(p);
+                      return (
+                        <button
+                          key={p}
+                          type="button"
+                          onClick={() => setDialog({ ...dialog, platform: p as PlatformType, config: {} })}
+                          className="relative flex flex-col items-center gap-1.5 px-2 py-3 rounded-xl border text-center transition-all"
+                          style={{
+                            borderColor: isActive ? meta.color : 'var(--color-border)',
+                            background: isActive ? meta.color + '08' : 'var(--color-bg)',
+                            boxShadow: isActive ? `0 0 0 1px ${meta.color}40` : 'none',
+                          }}
+                        >
+                          <span className="text-xl leading-none">{meta.icon}</span>
+                          <span
+                            className="text-[11px] font-medium leading-tight"
+                            style={{ color: isActive ? meta.color : 'var(--color-text-secondary)' }}
+                          >
+                            {getPlatformName(p)}
+                          </span>
+                          {hasGuide && (
+                            <span
+                              className="absolute -top-1.5 -right-1.5 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-bold text-white shadow-sm"
+                              style={{ background: 'linear-gradient(135deg, var(--color-primary), #A855F7)' }}
+                            >
+                              <Sparkles size={8} />
+                              AI
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <Select
+                    value={dialog.platform}
+                    onChange={(v) => setDialog({ ...dialog, platform: v as PlatformType, config: {} })}
+                    options={Object.keys(PLATFORM_META).map((p) => ({
+                      value: p,
+                      label: `${PLATFORM_META[p].icon} ${getPlatformName(p)}`,
+                    }))}
+                    fullWidth
+                    disabled
+                  />
+                )}
+              </div>
+
+              {/* Guided setup wizard for supported platforms */}
+              {showGuide ? (
+                <BotSetupGuide
+                  platform={dialog.platform as 'feishu' | 'dingtalk' | 'wecom'}
+                  config={dialog.config}
+                  onConfigChange={(c) => setDialog({ ...dialog, config: c })}
+                  onComplete={handleSave}
+                  lang={isZh ? 'zh' : 'en'}
                 />
-              </div>
-
-              {/* Platform doc link */}
-              {PLATFORM_META[dialog.platform]?.docUrl && (
-                <div
-                  className="flex items-center gap-3 px-4 py-3 rounded-xl"
-                  style={{ background: PLATFORM_META[dialog.platform].color + '08', border: `1px solid ${PLATFORM_META[dialog.platform].color}20` }}
-                >
-                  <div
-                    className="w-8 h-8 rounded-lg flex items-center justify-center text-base shrink-0"
-                    style={{ background: PLATFORM_META[dialog.platform].color + '15' }}
-                  >
-                    {PLATFORM_META[dialog.platform].icon}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
-                      {t('bots.platformDocHint')}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => open(PLATFORM_META[dialog.platform].docUrl)}
-                    className="shrink-0 inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-opacity hover:opacity-80 text-white"
-                    style={{ background: PLATFORM_META[dialog.platform].color }}
-                  >
-                    <ExternalLink size={12} />
-                    {t('bots.platformDoc')}
-                  </button>
-                </div>
-              )}
-
-              {/* Platform config fields */}
-              <div>
-                <label className="block text-[13px] font-medium mb-2" style={{ color: 'var(--color-text-secondary)' }}>
-                  {t('bots.config')}
-                </label>
-                <div className="space-y-3">
-                  {(PLATFORM_META[dialog.platform]?.configFields || []).map((field) => (
-                    <div key={field.key}>
-                      <label className="block text-[12px] mb-1" style={{ color: 'var(--color-text-muted)' }}>
-                        {field.label}
-                      </label>
-                      <input
-                        type={field.secret ? 'password' : 'text'}
-                        value={dialog.config[field.key] || ''}
-                        onChange={(e) => setDialog({
-                          ...dialog,
-                          config: { ...dialog.config, [field.key]: e.target.value },
-                        })}
-                        placeholder={field.placeholder}
-                        className="w-full rounded-xl border px-3.5 py-2.5 text-[13px] font-mono focus:outline-none focus:ring-2 transition-shadow"
-                        style={{ background: 'var(--color-bg)', borderColor: 'var(--color-border)', color: 'var(--color-text)' }}
-                      />
+              ) : (
+                <>
+                  {/* Platform doc link */}
+                  {PLATFORM_META[dialog.platform]?.docUrl && (
+                    <div
+                      className="flex items-center gap-3 px-4 py-3 rounded-xl"
+                      style={{ background: PLATFORM_META[dialog.platform].color + '08', border: `1px solid ${PLATFORM_META[dialog.platform].color}20` }}
+                    >
+                      <div
+                        className="w-8 h-8 rounded-lg flex items-center justify-center text-base shrink-0"
+                        style={{ background: PLATFORM_META[dialog.platform].color + '15' }}
+                      >
+                        {PLATFORM_META[dialog.platform].icon}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
+                          {t('bots.platformDocHint')}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => open(PLATFORM_META[dialog.platform].docUrl)}
+                        className="shrink-0 inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-opacity hover:opacity-80 text-white"
+                        style={{ background: PLATFORM_META[dialog.platform].color }}
+                      >
+                        <ExternalLink size={12} />
+                        {t('bots.platformDoc')}
+                      </button>
                     </div>
-                  ))}
-                </div>
-              </div>
+                  )}
+
+                  {/* Platform config fields */}
+                  <div>
+                    <label className="block text-[13px] font-medium mb-2" style={{ color: 'var(--color-text-secondary)' }}>
+                      {t('bots.config')}
+                    </label>
+                    <div className="space-y-3">
+                      {(PLATFORM_META[dialog.platform]?.configFields || []).map((field) => (
+                        <div key={field.key}>
+                          <label className="block text-[12px] mb-1" style={{ color: 'var(--color-text-muted)' }}>
+                            {field.label}
+                          </label>
+                          <input
+                            type={field.secret ? 'password' : 'text'}
+                            value={dialog.config[field.key] || ''}
+                            onChange={(e) => setDialog({
+                              ...dialog,
+                              config: { ...dialog.config, [field.key]: e.target.value },
+                            })}
+                            placeholder={field.placeholder}
+                            className="w-full rounded-xl border px-3.5 py-2.5 text-[13px] font-mono focus:outline-none focus:ring-2 transition-shadow"
+                            style={{ background: 'var(--color-bg)', borderColor: 'var(--color-border)', color: 'var(--color-text)' }}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
 
               {/* Enable toggle */}
               <div className="flex items-center gap-3">
@@ -750,27 +873,31 @@ export function BotsPage({ consumeNotifContext }: BotsPageProps) {
               </div>
             </div>
 
-            <div className="flex justify-end gap-3 mt-6">
-              <button
-                onClick={() => setDialog({ ...emptyDialog })}
-                className="px-4 py-2.5 text-[13px] font-medium rounded-xl transition-colors"
-                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-              >
-                {t('common.cancel')}
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={saving || !dialog.name.trim()}
-                className="px-4 py-2.5 text-[13px] font-medium text-white rounded-xl disabled:opacity-50 transition-colors shadow-sm"
-                style={{ background: 'var(--color-primary)' }}
-              >
-                {saving ? t('common.saving') : (dialog.mode === 'create' ? t('common.create') : t('common.save'))}
-              </button>
-            </div>
+            {/* Hide default buttons when guided wizard handles completion */}
+            {!showGuide && (
+              <div className="flex justify-end gap-3 mt-6">
+                <button
+                  onClick={() => setDialog({ ...emptyDialog })}
+                  className="px-4 py-2.5 text-[13px] font-medium rounded-xl transition-colors"
+                  onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                >
+                  {t('common.cancel')}
+                </button>
+                <button
+                  onClick={handleSave}
+                  disabled={saving || !dialog.name.trim()}
+                  className="px-4 py-2.5 text-[13px] font-medium text-white rounded-xl disabled:opacity-50 transition-colors shadow-sm"
+                  style={{ background: 'var(--color-primary)' }}
+                >
+                  {saving ? t('common.saving') : (dialog.mode === 'create' ? t('common.create') : t('common.save'))}
+                </button>
+              </div>
+            )}
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* Send message modal */}
       {showSendModal && (

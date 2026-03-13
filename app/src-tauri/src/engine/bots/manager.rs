@@ -17,6 +17,13 @@ struct DebounceEntry {
     last_received: tokio::time::Instant,
 }
 
+/// Tracks a running bot instance so it can be stopped individually.
+pub struct RunningBot {
+    pub bot_id: String,
+    /// Shared running flag from the platform bot — set to `false` to stop it.
+    pub running_flag: Arc<RwLock<bool>>,
+}
+
 /// Central bot manager — receives messages from all bots,
 /// processes them through the agent with conversation history, and dispatches responses.
 pub struct BotManager {
@@ -32,6 +39,10 @@ pub struct BotManager {
     debounce_buffer: Arc<RwLock<HashMap<String, DebounceEntry>>>,
     /// Message ID deduplication set (last 1000 IDs)
     seen_message_ids: Arc<RwLock<VecDeque<String>>>,
+    /// Currently running bot instances, keyed by bot_id
+    running_bots: Arc<RwLock<HashMap<String, RunningBot>>>,
+    /// Webhook server instance for lifecycle management
+    webhook_server: Arc<RwLock<Option<super::webhook_server::WebhookServer>>>,
 }
 
 /// Max number of message IDs to keep for deduplication
@@ -51,7 +62,15 @@ impl BotManager {
             running: Arc::new(RwLock::new(false)),
             debounce_buffer: Arc::new(RwLock::new(HashMap::new())),
             seen_message_ids: Arc::new(RwLock::new(VecDeque::new())),
+            running_bots: Arc::new(RwLock::new(HashMap::new())),
+            webhook_server: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Store the webhook server instance so it can be stopped on shutdown.
+    pub async fn set_webhook_server(&self, server: super::webhook_server::WebhookServer) {
+        let mut ws = self.webhook_server.write().await;
+        *ws = Some(server);
     }
 
     /// Generate a dedup key for a message
@@ -114,6 +133,42 @@ impl BotManager {
         );
     }
 
+    /// Unregister the response handler for a specific bot_id.
+    pub async fn unregister_handler(&self, bot_id: &str) {
+        let mut handlers = self.response_handlers.write().await;
+        handlers.remove(bot_id);
+    }
+
+    /// Register a running bot instance for tracking.
+    pub async fn register_running_bot(&self, bot: RunningBot) {
+        let mut bots = self.running_bots.write().await;
+        bots.insert(bot.bot_id.clone(), bot);
+    }
+
+    /// Unregister and stop a running bot instance. Returns true if the bot was found.
+    pub async fn unregister_running_bot(&self, bot_id: &str) -> bool {
+        let mut bots = self.running_bots.write().await;
+        if let Some(bot) = bots.remove(bot_id) {
+            let mut flag = bot.running_flag.write().await;
+            *flag = false;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Check if a specific bot is currently running.
+    pub async fn is_bot_running(&self, bot_id: &str) -> bool {
+        let bots = self.running_bots.read().await;
+        bots.contains_key(bot_id)
+    }
+
+    /// List all currently running bot IDs.
+    pub async fn list_running_bot_ids(&self) -> Vec<String> {
+        let bots = self.running_bots.read().await;
+        bots.keys().cloned().collect()
+    }
+
     /// Start the consumer loop with deduplication and debouncing.
     pub async fn start(&self, app_state: Arc<AppState>, app_handle: tauri::AppHandle) {
         let mut running = self.running.write().await;
@@ -138,18 +193,24 @@ impl BotManager {
                 loop {
                     let msg = {
                         let mut receiver = rx.write().await;
-                        match receiver.try_recv() {
-                            Ok(msg) => Some(msg),
-                            Err(mpsc::error::TryRecvError::Empty) => {
-                                drop(receiver);
-                                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                                let is_running = running.read().await;
-                                if !*is_running {
-                                    break;
+                        tokio::select! {
+                            result = receiver.recv() => {
+                                match result {
+                                    Some(msg) => Some(msg),
+                                    None => break, // channel closed
                                 }
-                                None
                             }
-                            Err(mpsc::error::TryRecvError::Disconnected) => break,
+                            _ = async {
+                                loop {
+                                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                                    let is_running = running.read().await;
+                                    if !*is_running {
+                                        return;
+                                    }
+                                }
+                            } => {
+                                break; // running flag set to false
+                            }
                         }
                     };
 
@@ -211,36 +272,26 @@ impl BotManager {
                     }
 
                     let now = tokio::time::Instant::now();
-                    let mut to_flush = Vec::new();
 
-                    {
-                        let buffer = debounce_buffer.read().await;
-                        for (key, entry) in buffer.iter() {
-                            if now.duration_since(entry.last_received) >= debounce_window {
-                                to_flush.push(key.clone());
-                            }
-                        }
-                    }
+                    // Single write lock to avoid race between read-scan and write-flush
+                    let mut buffer = debounce_buffer.write().await;
+                    let keys: Vec<String> = buffer.iter()
+                        .filter(|(_, entry)| now.duration_since(entry.last_received) >= debounce_window)
+                        .map(|(key, _)| key.clone())
+                        .collect();
 
-                    if !to_flush.is_empty() {
-                        let mut buffer = debounce_buffer.write().await;
-                        for key in to_flush {
-                            if let Some(entry) = buffer.remove(&key) {
-                                if now.duration_since(entry.last_received) >= debounce_window {
-                                    if !entry.messages.is_empty() {
-                                        let count = entry.messages.len();
-                                        let merged = BotManager::merge_messages(entry.messages);
-                                        if count > 1 {
-                                            log::info!(
-                                                "Debounce: merged {} messages from {}",
-                                                count, key
-                                            );
-                                        }
-                                        proc_tx.send(merged).await.ok();
-                                    }
-                                } else {
-                                    buffer.insert(key, entry);
+                    for key in keys {
+                        if let Some(entry) = buffer.remove(&key) {
+                            if !entry.messages.is_empty() {
+                                let count = entry.messages.len();
+                                let merged = BotManager::merge_messages(entry.messages);
+                                if count > 1 {
+                                    log::info!(
+                                        "Debounce: merged {} messages from {}",
+                                        count, key
+                                    );
                                 }
+                                proc_tx.send(merged).await.ok();
                             }
                         }
                     }
@@ -290,21 +341,40 @@ impl BotManager {
                     );
 
                     // Load bot config from DB for access control
-                    let bot_row = state.db.get_bot(&msg.bot_id).ok().flatten();
+                    let bot_row = match state.db.get_bot(&msg.bot_id) {
+                        Ok(row) => row,
+                        Err(e) => {
+                            log::error!(
+                                "[Worker {}] Failed to load bot config for '{}': {}. Denying access.",
+                                worker_id, msg.bot_id, e
+                            );
+                            continue;
+                        }
+                    };
 
                     // Check access control using bot's access_json
                     if let Some(ref bot) = bot_row {
                         if let Some(ref access_json) = bot.access_json {
-                            if let Ok(policy) = serde_json::from_str::<AccessPolicy>(access_json) {
-                                if let Err(deny_msg) = check_access(&policy, &msg) {
-                                    log::info!(
-                                        "[Worker {}] Access denied for {}:{} - {}",
-                                        worker_id, msg.platform, msg.sender_id, deny_msg
-                                    );
-                                    let hs = handlers.read().await;
-                                    if let Some(handler) = hs.get(&msg.bot_id) {
-                                        handler(msg.conversation_id.clone(), deny_msg).await.ok();
+                            match serde_json::from_str::<AccessPolicy>(access_json) {
+                                Ok(policy) => {
+                                    if let Err(deny_msg) = check_access(&policy, &msg) {
+                                        log::info!(
+                                            "[Worker {}] Access denied for {}:{} - {}",
+                                            worker_id, msg.platform, msg.sender_id, deny_msg
+                                        );
+                                        let hs = handlers.read().await;
+                                        if let Some(handler) = hs.get(&msg.bot_id) {
+                                            super::rate_limit::acquire(&msg.platform, &msg.bot_id).await;
+                                            handler(msg.conversation_id.clone(), deny_msg).await.ok();
+                                        }
+                                        continue;
                                     }
+                                }
+                                Err(e) => {
+                                    log::warn!(
+                                        "[Worker {}] Failed to parse access_json for bot '{}': {}. Denying access.",
+                                        worker_id, msg.bot_id, e
+                                    );
                                     continue;
                                 }
                             }
@@ -352,12 +422,32 @@ impl BotManager {
                         }
                     };
 
-                    // Send the final reply as an active message (no msg_id)
+                    // Send the final reply with rate limiting + retry
                     let hs = handlers.read().await;
                     if let Some(handler) = hs.get(&msg.bot_id) {
                         let target = msg.conversation_id.clone();
-                        if let Err(e) = handler(target, reply.clone()).await {
-                            log::error!("Failed to send response: {}", e);
+
+                        // Rate limit: wait for token before sending
+                        super::rate_limit::acquire(&msg.platform, &msg.bot_id).await;
+
+                        // Retry with exponential backoff (max 3 retries)
+                        let send_result = super::retry::with_retry(&msg.bot_id, || {
+                            handler(target.clone(), reply.clone())
+                        }).await;
+
+                        if !send_result.success {
+                            log::error!(
+                                "Failed to send response after {} attempts: {:?}",
+                                send_result.attempts, send_result.last_error
+                            );
+                            // Notify frontend of send failure
+                            super::retry::emit_send_failure(
+                                &app,
+                                &msg.bot_id,
+                                &target,
+                                send_result.last_error.as_deref().unwrap_or("unknown"),
+                                send_result.attempts,
+                            );
                         }
                     }
 
@@ -392,6 +482,14 @@ impl BotManager {
     pub async fn stop(&self) {
         let mut running = self.running.write().await;
         *running = false;
+        drop(running);
+
+        // Stop webhook server if running
+        let ws = self.webhook_server.read().await;
+        if let Some(ref server) = *ws {
+            server.stop().await;
+            log::info!("Webhook server stopped");
+        }
     }
 }
 
@@ -451,7 +549,33 @@ async fn process_message(
     // Check if this bot is bound to an existing session
     let bound_session = state.db.get_session_for_bot(&msg.bot_id).unwrap_or(None);
 
-    let session_id = if let Some(ref sid) = bound_session {
+    // Check if sender has a unified user identity for cross-platform session continuity
+    let unified_user_id = state.db.get_unified_user_by_identity(
+        &msg.platform, &msg.sender_id, &msg.bot_id
+    ).unwrap_or(None);
+
+    let session_id = if let Some(ref uid) = unified_user_id {
+        // Cross-platform shared session: use unified user session
+        let sid = format!("unified:{}", uid);
+        let user = state.db.get_unified_user(uid).ok().flatten();
+        let session_name = format!(
+            "Unified - {}",
+            user.as_ref().and_then(|u| u.display_name.as_deref()).unwrap_or(uid.as_str())
+        );
+        let source_meta = serde_json::json!({
+            "unified_user_id": uid,
+            "bot_id": msg.bot_id,
+            "platform": msg.platform,
+            "conversation_id": msg.conversation_id,
+            "sender_id": msg.sender_id,
+        }).to_string();
+        state.db.ensure_session(&sid, &session_name, "unified", Some(&source_meta))?;
+        log::info!(
+            "Unified user {} (via {}:{}), using shared session {}",
+            uid, msg.platform, msg.sender_id, sid
+        );
+        sid
+    } else if let Some(ref sid) = bound_session {
         // Route to the bound session instead of creating a separate bot session
         log::info!("Bot {} is bound to session {}, routing message there", msg.bot_id, sid);
         sid.clone()
@@ -496,14 +620,27 @@ async fn process_message(
         vec![]
     };
 
-    // Load skills (with names for agent filtering)
+    // Load skill index + always-active skills
     let skills_dir = state.working_dir.join("active_skills");
-    let mut skills = Vec::new();
+    let mut skill_index = Vec::new();
+    let mut always_active_skills = Vec::new();
     if let Ok(mut entries) = tokio::fs::read_dir(&skills_dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
-            let skill_md = entry.path().join("SKILL.md");
+            let path = entry.path();
+            let skill_md = path.join("SKILL.md");
             if let Ok(content) = tokio::fs::read_to_string(&skill_md).await {
-                skills.push(content);
+                let name = path.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let (description, is_always_active) = crate::commands::agent::parse_skill_frontmatter(&content);
+                if is_always_active {
+                    always_active_skills.push(content);
+                } else {
+                    skill_index.push(crate::commands::agent::SkillIndexEntry {
+                        name,
+                        description: description.unwrap_or_default(),
+                    });
+                }
             }
         }
     }
@@ -514,8 +651,9 @@ async fn process_message(
     };
 
     // Build system prompt using global config
+    let user_ws = state.user_workspace();
     let mut system_prompt = react_agent::build_system_prompt(
-        &state.working_dir, &skills, lang.as_deref(), None, None,
+        &state.working_dir, Some(&user_ws), &skill_index, &always_active_skills, lang.as_deref(), None, None,
     ).await;
 
     // Remove the bot-tools guidance that confuses the agent in this context
@@ -551,31 +689,58 @@ async fn process_message(
     let empty_overrides = std::collections::HashMap::new();
     let extra_tools = mcp_tools_as_definitions(&mcp_tools, &empty_overrides);
 
-    // Just pass the user's message content directly.
-    // The system prompt already contains all the context the agent needs.
-    let enriched_message = msg.content.clone();
+    // Download any media attachments and enrich the message content.
+    // For platform-specific URLs (telegram://file/xxx, feishu://image/xxx, etc.),
+    // this downloads the actual file and appends local path info to the message.
+    let enriched_message = if msg.content_parts.iter().any(|p| !matches!(p, super::ContentPart::Text { .. })) {
+        // Parse bot config to extract platform credentials for media download
+        let bot_config: serde_json::Value = bot
+            .map(|b| serde_json::from_str(&b.config_json).unwrap_or(serde_json::json!({})))
+            .unwrap_or(serde_json::json!({}));
+
+        let (media_notes, _downloaded_paths) = super::media::enrich_media_content(
+            &msg.content_parts,
+            &msg.platform,
+            &bot_config,
+            &state.user_workspace(),
+        ).await;
+
+        if media_notes.is_empty() {
+            msg.content.clone()
+        } else {
+            format!("{}\n{}", msg.content, media_notes)
+        }
+    } else {
+        msg.content.clone()
+    };
 
     // Use streaming agent: when first iteration has text + tool_calls,
     // send the text immediately as a natural ack via early_reply callback.
+    // We use a tokio::sync::watch channel to safely pass text from the sync
+    // on_event callback to the async send_task, avoiding mixed mutex issues.
     let early_sent = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let early_text = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let token_buf = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let (early_watch_tx, early_watch_rx) = tokio::sync::watch::channel(String::new());
+    let early_watch_tx = std::sync::Arc::new(early_watch_tx);
 
     let on_event = {
         let early_sent = early_sent.clone();
-        let early_text = early_text.clone();
+        let token_buf = token_buf.clone();
+        let early_watch_tx = early_watch_tx.clone();
         move |event: react_agent::AgentStreamEvent| {
             match event {
                 react_agent::AgentStreamEvent::ToolStart { .. } => {
                     if !early_sent.load(std::sync::atomic::Ordering::Relaxed) {
-                        let text = early_text.lock().unwrap().clone();
+                        let text = token_buf.lock().unwrap().clone();
                         if !text.trim().is_empty() {
                             early_sent.store(true, std::sync::atomic::Ordering::Relaxed);
+                            early_watch_tx.send(text).ok();
                         }
                     }
                 }
                 react_agent::AgentStreamEvent::Token(token) => {
                     if !early_sent.load(std::sync::atomic::Ordering::Relaxed) {
-                        early_text.lock().unwrap().push_str(&token);
+                        token_buf.lock().unwrap().push_str(&token);
                     }
                 }
                 _ => {}
@@ -585,12 +750,16 @@ async fn process_message(
 
     let early_reply = std::sync::Arc::new(tokio::sync::Mutex::new(early_reply));
     let early_saved_text = std::sync::Arc::new(tokio::sync::Mutex::new(Option::<String>::None));
+    let bot_id_for_context = msg.bot_id.clone();
+    let conversation_id_for_context = msg.conversation_id.clone();
     let reply = crate::engine::tools::with_session_id(
         session_id.clone(),
+        crate::engine::tools::with_bot_context(
+            bot_id_for_context,
+            conversation_id_for_context,
         async {
             let early_reply_ref = early_reply.clone();
-            let early_sent_watch = early_sent.clone();
-            let early_text_watch = early_text.clone();
+            let mut early_watch_rx = early_watch_rx.clone();
             let early_saved = early_saved_text.clone();
             let db_ref = std::sync::Arc::clone(&state.db);
             let sid = session_id.clone();
@@ -602,31 +771,28 @@ async fn process_message(
                 "bot_id": msg.bot_id,
             }).to_string();
             let send_task = tokio::spawn(async move {
-                for _ in 0..300 {
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    if early_sent_watch.load(std::sync::atomic::Ordering::Relaxed) {
-                        let text = early_text_watch.lock().unwrap().clone();
-                        if !text.trim().is_empty() {
-                            // Mark as saved FIRST to prevent race with abort
-                            *early_saved.lock().await = Some(text.clone());
-                            // Send via bot channel (passive reply with msg_id)
-                            let cb = early_reply_ref.lock().await;
-                            if let Some(ref f) = *cb {
-                                f(text.clone()).await;
-                            }
-                            // Save early reply to DB so it shows in YiClaw
-                            db_ref.push_message_with_metadata(&sid, "assistant", &text, Some(&reply_meta)).ok();
-                            // Notify frontend to refresh messages
-                            if let Some(ref ah) = app_h {
-                                use tauri::Emitter;
-                                ah.emit("bot://early-reply", serde_json::json!({
-                                    "bot_id": bot_id_for_early,
-                                    "session_id": sid,
-                                    "content": text,
-                                })).ok();
-                            }
+                // Wait for the watch channel to receive early text or be closed
+                if early_watch_rx.changed().await.is_ok() {
+                    let text = early_watch_rx.borrow().clone();
+                    if !text.trim().is_empty() {
+                        // Mark as saved FIRST to prevent race
+                        *early_saved.lock().await = Some(text.clone());
+                        // Send via bot channel (passive reply with msg_id)
+                        let cb = early_reply_ref.lock().await;
+                        if let Some(ref f) = *cb {
+                            f(text.clone()).await;
                         }
-                        break;
+                        // Save early reply to DB so it shows in YiYiClaw
+                        db_ref.push_message_with_metadata(&sid, "assistant", &text, Some(&reply_meta)).ok();
+                        // Notify frontend to refresh messages
+                        if let Some(ref ah) = app_h {
+                            use tauri::Emitter;
+                            ah.emit("bot://early-reply", serde_json::json!({
+                                "bot_id": bot_id_for_early,
+                                "session_id": sid,
+                                "content": text,
+                            })).ok();
+                        }
                     }
                 }
             });
@@ -634,12 +800,22 @@ async fn process_message(
             let result = react_agent::run_react_with_options_stream(
                 &config, &system_prompt, &enriched_message, &extra_tools,
                 &llm_history, max_iter, Some(&state.working_dir),
-                on_event, None,
+                on_event, None, None,
             ).await;
 
-            send_task.abort();
+            // Graceful shutdown: drop the watch sender so send_task sees channel closed,
+            // then wait up to 2 seconds for it to finish instead of aborting.
+            drop(early_watch_tx);
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                send_task,
+            ).await {
+                Err(_) => log::warn!("[bot] early reply send_task did not finish within 2s"),
+                Ok(Err(e)) => log::error!("[bot] early reply send_task panicked: {:?}", e),
+                Ok(Ok(_)) => {}
+            }
             result
-        },
+        }),
     ).await?;
 
     // Save assistant reply to session with bot metadata
@@ -649,10 +825,13 @@ async fn process_message(
         "bot_id": msg.bot_id,
     }).to_string();
     let early = early_saved_text.lock().await.clone();
-    if early.is_some() && early.as_deref() != Some(reply.trim()) {
-        state.db.push_message_with_metadata(&session_id, "assistant", &reply, Some(&bot_reply_meta))?;
-    } else if early.is_none() {
-        state.db.push_message_with_metadata(&session_id, "assistant", &reply, Some(&bot_reply_meta))?;
+    let should_save = !reply.is_empty() && reply != "(no response)";
+    if should_save {
+        if early.is_some() && early.as_deref() != Some(reply.trim()) {
+            state.db.push_message_with_metadata(&session_id, "assistant", &reply, Some(&bot_reply_meta))?;
+        } else if early.is_none() {
+            state.db.push_message_with_metadata(&session_id, "assistant", &reply, Some(&bot_reply_meta))?;
+        }
     }
     // If early text == final reply, skip duplicate save
 

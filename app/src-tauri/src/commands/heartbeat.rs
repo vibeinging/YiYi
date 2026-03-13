@@ -43,10 +43,14 @@ async fn resolve_llm(state: &AppState) -> Option<LLMConfig> {
     };
     let api_key = api_key.or_else(|| std::env::var(&p.api_key_prefix).ok())?;
 
+    let native_tools = crate::state::providers::resolve_native_injections(&p.native_tools, &active.model);
+
     Some(LLMConfig {
         base_url,
         api_key,
         model: active.model.clone(),
+        provider_id: active.provider_id.clone(),
+        native_tools,
     })
 }
 
@@ -83,7 +87,7 @@ pub async fn send_heartbeat(state: State<'_, AppState>) -> Result<serde_json::Va
 
     // Try to run with agent if LLM is configured
     let (success, message) = if let Some(llm_config) = resolve_llm(&state).await {
-        let prompt = react_agent::build_system_prompt(&state.working_dir, &[], None, None, None).await;
+        let prompt = react_agent::build_system_prompt(&state.working_dir, None, &[], &[], None, None, None).await;
         match tokio::time::timeout(
             std::time::Duration::from_secs(120),
             react_agent::run_react(&llm_config, &prompt, &query, &[]),

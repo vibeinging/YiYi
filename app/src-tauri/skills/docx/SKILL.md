@@ -3,7 +3,7 @@ name: docx
 description: "Use this skill to read or create Word documents (.docx files). Supports text extraction and document creation with headings and lists."
 metadata:
   {
-    "yiclaw":
+    "yiyiclaw":
       {
         "emoji": "📝",
         "requires": {}

@@ -19,17 +19,6 @@ pub fn estimate_tokens(text: &str) -> usize {
     cjk_chars + (other_chars + 3) / 4
 }
 
-/// Estimate total tokens for a sequence of messages (role + content).
-pub fn estimate_messages_tokens(messages: &[(String, String)]) -> usize {
-    messages
-        .iter()
-        .map(|(role, content)| {
-            // Each message has ~4 overhead tokens for role/formatting
-            4 + estimate_tokens(role) + estimate_tokens(content)
-        })
-        .sum()
-}
-
 fn is_cjk(ch: char) -> bool {
     matches!(ch,
         '\u{4E00}'..='\u{9FFF}' |   // CJK Unified

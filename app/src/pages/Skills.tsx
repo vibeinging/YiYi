@@ -619,27 +619,35 @@ export function SkillsPage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
-                      <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: 'var(--color-text-muted)', background: 'var(--color-bg-subtle)' }}>
-                        {getSourceLabel(skill.source || 'builtin')}
-                      </span>
-                      <button
-                        onClick={() => handleToggle(skill)}
-                        disabled={toggling.has(skill.name)}
-                        className="w-6 h-6 rounded-md flex items-center justify-center transition-colors"
-                        style={{
-                          background: skill.enabled ? 'rgba(74, 222, 128, 0.1)' : 'var(--color-bg-subtle)',
-                          color: skill.enabled ? 'var(--color-success)' : 'var(--color-text-tertiary)',
-                        }}
-                        title={skill.enabled ? t('skills.toggleDisable') : t('skills.toggleEnable')}
-                      >
-                        {toggling.has(skill.name) ? (
-                          <Loader2 size={12} className="animate-spin" />
-                        ) : skill.enabled ? (
-                          <Power size={12} />
-                        ) : (
-                          <PowerOff size={12} />
-                        )}
-                      </button>
+                      {skill.system ? (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded font-medium" style={{ color: 'var(--color-primary)', background: 'rgba(var(--color-primary-rgb, 99, 102, 241), 0.1)' }}>
+                          {t('skills.system')}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: 'var(--color-text-muted)', background: 'var(--color-bg-subtle)' }}>
+                          {getSourceLabel(skill.source || 'builtin')}
+                        </span>
+                      )}
+                      {!skill.system && (
+                        <button
+                          onClick={() => handleToggle(skill)}
+                          disabled={toggling.has(skill.name)}
+                          className="w-6 h-6 rounded-md flex items-center justify-center transition-colors"
+                          style={{
+                            background: skill.enabled ? 'rgba(74, 222, 128, 0.1)' : 'var(--color-bg-subtle)',
+                            color: skill.enabled ? 'var(--color-success)' : 'var(--color-text-tertiary)',
+                          }}
+                          title={skill.enabled ? t('skills.toggleDisable') : t('skills.toggleEnable')}
+                        >
+                          {toggling.has(skill.name) ? (
+                            <Loader2 size={12} className="animate-spin" />
+                          ) : skill.enabled ? (
+                            <Power size={12} />
+                          ) : (
+                            <PowerOff size={12} />
+                          )}
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -685,16 +693,18 @@ export function SkillsPage() {
                       >
                         <FileText size={12} />
                       </button>
-                      <button
-                        onClick={() => handleViewContent(skill, true)}
-                        className="w-6 h-6 flex items-center justify-center rounded-md transition-colors"
-                        style={{ color: 'var(--color-text-tertiary)' }}
-                        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-subtle)'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                        title={t('common.edit')}
-                      >
-                        <Pencil size={11} />
-                      </button>
+                      {!skill.system && (
+                        <button
+                          onClick={() => handleViewContent(skill, true)}
+                          className="w-6 h-6 flex items-center justify-center rounded-md transition-colors"
+                          style={{ color: 'var(--color-text-tertiary)' }}
+                          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-subtle)'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                          title={t('common.edit')}
+                        >
+                          <Pencil size={11} />
+                        </button>
+                      )}
                       {skill.url && (
                         <button
                           onClick={() => open(skill.url!)}

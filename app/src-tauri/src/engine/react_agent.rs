@@ -1,8 +1,31 @@
 use super::llm_client::{chat_completion, chat_completion_stream, LLMConfig, LLMMessage, MessageContent, StreamEvent};
 use super::token_counter::estimate_tokens;
 use super::tools::{builtin_tools, execute_tool, ToolDefinition};
+use std::sync::Arc;
 
-const DEFAULT_MAX_ITERATIONS: usize = 30;
+// ---------------------------------------------------------------------------
+// Tool persistence callback types
+// ---------------------------------------------------------------------------
+
+/// Events emitted for persisting tool calls to the database.
+#[derive(Debug, Clone)]
+pub enum ToolPersistEvent {
+    /// Assistant message that contains tool_calls
+    AssistantWithToolCalls {
+        content: String,
+        tool_calls_json: String, // serialized [{id, name, arguments}]
+    },
+    /// Tool result message
+    ToolResult {
+        tool_call_id: String,
+        tool_name: String,
+        result_content: String, // truncated
+    },
+}
+
+pub type PersistToolFn = Arc<dyn Fn(ToolPersistEvent) + Send + Sync>;
+
+const DEFAULT_MAX_ITERATIONS: usize = 200;
 /// Token threshold to trigger context compaction.
 const COMPACT_THRESHOLD: usize = 80_000;
 
@@ -33,6 +56,20 @@ pub async fn run_react_with_options(
     history: &[LLMMessage],
     max_iterations: Option<usize>,
     working_dir: Option<&std::path::Path>,
+) -> Result<String, String> {
+    run_react_with_options_persist(config, system_prompt, user_message, extra_tools, history, max_iterations, working_dir, None).await
+}
+
+/// Run ReAct loop with optional tool persistence callback.
+pub async fn run_react_with_options_persist(
+    config: &LLMConfig,
+    system_prompt: &str,
+    user_message: &str,
+    extra_tools: &[ToolDefinition],
+    history: &[LLMMessage],
+    max_iterations: Option<usize>,
+    working_dir: Option<&std::path::Path>,
+    persist_fn: Option<PersistToolFn>,
 ) -> Result<String, String> {
     let max_iter = max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS);
     let mut tools = builtin_tools();
@@ -85,6 +122,9 @@ pub async fn run_react_with_options(
     // Pre-compact if history made context too large before first LLM call
     compact_messages_if_needed(&mut messages, config, working_dir).await;
 
+    const MAX_EMPTY_RETRIES: usize = 3;
+    let mut consecutive_empty = 0u8;
+
     for iteration in 0..max_iter {
         log::info!("ReAct iteration {}/{}", iteration + 1, max_iter);
 
@@ -93,31 +133,62 @@ pub async fn run_react_with_options(
         // Add assistant message to history
         messages.push(response.message.clone());
 
-        // Check if there are tool calls
-        if let Some(tool_calls) = &response.message.tool_calls {
-            if tool_calls.is_empty() {
-                return Ok(response
-                    .message
-                    .content
-                    .map(|c| c.into_text())
-                .unwrap_or_else(|| "(no response)".into()));
+        // Determine whether we got valid tool calls
+        let has_tool_calls = response.message.tool_calls.as_ref()
+            .map_or(false, |tc| !tc.is_empty());
+
+        if has_tool_calls {
+            consecutive_empty = 0;
+            let tool_calls = response.message.tool_calls.as_ref().unwrap();
+
+            // Persist assistant message with tool_calls
+            if let Some(ref pfn) = persist_fn {
+                let content_text = response.message.content.as_ref()
+                    .map(|c| c.as_text().unwrap_or("").to_string())
+                    .unwrap_or_default();
+                let tc_json: Vec<serde_json::Value> = tool_calls.iter().map(|tc| {
+                    serde_json::json!({
+                        "id": tc.id,
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments.chars().take(500).collect::<String>(),
+                    })
+                }).collect();
+                pfn(ToolPersistEvent::AssistantWithToolCalls {
+                    content: content_text,
+                    tool_calls_json: serde_json::to_string(&tc_json).unwrap_or_default(),
+                });
             }
 
-            // Execute each tool call
+            // Execute all tool calls concurrently, preserving original order
             for call in tool_calls {
                 log::info!(
                     "Tool call: {}({})",
                     call.function.name,
                     call.function.arguments.chars().take(100).collect::<String>()
                 );
+            }
 
-                let result = execute_tool(call).await;
+            let futures: Vec<_> = tool_calls
+                .iter()
+                .map(|call| async move { execute_tool(call).await })
+                .collect();
+            let results = futures::future::join_all(futures).await;
 
+            for (call, result) in tool_calls.iter().zip(results.into_iter()) {
                 log::info!(
                     "Tool result ({}): {}...",
                     call.function.name,
                     result.content.chars().take(200).collect::<String>()
                 );
+
+                // Persist tool result
+                if let Some(ref pfn) = persist_fn {
+                    pfn(ToolPersistEvent::ToolResult {
+                        tool_call_id: result.tool_call_id.clone(),
+                        tool_name: call.function.name.clone(),
+                        result_content: result.content.chars().take(2000).collect(),
+                    });
+                }
 
                 let content = if result.images.is_empty() {
                     MessageContent::text(result.content)
@@ -132,20 +203,47 @@ pub async fn run_react_with_options(
                 });
             }
         } else {
-            return Ok(response
-                .message
-                .content
+            // No tool calls — check if we got a text response
+            let text = response.message.content
                 .map(|c| c.into_text())
-                .unwrap_or_else(|| "(no response)".into()));
+                .unwrap_or_default();
+            let text = text.trim().to_string();
+
+            if !text.is_empty() {
+                // Valid final text response
+                return Ok(text);
+            }
+
+            // Empty response — retry with a nudge
+            consecutive_empty += 1;
+            log::warn!(
+                "LLM returned empty response (retry {}/{})",
+                consecutive_empty, MAX_EMPTY_RETRIES
+            );
+
+            if (consecutive_empty as usize) >= MAX_EMPTY_RETRIES {
+                log::error!("LLM returned empty response {} times, giving up", MAX_EMPTY_RETRIES);
+                return Ok(String::new());
+            }
+
+            // Remove the empty assistant message we just pushed
+            messages.pop();
+
+            // Push a nudge to coax the LLM into responding
+            messages.push(LLMMessage {
+                role: "user".into(),
+                content: Some(MessageContent::text(
+                    "Please provide your response. Summarize what was done or answer the question."
+                )),
+                tool_calls: None,
+                tool_call_id: None,
+            });
         }
 
-        if response.finish_reason == "stop" {
-            return Ok(response
-                .message
-                .content
-                .map(|c| c.into_text())
-                .unwrap_or_else(|| "(no response)".into()));
-        }
+        // After executing tool calls, always continue the loop so the LLM
+        // can produce a final text response based on tool results.
+        // Do NOT check finish_reason here — some providers return "stop"
+        // even when tool_calls are present, and the content would be None.
 
         compact_messages_if_needed(&mut messages, config, working_dir).await;
     }
@@ -163,10 +261,11 @@ pub async fn run_react_with_options(
 #[derive(Debug, Clone)]
 pub enum AgentStreamEvent {
     Token(String),
+    Thinking(String),
     ToolStart { name: String, args_preview: String },
     ToolEnd { name: String, result_preview: String },
-    Complete(String),
-    Error(String),
+    Complete,
+    Error,
 }
 
 /// Streaming version of run_react_with_options.
@@ -181,6 +280,7 @@ pub async fn run_react_with_options_stream<F>(
     working_dir: Option<&std::path::Path>,
     on_event: F,
     cancelled: Option<&std::sync::atomic::AtomicBool>,
+    persist_fn: Option<PersistToolFn>,
 ) -> Result<String, String>
 where
     F: Fn(AgentStreamEvent) + Send + Clone + 'static,
@@ -230,6 +330,9 @@ where
     sanitize_messages(&mut messages);
     compact_messages_if_needed(&mut messages, config, working_dir).await;
 
+    const MAX_EMPTY_RETRIES: usize = 3;
+    let mut consecutive_empty = 0u8;
+
     for iteration in 0..max_iter {
         log::info!("ReAct stream iteration {}/{}", iteration + 1, max_iter);
 
@@ -240,35 +343,84 @@ where
         }
 
         let response = chat_completion_stream(config, &messages, &tools, move |evt| {
-            if let StreamEvent::ContentDelta(text) = evt {
-                cb(AgentStreamEvent::Token(text));
+            match evt {
+                StreamEvent::ContentDelta(text) => cb(AgentStreamEvent::Token(text)),
+                StreamEvent::ReasoningDelta(text) => cb(AgentStreamEvent::Thinking(text)),
+                _ => {}
             }
         }, cancelled)
         .await?;
 
         messages.push(response.message.clone());
 
-        if let Some(tool_calls) = &response.message.tool_calls {
-            if tool_calls.is_empty() {
-                let reply = response.message.content.map(|c| c.into_text()).unwrap_or_else(|| "(no response)".into());
-                on_event(AgentStreamEvent::Complete(reply.clone()));
-                return Ok(reply);
+        // Determine whether we got valid tool calls
+        let has_tool_calls = response.message.tool_calls.as_ref()
+            .map_or(false, |tc| !tc.is_empty());
+
+        if has_tool_calls {
+            consecutive_empty = 0;
+            let tool_calls = response.message.tool_calls.as_ref().unwrap();
+
+            // Persist assistant message with tool_calls
+            if let Some(ref pfn) = persist_fn {
+                let content_text = response.message.content.as_ref()
+                    .map(|c| c.as_text().unwrap_or("").to_string())
+                    .unwrap_or_default();
+                let tc_json: Vec<serde_json::Value> = tool_calls.iter().map(|tc| {
+                    serde_json::json!({
+                        "id": tc.id,
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments.chars().take(500).collect::<String>(),
+                    })
+                }).collect();
+                pfn(ToolPersistEvent::AssistantWithToolCalls {
+                    content: content_text,
+                    tool_calls_json: serde_json::to_string(&tc_json).unwrap_or_default(),
+                });
             }
 
+            // Emit all ToolStart events upfront
             for call in tool_calls {
                 let args_preview: String = call.function.arguments.chars().take(100).collect();
                 on_event(AgentStreamEvent::ToolStart {
                     name: call.function.name.clone(),
                     args_preview,
                 });
+            }
 
-                let result = execute_tool(call).await;
+            // Check cancellation before starting tool execution
+            if cancelled.map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                return Err("cancelled".to_string());
+            }
 
+            // Execute all tool calls concurrently, preserving original order
+            let futures: Vec<_> = tool_calls
+                .iter()
+                .map(|call| async move { execute_tool(call).await })
+                .collect();
+            let results = futures::future::join_all(futures).await;
+
+            // Check cancellation after tool execution, before feeding results back to LLM
+            if cancelled.map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                return Err("cancelled".to_string());
+            }
+
+            // Emit ToolEnd events and push results in order
+            for (call, result) in tool_calls.iter().zip(results.into_iter()) {
                 let result_preview: String = result.content.chars().take(200).collect();
                 on_event(AgentStreamEvent::ToolEnd {
                     name: call.function.name.clone(),
                     result_preview,
                 });
+
+                // Persist tool result
+                if let Some(ref pfn) = persist_fn {
+                    pfn(ToolPersistEvent::ToolResult {
+                        tool_call_id: result.tool_call_id.clone(),
+                        tool_name: call.function.name.clone(),
+                        result_content: result.content.chars().take(2000).collect(),
+                    });
+                }
 
                 let content = if result.images.is_empty() {
                     MessageContent::text(result.content)
@@ -283,22 +435,55 @@ where
                 });
             }
         } else {
-            let reply = response.message.content.map(|c| c.into_text()).unwrap_or_else(|| "(no response)".into());
-            on_event(AgentStreamEvent::Complete(reply.clone()));
-            return Ok(reply);
+            // No tool calls — check if we got a text response
+            let text = response.message.content
+                .map(|c| c.into_text())
+                .unwrap_or_default();
+            let text = text.trim().to_string();
+
+            if !text.is_empty() {
+                // Valid final text response
+                on_event(AgentStreamEvent::Complete);
+                return Ok(text);
+            }
+
+            // Empty response — retry with a nudge
+            consecutive_empty += 1;
+            log::warn!(
+                "LLM returned empty response (retry {}/{})",
+                consecutive_empty, MAX_EMPTY_RETRIES
+            );
+
+            if (consecutive_empty as usize) >= MAX_EMPTY_RETRIES {
+                log::error!("LLM returned empty response {} times, giving up", MAX_EMPTY_RETRIES);
+                on_event(AgentStreamEvent::Complete);
+                return Ok(String::new());
+            }
+
+            // Remove the empty assistant message we just pushed
+            messages.pop();
+
+            // Push a nudge to coax the LLM into responding
+            messages.push(LLMMessage {
+                role: "user".into(),
+                content: Some(MessageContent::text(
+                    "Please provide your response. Summarize what was done or answer the question."
+                )),
+                tool_calls: None,
+                tool_call_id: None,
+            });
         }
 
-        if response.finish_reason == "stop" {
-            let reply = response.message.content.map(|c| c.into_text()).unwrap_or_else(|| "(no response)".into());
-            on_event(AgentStreamEvent::Complete(reply.clone()));
-            return Ok(reply);
-        }
+        // After executing tool calls, always continue the loop so the LLM
+        // can produce a final text response based on tool results.
+        // Do NOT check finish_reason here — some providers return "stop"
+        // even when tool_calls are present, and the content would be None.
 
         compact_messages_if_needed(&mut messages, config, working_dir).await;
     }
 
     let err = format!("Agent reached maximum iterations ({})", max_iter);
-    on_event(AgentStreamEvent::Error(err.clone()));
+    on_event(AgentStreamEvent::Error);
     Err(err)
 }
 
@@ -353,72 +538,30 @@ pub fn seed_default_templates(working_dir: &std::path::Path, language: &str) {
     }
 }
 
-/// Append a conversation round to the session log in memory/sessions/.
-pub async fn append_session_log(
-    working_dir: &std::path::Path,
-    session_id: &str,
-    session_name: &str,
-    user_message: &str,
-    assistant_reply: &str,
-    tools_used: &[String],
-) {
-    let sessions_dir = working_dir.join("memory").join("sessions");
-    tokio::fs::create_dir_all(&sessions_dir).await.ok();
-
-    // File name: {date}_{sanitized_session_name}.md
-    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let safe_name: String = session_name
-        .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c > '\x7f' { c } else { '_' })
-        .take(50)
-        .collect();
-    let filename = format!("{}_{}.md", date, if safe_name.is_empty() { session_id } else { &safe_name });
-    let filepath = sessions_dir.join(&filename);
-
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
-    let tools_str = if tools_used.is_empty() {
-        "none".to_string()
-    } else {
-        tools_used.join(", ")
-    };
-
-    // Truncate long messages for the log
-    let user_preview: String = user_message.chars().take(500).collect();
-    let assistant_preview: String = assistant_reply.chars().take(1000).collect();
-
-    let entry = format!(
-        "\n## {} | session: {}\n\n**User**: {}\n\n**Assistant**: {}\n\n**Tools Used**: {}\n\n---\n",
-        now, session_id, user_preview, assistant_preview, tools_str
-    );
-
-    use tokio::io::AsyncWriteExt;
-    match tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&filepath)
-        .await
-    {
-        Ok(mut file) => {
-            if let Err(e) = file.write_all(entry.as_bytes()).await {
-                log::error!("Failed to write session log: {}", e);
-            }
-        }
-        Err(e) => log::error!("Failed to open session log: {}", e),
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Persona loading & system prompt building
 // ---------------------------------------------------------------------------
 
 /// Load persona files asynchronously.
-async fn load_persona(working_dir: &std::path::Path) -> String {
+/// Checks both working_dir (~/.yiyiclaw/) and user_workspace (~/Documents/YiYiClaw/),
+/// with user_workspace taking priority (user may customize SOUL.md there via SetupWizard).
+async fn load_persona(working_dir: &std::path::Path, user_workspace: Option<&std::path::Path>) -> String {
     let files = ["AGENTS.md", "SOUL.md", "PROFILE.md"];
     let mut parts = Vec::new();
 
     for name in &files {
-        let path = working_dir.join(name);
-        if let Ok(content) = tokio::fs::read_to_string(&path).await {
+        // Prefer user_workspace version, fallback to working_dir
+        let content = if let Some(ws) = user_workspace {
+            let ws_path = ws.join(name);
+            match tokio::fs::read_to_string(&ws_path).await {
+                Ok(c) => Some(c),
+                Err(_) => tokio::fs::read_to_string(working_dir.join(name)).await.ok(),
+            }
+        } else {
+            tokio::fs::read_to_string(working_dir.join(name)).await.ok()
+        };
+
+        if let Some(content) = content {
             let stripped = strip_yaml_frontmatter(&content);
             if !stripped.trim().is_empty() {
                 parts.push(format!("# {}\n\n{}", name, stripped));
@@ -445,12 +588,14 @@ fn strip_yaml_frontmatter(content: &str) -> String {
 /// Tool list is auto-generated from builtin_tools() to stay in sync.
 pub async fn build_system_prompt(
     working_dir: &std::path::Path,
-    skills_content: &[String],
+    user_workspace: Option<&std::path::Path>,
+    skill_index: &[crate::commands::agent::SkillIndexEntry],
+    always_active_skills: &[String],
     language: Option<&str>,
     mcp_tools: Option<&[super::mcp_runtime::MCPTool]>,
     unavailable_servers: Option<&[String]>,
 ) -> String {
-    let persona = load_persona(working_dir).await;
+    let persona = load_persona(working_dir, user_workspace).await;
     let lang = language.unwrap_or("zh-CN");
     let lang_instruction = if lang.starts_with("zh") {
         "Please respond in Chinese."
@@ -459,7 +604,7 @@ pub async fn build_system_prompt(
     };
 
     let mut prompt = if persona.is_empty() {
-        format!("You are YiClaw, a helpful AI assistant. {}\n\n", lang_instruction)
+        format!("You are YiYiClaw, a helpful AI assistant. {}\n\n", lang_instruction)
     } else {
         format!("{}\n\n{}\n\n", persona, lang_instruction)
     };
@@ -521,16 +666,17 @@ pub async fn build_system_prompt(
 
     let tool_list = tool_lines.join("\n");
 
-    // Workspace sandbox information
-    let workspace_display = working_dir.to_string_lossy();
-    let allowed_paths = super::tools::get_all_sandbox_paths().await;
-    let allowed_paths_info = if allowed_paths.is_empty() {
+    // Workspace & authorized folders information
+    let output_dir = user_workspace
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| working_dir.to_string_lossy().to_string());
+    let authorized_paths = super::tools::get_all_authorized_paths().await;
+    let authorized_info = if authorized_paths.is_empty() {
         String::new()
     } else {
         format!(
-            "\nAdditionally, the user has granted access to these paths:\n{}\n\
-            You may freely read, write, and execute commands in these directories.\n",
-            allowed_paths
+            "\nAuthorized folders (you can freely access these):\n{}\n",
+            authorized_paths
                 .iter()
                 .map(|p| format!("- {}", p))
                 .collect::<Vec<_>>()
@@ -540,12 +686,14 @@ pub async fn build_system_prompt(
 
     prompt.push_str(&format!(
         "\
-## Workspace & Sandbox
-Your workspace directory is: {workspace}
-By default, all file operations and shell commands run within this directory.
-If you need to access files outside the workspace, the user will be prompted to approve.
-Do NOT attempt to access paths outside the workspace unless the user explicitly asks.
-{allowed_paths}
+## Workspace & File Access
+Your default output directory is: {output_dir}
+When creating files (documents, spreadsheets, reports, etc.), save them here unless the user specifies a different path.
+{authorized_info}
+Files outside authorized folders are blocked. If the user asks you to access a path that is blocked, \
+tell them to add the folder in Settings > Workspace.
+Sensitive files (.env, .ssh, .pem, credentials) are always blocked for security.
+
 ## Tools
 You have access to these tools:
 {tool_list}
@@ -561,6 +709,16 @@ When using tools:
 - If a tool fails, try an alternative approach
 - ALWAYS use delete_file instead of shell 'rm' commands to delete files or directories. \
 This ensures proper permission checks and prevents accidental deletion of important files.
+
+## Presenting Results (IMPORTANT)
+After completing a task, you MUST make the results immediately visible to the user:
+- **Website/HTML**: Use browser_use(action='start', headed=true) to launch a visible browser, \
+then browser_use(action='goto', url=...) to open the page. Start a local server if needed.
+- **Script/CLI tool**: Run it once with execute_shell and show the output.
+- **Algorithm/function**: Show the code and a sample run with input/output.
+- **Modified project**: Show a summary of changes and run tests/build to confirm.
+- NEVER just say 'done' — always show tangible results the user can see or use immediately.
+- NEVER package output as a zip for the user to unpack manually.
 
 When a skill references Python scripts (e.g. `python scripts/xxx.py`), \
 use the run_python_script tool with the full absolute path. \
@@ -585,19 +743,24 @@ Users can bind external platform bots (Discord, Telegram, QQ, Feishu, DingTalk, 
 - Bot information is stored in the database, NEVER in config files — do NOT read config files to find bot info
 - If the user mentions a bot name or asks to send a message to an external platform, use these tools
 
+## Web Search (web_search tool)
+Use `web_search` for quick information lookup. It searches DuckDuckGo and returns results instantly — no browser needed.
+- Prefer `web_search` over `browser_use` for simple searches
+- If you need more detail from a search result, use `browser_use` to open the URL
+
 ## Browser Usage (browser_use tool)
-You have a full Chromium browser for web automation. Use it proactively whenever you need to:
-- **Browse websites** — search engines, social media, documentation, etc.
-- **Search for information** — when web_search is unavailable or insufficient, open a search engine or target website directly
-- **Operate platforms** — post content, manage accounts, perform actions on websites the user asks about
+You have a full Chromium browser for web automation. Use it when you need to:
+- **Browse websites** — open and interact with specific URLs
+- **Operate platforms** — post content, manage accounts, perform actions on websites
 - **Set up platform bots** — navigate developer consoles, extract credentials
 - **Scrape or extract data** — read page content, find elements, collect information
+- **Deep search** — when `web_search` results are insufficient, open a URL from the results to read the full page
 
 ### Decision flow:
-1. If the user asks to search/browse/operate a website → **use browser_use**, do NOT say you can't access it
-2. If web_search fails or is not configured → **fall back to browser_use**: open a search engine or the target site directly
-3. If the task involves any web interaction → **use browser_use**
-4. NEVER tell the user you cannot access a website. You have a real browser — just open it and go there.
+1. If the user asks to search for information → **use web_search** first for quick results
+2. If you need to read a full page or interact with a website → **use browser_use**
+3. If the task involves any web interaction (clicking, filling forms, etc.) → **use browser_use**
+4. NEVER tell the user you cannot access a website or search the web.
 
 ### Common workflow:
 1. `browser_use(action='start', headed=true)` — start visible browser
@@ -624,8 +787,8 @@ When setting up bots, open the developer console:
 - Be patient — wait for user confirmation between steps
 - When browsing Chinese sites (小红书、微博、抖音等), navigate directly to the website URL
 ",
-        workspace = workspace_display,
-        allowed_paths = allowed_paths_info,
+        output_dir = output_dir,
+        authorized_info = authorized_info,
         tool_list = tool_list,
     ));
 
@@ -650,8 +813,20 @@ When setting up bots, open the developer console:
         prompt.push_str(&format!("\n\n# Long-term Memory\n{truncated}"));
     }
 
-    // Append skill instructions
-    for skill in skills_content {
+    // Skill index — model calls activate_skills tool to load full content on demand
+    if !skill_index.is_empty() {
+        prompt.push_str("\n\n## Available Skills (call `activate_skills` tool to load detailed instructions)\n");
+        for entry in skill_index {
+            if entry.description.is_empty() {
+                prompt.push_str(&format!("- {}\n", entry.name));
+            } else {
+                prompt.push_str(&format!("- **{}**: {}\n", entry.name, entry.description));
+            }
+        }
+    }
+
+    // Always-active skills — injected directly (e.g. auto_continue)
+    for skill in always_active_skills {
         if !skill.is_empty() {
             prompt.push_str("\n---\n");
             prompt.push_str(skill);
@@ -668,72 +843,6 @@ When setting up bots, open the developer console:
 // /compact command support
 // ---------------------------------------------------------------------------
 
-/// Manually compact chat history. Called by /compact command.
-/// Keeps the most recent `keep_recent` messages, summarizes the rest,
-/// and persists the summary to disk.
-pub async fn manual_compact(
-    config: &LLMConfig,
-    history: &[LLMMessage],
-    working_dir: &std::path::Path,
-    keep_recent: usize,
-) -> Result<String, String> {
-    if history.len() <= keep_recent {
-        return Ok("History is too short to compact.".into());
-    }
-
-    let split = history.len() - keep_recent;
-    let to_summarize = &history[..split];
-
-    // Build summary of old messages
-    let mut summary_parts: Vec<String> = Vec::new();
-    for msg in to_summarize {
-        match msg.role.as_str() {
-            "user" => {
-                if let Some(text) = msg.content.as_ref().and_then(|c| c.as_text()) {
-                    let preview: String = text.chars().take(150).collect();
-                    summary_parts.push(format!("- User: {}", preview));
-                }
-            }
-            "assistant" => {
-                if let Some(text) = msg.content.as_ref().and_then(|c| c.as_text()) {
-                    let preview: String = text.chars().take(150).collect();
-                    summary_parts.push(format!("- Assistant: {}", preview));
-                }
-            }
-            _ => {}
-        }
-    }
-
-    // Try LLM summarization
-    let summary = if summary_parts.len() > 5 {
-        let request = format!(
-            "Summarize this conversation concisely (max 800 chars). \
-            Focus on key decisions, facts, and context:\n{}",
-            summary_parts.join("\n")
-        );
-        let msgs = vec![LLMMessage {
-            role: "user".into(),
-            content: Some(MessageContent::text(request)),
-            tool_calls: None,
-            tool_call_id: None,
-        }];
-        match chat_completion(config, &msgs, &[]).await {
-            Ok(resp) => resp.message.content.map(|c| c.into_text()).unwrap_or_else(|| summary_parts.join("\n")),
-            Err(_) => summary_parts.join("\n"),
-        }
-    } else {
-        summary_parts.join("\n")
-    };
-
-    // Persist summary
-    let summary_path = working_dir.join(COMPACT_SUMMARY_FILE);
-    tokio::fs::write(&summary_path, &summary).await.ok();
-
-    Ok(format!(
-        "Compacted {} messages into summary. Keeping {} recent messages.",
-        split, keep_recent
-    ))
-}
 
 // ---------------------------------------------------------------------------
 // Message sanitization — fix broken tool message sequences

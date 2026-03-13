@@ -10,3 +10,6 @@ pub mod browser;
 pub mod heartbeat;
 pub mod env;
 pub mod mcp;
+pub mod unified_users;
+pub mod tasks;
+pub mod pty;

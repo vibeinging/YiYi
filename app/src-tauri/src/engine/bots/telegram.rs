@@ -1,4 +1,4 @@
-use super::{now_ts, ContentPart, IncomingMessage};
+use super::{now_ts, update_bot_status, BotConnectionState, ContentPart, IncomingMessage};
 use tokio::sync::mpsc;
 
 /// Telegram Bot — Long polling via Bot API
@@ -19,6 +19,11 @@ impl TelegramBot {
         }
     }
 
+    /// Get the shared running flag for external stop control.
+    pub fn running_flag(&self) -> std::sync::Arc<tokio::sync::RwLock<bool>> {
+        self.running.clone()
+    }
+
     pub async fn start(&self, tx: mpsc::Sender<IncomingMessage>) {
         let token = self.bot_token.clone();
         let bot_id = self.bot_id.clone();
@@ -37,6 +42,8 @@ impl TelegramBot {
 
             let base_url = format!("https://api.telegram.org/bot{}", token);
 
+            update_bot_status(&bot_id, BotConnectionState::Connecting, Some("Verifying token".into()));
+
             // Verify bot token and log bot info
             match client
                 .get(format!("{}/getMe", base_url))
@@ -50,14 +57,17 @@ impl TelegramBot {
                                 .as_str()
                                 .unwrap_or("unknown");
                             log::info!("Telegram bot connected: @{}", username);
+                            update_bot_status(&bot_id, BotConnectionState::Connected, Some(format!("@{}", username)));
                         } else {
                             log::error!("Telegram bot auth failed: {:?}", json);
+                            update_bot_status(&bot_id, BotConnectionState::Error, Some("Auth failed".into()));
                             return;
                         }
                     }
                 }
                 Err(e) => {
                     log::error!("Telegram getMe failed: {}", e);
+                    update_bot_status(&bot_id, BotConnectionState::Error, Some(format!("getMe failed: {}", e)));
                     return;
                 }
             }
@@ -116,6 +126,7 @@ impl TelegramBot {
                 }
             }
 
+            update_bot_status(&bot_id, BotConnectionState::Disconnected, Some("Stopped".into()));
             log::info!("Telegram polling stopped");
         });
     }
@@ -126,27 +137,23 @@ impl TelegramBot {
     }
 
     pub async fn send(&self, chat_id: &str, content: &str) -> Result<(), String> {
-        let client = reqwest::Client::new();
+        let client = super::http_client();
         let base_url = format!("https://api.telegram.org/bot{}", self.bot_token);
 
-        // Telegram message limit is 4096 chars
-        let chunks: Vec<String> = if content.len() > 4000 {
-            content
-                .chars()
-                .collect::<Vec<char>>()
-                .chunks(4000)
-                .map(|c| c.iter().collect::<String>())
-                .collect()
-        } else {
-            vec![content.to_string()]
-        };
+        // Convert to MarkdownV2 with proper escaping; falls back to plain text
+        let (formatted, parse_mode) = super::formatter::format_telegram(content);
+
+        // Split at Telegram's 4096-char limit on paragraph boundaries
+        let chunks = super::formatter::split_telegram(&formatted);
 
         for chunk in chunks {
-            let body = serde_json::json!({
+            let mut body = serde_json::json!({
                 "chat_id": chat_id,
                 "text": chunk,
-                "parse_mode": "Markdown",
             });
+            if let Some(pm) = parse_mode {
+                body["parse_mode"] = serde_json::json!(pm);
+            }
 
             let resp = client
                 .post(format!("{}/sendMessage", base_url))
@@ -156,7 +163,7 @@ impl TelegramBot {
                 .await
                 .map_err(|e| format!("Telegram send failed: {}", e))?;
 
-            // If Markdown parsing fails, retry without parse_mode
+            // If MarkdownV2 parsing fails, retry without parse_mode (plain text)
             if let Ok(json) = resp.json::<serde_json::Value>().await {
                 if json["ok"].as_bool() != Some(true) {
                     let error_code = json["error_code"].as_i64().unwrap_or(0);
@@ -164,7 +171,7 @@ impl TelegramBot {
                     if error_code == 400 {
                         let fallback_body = serde_json::json!({
                             "chat_id": chat_id,
-                            "text": chunk,
+                            "text": content, // send original un-escaped content
                         });
                         client
                             .post(format!("{}/sendMessage", base_url))
@@ -179,6 +186,31 @@ impl TelegramBot {
         }
 
         Ok(())
+    }
+}
+
+/// Test Telegram bot credentials by calling getMe.
+pub async fn test_connection(bot_token: &str) -> Result<String, String> {
+    let client = super::http_client();
+
+    let url = format!("https://api.telegram.org/bot{}/getMe", bot_token);
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Telegram request failed: {}", e))?;
+
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Telegram response parse failed: {}", e))?;
+
+    if json["ok"].as_bool() == Some(true) {
+        let username = json["result"]["username"].as_str().unwrap_or("unknown");
+        Ok(format!("Telegram bot verified: @{}", username))
+    } else {
+        let msg = json["description"].as_str().unwrap_or("Invalid token");
+        Err(format!("Telegram auth failed: {}", msg))
     }
 }
 

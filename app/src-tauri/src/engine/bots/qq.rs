@@ -1,4 +1,4 @@
-use super::{now_ts, IncomingMessage};
+use super::{now_ts, update_bot_status, BotConnectionState, IncomingMessage};
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
@@ -30,6 +30,11 @@ impl QQBot {
         }
     }
 
+    /// Get the shared running flag for external stop control.
+    pub fn running_flag(&self) -> std::sync::Arc<tokio::sync::RwLock<bool>> {
+        self.running.clone()
+    }
+
     pub async fn start(&self, tx: mpsc::Sender<IncomingMessage>) {
         let bot_id = self.bot_id.clone();
         let app_id = self.app_id.clone();
@@ -42,7 +47,7 @@ impl QQBot {
         }
 
         tokio::spawn(async move {
-            let client = reqwest::Client::new();
+            let client = super::http_client();
 
             loop {
                 {
@@ -52,11 +57,14 @@ impl QQBot {
                     }
                 }
 
+                update_bot_status(&bot_id, BotConnectionState::Connecting, Some("Fetching access token".into()));
+
                 // Step 1: Get access token via OAuth
                 let access_token = match fetch_access_token(&client, &app_id, &client_secret).await {
                     Ok(t) => t,
                     Err(e) => {
                         log::error!("QQ access_token fetch failed: {}", e);
+                        update_bot_status(&bot_id, BotConnectionState::Error, Some(format!("Token fetch failed: {}", e)));
                         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                         continue;
                     }
@@ -164,8 +172,8 @@ impl QQBot {
                                                                     "shard": [0, 1],
                                                                     "properties": {
                                                                         "os": "linux",
-                                                                        "browser": "yiclaw",
-                                                                        "device": "yiclaw"
+                                                                        "browser": "yiyiclaw",
+                                                                        "device": "yiyiclaw"
                                                                     }
                                                                 }
                                                             });
@@ -188,11 +196,13 @@ impl QQBot {
                                                         match event_name {
                                                             "READY" => {
                                                                 let user = &payload["d"]["user"];
+                                                                let uname = user["username"].as_str().unwrap_or("?");
                                                                 log::info!(
                                                                     "QQ Bot authenticated! username={}, id={}",
-                                                                    user["username"].as_str().unwrap_or("?"),
+                                                                    uname,
                                                                     user["id"].as_str().unwrap_or("?")
                                                                 );
+                                                                update_bot_status(&bot_id, BotConnectionState::Connected, Some(format!("Authenticated as {}", uname)));
                                                             }
                                                             // 频道 @机器人 消息
                                                             "AT_MESSAGE_CREATE" | "MESSAGE_CREATE" => {
@@ -253,6 +263,7 @@ impl QQBot {
                     }
                     Err(e) => {
                         log::error!("QQ gateway connect failed: {}", e);
+                        update_bot_status(&bot_id, BotConnectionState::Error, Some(format!("Connect failed: {}", e)));
                     }
                 }
 
@@ -263,9 +274,11 @@ impl QQBot {
                 }
                 drop(r);
                 log::info!("QQ reconnecting in 5s...");
+                update_bot_status(&bot_id, BotConnectionState::Reconnecting, Some("Reconnecting in 5s".into()));
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             }
 
+            update_bot_status(&bot_id, BotConnectionState::Disconnected, Some("Stopped".into()));
             log::info!("QQ gateway stopped");
         });
     }
@@ -284,7 +297,7 @@ impl QQBot {
         msg_id: Option<&str>,
     ) -> Result<(), String> {
         let access_token = get_access_token(&self.app_id, &self.client_secret).await?;
-        let client = reqwest::Client::new();
+        let client = super::http_client();
         let url = format!(
             "https://api.sgroup.qq.com/channels/{}/messages",
             channel_id
@@ -320,7 +333,7 @@ impl QQBot {
         msg_id: Option<&str>,
     ) -> Result<(), String> {
         let access_token = get_access_token(&self.app_id, &self.client_secret).await?;
-        let client = reqwest::Client::new();
+        let client = super::http_client();
         let url = format!(
             "https://api.sgroup.qq.com/v2/groups/{}/messages",
             group_openid
@@ -354,7 +367,7 @@ impl QQBot {
         msg_id: Option<&str>,
     ) -> Result<(), String> {
         let access_token = get_access_token(&self.app_id, &self.client_secret).await?;
-        let client = reqwest::Client::new();
+        let client = super::http_client();
         let url = format!(
             "https://api.sgroup.qq.com/v2/users/{}/messages",
             user_openid
@@ -378,6 +391,36 @@ impl QQBot {
             .map_err(|e| format!("QQ c2c send failed: {}", e))?;
 
         Ok(())
+    }
+}
+
+/// Test QQ bot credentials by requesting an access token.
+pub async fn test_connection(app_id: &str, client_secret: &str) -> Result<String, String> {
+    let client = super::http_client();
+
+    let body = serde_json::json!({
+        "appId": app_id,
+        "clientSecret": client_secret,
+    });
+
+    let resp = client
+        .post("https://bots.qq.com/app/getAppAccessToken")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("QQ request failed: {}", e))?;
+
+    let status = resp.status();
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("QQ response parse failed: {}", e))?;
+
+    if status.is_success() && json.get("access_token").is_some() {
+        Ok("QQ bot credentials verified successfully".to_string())
+    } else {
+        let msg = json["message"].as_str().unwrap_or("Invalid credentials");
+        Err(format!("QQ auth failed: {}", msg))
     }
 }
 
@@ -418,7 +461,7 @@ async fn fetch_access_token(
 
 /// Convenience wrapper: fetch access_token for send methods.
 async fn get_access_token(app_id: &str, client_secret: &str) -> Result<String, String> {
-    let client = reqwest::Client::new();
+    let client = super::http_client();
     fetch_access_token(&client, app_id, client_secret).await
 }
 

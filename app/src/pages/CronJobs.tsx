@@ -16,14 +16,10 @@ import {
   Calendar,
   CheckCircle,
   XCircle,
-  AlertTriangle,
   Info,
   X,
   Zap,
-  ChevronDown,
-  ChevronUp,
   History,
-  Loader,
   Bell,
   MessageSquare,
   Send,
@@ -36,13 +32,12 @@ import {
   pauseCronJob,
   resumeCronJob,
   runCronJob,
-  listCronJobExecutions,
   type CronJobSpec,
-  type CronJobExecution,
 } from '../api/cronjobs';
 import { listen } from '@tauri-apps/api/event';
 import { listBots, type BotInfo } from '../api/bots';
 import { PageHeader } from '../components/PageHeader';
+import { TaskExecutionDetail } from '../components/TaskExecutionDetail';
 import { toast, confirm } from '../components/Toast';
 
 interface BotDispatchEntry {
@@ -67,15 +62,16 @@ interface CronJobDialog {
   dispatchBots: BotDispatchEntry[];
 }
 
-export function CronJobsPage() {
+interface CronJobsPageProps {
+  consumeNotifContext?: () => Record<string, unknown> | null;
+}
+
+export function CronJobsPage({ consumeNotifContext }: CronJobsPageProps) {
   const { t } = useTranslation();
   const [jobs, setJobs] = useState<CronJobSpec[]>([]);
   const [loading, setLoading] = useState(true);
   const [runningJobs, setRunningJobs] = useState<Set<string>>(new Set());
-  const [execDialog, setExecDialog] = useState<{ open: boolean; jobId: string; jobName: string }>({ open: false, jobId: '', jobName: '' });
-  const [executions, setExecutions] = useState<CronJobExecution[]>([]);
-  const [execLoading, setExecLoading] = useState(false);
-  const [expandedExecs, setExpandedExecs] = useState<Set<number>>(new Set());
+  const [detailPanel, setDetailPanel] = useState<{ open: boolean; jobId: string; jobName: string } | null>(null);
   const [dialog, setDialog] = useState<CronJobDialog>({
     open: false,
     mode: 'create',
@@ -108,7 +104,16 @@ export function CronJobsPage() {
   };
 
   useEffect(() => {
-    loadJobs();
+    loadJobs().then(() => {
+      const ctx = consumeNotifContext?.();
+      if (ctx?.page === 'cronjobs' && ctx?.job_id) {
+        setDetailPanel({
+          open: true,
+          jobId: ctx.job_id as string,
+          jobName: (ctx.job_name as string) || '',
+        });
+      }
+    });
     listBots().then(setAvailableBots).catch(() => {});
   }, []);
 
@@ -313,43 +318,6 @@ export function CronJobsPage() {
     }
   };
 
-  // Open execution history dialog
-  const openExecDialog = async (jobId: string, jobName: string) => {
-    setExecDialog({ open: true, jobId, jobName });
-    setExecutions([]);
-    setExpandedExecs(new Set());
-    setExecLoading(true);
-    try {
-      const data = await listCronJobExecutions(jobId, 20);
-      setExecutions(data);
-    } catch (error) {
-      console.error('Failed to load executions:', error);
-    } finally {
-      setExecLoading(false);
-    }
-  };
-
-  // Toggle individual execution result
-  const toggleExecExpand = (execId: number) => {
-    setExpandedExecs(prev => {
-      const next = new Set(prev);
-      if (next.has(execId)) {
-        next.delete(execId);
-      } else {
-        next.add(execId);
-      }
-      return next;
-    });
-  };
-
-  // Format cron expression
-  const formatCron = (cron: string) => {
-    const parts = cron.split(' ');
-    if (parts.length !== 5) return cron;
-    const [min, hour, day, month, weekday] = parts;
-    return `${min}min ${hour}h ${day}d ${month}m ${weekday}`;
-  };
-
   // Get status icon
   const getStatusBadge = (enabled?: boolean) => {
     if (enabled) {
@@ -511,7 +479,7 @@ export function CronJobsPage() {
 
                 {/* Execution history button */}
                 <button
-                  onClick={() => openExecDialog(job.id, job.name)}
+                  onClick={() => setDetailPanel({ open: true, jobId: job.id, jobName: job.name })}
                   className="flex items-center gap-2 mt-4 pt-3 border-t border-[var(--color-border)] text-[13px] text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition-colors w-full"
                 >
                   <History size={14} />
@@ -545,98 +513,14 @@ export function CronJobsPage() {
         </div>
       </div>
 
-      {/* Execution history dialog */}
-      {execDialog.open && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in">
-          <div className="bg-[var(--color-bg-elevated)] rounded-3xl w-[80vw] shadow-2xl border border-[var(--color-border)] animate-slide-up flex flex-col" style={{ height: '90vh' }}>
-            <div className="flex items-center justify-between p-6 pb-4 border-b border-[var(--color-border)]">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl bg-[var(--color-primary)]/10 flex items-center justify-center">
-                  <History size={18} className="text-[var(--color-primary)]" />
-                </div>
-                <div>
-                  <h2 className="font-semibold text-[15px]">{t('cronjobs.executionHistory')}</h2>
-                  <p className="text-[12px] text-[var(--color-text-muted)] mt-0.5">{execDialog.jobName}</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setExecDialog({ ...execDialog, open: false })}
-                className="p-2 hover:bg-[var(--color-bg-muted)] rounded-xl transition-all"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-6 pt-4">
-              {execLoading ? (
-                <div className="flex items-center justify-center py-12">
-                  <Loader size={20} className="animate-spin text-[var(--color-text-muted)]" />
-                </div>
-              ) : executions.length === 0 ? (
-                <div className="text-center py-12">
-                  <Clock size={32} className="mx-auto mb-3 opacity-20 text-[var(--color-text-muted)]" />
-                  <p className="text-[13px] text-[var(--color-text-muted)]">{t('cronjobs.noExecutions')}</p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {executions.map((exec) => (
-                    <div
-                      key={exec.id}
-                      className="rounded-xl border border-[var(--color-border)] overflow-hidden"
-                    >
-                      {/* Header - clickable */}
-                      <button
-                        onClick={() => toggleExecExpand(exec.id)}
-                        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[var(--color-bg-muted)] transition-colors text-left"
-                      >
-                        <div className="flex-shrink-0">
-                          {exec.status === 'running' ? (
-                            <Loader size={15} className="text-[var(--color-warning)] animate-spin" />
-                          ) : exec.status === 'success' ? (
-                            <CheckCircle size={15} className="text-[var(--color-success)]" />
-                          ) : exec.status === 'partial' ? (
-                            <AlertTriangle size={15} className="text-[var(--color-warning)]" />
-                          ) : (
-                            <XCircle size={15} className="text-[var(--color-error)]" />
-                          )}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <span className="text-[13px] font-medium">
-                            {new Date(exec.started_at).toLocaleString()}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-[var(--color-bg-muted)] text-[var(--color-text-muted)]">
-                            {exec.trigger_type === 'manual' ? t('cronjobs.triggerManual') : t('cronjobs.triggerScheduled')}
-                          </span>
-                          {exec.finished_at && (
-                            <span className="text-[11px] text-[var(--color-text-muted)]">
-                              {((exec.finished_at - exec.started_at) / 1000).toFixed(1)}s
-                            </span>
-                          )}
-                          {expandedExecs.has(exec.id) ? (
-                            <ChevronUp size={14} className="text-[var(--color-text-muted)]" />
-                          ) : (
-                            <ChevronDown size={14} className="text-[var(--color-text-muted)]" />
-                          )}
-                        </div>
-                      </button>
-
-                      {/* Collapsible result */}
-                      {expandedExecs.has(exec.id) && exec.result && (
-                        <div className="px-4 pb-3 border-t border-[var(--color-border)]">
-                          <pre className="mt-3 text-[13px] text-[var(--color-text-secondary)] whitespace-pre-wrap break-all leading-relaxed max-h-[200px] overflow-y-auto">
-                            {exec.result}
-                          </pre>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+      {/* Execution detail panel */}
+      {detailPanel && (
+        <TaskExecutionDetail
+          open={detailPanel.open}
+          onClose={() => setDetailPanel(null)}
+          jobId={detailPanel.jobId}
+          jobName={detailPanel.jobName}
+        />
       )}
 
       {/* Create/Edit dialog */}

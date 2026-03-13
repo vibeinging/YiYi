@@ -153,7 +153,7 @@ pub async fn send_to_bot(
                 .ok_or("No webhook_url configured")?
                 .to_string();
 
-            let client = reqwest::Client::new();
+            let client = crate::engine::bots::http_client();
             let body = serde_json::json!({
                 "target": target,
                 "content": content,
@@ -174,59 +174,93 @@ pub async fn send_to_bot(
                 .or_else(|| std::env::var("DISCORD_BOT_TOKEN").ok())
                 .ok_or("No Discord bot_token configured")?;
 
-            let client = reqwest::Client::new();
+            let client = crate::engine::bots::http_client();
             let url = format!("https://discord.com/api/v10/channels/{}/messages", target);
-            let body = serde_json::json!({ "content": content });
-            client
-                .post(&url)
-                .header("Authorization", format!("Bot {}", bot_token))
-                .header("Content-Type", "application/json")
-                .json(&body)
-                .timeout(std::time::Duration::from_secs(15))
-                .send()
-                .await
-                .map_err(|e| format!("Discord send failed: {}", e))?;
+            // Discord natively supports Markdown; split on paragraph boundaries
+            let chunks = crate::engine::bots::formatter::format_discord(content);
+            for chunk in chunks {
+                let body = serde_json::json!({ "content": chunk });
+                client
+                    .post(&url)
+                    .header("Authorization", format!("Bot {}", bot_token))
+                    .header("Content-Type", "application/json")
+                    .json(&body)
+                    .timeout(std::time::Duration::from_secs(15))
+                    .send()
+                    .await
+                    .map_err(|e| format!("Discord send failed: {}", e))?;
+            }
             Ok(())
         }
         "dingtalk" => {
+            // 优先使用 OpenAPI 发送（如果有 client_id/client_secret）
+            // 否则降级到 webhook
             let webhook = config["webhook_url"]
                 .as_str()
-                .ok_or("No DingTalk webhook_url configured")?
-                .to_string();
+                .map(|s| s.to_string());
 
-            let client = reqwest::Client::new();
-            let body = serde_json::json!({
-                "msgtype": "text",
-                "text": { "content": content }
-            });
-            client
-                .post(&webhook)
-                .json(&body)
-                .timeout(std::time::Duration::from_secs(15))
-                .send()
-                .await
-                .map_err(|e| format!("DingTalk send failed: {}", e))?;
-            Ok(())
+            if let Some(url) = webhook {
+                let client = crate::engine::bots::http_client();
+                // Use markdown format since agent output is typically markdown
+                let (title, text) = crate::engine::bots::formatter::format_dingtalk(content);
+                let body = serde_json::json!({
+                    "msgtype": "markdown",
+                    "markdown": { "title": title, "text": text }
+                });
+                client
+                    .post(&url)
+                    .json(&body)
+                    .timeout(std::time::Duration::from_secs(15))
+                    .send()
+                    .await
+                    .map_err(|e| format!("DingTalk send failed: {}", e))?;
+                Ok(())
+            } else {
+                Err("No DingTalk webhook_url configured. In Stream mode, replies are sent via sessionWebhook automatically.".to_string())
+            }
         }
         "feishu" => {
-            let webhook = config["webhook_url"]
+            // 优先使用 IM API 发送
+            let app_id = config["app_id"]
                 .as_str()
-                .ok_or("No Feishu webhook_url configured")?
-                .to_string();
+                .map(|s| s.to_string())
+                .or_else(|| std::env::var("FEISHU_APP_ID").ok());
+            let app_secret = config["app_secret"]
+                .as_str()
+                .map(|s| s.to_string())
+                .or_else(|| std::env::var("FEISHU_APP_SECRET").ok());
 
-            let client = reqwest::Client::new();
-            let body = serde_json::json!({
-                "msg_type": "text",
-                "content": { "text": content }
-            });
-            client
-                .post(&webhook)
-                .json(&body)
-                .timeout(std::time::Duration::from_secs(15))
-                .send()
-                .await
-                .map_err(|e| format!("Feishu send failed: {}", e))?;
-            Ok(())
+            if let (Some(aid), Some(asec)) = (app_id, app_secret) {
+                // 判断 target 类型
+                let (receive_id, id_type) = if target.starts_with("group:") {
+                    (target.strip_prefix("group:").unwrap_or(target), "chat_id")
+                } else if target.starts_with("dm:") {
+                    (target.strip_prefix("dm:").unwrap_or(target), "open_id")
+                } else {
+                    (target, "chat_id")
+                };
+                crate::engine::bots::feishu::FeishuBot::send_message(
+                    &aid, &asec, receive_id, id_type, content,
+                ).await
+            } else {
+                // 降级到 webhook
+                let webhook = config["webhook_url"]
+                    .as_str()
+                    .ok_or("No Feishu app_id/app_secret or webhook_url configured")?;
+                let client = crate::engine::bots::http_client();
+                let body = serde_json::json!({
+                    "msg_type": "text",
+                    "content": { "text": content }
+                });
+                client
+                    .post(webhook)
+                    .json(&body)
+                    .timeout(std::time::Duration::from_secs(15))
+                    .send()
+                    .await
+                    .map_err(|e| format!("Feishu send failed: {}", e))?;
+                Ok(())
+            }
         }
         "telegram" => {
             let bot_token = config["bot_token"]
@@ -281,43 +315,11 @@ pub async fn send_to_bot(
                 .or_else(|| std::env::var("WECOM_AGENT_ID").ok())
                 .ok_or("No WeCom agent_id configured")?;
 
-            let client = reqwest::Client::new();
-            let token_url = format!(
-                "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid={}&corpsecret={}",
-                corp_id, corp_secret
-            );
-            let token_resp = client
-                .get(&token_url)
-                .timeout(std::time::Duration::from_secs(10))
-                .send()
-                .await
-                .map_err(|e| format!("WeCom token request failed: {}", e))?
-                .json::<serde_json::Value>()
-                .await
-                .map_err(|e| format!("WeCom token parse failed: {}", e))?;
-
-            let access_token = token_resp["access_token"]
-                .as_str()
-                .ok_or("Failed to get WeCom access_token")?;
-
-            let send_url = format!(
-                "https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={}",
-                access_token
-            );
-            let body = serde_json::json!({
-                "touser": target,
-                "msgtype": "text",
-                "agentid": agent_id.parse::<i64>().unwrap_or(0),
-                "text": { "content": content },
-            });
-            client
-                .post(&send_url)
-                .json(&body)
-                .timeout(std::time::Duration::from_secs(15))
-                .send()
-                .await
-                .map_err(|e| format!("WeCom send failed: {}", e))?;
-            Ok(())
+            // Extract user_id from conversation format "agent_id:user_id"
+            let user_id = target.rsplit(':').next().unwrap_or(&target);
+            crate::engine::bots::wecom::send_message(
+                &corp_id, &corp_secret, &agent_id, user_id, content,
+            ).await
         }
         _ => Err(format!("Platform '{}' send not implemented", bot.platform)),
     }
@@ -334,7 +336,346 @@ pub async fn bots_send(
     Ok(serde_json::json!({ "status": "ok" }))
 }
 
+/// Start a single bot by its DB row. Returns the bot_id if successfully started,
+/// or None if credentials are missing / platform is webhook-only.
+/// The `stream_started` set tracks which bots were started in Stream/WS mode
+/// (used to distinguish from webhook fallback).
+async fn start_one_bot_inner(
+    bot: &BotRow,
+    manager: &Arc<crate::engine::bots::manager::BotManager>,
+    tx: &tokio::sync::mpsc::Sender<crate::engine::bots::IncomingMessage>,
+) -> Result<Option<String>, String> {
+    let config: serde_json::Value = serde_json::from_str(&bot.config_json).unwrap_or(serde_json::json!({}));
+    let bot_id = bot.id.clone();
+
+    match bot.platform.as_str() {
+        "discord" => {
+            let bot_token = config["bot_token"]
+                .as_str()
+                .map(|s| s.to_string())
+                .or_else(|| std::env::var("DISCORD_BOT_TOKEN").ok());
+
+            if let Some(token) = bot_token {
+                let ch = crate::engine::bots::discord::DiscordBot::new(bot_id.clone(), token.clone());
+                let running_flag = ch.running_flag();
+                ch.start(tx.clone()).await;
+
+                // Register response handler — Discord natively supports Markdown;
+                // use smart paragraph-boundary splitting for the 2000-char limit.
+                let token_c = token.clone();
+                manager.register_handler(&bot_id, move |target, content| {
+                    let token = token_c.clone();
+                    async move {
+                        let channel_id = target
+                            .strip_prefix("ch:")
+                            .or_else(|| target.strip_prefix("dm:"))
+                            .unwrap_or(&target);
+                        let client = crate::engine::bots::http_client();
+                        let url = format!("https://discord.com/api/v10/channels/{}/messages", channel_id);
+                        let chunks = crate::engine::bots::formatter::format_discord(&content);
+                        for chunk in chunks {
+                            let body = serde_json::json!({ "content": chunk });
+                            client.post(&url)
+                                .header("Authorization", format!("Bot {}", token))
+                                .header("Content-Type", "application/json")
+                                .json(&body)
+                                .timeout(std::time::Duration::from_secs(15))
+                                .send().await
+                                .map_err(|e| format!("Discord reply failed: {}", e))?;
+                        }
+                        Ok(())
+                    }
+                }).await;
+
+                // Track running bot
+                manager.register_running_bot(crate::engine::bots::manager::RunningBot {
+                    bot_id: bot_id.clone(),
+                    running_flag,
+                }).await;
+
+                Ok(Some(bot_id))
+            } else {
+                Ok(None)
+            }
+        }
+        "telegram" => {
+            let bot_token = config["bot_token"]
+                .as_str()
+                .map(|s| s.to_string())
+                .or_else(|| std::env::var("TELEGRAM_BOT_TOKEN").ok());
+
+            if let Some(token) = bot_token {
+                let ch = crate::engine::bots::telegram::TelegramBot::new(bot_id.clone(), token.clone());
+                let running_flag = ch.running_flag();
+                ch.start(tx.clone()).await;
+
+                let token_c = token.clone();
+                manager.register_handler(&bot_id, move |target, content| {
+                    let token = token_c.clone();
+                    async move {
+                        let ch = crate::engine::bots::telegram::TelegramBot::new(String::new(), token);
+                        ch.send(&target, &content).await
+                    }
+                }).await;
+
+                manager.register_running_bot(crate::engine::bots::manager::RunningBot {
+                    bot_id: bot_id.clone(),
+                    running_flag,
+                }).await;
+
+                Ok(Some(bot_id))
+            } else {
+                Ok(None)
+            }
+        }
+        "qq" => {
+            let app_id = config["app_id"]
+                .as_str()
+                .map(|s| s.to_string())
+                .or_else(|| std::env::var("QQ_BOT_APP_ID").ok());
+            let client_secret = config["client_secret"]
+                .as_str()
+                .map(|s| s.to_string())
+                .or_else(|| std::env::var("QQ_BOT_CLIENT_SECRET").ok());
+
+            if let (Some(app_id), Some(client_secret)) = (app_id, client_secret) {
+                let ch = crate::engine::bots::qq::QQBot::new(bot_id.clone(), app_id.clone(), client_secret.clone());
+                let running_flag = ch.running_flag();
+                ch.start(tx.clone()).await;
+
+                let app_id_c = app_id.clone();
+                let secret_c = client_secret.clone();
+                manager.register_handler(&bot_id, move |target, content| {
+                    let app_id = app_id_c.clone();
+                    let secret = secret_c.clone();
+                    async move {
+                        let qq_bot = crate::engine::bots::qq::QQBot::new(String::new(), app_id, secret);
+
+                        // Extract msg_id from target (format: "prefix:id#msg_id=xxx")
+                        let (conv_target, msg_id) = if let Some(idx) = target.find("#msg_id=") {
+                            (&target[..idx], Some(target[idx + 8..].to_string()))
+                        } else {
+                            (target.as_str(), None)
+                        };
+
+                        if let Some(rest) = conv_target.strip_prefix("guild:") {
+                            let channel_id = rest.rsplit(':').next().unwrap_or(conv_target);
+                            qq_bot.send_guild_message(channel_id, &content, msg_id.as_deref()).await?;
+                        } else if let Some(group_openid) = conv_target.strip_prefix("group:") {
+                            qq_bot.send_group_message(group_openid, &content, msg_id.as_deref()).await?;
+                        } else if let Some(user_openid) = conv_target.strip_prefix("c2c:") {
+                            qq_bot.send_c2c_message(user_openid, &content, msg_id.as_deref()).await?;
+                        }
+                        Ok(())
+                    }
+                }).await;
+
+                manager.register_running_bot(crate::engine::bots::manager::RunningBot {
+                    bot_id: bot_id.clone(),
+                    running_flag,
+                }).await;
+
+                Ok(Some(bot_id))
+            } else {
+                Ok(None)
+            }
+        }
+        "dingtalk" => {
+            // 优先使用 Stream 模式（client_id + client_secret）
+            let client_id = config["client_id"]
+                .as_str()
+                .or_else(|| config["app_key"].as_str())
+                .map(|s| s.to_string())
+                .or_else(|| std::env::var("DINGTALK_CLIENT_ID").ok());
+            let client_secret = config["client_secret"]
+                .as_str()
+                .or_else(|| config["app_secret"].as_str())
+                .map(|s| s.to_string())
+                .or_else(|| std::env::var("DINGTALK_CLIENT_SECRET").ok());
+
+            if let (Some(cid), Some(cs)) = (client_id, client_secret) {
+                let dt_bot = crate::engine::bots::dingtalk::DingTalkBot::new(
+                    bot_id.clone(), cid, cs,
+                );
+                let session_webhooks = dt_bot.session_webhooks();
+                let running_flag = dt_bot.running_flag();
+                dt_bot.start(tx.clone()).await;
+
+                // 注册 response handler：通过 sessionWebhook 或 meta 中的 webhook 回复
+                let webhooks = session_webhooks.clone();
+                manager.register_handler(&bot_id, move |target, content| {
+                    let webhooks = webhooks.clone();
+                    async move {
+                        let raw_conv_id = target
+                            .strip_prefix("group:")
+                            .or_else(|| target.strip_prefix("dm:"))
+                            .unwrap_or(&target);
+
+                        let webhook_url = {
+                            let whs = webhooks.read().await;
+                            whs.get(raw_conv_id).map(|e| e.url.clone())
+                        };
+
+                        if let Some(url) = webhook_url {
+                            crate::engine::bots::dingtalk::DingTalkBot::send_via_webhook(
+                                &url, &content,
+                            ).await
+                        } else {
+                            Err(format!(
+                                "DingTalk: no sessionWebhook found for conversation '{}'",
+                                target
+                            ))
+                        }
+                    }
+                }).await;
+
+                manager.register_running_bot(crate::engine::bots::manager::RunningBot {
+                    bot_id: bot_id.clone(),
+                    running_flag,
+                }).await;
+
+                log::info!("DingTalk bot started in Stream mode");
+                Ok(Some(bot_id))
+            } else {
+                // 降级到 Webhook 模式 — not tracked as a running bot
+                log::info!("DingTalk bot: no client_id/client_secret, falling back to webhook mode");
+                Ok(None)
+            }
+        }
+        "feishu" => {
+            // 优先使用 WebSocket 长连接模式
+            let app_id = config["app_id"]
+                .as_str()
+                .map(|s| s.to_string())
+                .or_else(|| std::env::var("FEISHU_APP_ID").ok());
+            let app_secret = config["app_secret"]
+                .as_str()
+                .map(|s| s.to_string())
+                .or_else(|| std::env::var("FEISHU_APP_SECRET").ok());
+
+            if let (Some(aid), Some(asec)) = (app_id, app_secret) {
+                let fs_bot = crate::engine::bots::feishu::FeishuBot::new(
+                    bot_id.clone(), aid.clone(), asec.clone(),
+                );
+                let running_flag = fs_bot.running_flag();
+                fs_bot.start(tx.clone()).await;
+
+                // 注册 response handler：通过飞书 IM API 发送消息
+                let aid_c = aid.clone();
+                let asec_c = asec.clone();
+                manager.register_handler(&bot_id, move |target, content| {
+                    let aid = aid_c.clone();
+                    let asec = asec_c.clone();
+                    async move {
+                        if let Some(chat_id) = target.strip_prefix("group:") {
+                            crate::engine::bots::feishu::FeishuBot::send_message(
+                                &aid, &asec, chat_id, "chat_id", &content,
+                            ).await
+                        } else if let Some(open_id) = target.strip_prefix("dm:") {
+                            crate::engine::bots::feishu::FeishuBot::send_message(
+                                &aid, &asec, open_id, "open_id", &content,
+                            ).await
+                        } else {
+                            crate::engine::bots::feishu::FeishuBot::send_message(
+                                &aid, &asec, &target, "chat_id", &content,
+                            ).await
+                        }
+                    }
+                }).await;
+
+                manager.register_running_bot(crate::engine::bots::manager::RunningBot {
+                    bot_id: bot_id.clone(),
+                    running_flag,
+                }).await;
+
+                log::info!("Feishu bot started in WebSocket mode");
+                Ok(Some(bot_id))
+            } else {
+                // 降级到 Webhook 模式
+                log::info!("Feishu bot: no app_id/app_secret, falling back to webhook mode");
+                Ok(None)
+            }
+        }
+        // Webhook-based platforms don't have long-running connections to track
+        "wecom" | "webhook" => {
+            Ok(None)
+        }
+        _ => {
+            log::warn!("Unknown platform type: {}", bot.platform);
+            Ok(None)
+        }
+    }
+}
+
+/// Start a single bot by its ID. Loads config from DB, starts the bot,
+/// registers its handler, and tracks it in the manager.
+/// Also ensures the consumer loop is running.
+pub async fn start_one_bot(
+    state: &AppState,
+    bot_id: &str,
+    app_handle: tauri::AppHandle,
+) -> Result<serde_json::Value, String> {
+    let manager = state.bot_manager.clone();
+
+    // Check if already running
+    if manager.is_bot_running(bot_id).await {
+        return Err(format!("Bot '{}' is already running", bot_id));
+    }
+
+    let bot = state.db.get_bot(bot_id)?
+        .ok_or_else(|| format!("Bot '{}' not found", bot_id))?;
+
+    if !bot.enabled {
+        return Err(format!("Bot '{}' is not enabled", bot_id));
+    }
+
+    let tx = manager.get_sender();
+    let result = start_one_bot_inner(&bot, &manager, &tx).await?;
+
+    // Ensure the consumer loop is running
+    if !manager.is_running().await {
+        let app_state = Arc::new(state.clone_shared());
+        manager.start(app_state, app_handle).await;
+    }
+
+    match result {
+        Some(id) => {
+            log::info!("Bot '{}' started successfully", id);
+            Ok(serde_json::json!({ "status": "ok", "bot_id": id }))
+        }
+        None => {
+            Err(format!("Bot '{}' could not be started (missing credentials or webhook-only platform)", bot_id))
+        }
+    }
+}
+
+/// Stop a single bot by its ID. Signals it to stop, unregisters its handler,
+/// and removes it from the running bots tracker.
+pub async fn stop_one_bot(
+    state: &AppState,
+    bot_id: &str,
+) -> Result<serde_json::Value, String> {
+    let manager = state.bot_manager.clone();
+
+    if !manager.is_bot_running(bot_id).await {
+        return Err(format!("Bot '{}' is not running", bot_id));
+    }
+
+    // Stop the bot (sets running flag to false)
+    let found = manager.unregister_running_bot(bot_id).await;
+    if !found {
+        return Err(format!("Bot '{}' not found in running bots", bot_id));
+    }
+
+    // Unregister its response handler
+    manager.unregister_handler(bot_id).await;
+
+    log::info!("Bot '{}' stopped successfully", bot_id);
+    Ok(serde_json::json!({ "status": "ok", "bot_id": bot_id }))
+}
+
 /// Core bot startup logic — used by both the tauri command and auto-start on app launch.
+/// Starts all enabled bots by calling `start_one_bot_inner` for each.
 pub async fn start_all_bots(
     state: &AppState,
     app_handle: tauri::AppHandle,
@@ -350,127 +691,39 @@ pub async fn start_all_bots(
             continue;
         }
 
-        let config: serde_json::Value = serde_json::from_str(&bot.config_json).unwrap_or(serde_json::json!({}));
-        let bot_id = bot.id.clone();
+        // Skip bots that are already running
+        if manager.is_bot_running(&bot.id).await {
+            started.push(bot.id.clone());
+            continue;
+        }
 
-        match bot.platform.as_str() {
-            "discord" => {
-                let bot_token = config["bot_token"]
-                    .as_str()
-                    .map(|s| s.to_string())
-                    .or_else(|| std::env::var("DISCORD_BOT_TOKEN").ok());
-
-                if let Some(token) = bot_token {
-                    let ch = crate::engine::bots::discord::DiscordBot::new(bot_id.clone(), token.clone());
-                    ch.start(tx.clone()).await;
-
-                    // Register response handler
-                    let token_c = token.clone();
-                    manager.register_handler(&bot_id, move |target, content| {
-                        let token = token_c.clone();
-                        async move {
-                            let channel_id = target
-                                .strip_prefix("ch:")
-                                .or_else(|| target.strip_prefix("dm:"))
-                                .unwrap_or(&target);
-                            let client = reqwest::Client::new();
-                            let url = format!("https://discord.com/api/v10/channels/{}/messages", channel_id);
-                            let body = serde_json::json!({ "content": content });
-                            client.post(&url)
-                                .header("Authorization", format!("Bot {}", token))
-                                .header("Content-Type", "application/json")
-                                .json(&body)
-                                .timeout(std::time::Duration::from_secs(15))
-                                .send().await
-                                .map_err(|e| format!("Discord reply failed: {}", e))?;
-                            Ok(())
-                        }
-                    }).await;
-
-                    started.push(bot_id);
+        match start_one_bot_inner(bot, &manager, &tx).await {
+            Ok(Some(id)) => started.push(id),
+            Ok(None) => {
+                // Webhook-only or missing credentials — still count as "started" for webhook platforms
+                match bot.platform.as_str() {
+                    "wecom" | "webhook" => started.push(bot.id.clone()),
+                    "dingtalk" | "feishu" => started.push(bot.id.clone()), // webhook fallback
+                    _ => {}
                 }
             }
-            "telegram" => {
-                let bot_token = config["bot_token"]
-                    .as_str()
-                    .map(|s| s.to_string())
-                    .or_else(|| std::env::var("TELEGRAM_BOT_TOKEN").ok());
-
-                if let Some(token) = bot_token {
-                    let ch = crate::engine::bots::telegram::TelegramBot::new(bot_id.clone(), token.clone());
-                    ch.start(tx.clone()).await;
-
-                    let token_c = token.clone();
-                    manager.register_handler(&bot_id, move |target, content| {
-                        let token = token_c.clone();
-                        async move {
-                            let ch = crate::engine::bots::telegram::TelegramBot::new(String::new(), token);
-                            ch.send(&target, &content).await
-                        }
-                    }).await;
-
-                    started.push(bot_id);
-                }
-            }
-            "qq" => {
-                let app_id = config["app_id"]
-                    .as_str()
-                    .map(|s| s.to_string())
-                    .or_else(|| std::env::var("QQ_BOT_APP_ID").ok());
-                let client_secret = config["client_secret"]
-                    .as_str()
-                    .map(|s| s.to_string())
-                    .or_else(|| std::env::var("QQ_BOT_CLIENT_SECRET").ok());
-
-                if let (Some(app_id), Some(client_secret)) = (app_id, client_secret) {
-                    let ch = crate::engine::bots::qq::QQBot::new(bot_id.clone(), app_id.clone(), client_secret.clone());
-                    ch.start(tx.clone()).await;
-
-                    let app_id_c = app_id.clone();
-                    let secret_c = client_secret.clone();
-                    manager.register_handler(&bot_id, move |target, content| {
-                        let app_id = app_id_c.clone();
-                        let secret = secret_c.clone();
-                        async move {
-                            let qq_bot = crate::engine::bots::qq::QQBot::new(String::new(), app_id, secret);
-
-                            // Extract msg_id from target (format: "prefix:id#msg_id=xxx")
-                            let (conv_target, msg_id) = if let Some(idx) = target.find("#msg_id=") {
-                                (&target[..idx], Some(target[idx + 8..].to_string()))
-                            } else {
-                                (target.as_str(), None)
-                            };
-
-                            if let Some(rest) = conv_target.strip_prefix("guild:") {
-                                let channel_id = rest.rsplit(':').next().unwrap_or(conv_target);
-                                qq_bot.send_guild_message(channel_id, &content, msg_id.as_deref()).await?;
-                            } else if let Some(group_openid) = conv_target.strip_prefix("group:") {
-                                qq_bot.send_group_message(group_openid, &content, msg_id.as_deref()).await?;
-                            } else if let Some(user_openid) = conv_target.strip_prefix("c2c:") {
-                                qq_bot.send_c2c_message(user_openid, &content, msg_id.as_deref()).await?;
-                            }
-                            Ok(())
-                        }
-                    }).await;
-
-                    started.push(bot_id);
-                }
-            }
-            // Webhook-based platforms (dingtalk, feishu, wecom, webhook)
-            "dingtalk" | "feishu" | "wecom" | "webhook" => {
-                // Webhook bots are handled via shared webhook server
-                // We'll start the webhook server once for all webhook-based bots
-                started.push(bot_id);
-            }
-            _ => {
-                log::warn!("Unknown platform type: {}", bot.platform);
+            Err(e) => {
+                log::error!("Failed to start bot '{}': {}", bot.id, e);
             }
         }
     }
 
     // Start webhook server if any webhook-based bots are enabled
+    let running_ids = manager.list_running_bot_ids().await;
     let webhook_bots: Vec<&BotRow> = bots.iter()
-        .filter(|b| b.enabled && matches!(b.platform.as_str(), "dingtalk" | "feishu" | "wecom" | "webhook"))
+        .filter(|b| {
+            if !b.enabled { return false; }
+            match b.platform.as_str() {
+                "wecom" | "webhook" => true,
+                "dingtalk" | "feishu" => !running_ids.contains(&b.id),
+                _ => false,
+            }
+        })
         .collect();
 
     if !webhook_bots.is_empty() {
@@ -488,6 +741,7 @@ pub async fn start_all_bots(
 
         let server = crate::engine::bots::webhook_server::WebhookServer::new(port);
         server.start(tx.clone(), bot_ids_map).await;
+        manager.set_webhook_server(server).await;
 
         // Register response handlers for webhook-based bots
         for bot in &webhook_bots {
@@ -500,8 +754,13 @@ pub async fn start_all_bots(
                         manager.register_handler(&bid, move |_target, content| {
                             let url = url.clone();
                             async move {
-                                let client = reqwest::Client::new();
-                                let body = serde_json::json!({ "msgtype": "text", "text": { "content": content } });
+                                let client = crate::engine::bots::http_client();
+                                // Use markdown format since agent output is typically markdown
+                                let (title, text) = crate::engine::bots::formatter::format_dingtalk(&content);
+                                let body = serde_json::json!({
+                                    "msgtype": "markdown",
+                                    "markdown": { "title": title, "text": text }
+                                });
                                 client.post(&url).json(&body).timeout(std::time::Duration::from_secs(15))
                                     .send().await.map_err(|e| format!("DingTalk reply failed: {}", e))?;
                                 Ok(())
@@ -514,7 +773,7 @@ pub async fn start_all_bots(
                         manager.register_handler(&bid, move |_target, content| {
                             let url = url.clone();
                             async move {
-                                let client = reqwest::Client::new();
+                                let client = crate::engine::bots::http_client();
                                 let body = serde_json::json!({ "msg_type": "text", "content": { "text": content } });
                                 client.post(&url).json(&body).timeout(std::time::Duration::from_secs(15))
                                     .send().await.map_err(|e| format!("Feishu reply failed: {}", e))?;
@@ -538,21 +797,9 @@ pub async fn start_all_bots(
                             let aid = aid.clone();
                             async move {
                                 let user_id = target.rsplit(':').next().unwrap_or(&target);
-                                let client = reqwest::Client::new();
-                                let token_url = format!("https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid={}&corpsecret={}", cid, cs);
-                                let token_resp = client.get(&token_url).timeout(std::time::Duration::from_secs(10))
-                                    .send().await.map_err(|e| format!("WeCom token failed: {}", e))?
-                                    .json::<serde_json::Value>().await.map_err(|e| format!("WeCom token parse failed: {}", e))?;
-                                let access_token = token_resp["access_token"].as_str().ok_or("WeCom access_token missing")?.to_string();
-                                let send_url = format!("https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={}", access_token);
-                                let body = serde_json::json!({
-                                    "touser": user_id, "msgtype": "text",
-                                    "agentid": aid.parse::<i64>().unwrap_or(0),
-                                    "text": { "content": content },
-                                });
-                                client.post(&send_url).json(&body).timeout(std::time::Duration::from_secs(15))
-                                    .send().await.map_err(|e| format!("WeCom reply failed: {}", e))?;
-                                Ok(())
+                                crate::engine::bots::wecom::send_message(
+                                    &cid, &cs, &aid, user_id, &content,
+                                ).await
                             }
                         }).await;
                     }
@@ -563,22 +810,30 @@ pub async fn start_all_bots(
     }
 
     // Build AppState clone for the manager
-    let app_state = Arc::new(AppState {
-        working_dir: state.working_dir.clone(),
-        user_workspace: std::sync::RwLock::new(state.user_workspace()),
-        secret_dir: state.secret_dir.clone(),
-        config: state.config.clone(),
-        providers: state.providers.clone(),
-        db: state.db.clone(),
-        bot_manager: state.bot_manager.clone(),
-        mcp_runtime: state.mcp_runtime.clone(),
-        chat_cancelled: state.chat_cancelled.clone(),
-        scheduler: state.scheduler.clone(),
-        streaming_state: state.streaming_state.clone(),
-    });
+    let app_state = Arc::new(state.clone_shared());
 
     // Start the consumer loop
-    manager.start(app_state, app_handle).await;
+    manager.start(app_state, app_handle.clone()).await;
+
+    // Spawn a background task that periodically emits bot status events to the frontend.
+    // This ensures the frontend stays in sync even if it missed an event.
+    {
+        let ah = app_handle.clone();
+        let manager_ref = state.bot_manager.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                if !manager_ref.is_running().await {
+                    break;
+                }
+                let statuses = crate::engine::bots::get_all_bot_statuses();
+                for status in &statuses {
+                    use tauri::Emitter;
+                    ah.emit("bot://status", status).ok();
+                }
+            }
+        });
+    }
 
     log::info!("Bots started: {:?}", started);
 
@@ -605,10 +860,106 @@ pub async fn bots_stop(
 }
 
 #[tauri::command]
+pub async fn bots_start_one(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    bot_id: String,
+) -> Result<serde_json::Value, String> {
+    start_one_bot(&state, &bot_id, app_handle).await
+}
+
+#[tauri::command]
+pub async fn bots_stop_one(
+    state: State<'_, AppState>,
+    bot_id: String,
+) -> Result<serde_json::Value, String> {
+    stop_one_bot(&state, &bot_id).await
+}
+
+#[tauri::command]
+pub async fn bots_running_list(
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    Ok(state.bot_manager.list_running_bot_ids().await)
+}
+
+#[tauri::command]
 pub async fn bots_list_sessions(
     state: State<'_, AppState>,
 ) -> Result<Vec<crate::engine::db::ChatSession>, String> {
     state.db.list_sessions_by_source("bot")
+}
+
+// === Test Connection Command ===
+
+#[tauri::command]
+pub async fn bots_test_connection(
+    platform: String,
+    config: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let result = match platform.as_str() {
+        "discord" => {
+            let token = config["bot_token"]
+                .as_str()
+                .ok_or("Missing bot_token in config")?;
+            crate::engine::bots::discord::test_connection(token).await
+        }
+        "telegram" => {
+            let token = config["bot_token"]
+                .as_str()
+                .ok_or("Missing bot_token in config")?;
+            crate::engine::bots::telegram::test_connection(token).await
+        }
+        "qq" => {
+            let app_id = config["app_id"]
+                .as_str()
+                .ok_or("Missing app_id in config")?;
+            let client_secret = config["client_secret"]
+                .as_str()
+                .ok_or("Missing client_secret in config")?;
+            crate::engine::bots::qq::test_connection(app_id, client_secret).await
+        }
+        "dingtalk" => {
+            let client_id = config["client_id"]
+                .as_str()
+                .or_else(|| config["app_key"].as_str())
+                .ok_or("Missing client_id in config")?;
+            let client_secret = config["client_secret"]
+                .as_str()
+                .or_else(|| config["app_secret"].as_str())
+                .ok_or("Missing client_secret in config")?;
+            crate::engine::bots::dingtalk::test_connection(client_id, client_secret).await
+        }
+        "feishu" => {
+            let app_id = config["app_id"]
+                .as_str()
+                .ok_or("Missing app_id in config")?;
+            let app_secret = config["app_secret"]
+                .as_str()
+                .ok_or("Missing app_secret in config")?;
+            crate::engine::bots::feishu::test_connection(app_id, app_secret).await
+        }
+        "wecom" => {
+            let corp_id = config["corp_id"]
+                .as_str()
+                .ok_or("Missing corp_id in config")?;
+            let corp_secret = config["corp_secret"]
+                .as_str()
+                .ok_or("Missing corp_secret in config")?;
+            crate::engine::bots::wecom::test_connection(corp_id, corp_secret).await
+        }
+        _ => {
+            return Ok(serde_json::json!({
+                "success": false,
+                "message": format!("Platform '{}' does not support connection testing", platform)
+            }));
+        }
+    };
+
+    match result {
+        Ok(msg) => Ok(serde_json::json!({ "success": true, "message": msg })),
+        Err(e) => Ok(serde_json::json!({ "success": false, "message": e })),
+    }
 }
 
 // === Session-Bot Binding Commands ===
@@ -642,4 +993,11 @@ pub async fn session_list_bots(
 ) -> Result<Vec<BotInfo>, String> {
     let rows = state.db.list_session_bots(&session_id)?;
     Ok(rows.into_iter().map(BotInfo::from).collect())
+}
+
+// === Bot Status Commands ===
+
+#[tauri::command]
+pub async fn bots_get_status() -> Result<Vec<crate::engine::bots::BotStatus>, String> {
+    Ok(crate::engine::bots::get_all_bot_statuses())
 }

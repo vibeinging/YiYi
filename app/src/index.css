@@ -5,7 +5,7 @@
 @tailwind utilities;
 
 /*
-  YiClaw Design System
+  YiYiClaw Design System
   ─────────────────────
   Base: #131014 (deepest black) / #1F1D2E (elevated dark)
   Glass cards float above with subtle light borders and blur.
@@ -117,6 +117,53 @@
   --sidebar-text-active: #FFFFFF;
   --sidebar-section: rgba(255, 255, 255, 0.42);
   --sidebar-border: transparent;
+}
+
+/* ─── YiYi working indicator ─── */
+@keyframes yiyi-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+.yiyi-working {
+  display: flex;
+  align-items: end;
+  gap: 1px;
+  margin-top: 8px;
+  animation: yiyi-bounce 1s ease-in-out infinite;
+}
+@keyframes dot-fade {
+  0%, 100% { opacity: 0.2; }
+  50% { opacity: 1; }
+}
+.yiyi-working .yiyi-dots {
+  display: inline-flex;
+  align-items: end;
+  gap: 2px;
+  margin-left: 1px;
+  margin-bottom: 4px;
+}
+.yiyi-working .yiyi-dots span {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--color-text-tertiary);
+  animation: dot-fade 1.2s ease-in-out infinite;
+}
+.yiyi-working .yiyi-dots span:nth-child(2) { animation-delay: 0.2s; }
+.yiyi-working .yiyi-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+/* Loading dots: YiYi thinking */
+@keyframes yiyi-thinking {
+  0%   { transform: scale(1) rotate(0deg); }
+  25%  { transform: scale(1.05) rotate(-3deg); }
+  50%  { transform: scale(1) rotate(0deg); }
+  75%  { transform: scale(1.05) rotate(3deg); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+.yiyi-thinking {
+  animation: yiyi-thinking 1.2s ease-in-out infinite;
+}
+.yiyi-thinking img {
 }
 
 /* ─── Spawn Agent Animations ─── */
@@ -290,6 +337,22 @@ select {
 @keyframes slideInRight {
   from { opacity: 0; transform: translateX(20px); }
   to { opacity: 1; transform: translateX(0); }
+}
+
+/* ─── Task Sidebar transitions ─── */
+.task-sidebar-expanded,
+.task-sidebar-collapsed {
+  transition: width 0.25s ease;
+}
+
+/* ─── Slide-in from bottom (for popovers) ─── */
+@keyframes slideInFromBottom {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.animate-slide-in-bottom {
+  animation: slideInFromBottom 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .animate-spin {

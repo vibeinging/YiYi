@@ -1,7 +1,7 @@
 ---
 name: cron
 description: "Help users manage scheduled/cron tasks. Understand cron expressions and guide users to create, modify, or troubleshoot scheduled jobs."
-metadata: { "yiclaw": { "emoji": "⏰" } }
+metadata: { "yiyiclaw": { "emoji": "⏰" } }
 ---
 
 # Scheduled Task Management

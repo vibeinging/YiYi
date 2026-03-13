@@ -23,6 +23,8 @@ export interface Skill extends SkillMetadata {
   content?: string;
   references?: Record<string, unknown>;
   scripts?: Record<string, unknown>;
+  /** System-internal skills cannot be edited, disabled, or deleted */
+  system?: boolean;
 }
 
 export interface ListSkillsOptions {

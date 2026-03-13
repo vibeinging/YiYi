@@ -1,4 +1,4 @@
-use axum::{extract::State as AxumState, routing::post, Json, Router};
+use axum::{extract::{Query, State as AxumState}, routing::{get, post}, Json, Router};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -45,12 +45,12 @@ impl WebhookServer {
         let app = Router::new()
             .route("/webhook/dingtalk", post(handle_dingtalk))
             .route("/webhook/feishu", post(handle_feishu))
-            .route("/webhook/wecom", post(handle_wecom))
+            .route("/webhook/wecom", get(handle_wecom_verify).post(handle_wecom))
             .route("/webhook/generic", post(handle_generic))
             .with_state(state);
 
         tokio::spawn(async move {
-            let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await {
+            let listener = match tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await {
                 Ok(l) => l,
                 Err(e) => {
                     log::error!("Failed to bind webhook server on port {}: {}", port, e);
@@ -268,13 +268,30 @@ async fn handle_feishu(
     Json(serde_json::json!({ "code": 0 }))
 }
 
-/// 企业微信 (WeCom) event callback
+/// WeCom URL verification callback (GET request).
+/// WeCom sends: GET /webhook/wecom?msg_signature=xxx&timestamp=xxx&nonce=xxx&echostr=xxx
+/// For simplified mode (no encryption), we just return the echostr.
+async fn handle_wecom_verify(
+    Query(params): Query<HashMap<String, String>>,
+) -> String {
+    if let Some(echostr) = params.get("echostr") {
+        log::info!("WeCom URL verification request received");
+        echostr.clone()
+    } else {
+        "ok".to_string()
+    }
+}
+
+/// 企业微信 (WeCom) event callback (POST request)
 /// 文档: https://developer.work.weixin.qq.com/document/path/90930
+///
+/// Supports plaintext JSON mode. For encrypted mode (EncodingAESKey),
+/// the message needs to be decrypted first (future enhancement).
 async fn handle_wecom(
     AxumState(state): AxumState<WebhookState>,
     Json(body): Json<serde_json::Value>,
 ) -> Json<serde_json::Value> {
-    // 企业微信验证 URL 回调 (echostr)
+    // Handle URL verification in POST body (some WeCom versions)
     if let Some(echostr) = body["echostr"].as_str() {
         return Json(serde_json::json!({ "echostr": echostr }));
     }
@@ -284,51 +301,127 @@ async fn handle_wecom(
         .or_else(|| body["msgtype"].as_str())
         .unwrap_or("");
 
-    // 只处理文本消息
-    if msg_type != "text" {
-        return Json(serde_json::json!({ "errcode": 0, "errmsg": "ok" }));
-    }
-
-    let text = body["Content"]
+    let from_user = body["FromUserName"]
         .as_str()
-        .or_else(|| body["content"].as_str())
-        .unwrap_or("")
-        .trim()
+        .or_else(|| body["from_user"].as_str())
+        .unwrap_or("unknown")
         .to_string();
 
-    if !text.is_empty() {
-        let from_user = body["FromUserName"]
-            .as_str()
-            .or_else(|| body["from_user"].as_str())
-            .unwrap_or("unknown")
-            .to_string();
+    let agent_id = body["AgentID"]
+        .as_str()
+        .or_else(|| body["agent_id"].as_str())
+        .unwrap_or("")
+        .to_string();
 
-        let agent_id = body["AgentID"]
-            .as_str()
-            .or_else(|| body["agent_id"].as_str())
-            .unwrap_or("")
-            .to_string();
+    let msg_id = body["MsgId"]
+        .as_str()
+        .map(|s| s.to_string())
+        .or_else(|| body["MsgId"].as_u64().map(|n| n.to_string()))
+        .unwrap_or_default();
 
-        let sender_name = body["FromUserName"]
-            .as_str()
-            .map(|s| s.to_string());
+    let (content, content_parts) = match msg_type {
+        "text" => {
+            let text = body["Content"]
+                .as_str()
+                .or_else(|| body["content"].as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if text.is_empty() {
+                return Json(serde_json::json!({ "errcode": 0, "errmsg": "ok" }));
+            }
+            (text.clone(), vec![ContentPart::Text { text }])
+        }
+        "image" => {
+            let pic_url = body["PicUrl"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            let media_id = body["MediaId"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            if pic_url.is_empty() && media_id.is_empty() {
+                return Json(serde_json::json!({ "errcode": 0, "errmsg": "ok" }));
+            }
+            let url = if !pic_url.is_empty() { pic_url } else { format!("wecom://media/{}", media_id) };
+            (
+                "[图片]".to_string(),
+                vec![ContentPart::Image { url, alt: None }],
+            )
+        }
+        "voice" => {
+            let media_id = body["MediaId"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            if media_id.is_empty() {
+                return Json(serde_json::json!({ "errcode": 0, "errmsg": "ok" }));
+            }
+            (
+                "[语音]".to_string(),
+                vec![ContentPart::Audio { url: format!("wecom://media/{}", media_id) }],
+            )
+        }
+        "video" => {
+            let media_id = body["MediaId"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            if media_id.is_empty() {
+                return Json(serde_json::json!({ "errcode": 0, "errmsg": "ok" }));
+            }
+            (
+                "[视频]".to_string(),
+                vec![ContentPart::Video { url: format!("wecom://media/{}", media_id) }],
+            )
+        }
+        "location" => {
+            let label = body["Label"]
+                .as_str()
+                .unwrap_or("未知位置");
+            let lat = body["Location_X"].as_str().unwrap_or("0");
+            let lng = body["Location_Y"].as_str().unwrap_or("0");
+            let text = format!("[位置: {} ({},{})]", label, lat, lng);
+            (text.clone(), vec![ContentPart::Text { text }])
+        }
+        "link" => {
+            let title = body["Title"].as_str().unwrap_or("");
+            let desc = body["Description"].as_str().unwrap_or("");
+            let url = body["Url"].as_str().unwrap_or("");
+            let text = format!("[链接: {} - {} {}]", title, desc, url);
+            (text.clone(), vec![ContentPart::Text { text }])
+        }
+        "event" => {
+            // Events like subscribe, enter_agent, etc.
+            let event = body["Event"].as_str().unwrap_or("");
+            log::debug!("WeCom event received: {}", event);
+            return Json(serde_json::json!({ "errcode": 0, "errmsg": "ok" }));
+        }
+        _ => {
+            log::debug!("WeCom: unsupported msg type '{}', skipping", msg_type);
+            return Json(serde_json::json!({ "errcode": 0, "errmsg": "ok" }));
+        }
+    };
 
-        let bot_id = state.bot_ids.get("wecom").cloned().unwrap_or_default();
+    let bot_id = state.bot_ids.get("wecom").cloned().unwrap_or_default();
 
-        let incoming = IncomingMessage {
-            bot_id,
-            platform: "wecom".into(),
-            conversation_id: format!("{}:{}", agent_id, from_user),
-            sender_id: from_user,
-            sender_name,
-            content: text,
-            timestamp: now_ts(),
-            meta: body.clone(),
-            content_parts: Vec::new(),
-        };
+    let incoming = IncomingMessage {
+        bot_id,
+        platform: "wecom".into(),
+        conversation_id: format!("{}:{}", agent_id, from_user),
+        sender_id: from_user.clone(),
+        sender_name: Some(from_user),
+        content,
+        timestamp: now_ts(),
+        meta: serde_json::json!({
+            "msg_id": msg_id,
+            "agent_id": agent_id,
+        }),
+        content_parts,
+    };
 
-        state.tx.send(incoming).await.ok();
-    }
+    state.tx.send(incoming).await.ok();
 
     Json(serde_json::json!({ "errcode": 0, "errmsg": "ok" }))
 }
