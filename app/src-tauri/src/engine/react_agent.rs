@@ -710,6 +710,26 @@ When using tools:
 - ALWAYS use delete_file instead of shell 'rm' commands to delete files or directories. \
 This ensures proper permission checks and prevents accidental deletion of important files.
 
+## 后台任务 (IMPORTANT)
+任何需要**创建文件**或**设置定时任务**的请求，都必须使用 `create_task` 创建后台任务。\
+后台任务在独立工作空间中执行，不影响主对话窗口的问答。
+
+### 必须使用 `create_task` 的场景：
+- 需要创建、写入、生成任何文件（代码、文档、网页、配置等）
+- 需要设置定时任务或周期性执行
+- 需要多步骤操作（构建项目、分析文档、批量处理等）
+- Examples: 帮我建个网站, 写一份报告, 创建一个脚本, 设置定时备份
+
+### 不需要使用 `create_task` 的场景：
+- 纯问答、解释概念、翻译文本
+- 只需要读取/搜索信息（不产生文件）
+- 简单的单步计算或查询
+
+### CRITICAL 规则：
+1. 不要在主对话中直接创建文件，一律通过 `create_task` 后台执行
+2. 创建任务后，立即用简短文字告知用户：任务已在后台开始执行，可以在右侧面板查看进度，不影响继续对话
+3. 不需要询问用户是否要后台执行，直接创建任务即可
+
 ## Presenting Results (IMPORTANT)
 After completing a task, you MUST make the results immediately visible to the user:
 - **Website/HTML**: Use browser_use(action='start', headed=true) to launch a visible browser, \
@@ -853,16 +873,19 @@ When setting up bots, open the developer console:
 /// Fixes:
 /// 1. Orphan tool results (tool messages without a preceding assistant tool_call)
 /// 2. Missing tool results (assistant has tool_calls but no matching tool response)
+/// 3. Tool messages not immediately following their parent assistant (strict APIs like DashScope)
 fn sanitize_messages(messages: &mut Vec<LLMMessage>) {
-    // Collect all tool_call IDs from assistant messages
-    let mut expected_tool_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut seen_tool_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    use std::collections::{HashMap, HashSet};
 
-    for msg in messages.iter() {
+    // Phase 1: Build a map of tool_call_id → assistant message index
+    let mut tool_call_to_assistant: HashMap<String, usize> = HashMap::new();
+    let mut seen_tool_ids: HashSet<String> = HashSet::new();
+
+    for (i, msg) in messages.iter().enumerate() {
         if msg.role == "assistant" {
             if let Some(calls) = &msg.tool_calls {
                 for call in calls {
-                    expected_tool_ids.insert(call.id.clone());
+                    tool_call_to_assistant.insert(call.id.clone(), i);
                 }
             }
         }
@@ -873,66 +896,93 @@ fn sanitize_messages(messages: &mut Vec<LLMMessage>) {
         }
     }
 
-    // Remove orphan tool messages (tool_call_id not in any assistant's tool_calls)
+    // Phase 2: Remove orphan tool messages (no matching assistant tool_call)
     let before = messages.len();
     messages.retain(|msg| {
         if msg.role == "tool" {
             if let Some(id) = &msg.tool_call_id {
-                return expected_tool_ids.contains(id);
+                return tool_call_to_assistant.contains_key(id);
             }
-            return false; // tool message without id
+            return false;
         }
         true
     });
-
     if messages.len() != before {
-        log::info!(
-            "Sanitized: removed {} orphan tool messages",
-            before - messages.len()
-        );
+        log::info!("Sanitized: removed {} orphan tool messages", before - messages.len());
     }
 
-    // For assistant messages with tool_calls that have no matching tool result,
-    // inject a placeholder tool result to keep the sequence valid
-    let missing_ids: Vec<String> = expected_tool_ids
-        .difference(&seen_tool_ids)
-        .cloned()
-        .collect();
+    // Phase 3: Inject placeholders for missing tool results
+    let expected_ids: HashSet<String> = tool_call_to_assistant.keys().cloned().collect();
+    let missing_ids: Vec<String> = expected_ids.difference(&seen_tool_ids).cloned().collect();
 
     if !missing_ids.is_empty() {
-        // Find where to insert — after the last message
         for id in &missing_ids {
-            // Find the assistant message that owns this tool_call
             let assistant_idx = messages.iter().position(|m| {
                 m.role == "assistant"
-                    && m.tool_calls
-                        .as_ref()
+                    && m.tool_calls.as_ref()
                         .map_or(false, |calls| calls.iter().any(|c| &c.id == id))
             });
-
             if let Some(idx) = assistant_idx {
-                // Find the right insertion point (after the assistant message and its existing tool results)
                 let mut insert_at = idx + 1;
                 while insert_at < messages.len() && messages[insert_at].role == "tool" {
                     insert_at += 1;
                 }
-
-                messages.insert(
-                    insert_at,
-                    LLMMessage {
-                        role: "tool".into(),
-                        content: Some(MessageContent::text("(result unavailable — from previous session)")),
-                        tool_calls: None,
-                        tool_call_id: Some(id.clone()),
-                    },
-                );
+                messages.insert(insert_at, LLMMessage {
+                    role: "tool".into(),
+                    content: Some(MessageContent::text("(result unavailable)")),
+                    tool_calls: None,
+                    tool_call_id: Some(id.clone()),
+                });
             }
         }
+        log::info!("Sanitized: injected {} placeholder tool results", missing_ids.len());
+    }
 
-        log::info!(
-            "Sanitized: injected {} placeholder tool results",
-            missing_ids.len()
-        );
+    // Phase 4: Ensure tool messages immediately follow their parent assistant.
+    // Some API providers (DashScope/Qwen) require strict ordering:
+    // assistant(tool_calls) must be immediately followed by its tool results.
+    // Re-arrange by collecting tool messages and re-inserting after their parent assistant.
+    let mut relocated = 0usize;
+    let mut i = 0;
+    while i < messages.len() {
+        if messages[i].role == "tool" {
+            let tool_call_id = match messages[i].tool_call_id.as_deref() {
+                Some(id) if !id.is_empty() => id.to_string(),
+                _ => { i += 1; continue; } // skip tool messages without valid ID
+            };
+            // Find the parent assistant
+            let parent_idx = messages[..i].iter().rposition(|m| {
+                m.role == "assistant"
+                    && m.tool_calls.as_ref()
+                        .map_or(false, |calls| calls.iter().any(|c| c.id == tool_call_id))
+            });
+            if let Some(pidx) = parent_idx {
+                // Check if this tool message is already in the correct position
+                // (immediately after parent assistant and any sibling tool messages)
+                let mut expected_pos = pidx + 1;
+                while expected_pos < messages.len()
+                    && expected_pos < i
+                    && messages[expected_pos].role == "tool"
+                {
+                    expected_pos += 1;
+                }
+                if expected_pos != i {
+                    // Need to relocate: remove from current position, insert after parent's tool block
+                    let tool_msg = messages.remove(i);
+                    let mut insert_at = pidx + 1;
+                    while insert_at < messages.len() && messages[insert_at].role == "tool" {
+                        insert_at += 1;
+                    }
+                    messages.insert(insert_at, tool_msg);
+                    relocated += 1;
+                    continue; // don't increment i since we removed an element
+                }
+            }
+        }
+        i += 1;
+    }
+    if relocated > 0 {
+        log::info!("Sanitized: relocated {} tool messages to correct positions", relocated);
     }
 }
 

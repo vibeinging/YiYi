@@ -182,7 +182,7 @@ function MainApp() {
   /** Render the active page */
   const renderPage = () => {
     switch (currentPage) {
-      case 'chat': return <ChatPage consumeNotifContext={consumeNotifContext} />;
+      case 'chat': return <ChatPage consumeNotifContext={consumeNotifContext} healthStatus={healthStatus} />;
       case 'skills': return <SkillsPage />;
       case 'cronjobs': return <CronJobsPage consumeNotifContext={consumeNotifContext} />;
       case 'workspace': return <WorkspacePage />;
@@ -218,9 +218,14 @@ function MainApp() {
     <div className={`h-screen flex ${appliedTheme}`} style={{ '--sidebar-width': `${sidebarWidth}px` } as React.CSSProperties}>
       {/* Task Sidebar (replaces old navigation sidebar) */}
       <TaskSidebar
-        healthStatus={healthStatus}
         currentPage={currentPage}
-        onPageChange={setCurrentPage}
+        onPageChange={(page) => {
+          setCurrentPage(page);
+          if (page === 'chat') {
+            // Signal Chat.tsx to switch to main session
+            window.dispatchEvent(new CustomEvent('chat:go-main'));
+          }
+        }}
         onNavigateToSession={(sessionId) => {
           useTaskSidebarStore.getState().navigateToSession(sessionId);
           setCurrentPage('chat');

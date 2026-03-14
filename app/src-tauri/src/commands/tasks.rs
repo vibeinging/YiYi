@@ -255,6 +255,21 @@ pub async fn confirm_background_task(
     // Push the original user message into task session
     state.db.push_message(&task.session_id, "user", &original_message)?;
 
+    // Extract plan from task record for spawning
+    let plan: Vec<String> = task.plan.as_ref()
+        .and_then(|p| serde_json::from_str(p).ok())
+        .unwrap_or_default();
+
+    // Spawn the background task execution (ReAct agent loop)
+    crate::engine::tools::spawn_task_execution(
+        task.id.clone(),
+        task.session_id.clone(),
+        task.title.clone(),
+        task.description.clone().unwrap_or_default(),
+        plan,
+        task.total_stages,
+    );
+
     Ok(task)
 }
 
@@ -286,6 +301,21 @@ pub async fn convert_to_long_task(
         )?;
     }
 
+    // Extract plan from task record for spawning
+    let plan: Vec<String> = task.plan.as_ref()
+        .and_then(|p| serde_json::from_str(p).ok())
+        .unwrap_or_default();
+
+    // Spawn the task execution (ReAct agent loop)
+    crate::engine::tools::spawn_task_execution(
+        task.id.clone(),
+        task.session_id.clone(),
+        task.title.clone(),
+        task.description.clone().unwrap_or_default(),
+        plan,
+        task.total_stages,
+    );
+
     Ok(task)
 }
 
@@ -302,4 +332,69 @@ pub async fn list_all_tasks_brief(
     state: State<'_, AppState>,
 ) -> Result<Vec<TaskInfo>, String> {
     state.db.list_tasks(None, None)
+}
+
+#[tauri::command]
+pub async fn open_task_folder(
+    task_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    // Validate task_id is a valid UUID to prevent path traversal
+    uuid::Uuid::parse_str(&task_id)
+        .map_err(|_| "Invalid task ID format".to_string())?;
+
+    let task = state.db.get_task(&task_id).map_err(|e| e.to_string())?;
+    let path = match &task {
+        Some(t) if t.workspace_path.is_some() => t.workspace_path.clone().unwrap(),
+        _ => {
+            // Fallback: use user workspace + task title (sanitized), or tasks/{id}
+            let user_ws = state.user_workspace();
+            if let Some(t) = &task {
+                let safe_title: String = t.title
+                    .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_")
+                    .trim()
+                    .to_string();
+                let name = if safe_title.is_empty() { task_id.clone() } else { safe_title };
+                user_ws.join(&name).to_string_lossy().to_string()
+            } else {
+                state.working_dir.join("tasks").join(&task_id).to_string_lossy().to_string()
+            }
+        }
+    };
+
+    let dir = std::path::Path::new(&path);
+    if !dir.exists() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("Failed to create dir: {}", e))?;
+    }
+
+    // Verify the resolved path is under working_dir or user_workspace
+    let canonical = std::fs::canonicalize(dir)
+        .map_err(|e| format!("Failed to resolve path: {}", e))?;
+    let working_dir_canon = std::fs::canonicalize(&state.working_dir)
+        .unwrap_or_else(|_| state.working_dir.clone());
+    let user_ws_canon = std::fs::canonicalize(&state.user_workspace())
+        .unwrap_or_else(|_| state.user_workspace());
+    if !canonical.starts_with(&working_dir_canon) && !canonical.starts_with(&user_ws_canon) {
+        return Err("Path is outside allowed directories".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| format!("Failed to open folder: {}", e))?;
+
+    #[cfg(target_os = "windows")]
+    std::process::Command::new("explorer")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| format!("Failed to open folder: {}", e))?;
+
+    #[cfg(target_os = "linux")]
+    std::process::Command::new("xdg-open")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| format!("Failed to open folder: {}", e))?;
+
+    Ok(())
 }

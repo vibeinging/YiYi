@@ -2349,7 +2349,7 @@ impl Database {
             None
         };
         conn.execute(
-            "UPDATE tasks SET status = ?1, updated_at = ?2, completed_at = COALESCE(?3, completed_at) WHERE id = ?4",
+            "UPDATE tasks SET status = ?1, updated_at = ?2, last_activity_at = ?2, completed_at = COALESCE(?3, completed_at) WHERE id = ?4",
             params![status, now, completed_at, task_id],
         )
         .map_err(|e| format!("Failed to update task status: {}", e))?;
@@ -2366,7 +2366,7 @@ impl Database {
         let now = now_ts();
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE tasks SET current_stage = ?1, total_stages = ?2, progress = ?3, updated_at = ?4 WHERE id = ?5",
+            "UPDATE tasks SET current_stage = ?1, total_stages = ?2, progress = ?3, updated_at = ?4, last_activity_at = ?4 WHERE id = ?5",
             params![current_stage, total_stages, progress, now, task_id],
         )
         .map_err(|e| format!("Failed to update task progress: {}", e))?;

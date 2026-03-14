@@ -85,3 +85,7 @@ export const getTaskByName = (name: string) =>
 // List all tasks brief info
 export const listAllTasksBrief = () =>
   invoke<TaskInfo[]>('list_all_tasks_brief');
+
+// Open task folder in system file manager
+export const openTaskFolder = (taskId: string) =>
+  invoke<void>('open_task_folder', { taskId });

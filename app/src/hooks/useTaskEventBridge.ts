@@ -25,7 +25,7 @@ export function useTaskEventBridge() {
     const getTaskId = (p: any): string => p.task_id || p.taskId || '';
 
     unlisteners.push(
-      // On task created: fetch full TaskInfo from backend
+      // On task created: add tab (without switching) so user stays in main chat
       listen('task://created', (event) => {
         if (cancelled) return;
         const p = event.payload as any;
@@ -36,6 +36,42 @@ export function useTaskEventBridge() {
           if (p.source === 'tool') {
             streamStore().taskStreamStart(taskId);
           }
+          // Add tab without switching — user stays in main session
+          if (p.source === 'tool' || p.source === 'background') {
+            const sessionId = p.session_id || p.sessionId;
+            const title = p.title || p.task_title || '任务';
+            if (sessionId) {
+              sidebar().addPendingNewTab(sessionId, title);
+            }
+          }
+        }
+      }),
+
+      listen('task://stream_chunk', (event) => {
+        if (cancelled) return;
+        const p = event.payload as any;
+        const taskId = getTaskId(p);
+        const text = p.text || '';
+        if (taskId && text) {
+          streamStore().taskStreamAppendChunk(taskId, text);
+        }
+      }),
+
+      listen('task://tool_start', (event) => {
+        if (cancelled) return;
+        const p = event.payload as any;
+        const taskId = getTaskId(p);
+        if (taskId) {
+          streamStore().taskStreamToolStart(taskId, p.name || '', p.preview || '');
+        }
+      }),
+
+      listen('task://tool_end', (event) => {
+        if (cancelled) return;
+        const p = event.payload as any;
+        const taskId = getTaskId(p);
+        if (taskId) {
+          streamStore().taskStreamToolEnd(taskId, p.name || '', p.preview || '');
         }
       }),
 
@@ -60,6 +96,9 @@ export function useTaskEventBridge() {
         streamStore().taskStreamEnd(taskId);
         setTimeout(() => streamStore().taskStreamRemove(taskId), 5000);
         toast.success(title ? `任务完成：${title}` : '任务已完成');
+        // Notify tab with green flash
+        const completedTask = sidebar().tasks.find(t => t.id === taskId);
+        if (completedTask) sidebar().notifyTab(completedTask.sessionId, 'complete');
       }),
 
       listen('task://failed', (event) => {
@@ -73,6 +112,9 @@ export function useTaskEventBridge() {
         streamStore().taskStreamEnd(taskId);
         setTimeout(() => streamStore().taskStreamRemove(taskId), 5000);
         toast.error(title ? `任务失败：${title}` : '任务执行失败');
+        // Notify tab with red flash
+        const failedTask = sidebar().tasks.find(t => t.id === taskId);
+        if (failedTask) sidebar().notifyTab(failedTask.sessionId, 'fail');
       }),
 
       listen('task://cancelled', (event) => {
@@ -112,7 +154,7 @@ export function useTaskEventBridge() {
       }),
     );
 
-    // Initial load
+    // Initial load (sidebar store is initialized separately in App.tsx)
     store().loadTasks();
 
     return () => {

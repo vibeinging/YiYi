@@ -152,7 +152,6 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
   errorMessage: null,
   longTask: { ...INITIAL_LONG_TASK },
   focusedTask: null,
-
   setSessionId: (id) => set({ sessionId: id }),
 
   startStream: () => set({

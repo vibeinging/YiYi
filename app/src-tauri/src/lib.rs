@@ -427,6 +427,7 @@ pub fn run() {
             commands::tasks::convert_to_long_task,
             commands::tasks::get_task_by_name,
             commands::tasks::list_all_tasks_brief,
+            commands::tasks::open_task_folder,
             // PTY
             commands::pty::pty_spawn,
             commands::pty::pty_write,

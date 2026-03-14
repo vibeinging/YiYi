@@ -1251,7 +1251,7 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
         ),
         tool_def(
             "create_task",
-            "当用户请求需要较长时间执行的复杂任务时，创建一个独立的后台任务。适用场景：建网站、分析长文档、批量处理文件、创建复杂项目等。不适用于简单问答或单步操作。创建后任务会在后台独立执行。",
+            "创建后台任务。任何需要创建/写入文件或设置定时任务的请求都必须使用此工具。任务在独立工作空间中后台执行，不影响主对话。不适用于纯问答、翻译等不产生文件的操作。",
             serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1272,32 +1272,7 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
                 "required": ["title", "description"]
             }),
         ),
-        tool_def(
-            "propose_background_task",
-            "When you determine a task will take a long time (multi-step file creation, code generation, complex analysis), call this tool to propose background execution to the user. The user can choose to run it in background or continue inline.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "task_name": {
-                        "type": "string",
-                        "description": "Short task name (e.g. '\u{521b}\u{5efa}\u{4e2a}\u{4eba}\u{4f5c}\u{54c1}\u{96c6}\u{7f51}\u{7ad9}')"
-                    },
-                    "task_description": {
-                        "type": "string",
-                        "description": "Brief description of what the task involves and estimated steps"
-                    },
-                    "context_summary": {
-                        "type": "string",
-                        "description": "Summary of conversation context: user requirements, preferences, constraints. This will be passed to the background task as initial context."
-                    },
-                    "estimated_steps": {
-                        "type": "number",
-                        "description": "Estimated number of steps"
-                    }
-                },
-                "required": ["task_name", "task_description", "context_summary"]
-            }),
-        ),
+        // propose_background_task removed — all file-creating tasks go through create_task directly
         tool_def(
             "create_workspace_dir",
             "Create a workspace directory for task file outputs. Call this BEFORE writing any files when the task will produce files (HTML, code, documents, etc.). The directory is created under the user's workspace (~/Documents/YiYiClaw/).",
@@ -1595,42 +1570,7 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         "send_file_to_user" => send_file_to_user_tool(&args).await,
         "create_task" => create_task_tool(&args).await,
         "spawn_agents" => spawn_agents_tool(args.clone()).await,
-        "propose_background_task" => {
-            // This tool returns a special result that the frontend renders as a confirmation card.
-            // The actual background task creation happens when the user clicks "后台执行".
-            let task_name = args.get("task_name").and_then(|v| v.as_str()).unwrap_or("Untitled Task");
-            let task_description = args.get("task_description").and_then(|v| v.as_str()).unwrap_or("");
-            let context_summary = args.get("context_summary").and_then(|v| v.as_str()).unwrap_or("");
-            let estimated_steps = args.get("estimated_steps").and_then(|v| v.as_u64()).unwrap_or(0);
-
-            // Emit event so frontend can show confirmation card
-            if let Some(handle) = APP_HANDLE.get() {
-                let _ = handle.emit("task://propose_background", serde_json::json!({
-                    "task_name": task_name,
-                    "task_description": task_description,
-                    "context_summary": context_summary,
-                    "estimated_steps": estimated_steps,
-                }));
-            }
-
-            // Include workspace_path if one was created for this session
-            let session_id = get_current_session_id();
-            let workspace_path = if !session_id.is_empty() {
-                let map = task_workspace_map().lock().await;
-                map.get(&session_id).cloned()
-            } else {
-                None
-            };
-
-            serde_json::json!({
-                "__type": "propose_background_task",
-                "task_name": task_name,
-                "task_description": task_description,
-                "context_summary": context_summary,
-                "estimated_steps": estimated_steps,
-                "workspace_path": workspace_path,
-            }).to_string()
-        }
+        // propose_background_task removed — handled by create_task directly
         "create_workspace_dir" => {
             let raw_name = args.get("dir_name").and_then(|v| v.as_str()).unwrap_or("task_output");
             // Sanitize: strip path separators and parent-dir references
@@ -1673,7 +1613,15 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
                 let session_id = get_current_session_id();
                 if !session_id.is_empty() {
                     let mut map = task_workspace_map().lock().await;
-                    map.insert(session_id, abs_path.clone());
+                    map.insert(session_id.clone(), abs_path.clone());
+                }
+
+                // Persist workspace_path to DB for the task (so open_task_folder can find it)
+                if session_id.starts_with("task:") {
+                    let task_id = &session_id["task:".len()..];
+                    if let Some(db) = DATABASE.get() {
+                        let _ = db.update_task_workspace_path(task_id, &abs_path);
+                    }
                 }
 
                 format!("Workspace directory created: {}\nAll task output files should be written to this directory.", abs_path)
@@ -1741,7 +1689,12 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
             match (get_pty_manager(), APP_HANDLE.get()) {
                 (Ok(mgr), Some(handle)) => {
                     match mgr.spawn(handle, command, &cmd_args, &cwd, cols, rows).await {
-                        Ok(sid) => format!("PTY session created: {}", sid),
+                        Ok(sid) => serde_json::json!({
+                            "__type": "pty_session",
+                            "session_id": sid,
+                            "command": command,
+                            "message": format!("PTY session created: {}", sid)
+                        }).to_string(),
                         Err(e) => format!("Error spawning PTY: {}", e),
                     }
                 }
@@ -4394,6 +4347,15 @@ struct AgentSpec {
 }
 
 async fn create_task_tool(args: &serde_json::Value) -> String {
+    // Prevent nested task creation: if we're already inside a task execution session,
+    // the agent should perform the work directly instead of spawning another task.
+    let current_sid = get_current_session_id();
+    if current_sid.starts_with("task:") {
+        return serde_json::json!({
+            "error": "已在任务执行上下文中，不能创建嵌套任务。请直接使用 write_file/edit_file/execute_shell 等工具完成工作。"
+        }).to_string();
+    }
+
     let title = args.get("title").and_then(|v| v.as_str()).unwrap_or("Untitled Task");
     let description = args.get("description").and_then(|v| v.as_str()).unwrap_or("");
     let plan: Vec<String> = args
@@ -4479,6 +4441,8 @@ async fn create_task_tool(args: &serde_json::Value) -> String {
 
     // Return result to the main conversation
     serde_json::json!({
+        "__type": "create_task",
+        "id": task_id,
         "task_id": task_id,
         "session_id": session_id,
         "status": "created",
@@ -4613,10 +4577,47 @@ pub fn spawn_task_execution(
             base_prompt = base_prompt,
         );
 
-        let user_message = format!(
-            "开始执行任务「{}」。请按照计划逐步完成。",
-            title
-        );
+        // Load conversation history from task session (context + user message pushed by confirm_background_task)
+        let history: Vec<super::llm_client::LLMMessage> = if let Some(db) = DATABASE.get() {
+            let msgs = db.get_recent_messages(&session_id, 50).unwrap_or_default();
+            msgs.iter().filter_map(|m| {
+                // Skip system messages (they're part of the prompt), only keep user/assistant/tool
+                if m.role == "system" {
+                    // Inject system context as part of user message instead
+                    None
+                } else {
+                    Some(super::llm_client::LLMMessage {
+                        role: m.role.clone(),
+                        content: Some(super::llm_client::MessageContent::text(&m.content)),
+                        tool_calls: None,
+                        tool_call_id: None,
+                    })
+                }
+            }).collect()
+        } else {
+            vec![]
+        };
+
+        // Use the last user message from history if available, otherwise generate one
+        let user_message = if let Some(last_user) = history.iter().rev().find(|m| m.role == "user") {
+            last_user.content.as_ref()
+                .and_then(|c| c.as_text())
+                .unwrap_or(&format!("开始执行任务「{}」。请按照计划逐步完成。", title))
+                .to_string()
+        } else {
+            format!("开始执行任务「{}」。请按照计划逐步完成。", title)
+        };
+        // History excludes the last user message (it's passed as current turn)
+        let task_history: Vec<super::llm_client::LLMMessage> = if !history.is_empty() {
+            let mut h = history;
+            // Remove the last user message since run_react will add it
+            if let Some(pos) = h.iter().rposition(|m| m.role == "user") {
+                h.remove(pos);
+            }
+            h
+        } else {
+            vec![]
+        };
 
         // Track progress from agent output
         let task_id_for_cb = task_id.clone();
@@ -4627,12 +4628,15 @@ pub fn spawn_task_execution(
         let on_event = move |evt: super::react_agent::AgentStreamEvent| {
             match &evt {
                 super::react_agent::AgentStreamEvent::Token(text) => {
-                    // Emit streaming chunk for frontend task stream
-                    if let Some(ref handle) = app_handle_for_cb {
-                        handle.emit("task://stream_chunk", serde_json::json!({
-                            "taskId": task_id_for_cb,
-                            "text": text,
-                        })).ok();
+                    // Strip [STAGE_COMPLETE: N] markers before sending to frontend
+                    let clean_text = strip_stage_markers(text);
+                    if !clean_text.is_empty() {
+                        if let Some(ref handle) = app_handle_for_cb {
+                            handle.emit("task://stream_chunk", serde_json::json!({
+                                "taskId": task_id_for_cb,
+                                "text": clean_text,
+                            })).ok();
+                        }
                     }
 
                     // Check for [STAGE_COMPLETE: N] markers
@@ -4683,20 +4687,43 @@ pub fn spawn_task_execution(
             }
         };
 
+        // Build persist callback for task session using global DATABASE reference
+        let persist_fn = {
+            let sid = session_id.clone();
+            Some(std::sync::Arc::new(move |evt: super::react_agent::ToolPersistEvent| {
+                let Some(db) = DATABASE.get() else { return };
+                match evt {
+                    super::react_agent::ToolPersistEvent::AssistantWithToolCalls { content, tool_calls_json } => {
+                        let metadata = serde_json::json!({
+                            "tool_calls": serde_json::from_str::<serde_json::Value>(&tool_calls_json).unwrap_or_default()
+                        }).to_string();
+                        db.push_message_with_metadata(&sid, "assistant", &content, Some(&metadata)).ok();
+                    }
+                    super::react_agent::ToolPersistEvent::ToolResult { tool_call_id, tool_name, result_content } => {
+                        let metadata = serde_json::json!({
+                            "tool_call_id": tool_call_id,
+                            "tool_name": tool_name,
+                        }).to_string();
+                        db.push_message_with_metadata(&sid, "tool", &result_content, Some(&metadata)).ok();
+                    }
+                }
+            }) as super::react_agent::PersistToolFn)
+        };
+
         // Execute the agent
         let result: Result<String, String> = if let Some(ref cancel) = cancel_signal {
             with_cancelled(cancel.clone(), Box::pin(
                 super::react_agent::run_react_with_options_stream(
                     &llm_config, &system_prompt, &user_message, &mcp_extra,
-                    &[], None, Some(&working_dir), on_event,
-                    Some(cancel.as_ref()), None,
+                    &task_history, None, Some(&working_dir), on_event,
+                    Some(cancel.as_ref()), persist_fn,
                 )
             )).await
         } else {
             super::react_agent::run_react_with_options_stream(
                 &llm_config, &system_prompt, &user_message, &mcp_extra,
-                &[], None, Some(&working_dir), on_event,
-                None, None,
+                &task_history, None, Some(&working_dir), on_event,
+                None, persist_fn,
             ).await
         };
 
@@ -4742,6 +4769,19 @@ pub fn spawn_task_execution(
             }
         }
     }));
+}
+
+/// Strip `[STAGE_COMPLETE: N]` markers from text so they don't appear in frontend.
+fn strip_stage_markers(text: &str) -> String {
+    let mut result = text.to_string();
+    while let Some(start) = result.find("[STAGE_COMPLETE:") {
+        if let Some(end) = result[start..].find(']') {
+            result.replace_range(start..start + end + 1, "");
+        } else {
+            break;
+        }
+    }
+    result
 }
 
 /// Parse `[STAGE_COMPLETE: N]` marker from text, returning the stage number.

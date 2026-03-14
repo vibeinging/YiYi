@@ -3,11 +3,11 @@
  *
  * Layout:
  * - Top: Logo + brand (drag region)
- * - Middle: Task list (Running > Scheduled > Completed, with empty state)
+ * - Middle: Task list (Pinned > Active > Scheduled > Date-grouped finished)
  * - Bottom: Quick nav icon bar (Chat, Skills, Bots, Settings, More)
  */
 
-import { memo, useState, useEffect, useCallback, useRef } from 'react';
+import { memo, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   CheckCircle, AlertCircle, Clock, Pause, XCircle,
   Settings, Puzzle, Bot, Zap, FolderOpen,
@@ -20,10 +20,8 @@ import { cancelTask, pauseTask, type TaskInfo } from '../api/tasks';
 import { deleteCronJob, pauseCronJob, resumeCronJob } from '../api/cronjobs';
 import { TASK_STATUS_CONFIG, timeAgo } from '../utils/taskStatus';
 import type { Page } from '../App';
-import logoImg from '../assets/yiyi-logo.png';
 
 interface TaskSidebarProps {
-  healthStatus: 'ok' | 'error' | 'checking';
   currentPage: Page;
   onPageChange: (page: Page) => void;
   onNavigateToSession: (sessionId: string) => void;
@@ -201,7 +199,6 @@ function SidebarTaskCard({ task }: { task: TaskInfo }) {
 
           {/* Title */}
           <span className="flex-1 truncate text-[12.5px] font-medium" style={{ color: 'var(--sidebar-text-active)' }}>
-            {task.pinned && <Pin size={9} className="inline mr-1 -mt-[1px]" style={{ color: 'var(--color-warning)', opacity: 0.8 }} />}
             {task.title}
           </span>
 
@@ -343,11 +340,64 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+// --- Date grouping helpers ---
+interface DateGroup {
+  label: string;
+  tasks: TaskInfo[];
+}
+
+function getDateGroupLabel(ts: number): string {
+  const now = new Date();
+  const date = new Date(ts);
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const yesterdayStart = todayStart - 86400_000;
+  // Monday of this week
+  const dayOfWeek = now.getDay() || 7; // Sunday=7
+  const weekStart = todayStart - (dayOfWeek - 1) * 86400_000;
+
+  if (ts >= todayStart) return '今天';
+  if (ts >= yesterdayStart) return '昨天';
+  if (ts >= weekStart) return '本周';
+  // Same month
+  if (date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth()) return '本月';
+  // Format as YYYY-MM
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function groupTasksByDate(tasks: TaskInfo[]): DateGroup[] {
+  const order = ['今天', '昨天', '本周', '本月'];
+  const groups = new Map<string, TaskInfo[]>();
+
+  for (const task of tasks) {
+    const label = getDateGroupLabel(task.completedAt || task.updatedAt || task.createdAt);
+    const list = groups.get(label);
+    if (list) list.push(task);
+    else groups.set(label, [task]);
+  }
+
+  // Sort tasks within each group by time desc
+  for (const list of groups.values()) {
+    list.sort((a, b) => (b.completedAt || b.updatedAt || b.createdAt) - (a.completedAt || a.updatedAt || a.createdAt));
+  }
+
+  // Sort groups: predefined order first, then chronologically desc for month labels
+  const result: DateGroup[] = [];
+  for (const label of order) {
+    const list = groups.get(label);
+    if (list) { result.push({ label, tasks: list }); groups.delete(label); }
+  }
+  // Remaining (month labels) sorted desc
+  const remaining = [...groups.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+  for (const [label, tasks] of remaining) {
+    result.push({ label, tasks });
+  }
+  return result;
+}
+
 // ═══════════════════════════════════════════
 // Main Sidebar Component
 // ═══════════════════════════════════════════
 export const TaskSidebar = memo(function TaskSidebar({
-  healthStatus,
   currentPage,
   onPageChange,
   onNavigateToSession,
@@ -360,22 +410,54 @@ export const TaskSidebar = memo(function TaskSidebar({
   const toggleSidebar = useTaskSidebarStore((s) => s.toggleSidebar);
 
   const [moreOpen, setMoreOpen] = useState(false);
-
-  const runningTasks = tasks.filter(t => t.status === 'running');
-  const pausedTasks = tasks.filter(t => t.status === 'paused');
-  const pendingTasks = tasks.filter(t => t.status === 'pending');
-  const activeTasks = [...runningTasks, ...pausedTasks, ...pendingTasks];
-  const finishedTasks = tasks.filter(t =>
-    t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled'
-  );
   const [showAllFinished, setShowAllFinished] = useState(false);
-  const visibleFinished = showAllFinished ? finishedTasks : finishedTasks.slice(0, 8);
-  const hasMoreFinished = finishedTasks.length > 8;
+
+  // Pinned tasks: sorted by lastActivityAt desc (pin time)
+  const pinnedTasks = useMemo(
+    () => tasks.filter(t => t.pinned).sort((a, b) => (b.lastActivityAt || b.updatedAt) - (a.lastActivityAt || a.updatedAt)),
+    [tasks],
+  );
+
+  // Active tasks (not pinned): running/paused/pending
+  const activeTasks = useMemo(
+    () => tasks.filter(t => !t.pinned && (t.status === 'running' || t.status === 'paused' || t.status === 'pending')),
+    [tasks],
+  );
+
+  // Finished tasks (not pinned), grouped by date
+  const finishedGroups = useMemo(() => {
+    const finished = tasks.filter(t => !t.pinned && (t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled'));
+    return groupTasksByDate(finished);
+  }, [tasks]);
+
+  const totalFinished = useMemo(() => finishedGroups.reduce((sum, g) => sum + g.tasks.length, 0), [finishedGroups]);
+
+  // Limit finished tasks when collapsed: show first N tasks across groups
+  const MAX_COLLAPSED_FINISHED = 8;
+  const visibleFinishedGroups = useMemo(() => {
+    if (showAllFinished) return finishedGroups;
+    let remaining = MAX_COLLAPSED_FINISHED;
+    const result: DateGroup[] = [];
+    for (const group of finishedGroups) {
+      if (remaining <= 0) break;
+      if (group.tasks.length <= remaining) {
+        result.push(group);
+        remaining -= group.tasks.length;
+      } else {
+        result.push({ label: group.label, tasks: group.tasks.slice(0, remaining) });
+        remaining = 0;
+      }
+    }
+    return result;
+  }, [finishedGroups, showAllFinished]);
+
+  const hasMoreFinished = totalFinished > MAX_COLLAPSED_FINISHED;
 
   const isMorePage = moreNavItems.some(n => n.id === currentPage);
 
   // ─── Collapsed ───
   if (sidebarCollapsed) {
+    const activeCount = activeTasks.length + pinnedTasks.filter(t => t.status === 'running' || t.status === 'paused' || t.status === 'pending').length;
     return (
       <aside
         className="flex flex-col shrink-0 items-center py-2 relative z-40"
@@ -385,22 +467,20 @@ export const TaskSidebar = memo(function TaskSidebar({
           borderRight: '1px solid var(--sidebar-border)',
         }}
       >
-        {/* Logo */}
-        <div className="h-12 shrink-0 flex items-center justify-center app-drag-region" onMouseDown={onDragMouseDown}>
-          <img src={logoImg} alt="YiYi" className="w-7 h-7 rounded-lg" style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))' }} />
-        </div>
+        {/* Drag region (traffic lights space on macOS) */}
+        <div className="h-10 shrink-0 flex items-center justify-center app-drag-region" onMouseDown={onDragMouseDown} />
 
         {/* Active task count */}
-        {activeTasks.length > 0 && (
+        {activeCount > 0 && (
           <button
             onClick={() => toggleSidebar(false)}
             className="mt-1 w-9 h-9 flex flex-col items-center justify-center rounded-xl transition-colors"
             style={{ color: 'var(--sidebar-text-active)' }}
             onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
             onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-            title={`${activeTasks.length} active tasks`}
+            title={`${activeCount} active tasks`}
           >
-            <span className="text-[13px] font-bold tabular-nums leading-none">{activeTasks.length}</span>
+            <span className="text-[13px] font-bold tabular-nums leading-none">{activeCount}</span>
             <div className="w-1 h-1 rounded-full mt-[3px]" style={{ background: 'var(--color-primary)', boxShadow: '0 0 4px var(--color-primary)' }} />
           </button>
         )}
@@ -446,6 +526,8 @@ export const TaskSidebar = memo(function TaskSidebar({
   }
 
   // ─── Expanded ───
+  const isEmpty = tasks.length === 0 && cronJobs.length === 0;
+
   return (
     <aside
       className="flex flex-col shrink-0 relative z-40"
@@ -455,27 +537,12 @@ export const TaskSidebar = memo(function TaskSidebar({
         borderRight: '1px solid var(--sidebar-border)',
       }}
     >
-      {/* ── Header: Logo + Brand ── */}
-      <div className="h-[52px] shrink-0 flex items-center gap-2.5 px-4 app-drag-region" onMouseDown={onDragMouseDown}>
-        <img src={logoImg} alt="YiYi" className="w-[26px] h-[26px] rounded-lg pointer-events-none" style={{ filter: 'drop-shadow(0 2px 6px rgba(0,0,0,0.3))' }} />
-        <span className="text-[13px] font-bold tracking-tight pointer-events-none" style={{ color: 'var(--sidebar-text-active)' }}>
-          YiYi
-        </span>
-        <div className="flex-1" />
-        <div className="flex items-center gap-1.5 pointer-events-none">
-          <div
-            className="w-[6px] h-[6px] rounded-full"
-            style={{
-              background: healthStatus === 'ok' ? 'var(--color-success)' : healthStatus === 'error' ? 'var(--color-error)' : 'var(--color-text-tertiary)',
-              boxShadow: healthStatus === 'ok' ? '0 0 6px var(--color-success)' : 'none',
-            }}
-          />
-        </div>
-      </div>
+      {/* ── Drag region (traffic lights space on macOS) ── */}
+      <div className="h-10 shrink-0 app-drag-region" onMouseDown={onDragMouseDown} />
 
       {/* ── Task List ── */}
       <div className="flex-1 overflow-y-auto py-0.5" style={{ scrollbarWidth: 'thin' }}>
-        {tasks.length === 0 && cronJobs.length === 0 ? (
+        {isEmpty ? (
           /* Empty state */
           <div className="flex flex-col items-center justify-center h-full px-6 text-center">
             <div className="w-10 h-10 rounded-2xl flex items-center justify-center mb-3" style={{ background: 'rgba(255,255,255,0.04)' }}>
@@ -490,7 +557,20 @@ export const TaskSidebar = memo(function TaskSidebar({
           </div>
         ) : (
           <>
-            {/* Active tasks */}
+            {/* Pinned tasks */}
+            {pinnedTasks.length > 0 && (
+              <div className="mb-1">
+                <SectionLabel>
+                  <Pin size={9} className="inline mr-1 -mt-[1px]" />
+                  置顶
+                </SectionLabel>
+                {pinnedTasks.map((task) => (
+                  <SidebarTaskCard key={task.id} task={task} />
+                ))}
+              </div>
+            )}
+
+            {/* Active tasks (not pinned) */}
             {activeTasks.length > 0 && (
               <div className="mb-1">
                 <SectionLabel>进行中</SectionLabel>
@@ -510,26 +590,27 @@ export const TaskSidebar = memo(function TaskSidebar({
               </div>
             )}
 
-            {/* Finished tasks */}
-            {finishedTasks.length > 0 && (
-              <div className="mb-1">
-                <SectionLabel>已完成</SectionLabel>
-                {visibleFinished.map((task) => (
+            {/* Finished tasks grouped by date */}
+            {visibleFinishedGroups.map((group) => (
+              <div key={group.label} className="mb-1">
+                <SectionLabel>{group.label}</SectionLabel>
+                {group.tasks.map((task) => (
                   <SidebarTaskCard key={task.id} task={task} />
                 ))}
-                {hasMoreFinished && !showAllFinished && (
-                  <button
-                    onClick={() => setShowAllFinished(true)}
-                    className="w-full flex items-center justify-center gap-1 py-2 text-[10px] font-medium rounded-lg transition-colors"
-                    style={{ color: 'var(--sidebar-text)', opacity: 0.5 }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--sidebar-hover)'; (e.currentTarget.style as any).opacity = '0.8'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; (e.currentTarget.style as any).opacity = '0.5'; }}
-                  >
-                    <ChevronDown size={11} />
-                    更多 ({finishedTasks.length - 8})
-                  </button>
-                )}
               </div>
+            ))}
+
+            {hasMoreFinished && !showAllFinished && (
+              <button
+                onClick={() => setShowAllFinished(true)}
+                className="w-full flex items-center justify-center gap-1 py-2 text-[10px] font-medium rounded-lg transition-colors"
+                style={{ color: 'var(--sidebar-text)', opacity: 0.5 }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--sidebar-hover)'; (e.currentTarget.style as any).opacity = '0.8'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; (e.currentTarget.style as any).opacity = '0.5'; }}
+              >
+                <ChevronDown size={11} />
+                更多 ({totalFinished - MAX_COLLAPSED_FINISHED})
+              </button>
             )}
           </>
         )}
