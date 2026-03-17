@@ -29,6 +29,11 @@ const DEFAULT_MAX_ITERATIONS: usize = 200;
 /// Token threshold to trigger context compaction.
 const COMPACT_THRESHOLD: usize = 80_000;
 
+/// Semaphore to limit concurrent background LLM calls (reflections, feedback learning).
+/// Prevents API rate limit exhaustion when many tasks complete simultaneously.
+static GROWTH_LLM_SEMAPHORE: std::sync::LazyLock<tokio::sync::Semaphore> =
+    std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(3));
+
 /// Compact summary file name within working_dir.
 const COMPACT_SUMMARY_FILE: &str = ".compact_summary.txt";
 
@@ -586,6 +591,23 @@ fn strip_yaml_frontmatter(content: &str) -> String {
 
 /// Build the system prompt asynchronously.
 /// Tool list is auto-generated from builtin_tools() to stay in sync.
+/// Sanitize a string before injecting into system prompt.
+/// Truncates, forces single-line, and strips injection-like patterns.
+fn sanitize_prompt_field(s: &str, max_chars: usize) -> String {
+    let truncated: String = s.chars().take(max_chars).collect();
+    // Force single line (strip newlines that could break prompt structure)
+    let single_line = truncated.replace('\n', " ").replace('\r', " ");
+    // Strip patterns that look like prompt injection attempts
+    let cleaned = single_line
+        .replace("ignore", "")
+        .replace("IGNORE", "")
+        .replace("override", "")
+        .replace("OVERRIDE", "")
+        .replace("new role", "")
+        .replace("forget", "");
+    cleaned.trim().to_string()
+}
+
 pub async fn build_system_prompt(
     working_dir: &std::path::Path,
     user_workspace: Option<&std::path::Path>,
@@ -849,14 +871,13 @@ When setting up bots, open the developer console:
     if let Some(db) = super::tools::get_database() {
         let corrections = db.get_active_corrections(5);
         if !corrections.is_empty() {
-            prompt.push_str("\n\n## Learned Behaviors (from past feedback)\n");
-            for (trigger, behavior, source) in &corrections {
-                let source_hint = if source.is_empty() {
-                    String::new()
-                } else {
-                    format!(" [{}]", source)
-                };
-                prompt.push_str(&format!("- {}: {}{}\n", trigger, behavior, source_hint));
+            prompt.push_str("\n\n## Learned Behaviors (from past feedback)\n\
+                             These are behavioral rules learned from user feedback. Follow them.\n");
+            for (trigger, behavior, _source) in &corrections {
+                // Sanitize: truncate, single-line, strip injection-like keywords
+                let safe_trigger = sanitize_prompt_field(trigger, 80);
+                let safe_behavior = sanitize_prompt_field(behavior, 150);
+                prompt.push_str(&format!("- {}: {}\n", safe_trigger, safe_behavior));
             }
         }
 
@@ -888,8 +909,9 @@ When setting up bots, open the developer console:
                 } else {
                     " [never run]".into()
                 };
+                let safe_desc = sanitize_prompt_field(&entry.description, 120);
                 prompt.push_str(&format!("- **{}** ({}): {}{}\n",
-                    entry.name, entry.language, entry.description, status
+                    entry.name, entry.language, safe_desc, status
                 ));
             }
             if code_entries.len() > 10 {
@@ -1397,6 +1419,15 @@ pub async fn reflect_on_task(
 ) {
     use super::tools::get_database;
 
+    // Rate limit: max 3 concurrent background LLM calls
+    let _permit = match GROWTH_LLM_SEMAPHORE.try_acquire() {
+        Ok(p) => p,
+        Err(_) => {
+            log::debug!("Growth reflection skipped: too many concurrent LLM calls");
+            return;
+        }
+    };
+
     let db = match get_database() {
         Some(db) => db,
         None => return,
@@ -1512,6 +1543,15 @@ pub async fn learn_from_feedback(
     agent_response: &str,
 ) {
     use super::tools::get_database;
+
+    // Rate limit: max 3 concurrent background LLM calls
+    let _permit = match GROWTH_LLM_SEMAPHORE.try_acquire() {
+        Ok(p) => p,
+        Err(_) => {
+            log::debug!("Feedback learning skipped: too many concurrent LLM calls");
+            return;
+        }
+    };
 
     let db = match get_database() {
         Some(db) => db,

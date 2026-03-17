@@ -30,6 +30,17 @@ const resources = {
           system: '系统',
         },
       },
+      // Growth
+      growth: {
+        pageTitle: 'YiYi 的成长',
+        pageDesc: '追踪 YiYi 如何学习、改进和成长',
+        emptyTitle: 'YiYi 刚刚起步',
+        emptyDesc: '试着让 YiYi 帮你完成一个实际任务——编程、写文档或自动化操作。第一次使用工具后，成长数据就会出现。',
+        stats: { tasksCompleted: '完成任务', successRate: '成功率', lessonsLearned: '经验积累' },
+        sections: { capabilityProfile: '能力画像', lessonsLearned: '经验教训', timeline: '成长时间线' },
+        skillSuggestion: { title: '成长机会' },
+        timeline: { lesson: '经验', adjusted: '调整', firstTask: '首个任务', newSkill: '新技能', improved: '提升' },
+      },
       // Theme
       theme: {
         light: '浅色',

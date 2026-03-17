@@ -3,6 +3,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Sprout, TrendingUp, Target, BookOpen,
   RefreshCw, Loader2,
@@ -14,6 +15,7 @@ import {
 } from '../api/system';
 
 export function GrowthPage() {
+  const { t } = useTranslation();
   const [data, setData] = useState<GrowthData | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -38,8 +40,8 @@ export function GrowthPage() {
   return (
     <div className="h-full overflow-y-auto px-6 py-6">
       <PageHeader
-        title="YiYi's Growth"
-        description="Track how YiYi learns, improves, and grows with you."
+        title={t('growth.pageTitle', "YiYi's Growth")}
+        description={t('growth.pageDesc', 'Track how YiYi learns, improves, and grows with you.')}
         actions={
           <button
             onClick={loadData}
@@ -51,7 +53,7 @@ export function GrowthPage() {
             }}
           >
             {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-            Refresh
+            {t('common.refresh', 'Refresh')}
           </button>
         }
       />
@@ -93,15 +95,15 @@ export function GrowthPage() {
 }
 
 function EmptyState() {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col items-center justify-center h-64 text-center" style={{ color: 'var(--color-text-tertiary)' }}>
       <Sprout size={48} className="mb-4 opacity-40" />
       <p className="text-lg font-medium mb-1" style={{ color: 'var(--color-text-secondary)' }}>
-        YiYi is just getting started
+        {t('growth.emptyTitle', 'YiYi is just getting started')}
       </p>
       <p className="text-[13px] max-w-sm leading-relaxed">
-        Try asking YiYi to help with a real task — write code, create a document, or automate something.
-        Growth data appears after your first interaction that involves tool usage.
+        {t('growth.emptyDesc', 'Try asking YiYi to help with a real task — write code, create a document, or automate something. Growth data appears after your first interaction that involves tool usage.')}
       </p>
     </div>
   );
@@ -130,7 +132,7 @@ function StatsCards({ report }: { report: GrowthReport }) {
   ];
 
   return (
-    <div className="grid grid-cols-3 gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
       {cards.map((card, i) => (
         <div
           key={i}

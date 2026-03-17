@@ -428,7 +428,8 @@ impl Database {
                 hit_count INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_corrections_active ON corrections(active);",
+            CREATE INDEX IF NOT EXISTS idx_corrections_active ON corrections(active);
+            CREATE INDEX IF NOT EXISTS idx_corrections_sort ON corrections(active, hit_count DESC, created_at DESC);",
         )
         .map_err(|e| format!("Failed to create corrections table: {}", e))?;
 
@@ -448,7 +449,8 @@ impl Database {
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_code_registry_name ON code_registry(name);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_code_registry_name ON code_registry(name);
+            CREATE INDEX IF NOT EXISTS idx_code_registry_path ON code_registry(path);
             CREATE INDEX IF NOT EXISTS idx_code_registry_skill ON code_registry(skill_name);",
         )
         .map_err(|e| format!("Failed to create code_registry table: {}", e))?;
@@ -2589,28 +2591,28 @@ impl Database {
         skill_name: Option<&str>,
     ) -> Result<String, String> {
         let conn = self.conn.lock().unwrap();
-        // Upsert: if same name exists, update it
-        let existing: Option<String> = conn
-            .query_row("SELECT id FROM code_registry WHERE name = ?1", params![name], |r| r.get(0))
-            .optional()
-            .map_err(|e| format!("Query error: {}", e))?;
-
+        let id = uuid::Uuid::new_v4().to_string();
         let now = now_ts();
-        if let Some(id) = existing {
-            conn.execute(
-                "UPDATE code_registry SET path = ?1, description = ?2, language = ?3, invoke_hint = ?4, skill_name = ?5, updated_at = ?6 WHERE id = ?7",
-                params![path, description, language, invoke_hint, skill_name, now, id],
-            ).map_err(|e| format!("Update error: {}", e))?;
-            Ok(id)
-        } else {
-            let id = uuid::Uuid::new_v4().to_string();
-            conn.execute(
-                "INSERT INTO code_registry (id, name, path, description, language, invoke_hint, skill_name, run_count, success_count, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, 0, ?8, ?9)",
-                params![id, name, path, description, language, invoke_hint, skill_name, now, now],
-            ).map_err(|e| format!("Insert error: {}", e))?;
-            Ok(id)
-        }
+
+        // Atomic UPSERT: INSERT or UPDATE on name conflict (no race condition)
+        conn.execute(
+            "INSERT INTO code_registry (id, name, path, description, language, invoke_hint, skill_name, run_count, success_count, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, 0, ?8, ?9)
+             ON CONFLICT(name) DO UPDATE SET
+               path = excluded.path,
+               description = excluded.description,
+               language = excluded.language,
+               invoke_hint = excluded.invoke_hint,
+               skill_name = excluded.skill_name,
+               updated_at = excluded.updated_at",
+            params![id, name, path, description, language, invoke_hint, skill_name, now, now],
+        ).map_err(|e| format!("Upsert error: {}", e))?;
+
+        // Return the actual id (may be existing or new)
+        let actual_id: String = conn
+            .query_row("SELECT id FROM code_registry WHERE name = ?1", params![name], |r| r.get(0))
+            .map_err(|e| format!("Query error: {}", e))?;
+        Ok(actual_id)
     }
 
     /// Record a script execution result (success or failure with error).
