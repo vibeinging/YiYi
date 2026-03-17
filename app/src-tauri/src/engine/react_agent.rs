@@ -872,7 +872,7 @@ When setting up bots, open the developer console:
 
     // Inject code library summary (so LLM knows what scripts are available)
     if let Some(db) = super::tools::get_database() {
-        let code_entries = db.list_code_registry();
+        let code_entries = db.search_code_registry("", 10);
         if !code_entries.is_empty() {
             prompt.push_str("\n\n## My Code Library (scripts I've created)\n\
                              Before writing new code, check if something similar exists here. Use `search_my_code` for details.\n");
@@ -1603,8 +1603,8 @@ JSON only:"#
 /// Returns a summary of success rate, failure patterns, and recommended actions.
 pub fn generate_growth_report(db: &super::db::Database) -> Option<GrowthReport> {
     let reflections = db.get_recent_reflections(50);
-    if reflections.len() < 3 {
-        return None; // Not enough data
+    if reflections.is_empty() {
+        return None;
     }
 
     let total = reflections.len();
@@ -1619,12 +1619,7 @@ pub fn generate_growth_report(db: &super::db::Database) -> Option<GrowthReport> 
         .filter(|l| !l.is_empty())
         .collect();
 
-    // Collect skill opportunities
-    let skill_opps: Vec<&str> = reflections
-        .iter()
-        .filter_map(|(_, _, _)| None::<&str>) // skill_opportunity not in get_recent_reflections yet
-        .collect();
-    let _ = skill_opps; // suppress warning, will be used when we extend get_recent_reflections
+    // Skill opportunities are handled separately by detect_skill_opportunity()
 
     Some(GrowthReport {
         total_tasks: total,

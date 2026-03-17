@@ -2059,7 +2059,7 @@ async fn write_file_tool(args: &serde_json::Value) -> String {
                     // Extract first comment line as description, or use filename
                     let desc = content.lines()
                         .find(|l| l.starts_with('#') || l.starts_with("//") || l.starts_with("\"\"\""))
-                        .map(|l| l.trim_start_matches(['#', '/', ' ', '"']).trim().to_string())
+                        .map(|l| l.trim_matches(['#', '/', ' ', '"', '!', '\'']).trim().to_string())
                         .filter(|d| d.len() > 5)
                         .unwrap_or_else(|| format!("Script: {}", stem));
                     db.register_code(stem, path, &desc, lang, None, None).ok();

@@ -849,6 +849,8 @@ pub async fn chat_stream_start(
         let sid_for_event = sid_clone.clone();
         let thinking_buf = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
         let thinking_buf_for_event = thinking_buf.clone();
+        let tool_call_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let tool_count_for_event = tool_call_count.clone();
         let on_event = move |evt: react_agent::AgentStreamEvent| {
             match &evt {
                 react_agent::AgentStreamEvent::Token(text) => {
@@ -894,6 +896,7 @@ pub async fn chat_stream_start(
                     }
                 }
                 react_agent::AgentStreamEvent::ToolEnd { name, result_preview } => {
+                    tool_count_for_event.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     handle
                         .emit(
                             "chat://tool_status",
@@ -1134,6 +1137,24 @@ pub async fn chat_stream_start(
                                         ).await;
                                     });
                                 }
+                            }
+
+                            // Growth System: reflect on chat if tools were used (real work done)
+                            if tool_call_count.load(std::sync::atomic::Ordering::Relaxed) > 0 {
+                                let config_ref = ctx.config.clone();
+                                let user_msg = ctx.augmented_message.clone();
+                                let reply_ref = last_reply.clone();
+                                let sid_ref = sid_clone.clone();
+                                tokio::spawn(async move {
+                                    react_agent::reflect_on_task(
+                                        &config_ref,
+                                        None,
+                                        Some(&sid_ref),
+                                        &user_msg,
+                                        &reply_ref,
+                                        true,
+                                    ).await;
+                                });
                             }
 
                             break;

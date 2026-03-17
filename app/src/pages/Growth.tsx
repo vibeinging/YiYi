@@ -99,8 +99,9 @@ function EmptyState() {
       <p className="text-lg font-medium mb-1" style={{ color: 'var(--color-text-secondary)' }}>
         YiYi is just getting started
       </p>
-      <p className="text-[13px] max-w-sm">
-        As you use YiYi for tasks, she'll learn and grow. Check back here to see her progress.
+      <p className="text-[13px] max-w-sm leading-relaxed">
+        Try asking YiYi to help with a real task — write code, create a document, or automate something.
+        Growth data appears after your first interaction that involves tool usage.
       </p>
     </div>
   );

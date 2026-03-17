@@ -2644,24 +2644,31 @@ impl Database {
             conn.execute(sql_failure, params![error.unwrap_or("unknown"), now, path]).unwrap_or(0)
         };
 
-        // If no path match, try by file stem as name
+        // If no path match, try by file stem — but only if exactly one match exists
         if affected == 0 {
             let stem = std::path::Path::new(path)
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("");
             if !stem.is_empty() {
-                if success {
-                    conn.execute(
-                        "UPDATE code_registry SET run_count = run_count + 1, success_count = success_count + 1, last_error = NULL, updated_at = ?1 WHERE name = ?2",
-                        params![now, stem],
-                    ).ok();
-                } else {
-                    conn.execute(
-                        "UPDATE code_registry SET run_count = run_count + 1, last_error = ?1, updated_at = ?2 WHERE name = ?3",
-                        params![error.unwrap_or("unknown"), now, stem],
-                    ).ok();
+                // Check uniqueness before updating to prevent cross-contamination
+                let count: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM code_registry WHERE name = ?1", params![stem], |r| r.get(0))
+                    .unwrap_or(0);
+                if count == 1 {
+                    if success {
+                        conn.execute(
+                            "UPDATE code_registry SET run_count = run_count + 1, success_count = success_count + 1, last_error = NULL, updated_at = ?1 WHERE name = ?2",
+                            params![now, stem],
+                        ).ok();
+                    } else {
+                        conn.execute(
+                            "UPDATE code_registry SET run_count = run_count + 1, last_error = ?1, updated_at = ?2 WHERE name = ?3",
+                            params![error.unwrap_or("unknown"), now, stem],
+                        ).ok();
+                    }
                 }
+                // If count > 1, skip to avoid contaminating wrong entry
             }
         }
     }
