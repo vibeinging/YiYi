@@ -284,6 +284,8 @@ pub fn run() {
             commands::system::set_app_flag,
             commands::system::get_growth_report,
             commands::system::get_morning_greeting,
+            commands::system::disable_correction,
+            commands::system::consolidate_principles,
             // Models & Providers
             commands::models::list_providers,
             commands::models::configure_provider,

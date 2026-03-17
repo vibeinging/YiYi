@@ -867,21 +867,39 @@ When setting up bots, open the developer console:
         tool_list = tool_list,
     ));
 
-    // Load behavioral corrections from Growth System
-    if let Some(db) = super::tools::get_database() {
+    // Load behavioral principles from Growth System (consolidated from corrections)
+    let principles = super::memory::read_principles_md(working_dir);
+    if !principles.is_empty() {
+        let truncated = if principles.len() > 800 {
+            let boundary = principles
+                .char_indices()
+                .take_while(|(i, _)| *i <= 800)
+                .last()
+                .map(|(i, c)| i + c.len_utf8())
+                .unwrap_or(0);
+            &principles[..boundary]
+        } else {
+            &principles
+        };
+        prompt.push_str(&format!(
+            "\n\n## Behavioral Principles (learned from your feedback)\n{}\n",
+            sanitize_prompt_field(truncated, 800)
+        ));
+    } else if let Some(db) = super::tools::get_database() {
+        // Fallback: if no PRINCIPLES.md yet, inject raw corrections (will be consolidated later)
         let corrections = db.get_active_corrections(5);
         if !corrections.is_empty() {
-            prompt.push_str("\n\n## Learned Behaviors (from past feedback)\n\
-                             These are behavioral rules learned from user feedback. Follow them.\n");
-            for (trigger, behavior, _source) in &corrections {
-                // Sanitize: truncate, single-line, strip injection-like keywords
+            prompt.push_str("\n\n## Learned Behaviors (from past feedback)\n");
+            for (trigger, behavior, _) in &corrections {
                 let safe_trigger = sanitize_prompt_field(trigger, 80);
                 let safe_behavior = sanitize_prompt_field(behavior, 150);
                 prompt.push_str(&format!("- {}: {}\n", safe_trigger, safe_behavior));
             }
         }
+    }
 
-        // Skill genesis: proactively suggest creating a skill if pattern detected
+    // Skill genesis + consolidation trigger
+    if let Some(db) = super::tools::get_database() {
         if let Some(suggestion) = detect_skill_opportunity(&db) {
             prompt.push_str(&format!(
                 "\n\n## Proactive Suggestion\n{}\n\
@@ -1630,7 +1648,23 @@ JSON only:"#
         &parsed.correct_behavior,
         Some("user_feedback"),
     ) {
-        Ok(id) => log::info!("Correction rule saved: {}", id),
+        Ok(id) => {
+            log::info!("Correction rule saved: {}", id);
+            // Auto-consolidate when corrections accumulate (every 5 new corrections)
+            let count = db.count_active_corrections();
+            if count >= 3 && count % 5 == 0 {
+                if let Some(working_dir) = super::tools::get_working_dir() {
+                    let cfg = config.clone();
+                    let wd = working_dir.clone();
+                    tokio::spawn(async move {
+                        match consolidate_corrections_to_principles(&cfg, &super::tools::get_database().unwrap(), &wd).await {
+                            Ok(msg) => log::info!("Auto-consolidation: {}", msg),
+                            Err(e) => log::warn!("Auto-consolidation failed: {}", e),
+                        }
+                    });
+                }
+            }
+        }
         Err(e) => log::warn!("Failed to save correction: {}", e),
     }
 }
@@ -2023,4 +2057,105 @@ pub fn build_growth_timeline(db: &super::db::Database, limit: usize) -> Vec<Grow
     milestones.sort_by(|a, b| b.date.cmp(&a.date));
     milestones.truncate(limit);
     milestones
+}
+
+// ---------------------------------------------------------------------------
+// Growth System — Principles Consolidation
+// ---------------------------------------------------------------------------
+
+/// Consolidate active corrections into PRINCIPLES.md.
+/// Called periodically (e.g. when correction count exceeds threshold).
+/// Uses LLM to merge, deduplicate, and resolve conflicts between raw corrections.
+pub async fn consolidate_corrections_to_principles(
+    config: &LLMConfig,
+    db: &super::db::Database,
+    working_dir: &std::path::Path,
+) -> Result<String, String> {
+    let _permit = match GROWTH_LLM_SEMAPHORE.try_acquire() {
+        Ok(p) => p,
+        Err(_) => return Err("Too many concurrent growth LLM calls".into()),
+    };
+
+    let all_corrections = db.get_all_active_corrections();
+    if all_corrections.is_empty() {
+        return Ok("No active corrections to consolidate.".into());
+    }
+
+    // Load existing principles for context
+    let existing_principles = super::memory::read_principles_md(working_dir);
+
+    // Build correction list for LLM
+    let mut corrections_text = String::new();
+    for (i, (trigger, behavior, _)) in all_corrections.iter().enumerate() {
+        corrections_text.push_str(&format!("{}. When {}: {}\n", i + 1, trigger, behavior));
+    }
+
+    let prompt_text = format!(
+        r#"You are consolidating behavioral correction rules into a concise set of principles.
+
+Raw correction rules ({count} total):
+{corrections}
+{existing_context}
+Task: Merge these into a concise list of behavioral principles (max 10 items).
+- Combine similar/overlapping rules
+- Resolve any contradictions (prefer the more specific rule)
+- Write each principle as a short, actionable statement
+- Remove redundant or trivial rules
+- Keep the language matching the original rules (Chinese or English)
+
+Respond with ONLY the consolidated principles, one per line, prefixed with "- ".
+Example:
+- Always confirm before git push
+- Prefer edit_file over write_file for existing files
+- Keep responses concise unless user asks for detail
+
+Consolidated principles:"#,
+        count = all_corrections.len(),
+        corrections = corrections_text,
+        existing_context = if existing_principles.is_empty() {
+            String::new()
+        } else {
+            format!("\nExisting principles (update/extend these):\n{}\n", existing_principles)
+        },
+    );
+
+    let messages = vec![LLMMessage {
+        role: "user".into(),
+        content: Some(MessageContent::text(prompt_text)),
+        tool_calls: None,
+        tool_call_id: None,
+    }];
+
+    let result = match chat_completion(config, &messages, &[]).await {
+        Ok(resp) => resp.message.content.map(|c| c.into_text()).unwrap_or_default(),
+        Err(e) => return Err(format!("LLM consolidation failed: {}", e)),
+    };
+
+    // Extract only lines starting with "- "
+    let principles: Vec<&str> = result
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| l.starts_with("- ") || l.starts_with("* "))
+        .collect();
+
+    if principles.is_empty() {
+        return Err("LLM returned no valid principles".into());
+    }
+
+    let principles_content = principles.join("\n");
+
+    // Write to PRINCIPLES.md
+    super::memory::write_principles_md(working_dir, &principles_content)?;
+
+    log::info!(
+        "Consolidated {} corrections into {} principles",
+        all_corrections.len(),
+        principles.len()
+    );
+
+    Ok(format!(
+        "Consolidated {} corrections into {} principles.",
+        all_corrections.len(),
+        principles.len()
+    ))
 }

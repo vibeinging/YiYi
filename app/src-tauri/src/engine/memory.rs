@@ -40,6 +40,19 @@ pub fn write_memory_md(working_dir: &Path, content: &str) -> Result<(), String> 
     fs::write(&path, content).map_err(|e| format!("Failed to write MEMORY.md: {e}"))
 }
 
+/// Read PRINCIPLES.md content (behavioral guidelines consolidated from corrections)
+pub fn read_principles_md(working_dir: &Path) -> String {
+    let path = memory_dir(working_dir).join("PRINCIPLES.md");
+    fs::read_to_string(&path).unwrap_or_default()
+}
+
+/// Write/overwrite PRINCIPLES.md
+pub fn write_principles_md(working_dir: &Path, content: &str) -> Result<(), String> {
+    ensure_memory_dir(working_dir)?;
+    let path = memory_dir(working_dir).join("PRINCIPLES.md");
+    fs::write(&path, content).map_err(|e| format!("Failed to write PRINCIPLES.md: {e}"))
+}
+
 /// Append entry to today's diary (uses OpenOptions::append for atomicity)
 pub fn append_diary(
     working_dir: &Path,

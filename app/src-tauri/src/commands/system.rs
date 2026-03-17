@@ -669,3 +669,29 @@ pub async fn get_morning_greeting(
 
     Ok(generate_morning_reflection(&config, &state.db).await)
 }
+
+/// Disable a correction rule by id.
+#[tauri::command]
+pub async fn disable_correction(
+    state: State<'_, AppState>,
+    correction_id: String,
+) -> Result<(), String> {
+    state.db.disable_correction(&correction_id)
+}
+
+/// Manually trigger principles consolidation.
+#[tauri::command]
+pub async fn consolidate_principles(
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    use crate::engine::react_agent::consolidate_corrections_to_principles;
+    use crate::commands::agent::resolve_llm_config;
+
+    let config = resolve_llm_config(&state).await?;
+    let working_dir = state.db.get_config("working_dir")
+        .map(std::path::PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|h| h.join(".yiyiclaw")))
+        .ok_or("Cannot determine working directory")?;
+
+    consolidate_corrections_to_principles(&config, &state.db, &working_dir).await
+}

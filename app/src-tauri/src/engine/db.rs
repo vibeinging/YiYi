@@ -2554,6 +2554,26 @@ impl Database {
         .unwrap_or_default()
     }
 
+    /// Get all active corrections (for consolidation into PRINCIPLES.md).
+    pub fn get_all_active_corrections(&self) -> Vec<(String, String, String)> {
+        self.get_active_corrections(500)
+    }
+
+    /// Count active corrections.
+    pub fn count_active_corrections(&self) -> usize {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row("SELECT COUNT(*) FROM corrections WHERE active = 1", [], |r| r.get::<_, i64>(0))
+            .unwrap_or(0) as usize
+    }
+
+    /// Disable a correction by id.
+    pub fn disable_correction(&self, id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE corrections SET active = 0 WHERE id = ?1", params![id])
+            .map_err(|e| format!("Failed to disable correction: {}", e))?;
+        Ok(())
+    }
+
     /// Get recent reflections for growth analysis.
     pub fn get_recent_reflections(&self, limit: usize) -> Vec<(String, String, Option<String>)> {
         let conn = self.conn.lock().unwrap();
