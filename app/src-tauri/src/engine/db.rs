@@ -2630,6 +2630,42 @@ impl Database {
         }
     }
 
+    /// Record execution by path (more reliable than name matching).
+    pub fn record_code_execution_by_path(&self, path: &str, success: bool, error: Option<&str>) {
+        let conn = self.conn.lock().unwrap();
+        let now = now_ts();
+        // Try exact path match first, then fall back to name match using file stem
+        let sql_success = "UPDATE code_registry SET run_count = run_count + 1, success_count = success_count + 1, last_error = NULL, updated_at = ?1 WHERE path = ?2";
+        let sql_failure = "UPDATE code_registry SET run_count = run_count + 1, last_error = ?1, updated_at = ?2 WHERE path = ?3";
+
+        let affected = if success {
+            conn.execute(sql_success, params![now, path]).unwrap_or(0)
+        } else {
+            conn.execute(sql_failure, params![error.unwrap_or("unknown"), now, path]).unwrap_or(0)
+        };
+
+        // If no path match, try by file stem as name
+        if affected == 0 {
+            let stem = std::path::Path::new(path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            if !stem.is_empty() {
+                if success {
+                    conn.execute(
+                        "UPDATE code_registry SET run_count = run_count + 1, success_count = success_count + 1, last_error = NULL, updated_at = ?1 WHERE name = ?2",
+                        params![now, stem],
+                    ).ok();
+                } else {
+                    conn.execute(
+                        "UPDATE code_registry SET run_count = run_count + 1, last_error = ?1, updated_at = ?2 WHERE name = ?3",
+                        params![error.unwrap_or("unknown"), now, stem],
+                    ).ok();
+                }
+            }
+        }
+    }
+
     /// Search code registry by name or description keywords.
     pub fn search_code_registry(&self, query: &str, limit: usize) -> Vec<CodeRegistryEntry> {
         let conn = self.conn.lock().unwrap();

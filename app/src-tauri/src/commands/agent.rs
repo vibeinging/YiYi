@@ -1094,13 +1094,26 @@ pub async fn chat_stream_start(
                             }
 
                             // Growth System: detect implicit negative feedback in user message
+                            // Safety: only trigger on short messages that START with correction keywords
+                            // to avoid false positives like "不要忘记加测试" or "what's wrong with this code?"
                             {
-                                let user_msg_lower = ctx.augmented_message.to_lowercase();
-                                let is_correction = [
-                                    "不对", "不要", "不是这样", "重来", "重新", "错了",
-                                    "wrong", "no,", "don't", "redo", "not what i",
-                                    "别这样", "换个", "我说的不是", "你理解错了",
-                                ].iter().any(|p| user_msg_lower.contains(p));
+                                let msg = ctx.augmented_message.trim();
+                                let msg_lower = msg.to_lowercase();
+                                let is_short = msg.chars().count() < 50;
+
+                                // Must start with a correction keyword (not just contain it)
+                                let starts_with_correction = [
+                                    "不对", "不是这样", "重来", "错了",
+                                    "wrong", "no,", "no ", "redo",
+                                    "别这样", "我说的不是", "你理解错了",
+                                ].iter().any(|p| msg_lower.starts_with(p));
+
+                                // Or short message containing correction words
+                                let short_contains_correction = is_short && [
+                                    "重新做", "重做", "换一个", "不要这样",
+                                ].iter().any(|p| msg_lower.contains(p));
+
+                                let is_correction = starts_with_correction || short_contains_correction;
 
                                 if is_correction && !last_reply.is_empty() {
                                     let config_fb = ctx.config.clone();

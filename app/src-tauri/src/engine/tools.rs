@@ -2042,7 +2042,32 @@ async fn write_file_tool(args: &serde_json::Value) -> String {
         tokio::fs::create_dir_all(parent).await.ok();
     }
     match tokio::fs::write(path, content).await {
-        Ok(_) => format!("Wrote {} bytes to {}", content.len(), path),
+        Ok(_) => {
+            // Auto-register scripts in code library
+            let script_exts = [".py", ".js", ".ts", ".sh", ".bash", ".rb", ".pl"];
+            let is_script = script_exts.iter().any(|ext| path.ends_with(ext));
+            if is_script {
+                if let Some(db) = DATABASE.get() {
+                    let stem = std::path::Path::new(path)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("unnamed");
+                    let lang = if path.ends_with(".py") { "python" }
+                        else if path.ends_with(".js") || path.ends_with(".ts") { "javascript" }
+                        else if path.ends_with(".sh") || path.ends_with(".bash") { "bash" }
+                        else { "other" };
+                    // Extract first comment line as description, or use filename
+                    let desc = content.lines()
+                        .find(|l| l.starts_with('#') || l.starts_with("//") || l.starts_with("\"\"\""))
+                        .map(|l| l.trim_start_matches(['#', '/', ' ', '"']).trim().to_string())
+                        .filter(|d| d.len() > 5)
+                        .unwrap_or_else(|| format!("Script: {}", stem));
+                    db.register_code(stem, path, &desc, lang, None, None).ok();
+                    log::info!("Auto-registered script in code library: {}", stem);
+                }
+            }
+            format!("Wrote {} bytes to {}", content.len(), path)
+        }
         Err(e) => format!("Error writing file: {}", e),
     }
 }
@@ -2766,17 +2791,10 @@ async fn run_python_script_tool(args: &serde_json::Value) -> String {
     )
     .await;
 
-    // Auto-track execution in code registry if this script is registered
+    // Auto-track execution in code registry (match by path, then by name)
     if let Some(db) = DATABASE.get() {
-        // Extract script name from path for registry lookup
-        let script_name = std::path::Path::new(script_path)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(script_path);
-        match &result {
-            Ok(_) => db.record_code_execution(script_name, true, None),
-            Err(e) => db.record_code_execution(script_name, false, Some(&e.to_string())),
-        }
+        db.record_code_execution_by_path(script_path, result.is_ok(),
+            result.as_ref().err().map(|e| e.as_str()));
     }
 
     match result {
@@ -4028,6 +4046,11 @@ async fn register_code_tool(args: &serde_json::Value) -> String {
         return "Error: name, path, and description are required".into();
     }
 
+    // Security: verify path is in authorized folders
+    if let Err(e) = access_check(path, false).await {
+        return format!("Error: {}", e);
+    }
+
     // Verify the file actually exists
     if !std::path::Path::new(path).exists() {
         return format!("Error: file does not exist at {}", path);
@@ -4123,9 +4146,18 @@ async fn manage_skill_tool(args: &serde_json::Value) -> String {
                 std::fs::create_dir_all(&scripts_dir_active).ok();
 
                 for (filename, content_val) in scripts {
+                    // Security: sanitize filename to prevent path traversal
+                    let safe_name = std::path::Path::new(filename)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("");
+                    if safe_name.is_empty() || safe_name.starts_with('.') {
+                        log::warn!("Skipping invalid script filename: {}", filename);
+                        continue;
+                    }
                     if let Some(script_content) = content_val.as_str() {
-                        let custom_path = scripts_dir_custom.join(filename);
-                        let active_path = scripts_dir_active.join(filename);
+                        let custom_path = scripts_dir_custom.join(safe_name);
+                        let active_path = scripts_dir_active.join(safe_name);
                         std::fs::write(&custom_path, script_content).ok();
                         std::fs::write(&active_path, script_content).ok();
 

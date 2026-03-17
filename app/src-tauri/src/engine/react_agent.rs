@@ -878,7 +878,11 @@ When setting up bots, open the developer console:
                              Before writing new code, check if something similar exists here. Use `search_my_code` for details.\n");
             for entry in code_entries.iter().take(10) {
                 let status = if let Some(ref err) = entry.last_error {
-                    format!(" [LAST ERROR: {}]", &err[..err.len().min(60)])
+                    {
+                        // Sanitize error: remove potential sensitive paths
+                        let sanitized: String = err.chars().take(50).collect();
+                        format!(" [LAST ERROR: {}]", sanitized.replace(|c: char| c == '/' || c == '\\', "_"))
+                    }
                 } else if entry.run_count > 0 {
                     format!(" [{}/{} runs OK]", entry.success_count, entry.run_count)
                 } else {
