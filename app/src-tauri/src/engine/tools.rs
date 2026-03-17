@@ -1115,7 +1115,7 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
         tool_def(
             "manage_skill",
             "Manage AI skills: create, list, enable, disable, or delete skills.\n\
-            - create: Generate a new custom skill from a name and SKILL.md content. The content must include YAML frontmatter (name, description, metadata with emoji) and Markdown instructions.\n\
+            - create: Generate a new custom skill with SKILL.md and optional script files. Scripts are saved to the skill's scripts/ directory and auto-registered in your code library.\n\
             - list: List all available skills with their status.\n\
             - enable: Enable a skill by name.\n\
             - disable: Disable a skill by name.\n\
@@ -1130,7 +1130,12 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
                         "description": "Action to perform"
                     },
                     "name": { "type": "string", "description": "Skill name (lowercase, alphanumeric with hyphens/underscores). Required for create/enable/disable/delete." },
-                    "content": { "type": "string", "description": "Full SKILL.md content including YAML frontmatter and Markdown instructions. Required for create." }
+                    "content": { "type": "string", "description": "Full SKILL.md content including YAML frontmatter and Markdown instructions. Required for create." },
+                    "scripts": {
+                        "type": "object",
+                        "description": "Optional script files to create in the skill's scripts/ directory. Keys are filenames, values are file contents. Example: {\"clean.py\": \"import sys\\n...\"}",
+                        "additionalProperties": { "type": "string" }
+                    }
                 },
                 "required": ["action"]
             }),
@@ -1150,6 +1155,36 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
                     }
                 },
                 "required": ["names"]
+            }),
+        ),
+        tool_def(
+            "register_code",
+            "Register a script or code file you created so you can find and reuse it later. \
+            Always call this after writing a reusable script. \
+            This builds your personal code library that persists across conversations.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Short identifier for the code (e.g. 'csv_cleaner', 'pdf_merger')" },
+                    "path": { "type": "string", "description": "Absolute path where the script is saved" },
+                    "description": { "type": "string", "description": "What this code does, when to use it" },
+                    "language": { "type": "string", "description": "Programming language: python, javascript, bash, etc." },
+                    "invoke_hint": { "type": "string", "description": "How to invoke this code (e.g. 'run_python_script with args: [input_file, output_file]')" }
+                },
+                "required": ["name", "path", "description"]
+            }),
+        ),
+        tool_def(
+            "search_my_code",
+            "Search your personal code library for scripts you previously created. \
+            Use this before writing new code — you may have already built something similar. \
+            Returns matching scripts with their paths, descriptions, and usage stats.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Search keywords (name, description, or purpose)" }
+                },
+                "required": ["query"]
             }),
         ),
         tool_def(
@@ -1586,6 +1621,8 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         "list_bound_bots" => list_bound_bots_tool().await,
         "manage_skill" => manage_skill_tool(&args).await,
         "activate_skills" => activate_skills_tool(&args).await,
+        "register_code" => register_code_tool(&args).await,
+        "search_my_code" => search_my_code_tool(&args).await,
         "request_continuation" => {
             CONTINUATION_REQUESTED
                 .try_with(|c| c.store(true, std::sync::atomic::Ordering::Relaxed))
@@ -2723,13 +2760,27 @@ async fn run_python_script_tool(args: &serde_json::Value) -> String {
 
     let args_json = serde_json::to_string(&script_args).unwrap_or_else(|_| "[]".into());
 
-    match python_bridge::call_python(
+    let result = python_bridge::call_python(
         "run_script",
         vec![script_path.to_string(), args_json],
     )
-    .await
-    {
-        Ok(result) => truncate_output(&result, 8000),
+    .await;
+
+    // Auto-track execution in code registry if this script is registered
+    if let Some(db) = DATABASE.get() {
+        // Extract script name from path for registry lookup
+        let script_name = std::path::Path::new(script_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(script_path);
+        match &result {
+            Ok(_) => db.record_code_execution(script_name, true, None),
+            Err(e) => db.record_code_execution(script_name, false, Some(&e.to_string())),
+        }
+    }
+
+    match result {
+        Ok(output) => truncate_output(&output, 8000),
         Err(e) => format!("Python script error: {}", e),
     }
 }
@@ -3962,6 +4013,74 @@ fn strip_frontmatter(content: &str) -> &str {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Code Registry tools — YiYi's self-created code library
+// ---------------------------------------------------------------------------
+
+async fn register_code_tool(args: &serde_json::Value) -> String {
+    let name = args["name"].as_str().unwrap_or("");
+    let path = args["path"].as_str().unwrap_or("");
+    let description = args["description"].as_str().unwrap_or("");
+    let language = args["language"].as_str().unwrap_or("python");
+    let invoke_hint = args["invoke_hint"].as_str();
+
+    if name.is_empty() || path.is_empty() || description.is_empty() {
+        return "Error: name, path, and description are required".into();
+    }
+
+    // Verify the file actually exists
+    if !std::path::Path::new(path).exists() {
+        return format!("Error: file does not exist at {}", path);
+    }
+
+    let db = match DATABASE.get() {
+        Some(db) => db,
+        None => return "Error: database not available".into(),
+    };
+
+    match db.register_code(name, path, description, language, invoke_hint, None) {
+        Ok(id) => format!(
+            "Registered '{}' in code library (id: {}). You can find and reuse it later with search_my_code.",
+            name, id
+        ),
+        Err(e) => format!("Error: {}", e),
+    }
+}
+
+async fn search_my_code_tool(args: &serde_json::Value) -> String {
+    let query = args["query"].as_str().unwrap_or("");
+    if query.is_empty() {
+        return "Error: query is required".into();
+    }
+
+    let db = match DATABASE.get() {
+        Some(db) => db,
+        None => return "Error: database not available".into(),
+    };
+
+    let results = db.search_code_registry(query, 10);
+    if results.is_empty() {
+        return format!("No code found matching '{}'. You may need to write it from scratch.", query);
+    }
+
+    let mut output = format!("Found {} matching scripts:\n\n", results.len());
+    for entry in &results {
+        output.push_str(&format!(
+            "- **{}** ({})\n  Path: {}\n  Description: {}\n  Usage: {} runs, {} successful\n",
+            entry.name, entry.language, entry.path, entry.description,
+            entry.run_count, entry.success_count,
+        ));
+        if let Some(ref hint) = entry.invoke_hint {
+            output.push_str(&format!("  Invoke: {}\n", hint));
+        }
+        if let Some(ref err) = entry.last_error {
+            output.push_str(&format!("  Last error: {}\n", err));
+        }
+        output.push('\n');
+    }
+    output
+}
+
 async fn manage_skill_tool(args: &serde_json::Value) -> String {
     let action = args["action"].as_str().unwrap_or("");
     let name = args["name"].as_str().unwrap_or("");
@@ -3995,12 +4114,57 @@ async fn manage_skill_tool(args: &serde_json::Value) -> String {
             std::fs::create_dir_all(&skill_active).ok();
             std::fs::write(skill_active.join("SKILL.md"), content).ok();
 
+            // Create script files if provided
+            let mut script_count = 0;
+            if let Some(scripts) = args["scripts"].as_object() {
+                let scripts_dir_custom = skill_custom.join("scripts");
+                let scripts_dir_active = skill_active.join("scripts");
+                std::fs::create_dir_all(&scripts_dir_custom).ok();
+                std::fs::create_dir_all(&scripts_dir_active).ok();
+
+                for (filename, content_val) in scripts {
+                    if let Some(script_content) = content_val.as_str() {
+                        let custom_path = scripts_dir_custom.join(filename);
+                        let active_path = scripts_dir_active.join(filename);
+                        std::fs::write(&custom_path, script_content).ok();
+                        std::fs::write(&active_path, script_content).ok();
+
+                        // Auto-register in code library
+                        if let Some(db) = DATABASE.get() {
+                            let script_name = format!("{}:{}", name, filename);
+                            let desc = format!("Script from skill '{}': {}", name, filename);
+                            let lang = if filename.ends_with(".py") { "python" }
+                                else if filename.ends_with(".js") { "javascript" }
+                                else if filename.ends_with(".sh") { "bash" }
+                                else { "unknown" };
+                            let hint = format!(
+                                "run_python_script with script_path={}",
+                                active_path.to_string_lossy()
+                            );
+                            db.register_code(
+                                &script_name,
+                                &active_path.to_string_lossy(),
+                                &desc,
+                                lang,
+                                Some(&hint),
+                                Some(name),
+                            ).ok();
+                        }
+                        script_count += 1;
+                    }
+                }
+            }
+
             // Notify frontend to refresh
             if let Some(handle) = APP_HANDLE.get() {
                 handle.emit("skills://changed", "created").ok();
             }
 
-            format!("Skill '{}' created and enabled successfully.", name)
+            if script_count > 0 {
+                format!("Skill '{}' created with {} script(s) and enabled. Scripts auto-registered in code library.", name, script_count)
+            } else {
+                format!("Skill '{}' created and enabled successfully.", name)
+            }
         }
         "list" => {
             let mut result = Vec::new();

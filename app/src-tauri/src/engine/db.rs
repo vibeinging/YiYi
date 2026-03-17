@@ -432,6 +432,27 @@ impl Database {
         )
         .map_err(|e| format!("Failed to create corrections table: {}", e))?;
 
+        // Code registry — tracks scripts/tools YiYi has created
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS code_registry (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                path TEXT NOT NULL,
+                description TEXT NOT NULL,
+                language TEXT NOT NULL DEFAULT 'python',
+                invoke_hint TEXT,
+                skill_name TEXT,
+                run_count INTEGER NOT NULL DEFAULT 0,
+                success_count INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_code_registry_name ON code_registry(name);
+            CREATE INDEX IF NOT EXISTS idx_code_registry_skill ON code_registry(skill_name);",
+        )
+        .map_err(|e| format!("Failed to create code_registry table: {}", e))?;
+
         Ok(())
     }
 
@@ -2553,6 +2574,99 @@ impl Database {
         .unwrap_or_default()
     }
 
+    // -----------------------------------------------------------------------
+    // Code Registry (Growth System — self-created tools)
+    // -----------------------------------------------------------------------
+
+    /// Register a script/tool that YiYi has created.
+    pub fn register_code(
+        &self,
+        name: &str,
+        path: &str,
+        description: &str,
+        language: &str,
+        invoke_hint: Option<&str>,
+        skill_name: Option<&str>,
+    ) -> Result<String, String> {
+        let conn = self.conn.lock().unwrap();
+        // Upsert: if same name exists, update it
+        let existing: Option<String> = conn
+            .query_row("SELECT id FROM code_registry WHERE name = ?1", params![name], |r| r.get(0))
+            .optional()
+            .map_err(|e| format!("Query error: {}", e))?;
+
+        let now = now_ts();
+        if let Some(id) = existing {
+            conn.execute(
+                "UPDATE code_registry SET path = ?1, description = ?2, language = ?3, invoke_hint = ?4, skill_name = ?5, updated_at = ?6 WHERE id = ?7",
+                params![path, description, language, invoke_hint, skill_name, now, id],
+            ).map_err(|e| format!("Update error: {}", e))?;
+            Ok(id)
+        } else {
+            let id = uuid::Uuid::new_v4().to_string();
+            conn.execute(
+                "INSERT INTO code_registry (id, name, path, description, language, invoke_hint, skill_name, run_count, success_count, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, 0, ?8, ?9)",
+                params![id, name, path, description, language, invoke_hint, skill_name, now, now],
+            ).map_err(|e| format!("Insert error: {}", e))?;
+            Ok(id)
+        }
+    }
+
+    /// Record a script execution result (success or failure with error).
+    pub fn record_code_execution(&self, name: &str, success: bool, error: Option<&str>) {
+        let conn = self.conn.lock().unwrap();
+        let now = now_ts();
+        if success {
+            conn.execute(
+                "UPDATE code_registry SET run_count = run_count + 1, success_count = success_count + 1, last_error = NULL, updated_at = ?1 WHERE name = ?2",
+                params![now, name],
+            ).ok();
+        } else {
+            conn.execute(
+                "UPDATE code_registry SET run_count = run_count + 1, last_error = ?1, updated_at = ?2 WHERE name = ?3",
+                params![error.unwrap_or("unknown error"), now, name],
+            ).ok();
+        }
+    }
+
+    /// Search code registry by name or description keywords.
+    pub fn search_code_registry(&self, query: &str, limit: usize) -> Vec<CodeRegistryEntry> {
+        let conn = self.conn.lock().unwrap();
+        let pattern = format!("%{}%", query);
+        let mut stmt = match conn.prepare(
+            "SELECT name, path, description, language, invoke_hint, skill_name, run_count, success_count, last_error
+             FROM code_registry
+             WHERE name LIKE ?1 OR description LIKE ?1
+             ORDER BY run_count DESC, updated_at DESC
+             LIMIT ?2",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        stmt.query_map(params![pattern, limit as i64], |row| {
+            Ok(CodeRegistryEntry {
+                name: row.get(0)?,
+                path: row.get(1)?,
+                description: row.get(2)?,
+                language: row.get(3)?,
+                invoke_hint: row.get(4)?,
+                skill_name: row.get(5)?,
+                run_count: row.get(6)?,
+                success_count: row.get(7)?,
+                last_error: row.get(8)?,
+            })
+        })
+        .ok()
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
+    }
+
+    /// List all registered code entries.
+    pub fn list_code_registry(&self) -> Vec<CodeRegistryEntry> {
+        self.search_code_registry("", 100)
+    }
+
     pub fn delete_task(&self, task_id: &str) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
         // Get the session_id for this task so we can cascade-delete the session
@@ -2598,7 +2712,19 @@ pub struct UserIdentityRow {
     pub created_at: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
+pub struct CodeRegistryEntry {
+    pub name: String,
+    pub path: String,
+    pub description: String,
+    pub language: String,
+    pub invoke_hint: Option<String>,
+    pub skill_name: Option<String>,
+    pub run_count: i64,
+    pub success_count: i64,
+    pub last_error: Option<String>,
+}
+
 pub struct MemoryRow {
     pub id: String,
     pub session_id: Option<String>,

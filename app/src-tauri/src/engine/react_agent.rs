@@ -870,6 +870,30 @@ When setting up bots, open the developer console:
         }
     }
 
+    // Inject code library summary (so LLM knows what scripts are available)
+    if let Some(db) = super::tools::get_database() {
+        let code_entries = db.list_code_registry();
+        if !code_entries.is_empty() {
+            prompt.push_str("\n\n## My Code Library (scripts I've created)\n\
+                             Before writing new code, check if something similar exists here. Use `search_my_code` for details.\n");
+            for entry in code_entries.iter().take(10) {
+                let status = if let Some(ref err) = entry.last_error {
+                    format!(" [LAST ERROR: {}]", &err[..err.len().min(60)])
+                } else if entry.run_count > 0 {
+                    format!(" [{}/{} runs OK]", entry.success_count, entry.run_count)
+                } else {
+                    " [never run]".into()
+                };
+                prompt.push_str(&format!("- **{}** ({}): {}{}\n",
+                    entry.name, entry.language, entry.description, status
+                ));
+            }
+            if code_entries.len() > 10 {
+                prompt.push_str(&format!("  ...and {} more. Use search_my_code to find them.\n", code_entries.len() - 10));
+            }
+        }
+    }
+
     // Load MEMORY.md into system prompt
     let memory_content = super::memory::read_memory_md(working_dir);
     if !memory_content.is_empty() {
