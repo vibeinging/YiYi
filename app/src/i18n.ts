@@ -19,6 +19,7 @@ const resources = {
         sessions: '会话',
         terminal: '终端',
         heartbeat: '心跳',
+        growth: '成长',
         settings: '设置',
         advanced: '高级',
         more: '更多',
@@ -556,6 +557,18 @@ const resources = {
         sensitiveFilesDesc: '匹配这些规则的文件将被永远阻止访问，即使在授权文件夹内。',
         addPattern: '添加规则',
         builtin: '内置',
+        // Updater
+        checkUpdate: '检查更新',
+        checking: '检查中...',
+        updateAvailable: '发现新版本',
+        updateVersion: '新版本: v{{version}}',
+        downloading: '下载中...',
+        downloadProgress: '已下载 {{percent}}%',
+        installing: '安装中...',
+        installAndRestart: '安装并重启',
+        upToDate: '已是最新版本',
+        updateFailed: '检查更新失败',
+        releaseNotes: '更新说明',
       },
       // Heartbeat page
       heartbeat: {
@@ -721,6 +734,7 @@ const resources = {
         sessions: 'Sessions',
         terminal: 'Terminal',
         heartbeat: 'Heartbeat',
+        growth: 'Growth',
         settings: 'Settings',
         advanced: 'Advanced',
         more: 'More',
@@ -1258,6 +1272,18 @@ const resources = {
         sensitiveFilesDesc: 'File patterns that are always blocked, even within authorized folders.',
         addPattern: 'Add Pattern',
         builtin: 'Built-in',
+        // Updater
+        checkUpdate: 'Check for Updates',
+        checking: 'Checking...',
+        updateAvailable: 'Update Available',
+        updateVersion: 'New version: v{{version}}',
+        downloading: 'Downloading...',
+        downloadProgress: 'Downloaded {{percent}}%',
+        installing: 'Installing...',
+        installAndRestart: 'Install & Restart',
+        upToDate: 'Up to date',
+        updateFailed: 'Update check failed',
+        releaseNotes: 'Release Notes',
       },
       // Heartbeat page
       heartbeat: {

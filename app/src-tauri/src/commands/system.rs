@@ -627,3 +627,45 @@ pub async fn set_app_flag(
 ) -> Result<(), String> {
     state.db.set_config(&key, &value)
 }
+
+// ---------------------------------------------------------------------------
+// Growth System API
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn get_growth_report(
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    use crate::engine::react_agent::{
+        generate_growth_report, detect_skill_opportunity,
+        build_capability_profile, build_growth_timeline,
+    };
+
+    let report = generate_growth_report(&state.db);
+    let skill_suggestion = detect_skill_opportunity(&state.db);
+    let capabilities = build_capability_profile(&state.db);
+    let timeline = build_growth_timeline(&state.db, 30);
+
+    Ok(serde_json::json!({
+        "report": report,
+        "skill_suggestion": skill_suggestion,
+        "capabilities": capabilities,
+        "timeline": timeline,
+    }))
+}
+
+/// Get a morning greeting with proactive suggestions (called once per day).
+#[tauri::command]
+pub async fn get_morning_greeting(
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    use crate::engine::react_agent::generate_morning_reflection;
+    use crate::commands::agent::resolve_llm_config;
+
+    let config = match resolve_llm_config(&state).await {
+        Ok(c) => c,
+        Err(_) => return Ok(None), // No model configured, skip
+    };
+
+    Ok(generate_morning_reflection(&config, &state.db).await)
+}

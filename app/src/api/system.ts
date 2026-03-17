@@ -93,3 +93,43 @@ export async function getAppFlag(key: string): Promise<string | null> {
 export async function setAppFlag(key: string, value: string): Promise<void> {
   await invoke('set_app_flag', { key, value });
 }
+
+// Growth System API
+
+export interface GrowthReport {
+  total_tasks: number;
+  success_count: number;
+  failure_count: number;
+  partial_count: number;
+  success_rate: number;
+  top_lessons: string[];
+}
+
+export interface CapabilityDimension {
+  name: string;
+  success_rate: number;
+  sample_count: number;
+  confidence: string;
+}
+
+export interface GrowthMilestone {
+  date: string;
+  event_type: string;
+  title: string;
+  description: string;
+}
+
+export interface GrowthData {
+  report: GrowthReport | null;
+  skill_suggestion: string | null;
+  capabilities: CapabilityDimension[];
+  timeline: GrowthMilestone[];
+}
+
+export async function getGrowthReport(): Promise<GrowthData> {
+  return await invoke<GrowthData>('get_growth_report');
+}
+
+export async function getMorningGreeting(): Promise<string | null> {
+  return await invoke<string | null>('get_morning_greeting');
+}

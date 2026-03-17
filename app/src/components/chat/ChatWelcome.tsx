@@ -2,11 +2,12 @@
  * ChatWelcome — Empty state welcome screen with quick action cards.
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus } from 'lucide-react';
+import { Plus, Sprout } from 'lucide-react';
 import logoImg from '../../assets/yiyi-logo.png';
 import { getQuickActions } from './chatActions';
+import { getMorningGreeting } from '../../api/system';
 
 interface ChatWelcomeProps {
   aiName: string;
@@ -16,8 +17,16 @@ interface ChatWelcomeProps {
 export function ChatWelcome({ aiName, onSendPrompt }: ChatWelcomeProps) {
   const { t } = useTranslation();
   const [expandedAction, setExpandedAction] = useState<number | null>(null);
+  const [morningGreeting, setMorningGreeting] = useState<string | null>(null);
 
   const quickActions = getQuickActions(t);
+
+  // Fetch morning greeting once
+  useEffect(() => {
+    getMorningGreeting()
+      .then(g => { if (g) setMorningGreeting(g); })
+      .catch(() => {});
+  }, []);
 
   return (
     <div
@@ -66,6 +75,26 @@ export function ChatWelcome({ aiName, onSendPrompt }: ChatWelcomeProps) {
             </div>
           </div>
         </div>
+
+        {/* Morning greeting from Growth System */}
+        {morningGreeting && expandedAction === null && (
+          <div
+            className="mb-4 p-3.5 rounded-xl text-[13px] leading-relaxed transition-all"
+            style={{
+              background: 'linear-gradient(135deg, rgba(175,82,222,0.06), rgba(88,86,214,0.06))',
+              border: '1px solid rgba(175,82,222,0.15)',
+              color: 'var(--color-text-secondary)',
+            }}
+          >
+            <div className="flex items-center gap-1.5 mb-1.5">
+              <Sprout size={14} style={{ color: '#AF52DE' }} />
+              <span className="text-[12px] font-medium" style={{ color: '#AF52DE' }}>
+                YiYi's Growth Insight
+              </span>
+            </div>
+            {morningGreeting}
+          </div>
+        )}
 
         {/* Quick action cards */}
         <div className="grid grid-cols-3 gap-2.5 mb-5">

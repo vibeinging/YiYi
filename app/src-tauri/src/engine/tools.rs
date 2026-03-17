@@ -58,6 +58,16 @@ static AUTHORIZED_FOLDERS: std::sync::OnceLock<Mutex<Vec<AuthorizedFolder>>> =
 /// Used as the default working directory for claude_code and file operations.
 static USER_WORKSPACE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
+/// Cached Claude Code CLI availability check (resolved once, reused).
+static CLAUDE_CLI_AVAILABLE: tokio::sync::OnceCell<bool> = tokio::sync::OnceCell::const_new();
+
+/// Check if Claude Code CLI is installed (cached after first check).
+pub(crate) async fn is_claude_cli_available() -> bool {
+    *CLAUDE_CLI_AVAILABLE
+        .get_or_init(|| async { resolve_claude_bin().await.is_some() })
+        .await
+}
+
 /// Current task workspace path set by create_workspace_dir tool, keyed by session.
 static CURRENT_TASK_WORKSPACE: std::sync::OnceLock<Mutex<std::collections::HashMap<String, String>>> = std::sync::OnceLock::new();
 
@@ -571,35 +581,49 @@ fn tool_def(name: &str, desc: &str, params: serde_json::Value) -> ToolDefinition
     }
 }
 
+/// Built-in tools with unavailable tools filtered out (e.g. claude_code when CLI not installed).
+pub async fn builtin_tools_filtered() -> Vec<ToolDefinition> {
+    let mut tools = builtin_tools();
+    if !is_claude_cli_available().await {
+        tools.retain(|t| t.function.name != "claude_code");
+    }
+    tools
+}
+
 /// Built-in tools available to the agent
 pub fn builtin_tools() -> Vec<ToolDefinition> {
     vec![
         tool_def(
             "execute_shell",
-            "Execute a shell command and return its output.",
+            "Execute a shell command and return its output. Has a timeout to prevent hanging.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
                     "command": { "type": "string", "description": "The shell command to execute" },
-                    "cwd": { "type": "string", "description": "Working directory (optional)" }
+                    "cwd": { "type": "string", "description": "Working directory (optional)" },
+                    "timeout_secs": { "type": "integer", "description": "Timeout in seconds. Default 120 (2 minutes)." }
                 },
                 "required": ["command"]
             }),
         ),
         tool_def(
             "read_file",
-            "Read the contents of a file at the given path.",
+            "Read the contents of a file with line numbers. Supports offset/limit for large files. \
+            Always read a file before editing it.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Absolute path to the file" }
+                    "path": { "type": "string", "description": "Absolute path to the file" },
+                    "offset": { "type": "integer", "description": "Start reading from this line number (1-based). Default: 1" },
+                    "limit": { "type": "integer", "description": "Maximum number of lines to read. Default: reads up to 2000 lines." }
                 },
                 "required": ["path"]
             }),
         ),
         tool_def(
             "write_file",
-            "Write content to a file. Creates the file if it doesn't exist.",
+            "Write content to a file (full overwrite). Creates the file if it doesn't exist. \
+            Prefer edit_file for modifying existing files. Only use write_file for new files or complete rewrites.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -611,13 +635,16 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
         ),
         tool_def(
             "edit_file",
-            "Replace a specific string in a file with new content. Use for targeted edits.",
+            "Perform exact string replacement in a file. The old_text must be unique in the file — \
+            if it matches multiple locations the edit will FAIL. Provide more surrounding context to make it unique. \
+            Set replace_all=true to replace every occurrence. Always read_file before editing.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Absolute path to the file" },
-                    "old_text": { "type": "string", "description": "Text to find and replace" },
-                    "new_text": { "type": "string", "description": "Replacement text" }
+                    "old_text": { "type": "string", "description": "Exact text to find. Must be unique in the file unless replace_all is true." },
+                    "new_text": { "type": "string", "description": "Replacement text (must differ from old_text)" },
+                    "replace_all": { "type": "boolean", "description": "Replace all occurrences instead of requiring uniqueness. Default false." }
                 },
                 "required": ["path", "old_text", "new_text"]
             }),
@@ -659,13 +686,17 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
         ),
         tool_def(
             "grep_search",
-            "Search for a pattern in files recursively. Returns matching lines with file paths.",
+            "Search for a regex pattern in files recursively. Uses ripgrep when available for speed. \
+            Returns matching lines with file paths and line numbers.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
                     "pattern": { "type": "string", "description": "Search pattern (regex supported)" },
-                    "path": { "type": "string", "description": "Directory to search in" },
-                    "file_pattern": { "type": "string", "description": "File glob pattern, e.g. '*.ts' (optional)" }
+                    "path": { "type": "string", "description": "Directory or file to search in" },
+                    "file_pattern": { "type": "string", "description": "File glob filter, e.g. '*.ts'" },
+                    "max_results": { "type": "integer", "description": "Max matching lines to return. Default 50." },
+                    "context_lines": { "type": "integer", "description": "Lines of context before and after each match (like grep -C). Default 0." },
+                    "case_insensitive": { "type": "boolean", "description": "Case insensitive search. Default false." }
                 },
                 "required": ["pattern", "path"]
             }),
@@ -1813,6 +1844,7 @@ fn check_dangerous_command(command: &str) -> Result<(), String> {
 async fn execute_shell_tool(args: &serde_json::Value) -> String {
     let command = args["command"].as_str().unwrap_or("");
     let cwd = args["cwd"].as_str();
+    let timeout_secs = args["timeout_secs"].as_u64().unwrap_or(120);
 
     if command.is_empty() {
         return "Error: command is required".into();
@@ -1823,17 +1855,20 @@ async fn execute_shell_tool(args: &serde_json::Value) -> String {
         return format!("Error: {}", e);
     }
 
-    // Working directory priority: explicit cwd > workspace default
-    // Note: cwd is not sandbox-gated because shell commands can access any path
-    // in the command body anyway. The sandbox boundary is enforced via system prompt
-    // and file-level tool checks. Defaulting to workspace is the key safety measure.
     let effective_cwd = match cwd {
         Some(dir) => Some(dir.to_string()),
         None => Some(get_effective_workspace().to_string_lossy().to_string()),
     };
 
-    let mut cmd = tokio::process::Command::new("sh");
-    cmd.arg("-c").arg(command);
+    let mut cmd = if cfg!(windows) {
+        let mut c = tokio::process::Command::new("cmd");
+        c.arg("/C").arg(command);
+        c
+    } else {
+        let mut c = tokio::process::Command::new("sh");
+        c.arg("-c").arg(command);
+        c
+    };
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
@@ -1841,24 +1876,64 @@ async fn execute_shell_tool(args: &serde_json::Value) -> String {
         cmd.current_dir(dir);
     }
 
-    match cmd.output().await {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let code = output.status.code().unwrap_or(-1);
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return format!("Failed to execute: {}", e),
+    };
+
+    // Read stdout/stderr from pipes before waiting
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
+
+    let stdout_handle = tokio::spawn(async move {
+        let mut buf = String::new();
+        if let Some(mut pipe) = stdout_pipe {
+            use tokio::io::AsyncReadExt;
+            let mut bytes = Vec::new();
+            pipe.read_to_end(&mut bytes).await.ok();
+            buf = String::from_utf8_lossy(&bytes).to_string();
+        }
+        buf
+    });
+    let stderr_handle = tokio::spawn(async move {
+        let mut buf = String::new();
+        if let Some(mut pipe) = stderr_pipe {
+            use tokio::io::AsyncReadExt;
+            let mut bytes = Vec::new();
+            pipe.read_to_end(&mut bytes).await.ok();
+            buf = String::from_utf8_lossy(&bytes).to_string();
+        }
+        buf
+    });
+
+    let wait_result = tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs),
+        child.wait(),
+    )
+    .await;
+
+    match wait_result {
+        Ok(Ok(status)) => {
+            let stdout = stdout_handle.await.unwrap_or_default();
+            let stderr = stderr_handle.await.unwrap_or_default();
+            let code = status.code().unwrap_or(-1);
 
             if code == 0 {
-                let s = stdout.to_string();
-                if s.is_empty() {
+                if stdout.is_empty() {
                     "(completed with no output)".into()
                 } else {
-                    truncate_output(&s, 8000)
+                    truncate_output(&stdout, 8000)
                 }
             } else {
-                format!("Exit code: {}\nstdout: {}\nstderr: {}", code, stdout, stderr)
+                let combined = format!("Exit code: {}\nstdout: {}\nstderr: {}", code, stdout, stderr);
+                truncate_output(&combined, 8000)
             }
         }
-        Err(e) => format!("Failed to execute: {}", e),
+        Ok(Err(e)) => format!("Failed to execute: {}", e),
+        Err(_) => {
+            child.kill().await.ok();
+            format!("Error: command timed out after {} seconds. Try breaking it into smaller steps.", timeout_secs)
+        }
     }
 }
 
@@ -1870,8 +1945,49 @@ async fn read_file_tool(args: &serde_json::Value) -> String {
     if let Err(e) = access_check(path, false).await {
         return format!("Error: {}", e);
     }
+    // Reject files larger than 10MB to prevent OOM
+    match tokio::fs::metadata(path).await {
+        Ok(meta) => {
+            let size = meta.len();
+            if size > 10 * 1024 * 1024 {
+                return format!(
+                    "Error: file is too large ({:.1} MB). Use grep_search or execute_shell with head/tail for large files.",
+                    size as f64 / 1024.0 / 1024.0
+                );
+            }
+        }
+        Err(e) => return format!("Error: {}", e),
+    }
+
+    let offset = args["offset"].as_u64().unwrap_or(1).max(1) as usize;
+    let limit = args["limit"].as_u64().unwrap_or(2000) as usize;
+
     match tokio::fs::read_to_string(path).await {
-        Ok(content) => truncate_output(&content, 10000),
+        Ok(content) => {
+            let lines: Vec<&str> = content.lines().collect();
+            let total = lines.len();
+            let start = (offset - 1).min(total);
+            let end = (start + limit).min(total);
+            let selected = &lines[start..end];
+
+            if selected.is_empty() {
+                return format!("(empty file or offset {} beyond {} total lines)", offset, total);
+            }
+
+            // Format with line numbers like `cat -n`
+            let width = format!("{}", end).len();
+            let mut result = String::with_capacity(selected.len() * 80);
+            for (i, line) in selected.iter().enumerate() {
+                let line_num = start + i + 1;
+                result.push_str(&format!("{:>width$}\t{}\n", line_num, line, width = width));
+            }
+
+            if end < total {
+                result.push_str(&format!("\n({} total lines, showing {}-{})", total, offset, end));
+            }
+
+            truncate_output(&result, 30000)
+        }
         Err(e) => format!("Error reading file: {}", e),
     }
 }
@@ -1898,9 +2014,13 @@ async fn edit_file_tool(args: &serde_json::Value) -> String {
     let path = args["path"].as_str().unwrap_or("");
     let old_text = args["old_text"].as_str().unwrap_or("");
     let new_text = args["new_text"].as_str().unwrap_or("");
+    let replace_all = args["replace_all"].as_bool().unwrap_or(false);
 
     if path.is_empty() || old_text.is_empty() {
         return "Error: path and old_text are required".into();
+    }
+    if old_text == new_text {
+        return "Error: new_text must be different from old_text".into();
     }
     if let Err(e) = access_check(path, true).await {
         return format!("Error: {}", e);
@@ -1908,12 +2028,40 @@ async fn edit_file_tool(args: &serde_json::Value) -> String {
 
     match tokio::fs::read_to_string(path).await {
         Ok(content) => {
-            if !content.contains(old_text) {
-                return format!("Error: old_text not found in {}", path);
+            let match_count = content.matches(old_text).count();
+            if match_count == 0 {
+                return format!("Error: old_text not found in {}. Read the file first to get the exact text.", path);
             }
-            let new_content = content.replacen(old_text, new_text, 1);
+            if !replace_all && match_count > 1 {
+                return format!(
+                    "Error: old_text matches {} locations in {}. Provide more surrounding context to make it unique, or set replace_all=true.",
+                    match_count, path
+                );
+            }
+            // Create backup in ~/.yiyiclaw/backups/ (not next to source file)
+            if let Some(home) = dirs::home_dir() {
+                let backup_dir = home.join(".yiyiclaw").join("backups");
+                tokio::fs::create_dir_all(&backup_dir).await.ok();
+                // Encode path as filename: replace / with __
+                let safe_name = path.replace(['/', '\\'], "__");
+                let backup_path = backup_dir.join(format!("{}.backup", safe_name));
+                if let Err(e) = tokio::fs::write(&backup_path, &content).await {
+                    log::warn!("Failed to create backup for {}: {}", path, e);
+                }
+            }
+            let new_content = if replace_all {
+                content.replace(old_text, new_text)
+            } else {
+                content.replacen(old_text, new_text, 1)
+            };
             match tokio::fs::write(path, &new_content).await {
-                Ok(_) => format!("Edited {} successfully", path),
+                Ok(_) => {
+                    if replace_all && match_count > 1 {
+                        format!("Edited {} successfully ({} replacements)", path, match_count)
+                    } else {
+                        format!("Edited {} successfully", path)
+                    }
+                }
                 Err(e) => format!("Error writing: {}", e),
             }
         }
@@ -2026,10 +2174,27 @@ async fn list_directory_tool(args: &serde_json::Value) -> String {
     }
 }
 
+/// Check if ripgrep (rg) is available on the system.
+static RG_AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+fn is_rg_available() -> bool {
+    *RG_AVAILABLE.get_or_init(|| {
+        std::process::Command::new("rg")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    })
+}
+
 async fn grep_search_tool(args: &serde_json::Value) -> String {
     let pattern = args["pattern"].as_str().unwrap_or("");
     let path = args["path"].as_str().unwrap_or(".");
     let file_pattern = args["file_pattern"].as_str();
+    let max_results = args["max_results"].as_u64().unwrap_or(50) as usize;
+    let context_lines = args["context_lines"].as_u64().unwrap_or(0);
+    let case_insensitive = args["case_insensitive"].as_bool().unwrap_or(false);
 
     if pattern.is_empty() {
         return "Error: pattern is required".into();
@@ -2038,26 +2203,160 @@ async fn grep_search_tool(args: &serde_json::Value) -> String {
         return format!("Error: {}", e);
     }
 
-    // Use Command::new with args to avoid shell injection
-    let mut cmd = tokio::process::Command::new("grep");
-    cmd.arg("-rn");
-    if let Some(fp) = file_pattern {
-        cmd.arg(format!("--include={}", fp));
-    }
-    cmd.arg("--").arg(pattern).arg(path);
+    // Prefer ripgrep for speed, fall back to grep
+    let use_rg = is_rg_available();
+    let mut cmd = if use_rg {
+        let mut c = tokio::process::Command::new("rg");
+        c.arg("-n"); // line numbers
+        if let Some(fp) = file_pattern {
+            c.arg("--glob").arg(fp);
+        }
+        if case_insensitive {
+            c.arg("-i");
+        }
+        if context_lines > 0 {
+            c.arg("-C").arg(context_lines.to_string());
+        }
+        c.arg("--max-count").arg("1000"); // safety cap per file
+        c.arg("--").arg(pattern).arg(path);
+        c
+    } else {
+        // No rg available — try system grep, fall back to pure-Rust search
+        let mut c = tokio::process::Command::new("grep");
+        c.arg("-rn");
+        if let Some(fp) = file_pattern {
+            c.arg(format!("--include={}", fp));
+        }
+        if case_insensitive {
+            c.arg("-i");
+        }
+        if context_lines > 0 {
+            c.arg(format!("-C{}", context_lines));
+        }
+        c.arg("--").arg(pattern).arg(path);
+        c.stdout(Stdio::piped());
+        c.stderr(Stdio::piped());
+
+        match c.output().await {
+            Ok(output) if output.status.success() || !output.stdout.is_empty() => {
+                // grep worked, format output
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                return format_grep_output(&stdout, max_results);
+            }
+            Ok(output) if output.status.code() == Some(1) => {
+                // grep ran but found no matches
+                return format!("No matches found for '{}' in {}", pattern, path);
+            }
+            _ => {
+                // grep not available (Windows) — pure Rust fallback
+                return grep_pure_rust(pattern, path, file_pattern, max_results, case_insensitive).await;
+            }
+        }
+    };
+
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
     match cmd.output().await {
         Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stdout = String::from_utf8_lossy(&output.stdout);
             if stdout.is_empty() {
-                format!("No matches found for '{}' in {}", pattern, path)
-            } else {
-                truncate_output(&stdout, 8000)
+                return format!("No matches found for '{}' in {}", pattern, path);
             }
+            format_grep_output(&stdout, max_results)
         }
         Err(e) => format!("Error: {}", e),
+    }
+}
+
+fn format_grep_output(stdout: &str, max_results: usize) -> String {
+    if stdout.is_empty() {
+        return "(no matches)".into();
+    }
+    let lines: Vec<&str> = stdout.lines().collect();
+    let total = lines.len();
+    let shown = lines.into_iter().take(max_results).collect::<Vec<_>>().join("\n");
+    if total > max_results {
+        format!("{}\n\n({} total matches, showing first {})", shown, total, max_results)
+    } else {
+        shown
+    }
+}
+
+/// Pure-Rust grep fallback when neither rg nor grep is available (e.g. Windows without rg).
+async fn grep_pure_rust(
+    pattern: &str,
+    search_path: &str,
+    file_pattern: Option<&str>,
+    max_results: usize,
+    case_insensitive: bool,
+) -> String {
+    let regex_pattern = if case_insensitive {
+        format!("(?i){}", pattern)
+    } else {
+        pattern.to_string()
+    };
+    let re = match regex::Regex::new(&regex_pattern) {
+        Ok(r) => r,
+        Err(e) => return format!("Invalid regex pattern: {}", e),
+    };
+
+    let glob_pat = if let Some(fp) = file_pattern {
+        format!("{}/**/{}", search_path, fp)
+    } else {
+        format!("{}/**/*", search_path)
+    };
+
+    let mut results = Vec::new();
+    let entries = match glob::glob(&glob_pat) {
+        Ok(e) => e,
+        Err(e) => return format!("Error: {}", e),
+    };
+
+    // Directories to skip (mimic ripgrep's default ignores)
+    let skip_dirs = [
+        "node_modules", ".git", "target", "dist", "build", ".next",
+        "__pycache__", ".venv", "venv", ".tox", "vendor", ".bundle",
+        ".gradle", ".idea", ".vscode", "coverage",
+    ];
+
+    for entry in entries.flatten() {
+        if !entry.is_file() {
+            continue;
+        }
+        // Skip known large/generated directories
+        let path_str = entry.to_string_lossy();
+        if skip_dirs.iter().any(|d| {
+            path_str.contains(&format!("/{}/", d)) || path_str.contains(&format!("\\{}\\", d))
+        }) {
+            continue;
+        }
+        // Skip binary files by checking extension
+        let ext = entry.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let skip_exts = ["png", "jpg", "jpeg", "gif", "bmp", "ico", "woff", "woff2",
+                         "ttf", "eot", "mp3", "mp4", "zip", "gz", "tar", "exe", "dll",
+                         "so", "dylib", "o", "a", "class", "pyc", "wasm"];
+        if skip_exts.contains(&ext.to_lowercase().as_str()) {
+            continue;
+        }
+        if let Ok(content) = tokio::fs::read_to_string(&entry).await {
+            for (line_num, line) in content.lines().enumerate() {
+                if re.is_match(line) {
+                    results.push(format!("{}:{}:{}", entry.display(), line_num + 1, line));
+                    if results.len() >= max_results {
+                        let total_hint = format!("\n\n(reached {} result limit, may have more matches)", max_results);
+                        return results.join("\n") + &total_hint;
+                    }
+                }
+            }
+        }
+    }
+
+    let install_hint = "\n\nTip: install ripgrep for much faster search — https://github.com/BurntSushi/ripgrep#installation";
+    if results.is_empty() {
+        format!("No matches found for '{}' in {}{}", pattern, search_path, install_hint)
+    } else {
+        format!("{}{}", results.join("\n"), install_hint)
     }
 }
 
@@ -4193,7 +4492,7 @@ async fn claude_code_tool(args: &serde_json::Value) -> String {
 
 /// Resolve the full path to the `claude` CLI binary.
 /// Falls back to common install paths for GUI apps with restricted PATH.
-async fn resolve_claude_bin() -> Option<String> {
+pub(crate) async fn resolve_claude_bin() -> Option<String> {
     // Try PATH first
     let check_cmd = if cfg!(windows) { "where" } else { "which" };
     if let Ok(output) = tokio::process::Command::new(check_cmd)
@@ -4280,15 +4579,21 @@ async fn resolve_claude_code_provider() -> Option<(String, String)> {
 
 fn truncate_output(s: &str, max_chars: usize) -> String {
     let char_count = s.chars().count();
-    if char_count > max_chars {
-        let truncated: String = s.chars().take(max_chars).collect();
-        format!(
-            "{}...\n[truncated, {} chars total]",
-            truncated, char_count
-        )
-    } else {
-        s.to_string()
+    if char_count <= max_chars {
+        return s.to_string();
     }
+    // Keep head (80%) and tail (20%) to preserve both context and trailing errors
+    let head_chars = max_chars * 4 / 5;
+    let tail_chars = max_chars - head_chars;
+    let head: String = s.chars().take(head_chars).collect();
+    let tail: String = s.chars().skip(char_count - tail_chars).collect();
+    format!(
+        "{}\n\n... [truncated {} of {} chars] ...\n\n{}",
+        head,
+        char_count - max_chars,
+        char_count,
+        tail
+    )
 }
 
 /// Try to execute a tool via MCP runtime.
@@ -4728,13 +5033,13 @@ pub fn spawn_task_execution(
         };
 
         // Handle result
-        match result {
-            Ok(reply) => {
+        let (was_successful, result_text) = match result {
+            Ok(ref reply) => {
                 // Save result to DB
                 if let Some(db) = DATABASE.get() {
                     db.update_task_status(&task_id, "completed").ok();
                     db.update_task_progress(&task_id, total_stages, total_stages, 100.0).ok();
-                    db.push_message(&session_id, "assistant", &reply).ok();
+                    db.push_message(&session_id, "assistant", reply).ok();
                 }
 
                 if let Some(ref handle) = app_handle {
@@ -4742,23 +5047,44 @@ pub fn spawn_task_execution(
                         "taskId": task_id,
                         "sessionId": session_id,
                         "status": "completed",
-                        "result": truncate_output(&reply, 3000),
+                        "result": truncate_output(reply, 3000),
                     })).ok();
                 }
 
                 log::info!("Task {} completed successfully", task_id);
+                (true, reply.clone())
             }
-            Err(e) => {
+            Err(ref e) => {
                 let error_msg = if e == "cancelled" {
                     "任务已被取消"
                 } else {
-                    &e
+                    e.as_str()
                 };
                 let status = if e == "cancelled" { "cancelled" } else { "failed" };
 
                 fail_task_with_status(&task_id, &session_id, error_msg, status);
                 log::warn!("Task {} {}: {}", task_id, status, error_msg);
+                (false, error_msg.to_string())
             }
+        };
+
+        // Growth System: post-task reflection (background, non-blocking)
+        {
+            let config = llm_config.clone();
+            let tid = task_id.clone();
+            let sid = session_id.clone();
+            let desc = description.clone();
+            let res = result_text;
+            tokio::spawn(async move {
+                super::react_agent::reflect_on_task(
+                    &config,
+                    Some(&tid),
+                    Some(&sid),
+                    &desc,
+                    &res,
+                    was_successful,
+                ).await;
+            });
         }
 
         // Cleanup cancel signal

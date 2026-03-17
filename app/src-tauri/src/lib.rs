@@ -24,6 +24,8 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_python::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::new())
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -280,6 +282,8 @@ pub fn run() {
             commands::system::install_git,
             commands::system::get_app_flag,
             commands::system::set_app_flag,
+            commands::system::get_growth_report,
+            commands::system::get_morning_greeting,
             // Models & Providers
             commands::models::list_providers,
             commands::models::configure_provider,

@@ -10,7 +10,7 @@
 import { memo, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   CheckCircle, AlertCircle, Clock, Pause, XCircle,
-  Settings, Puzzle, Bot, Zap, FolderOpen,
+  Settings, Puzzle, Bot, Zap, FolderOpen, Sprout,
   Pin, PinOff, Trash2, RefreshCw, MessageCircle,
   ChevronDown, ListTodo, PanelLeftClose, PanelLeft, Grid3X3,
 } from 'lucide-react';
@@ -276,6 +276,7 @@ const primaryNav: { id: Page; icon: React.ComponentType<any>; labelKey: string }
 ];
 
 const moreNavItems: { id: Page; icon: React.ComponentType<any>; labelKey: string }[] = [
+  { id: 'growth', icon: Sprout, labelKey: 'nav.growth' },
   { id: 'mcp', icon: Zap, labelKey: 'nav.mcp' },
   { id: 'cronjobs', icon: Clock, labelKey: 'nav.cronjobs' },
   { id: 'workspace', icon: FolderOpen, labelKey: 'nav.workspace' },

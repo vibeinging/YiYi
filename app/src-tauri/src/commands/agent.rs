@@ -1093,6 +1093,36 @@ pub async fn chat_stream_start(
                                 });
                             }
 
+                            // Growth System: detect implicit negative feedback in user message
+                            {
+                                let user_msg_lower = ctx.augmented_message.to_lowercase();
+                                let is_correction = [
+                                    "不对", "不要", "不是这样", "重来", "重新", "错了",
+                                    "wrong", "no,", "don't", "redo", "not what i",
+                                    "别这样", "换个", "我说的不是", "你理解错了",
+                                ].iter().any(|p| user_msg_lower.contains(p));
+
+                                if is_correction && !last_reply.is_empty() {
+                                    let config_fb = ctx.config.clone();
+                                    let feedback = ctx.augmented_message.clone();
+                                    let prev_request: String = ctx.llm_history.iter()
+                                        .rev()
+                                        .find(|m| m.role == "user")
+                                        .and_then(|m| m.content.as_ref())
+                                        .map(|c| c.clone().into_text())
+                                        .unwrap_or_default();
+                                    let prev_reply = last_reply.clone();
+                                    tokio::spawn(async move {
+                                        react_agent::learn_from_feedback(
+                                            &config_fb,
+                                            &feedback,
+                                            &prev_request,
+                                            &prev_reply,
+                                        ).await;
+                                    });
+                                }
+                            }
+
                             break;
                         }
 

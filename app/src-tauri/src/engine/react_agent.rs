@@ -1,6 +1,6 @@
 use super::llm_client::{chat_completion, chat_completion_stream, LLMConfig, LLMMessage, MessageContent, StreamEvent};
 use super::token_counter::estimate_tokens;
-use super::tools::{builtin_tools, execute_tool, ToolDefinition};
+use super::tools::{builtin_tools_filtered, execute_tool, ToolDefinition};
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
@@ -72,7 +72,7 @@ pub async fn run_react_with_options_persist(
     persist_fn: Option<PersistToolFn>,
 ) -> Result<String, String> {
     let max_iter = max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS);
-    let mut tools = builtin_tools();
+    let mut tools = builtin_tools_filtered().await;
     tools.extend(extra_tools.iter().cloned());
 
     let mut messages: Vec<LLMMessage> = vec![
@@ -286,7 +286,7 @@ where
     F: Fn(AgentStreamEvent) + Send + Clone + 'static,
 {
     let max_iter = max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS);
-    let mut tools = builtin_tools();
+    let mut tools = builtin_tools_filtered().await;
     tools.extend(extra_tools.iter().cloned());
 
     let mut messages: Vec<LLMMessage> = vec![LLMMessage {
@@ -629,7 +629,7 @@ pub async fn build_system_prompt(
     }
 
     // Auto-generate tool list from builtin_tools() and MCP tools
-    let tools = builtin_tools();
+    let tools = builtin_tools_filtered().await;
     let mut tool_lines: Vec<String> = tools
         .iter()
         .map(|t| format!("- {}: {}", t.function.name, t.function.description))
@@ -684,6 +684,39 @@ pub async fn build_system_prompt(
         )
     };
 
+    // Detect Claude Code CLI availability and inject guidance (language-aware)
+    let claude_code_guidance = if super::tools::is_claude_cli_available().await {
+        if lang.starts_with("zh") {
+            "\n\
+### Claude Code 编码助手 (IMPORTANT)\n\
+你的工具列表中有 `claude_code` 工具。对于**复杂编码任务**（多文件修改、架构分析、大规模重构），优先使用它：\n\
+- 代码编写/修改/重构（新功能、bug修复、多文件修改）\n\
+- 代码搜索/分析（查找定义、理解架构、分析调用链）\n\
+- 测试编写和运行\n\
+- Git 操作（提交、分支管理，但不自动 push）\n\
+- 构建/调试（编译错误修复、依赖排查）\n\n\
+Claude Code 拥有完整的代码理解、编辑、搜索和终端能力，比内置工具更高效。\n\
+调用时通过 `prompt` 参数描述具体任务，通过 `context` 参数传递项目约定或对话背景。\n\
+多次调用会自动保持上下文连续性。完成后必须向用户展示成果（代码diff、运行结果等），不要只说「已完成」。\n\
+简单的单文件查看或小修改可直接使用内置工具（read_file、edit_file）。\n"
+        } else {
+            "\n\
+### Claude Code Coding Assistant (IMPORTANT)\n\
+You have a `claude_code` tool available. For **complex coding tasks** (multi-file changes, architecture analysis, large refactors), prefer using it:\n\
+- Code writing/modification/refactoring\n\
+- Code search/analysis (find definitions, understand architecture)\n\
+- Test writing and execution\n\
+- Git operations (commit, branch management — no auto push)\n\
+- Build/debug (compile errors, dependency issues)\n\n\
+Claude Code has full code understanding, editing, search, and terminal capabilities.\n\
+Use `prompt` to describe the task, `context` to pass project conventions or conversation background.\n\
+Multiple calls automatically maintain session continuity. Always show results to the user after completion.\n\
+For simple single-file reads or small edits, use built-in tools (read_file, edit_file) directly.\n"
+        }
+    } else {
+        ""
+    };
+
     prompt.push_str(&format!(
         "\
 ## Workspace & File Access
@@ -701,7 +734,7 @@ You have access to these tools:
 IMPORTANT: For simple document reading, prefer built-in tools (read_pdf, read_docx, \
 read_spreadsheet). For advanced operations (PDF forms, PPTX creation, complex Excel), \
 use run_python or run_python_script with the appropriate libraries.
-
+{claude_code_guidance}
 When using tools:
 - Think step by step about what you need to do
 - Use the appropriate tool for each step
@@ -811,6 +844,31 @@ When setting up bots, open the developer console:
         authorized_info = authorized_info,
         tool_list = tool_list,
     ));
+
+    // Load behavioral corrections from Growth System
+    if let Some(db) = super::tools::get_database() {
+        let corrections = db.get_active_corrections(5);
+        if !corrections.is_empty() {
+            prompt.push_str("\n\n## Learned Behaviors (from past feedback)\n");
+            for (trigger, behavior, source) in &corrections {
+                let source_hint = if source.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", source)
+                };
+                prompt.push_str(&format!("- {}: {}{}\n", trigger, behavior, source_hint));
+            }
+        }
+
+        // Skill genesis: proactively suggest creating a skill if pattern detected
+        if let Some(suggestion) = detect_skill_opportunity(&db) {
+            prompt.push_str(&format!(
+                "\n\n## Proactive Suggestion\n{}\n\
+                 If the user agrees, use manage_skill(action='create') to create the skill.\n",
+                suggestion
+            ));
+        }
+    }
 
     // Load MEMORY.md into system prompt
     let memory_content = super::memory::read_memory_md(working_dir);
@@ -1293,4 +1351,613 @@ Extract memories (JSON array only):"#
     if added > 0 {
         log::info!("Auto-extracted {} memories from conversation", added);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Growth System — Post-task reflection
+// ---------------------------------------------------------------------------
+
+/// Reflect on a completed task: assess outcome, extract lessons, identify skill opportunities.
+/// Runs in the background after task completion. Stores results in reflections table.
+pub async fn reflect_on_task(
+    config: &LLMConfig,
+    task_id: Option<&str>,
+    session_id: Option<&str>,
+    task_description: &str,
+    result_text: &str,
+    was_successful: bool,
+) {
+    use super::tools::get_database;
+
+    let db = match get_database() {
+        Some(db) => db,
+        None => return,
+    };
+
+    // Skip trivial tasks
+    if task_description.len() < 10 && result_text.len() < 30 {
+        return;
+    }
+
+    let desc_preview: String = task_description.chars().take(1500).collect();
+    let result_preview: String = result_text.chars().take(1500).collect();
+    let outcome_hint = if was_successful { "success" } else { "failure" };
+
+    let reflection_prompt = format!(
+        r#"You are reflecting on a completed task. Analyze what happened and extract lessons.
+
+Task: {desc_preview}
+Outcome: {outcome_hint}
+Result: {result_preview}
+
+Respond ONLY with a JSON object:
+{{
+  "outcome": "success" | "partial" | "failure",
+  "summary": "one-sentence summary of what happened",
+  "lesson": "generalizable lesson for future tasks (or null if none)",
+  "skill_opportunity": "if this task could be automated as a reusable skill, describe it briefly (or null)"
+}}
+
+JSON only:"#
+    );
+
+    let messages = vec![LLMMessage {
+        role: "user".into(),
+        content: Some(MessageContent::text(reflection_prompt)),
+        tool_calls: None,
+        tool_call_id: None,
+    }];
+
+    let result = match chat_completion(config, &messages, &[]).await {
+        Ok(resp) => resp.message.content.map(|c| c.into_text()).unwrap_or_default(),
+        Err(e) => {
+            log::warn!("Reflection LLM call failed: {}", e);
+            // Still save a basic reflection without LLM analysis
+            db.add_reflection(
+                task_id, session_id, outcome_hint,
+                &format!("Task completed ({outcome_hint}), LLM reflection unavailable"),
+                None, None,
+            ).ok();
+            return;
+        }
+    };
+
+    // Parse JSON
+    let trimmed = result.trim();
+    let json_str = if trimmed.starts_with("```") {
+        trimmed
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim()
+    } else {
+        trimmed
+    };
+
+    #[derive(serde::Deserialize)]
+    struct ReflectionResult {
+        outcome: Option<String>,
+        summary: Option<String>,
+        lesson: Option<String>,
+        skill_opportunity: Option<String>,
+    }
+
+    let parsed: ReflectionResult = match serde_json::from_str(json_str) {
+        Ok(r) => r,
+        Err(e) => {
+            log::debug!("Reflection parse error: {} (response: {})", e, &result[..result.len().min(200)]);
+            db.add_reflection(
+                task_id, session_id, outcome_hint,
+                &format!("Task {outcome_hint}"),
+                None, None,
+            ).ok();
+            return;
+        }
+    };
+
+    let outcome = parsed.outcome.as_deref().unwrap_or(outcome_hint);
+    let summary = parsed.summary.as_deref().unwrap_or("(no summary)");
+
+    // Save reflection
+    if let Ok(ref_id) = db.add_reflection(
+        task_id, session_id, outcome, summary,
+        parsed.lesson.as_deref(),
+        parsed.skill_opportunity.as_deref(),
+    ) {
+        log::info!("Reflection saved: {} (outcome: {})", ref_id, outcome);
+    }
+
+    // If there's a lesson, also save it as a memory
+    if let Some(ref lesson) = parsed.lesson {
+        if !lesson.is_empty() {
+            db.memory_add(lesson, "experience", session_id).ok();
+        }
+    }
+}
+
+/// Analyze user feedback and generate behavioral corrections.
+/// Called when user provides negative feedback (thumbs down, "redo", corrections).
+pub async fn learn_from_feedback(
+    config: &LLMConfig,
+    user_feedback: &str,
+    original_request: &str,
+    agent_response: &str,
+) {
+    use super::tools::get_database;
+
+    let db = match get_database() {
+        Some(db) => db,
+        None => return,
+    };
+
+    if user_feedback.len() < 5 {
+        return;
+    }
+
+    let feedback_preview: String = user_feedback.chars().take(1000).collect();
+    let request_preview: String = original_request.chars().take(800).collect();
+    let response_preview: String = agent_response.chars().take(800).collect();
+
+    let correction_prompt = format!(
+        r#"The user gave negative feedback about an AI assistant's response. Analyze and create a behavioral correction rule.
+
+User's original request: {request_preview}
+AI's response (that the user didn't like): {response_preview}
+User's feedback: {feedback_preview}
+
+Create a correction rule. Respond ONLY with a JSON object:
+{{
+  "trigger": "when the user asks/does X...",
+  "wrong_behavior": "I previously did Y...",
+  "correct_behavior": "I should do Z instead..."
+}}
+
+JSON only:"#
+    );
+
+    let messages = vec![LLMMessage {
+        role: "user".into(),
+        content: Some(MessageContent::text(correction_prompt)),
+        tool_calls: None,
+        tool_call_id: None,
+    }];
+
+    let result = match chat_completion(config, &messages, &[]).await {
+        Ok(resp) => resp.message.content.map(|c| c.into_text()).unwrap_or_default(),
+        Err(e) => {
+            log::warn!("Feedback learning LLM call failed: {}", e);
+            return;
+        }
+    };
+
+    let trimmed = result.trim();
+    let json_str = if trimmed.starts_with("```") {
+        trimmed
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim()
+    } else {
+        trimmed
+    };
+
+    #[derive(serde::Deserialize)]
+    struct CorrectionResult {
+        trigger: String,
+        wrong_behavior: Option<String>,
+        correct_behavior: String,
+    }
+
+    let parsed: CorrectionResult = match serde_json::from_str(json_str) {
+        Ok(r) => r,
+        Err(e) => {
+            log::debug!("Correction parse error: {}", e);
+            return;
+        }
+    };
+
+    match db.add_correction(
+        &parsed.trigger,
+        parsed.wrong_behavior.as_deref(),
+        &parsed.correct_behavior,
+        Some("user_feedback"),
+    ) {
+        Ok(id) => log::info!("Correction rule saved: {}", id),
+        Err(e) => log::warn!("Failed to save correction: {}", e),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Growth System — Growth Report & Skill Genesis
+// ---------------------------------------------------------------------------
+
+/// Generate a growth report from recent reflections.
+/// Returns a summary of success rate, failure patterns, and recommended actions.
+pub fn generate_growth_report(db: &super::db::Database) -> Option<GrowthReport> {
+    let reflections = db.get_recent_reflections(50);
+    if reflections.len() < 3 {
+        return None; // Not enough data
+    }
+
+    let total = reflections.len();
+    let successes = reflections.iter().filter(|(o, _, _)| o == "success").count();
+    let failures = reflections.iter().filter(|(o, _, _)| o == "failure").count();
+    let partials = total - successes - failures;
+
+    // Collect lessons
+    let lessons: Vec<&str> = reflections
+        .iter()
+        .filter_map(|(_, _, l)| l.as_deref())
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    // Collect skill opportunities
+    let skill_opps: Vec<&str> = reflections
+        .iter()
+        .filter_map(|(_, _, _)| None::<&str>) // skill_opportunity not in get_recent_reflections yet
+        .collect();
+    let _ = skill_opps; // suppress warning, will be used when we extend get_recent_reflections
+
+    Some(GrowthReport {
+        total_tasks: total,
+        success_count: successes,
+        failure_count: failures,
+        partial_count: partials,
+        success_rate: successes as f64 / total as f64,
+        top_lessons: lessons.into_iter().take(5).map(String::from).collect(),
+    })
+}
+
+/// Growth report data structure.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GrowthReport {
+    pub total_tasks: usize,
+    pub success_count: usize,
+    pub failure_count: usize,
+    pub partial_count: usize,
+    pub success_rate: f64,
+    pub top_lessons: Vec<String>,
+}
+
+/// Check if there are recurring skill opportunities in reflections.
+/// Returns a suggestion message if a pattern is detected (3+ similar opportunities).
+pub fn detect_skill_opportunity(db: &super::db::Database) -> Option<String> {
+    let conn = match db.get_conn() {
+        Some(c) => c,
+        None => return None,
+    };
+
+    // Query skill_opportunity from reflections where it's not null
+    let mut stmt = conn
+        .prepare(
+            "SELECT skill_opportunity FROM reflections
+             WHERE skill_opportunity IS NOT NULL AND skill_opportunity != ''
+             ORDER BY created_at DESC LIMIT 20",
+        )
+        .ok()?;
+
+    let opportunities: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .ok()?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    if opportunities.len() < 3 {
+        return None;
+    }
+
+    // Simple frequency detection: if 3+ opportunities mention similar words
+    // (this is a heuristic; a more sophisticated version would use embeddings)
+    let first = &opportunities[0];
+    let similar_count = opportunities
+        .iter()
+        .skip(1)
+        .filter(|o| {
+            // Check if they share at least 2 significant words
+            let words_a: std::collections::HashSet<&str> = first.split_whitespace()
+                .filter(|w| w.len() > 3)
+                .collect();
+            let words_b: std::collections::HashSet<&str> = o.split_whitespace()
+                .filter(|w| w.len() > 3)
+                .collect();
+            words_a.intersection(&words_b).count() >= 2
+        })
+        .count();
+
+    if similar_count >= 2 {
+        Some(format!(
+            "I've noticed a recurring pattern in your tasks: \"{}\". Would you like me to create a reusable skill for this?",
+            first
+        ))
+    } else {
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Growth System — Capability Profile
+// ---------------------------------------------------------------------------
+
+/// A single capability dimension with success metrics.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CapabilityDimension {
+    pub name: String,
+    pub success_rate: f64,
+    pub sample_count: usize,
+    pub confidence: String, // "low" (<5), "medium" (5-15), "high" (>15)
+}
+
+/// Build a capability profile from reflection summaries.
+/// Groups reflections by detected task category and computes success rates.
+pub fn build_capability_profile(db: &super::db::Database) -> Vec<CapabilityDimension> {
+    let conn = match db.get_conn() {
+        Some(c) => c,
+        None => return Vec::new(),
+    };
+
+    // Get all reflections with outcome and summary
+    let mut stmt = match conn.prepare(
+        "SELECT outcome, summary FROM reflections ORDER BY created_at DESC LIMIT 200",
+    ) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+
+    let rows: Vec<(String, String)> = stmt
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .ok()
+        .map(|r| r.flatten().collect())
+        .unwrap_or_default();
+
+    if rows.is_empty() {
+        return Vec::new();
+    }
+
+    // Categorize by keywords in summary
+    let categories = [
+        ("coding", &["代码", "编程", "code", "programming", "编写", "函数", "bug", "refactor", "实现", "feature"][..]),
+        ("documents", &["文档", "报告", "文件", "document", "report", "writing", "docx", "pdf", "pptx"]),
+        ("data_analysis", &["数据", "分析", "统计", "data", "analysis", "csv", "excel", "表格"]),
+        ("web_automation", &["浏览器", "网页", "browser", "web", "scrape", "自动化"]),
+        ("system_ops", &["shell", "命令", "安装", "部署", "deploy", "系统", "terminal", "服务器"]),
+        ("scheduling", &["定时", "提醒", "cron", "schedule", "reminder", "任务"]),
+    ];
+
+    let mut category_stats: std::collections::HashMap<&str, (usize, usize)> = std::collections::HashMap::new();
+
+    for (outcome, summary) in &rows {
+        let summary_lower = summary.to_lowercase();
+        let is_success = outcome == "success";
+
+        let mut matched = false;
+        for (cat_name, keywords) in &categories {
+            if keywords.iter().any(|kw| summary_lower.contains(kw)) {
+                let entry = category_stats.entry(cat_name).or_insert((0, 0));
+                entry.0 += 1; // total
+                if is_success {
+                    entry.1 += 1; // successes
+                }
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            let entry = category_stats.entry("other").or_insert((0, 0));
+            entry.0 += 1;
+            if is_success {
+                entry.1 += 1;
+            }
+        }
+    }
+
+    let display_names: std::collections::HashMap<&str, &str> = [
+        ("coding", "Coding"),
+        ("documents", "Documents"),
+        ("data_analysis", "Data Analysis"),
+        ("web_automation", "Web Automation"),
+        ("system_ops", "System Ops"),
+        ("scheduling", "Scheduling"),
+        ("other", "Other"),
+    ].into_iter().collect();
+
+    let mut profile: Vec<CapabilityDimension> = category_stats
+        .iter()
+        .map(|(name, (total, successes))| {
+            let confidence = if *total < 5 {
+                "low"
+            } else if *total < 15 {
+                "medium"
+            } else {
+                "high"
+            };
+            CapabilityDimension {
+                name: display_names.get(name).unwrap_or(name).to_string(),
+                success_rate: if *total > 0 { *successes as f64 / *total as f64 } else { 0.0 },
+                sample_count: *total,
+                confidence: confidence.to_string(),
+            }
+        })
+        .collect();
+
+    profile.sort_by(|a, b| b.sample_count.cmp(&a.sample_count));
+    profile
+}
+
+// ---------------------------------------------------------------------------
+// Growth System — Morning Reflection (Proactive Greeting)
+// ---------------------------------------------------------------------------
+
+/// Generate a proactive morning greeting with actionable suggestions.
+/// Called on first user interaction of the day.
+pub async fn generate_morning_reflection(
+    config: &LLMConfig,
+    db: &super::db::Database,
+) -> Option<String> {
+    // Check if we already did morning reflection today
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    if let Some(conn) = db.get_conn() {
+        let already_done: bool = conn
+            .prepare("SELECT 1 FROM reflections WHERE task_id = ?1 LIMIT 1")
+            .and_then(|mut stmt| stmt.exists(rusqlite::params![format!("morning:{}", today)]))
+            .unwrap_or(false);
+        if already_done {
+            return None;
+        }
+    }
+
+    // Gather context
+    let report = generate_growth_report(db);
+    let corrections = db.get_active_corrections(3);
+    let profile = build_capability_profile(db);
+
+    // Build a context summary for LLM
+    let report_summary = match &report {
+        Some(r) => format!(
+            "Recent performance: {} tasks, {:.0}% success rate. Top lessons: {}",
+            r.total_tasks,
+            r.success_rate * 100.0,
+            if r.top_lessons.is_empty() { "none yet".into() } else { r.top_lessons.join("; ") }
+        ),
+        None => "Not enough task history yet.".into(),
+    };
+
+    let corrections_summary = if corrections.is_empty() {
+        "No behavioral corrections recorded.".into()
+    } else {
+        corrections.iter()
+            .map(|(t, b, _)| format!("{}: {}", t, b))
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+
+    let profile_summary = if profile.is_empty() {
+        "No capability data yet.".into()
+    } else {
+        profile.iter()
+            .take(4)
+            .map(|d| format!("{}: {:.0}% ({} tasks)", d.name, d.success_rate * 100.0, d.sample_count))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    let prompt_text = format!(
+        r#"You are YiYi, an AI companion starting a new day with your user. Generate a brief, warm morning greeting (2-4 sentences) with 1-2 proactive suggestions based on this context:
+
+Growth data: {report_summary}
+Learned corrections: {corrections_summary}
+Capability profile: {profile_summary}
+
+Guidelines:
+- Be warm but concise, like a thoughtful friend
+- If you have growth data, mention one insight naturally
+- Suggest 1-2 actionable things (not generic)
+- If no data yet, just be welcoming and offer help
+- Respond in the user's likely language (Chinese if context suggests it)
+
+Morning greeting:"#
+    );
+
+    let messages = vec![LLMMessage {
+        role: "user".into(),
+        content: Some(MessageContent::text(prompt_text)),
+        tool_calls: None,
+        tool_call_id: None,
+    }];
+
+    let greeting = match chat_completion(config, &messages, &[]).await {
+        Ok(resp) => resp.message.content.map(|c| c.into_text()),
+        Err(e) => {
+            log::warn!("Morning reflection LLM call failed: {}", e);
+            None
+        }
+    }?;
+
+    // Mark as done for today
+    db.add_reflection(
+        Some(&format!("morning:{}", today)),
+        None,
+        "success",
+        &format!("Morning reflection: {}", &greeting.chars().take(100).collect::<String>()),
+        None,
+        None,
+    ).ok();
+
+    Some(greeting)
+}
+
+/// Growth milestone events for the timeline.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GrowthMilestone {
+    pub date: String,
+    pub event_type: String, // "first_task", "skill_created", "lesson_learned", "correction", "capability_up"
+    pub title: String,
+    pub description: String,
+}
+
+/// Build a growth timeline from stored data.
+pub fn build_growth_timeline(db: &super::db::Database, limit: usize) -> Vec<GrowthMilestone> {
+    let conn = match db.get_conn() {
+        Some(c) => c,
+        None => return Vec::new(),
+    };
+
+    let mut milestones = Vec::new();
+
+    // Reflections with lessons → "lesson_learned" milestones
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT created_at, summary, lesson FROM reflections
+         WHERE lesson IS NOT NULL AND lesson != ''
+         ORDER BY created_at DESC LIMIT ?1",
+    ) {
+        if let Ok(rows) = stmt.query_map(rusqlite::params![limit as i64], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        }) {
+            for row in rows.flatten() {
+                let date = chrono::DateTime::from_timestamp(row.0, 0)
+                    .map(|dt| dt.format("%Y-%m-%d").to_string())
+                    .unwrap_or_default();
+                milestones.push(GrowthMilestone {
+                    date,
+                    event_type: "lesson_learned".into(),
+                    title: "Learned from experience".into(),
+                    description: row.2,
+                });
+            }
+        }
+    }
+
+    // Corrections → "correction" milestones
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT created_at, trigger_pattern, correct_behavior FROM corrections
+         ORDER BY created_at DESC LIMIT ?1",
+    ) {
+        if let Ok(rows) = stmt.query_map(rusqlite::params![limit as i64], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        }) {
+            for row in rows.flatten() {
+                let date = chrono::DateTime::from_timestamp(row.0, 0)
+                    .map(|dt| dt.format("%Y-%m-%d").to_string())
+                    .unwrap_or_default();
+                milestones.push(GrowthMilestone {
+                    date,
+                    event_type: "correction".into(),
+                    title: format!("Behavioral adjustment: {}", row.1),
+                    description: row.2,
+                });
+            }
+        }
+    }
+
+    // Sort by date descending
+    milestones.sort_by(|a, b| b.date.cmp(&a.date));
+    milestones.truncate(limit);
+    milestones
 }

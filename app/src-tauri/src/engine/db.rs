@@ -97,6 +97,11 @@ fn default_task_type() -> String {
 }
 
 impl Database {
+    /// Get a locked connection handle (for ad-hoc queries in growth system etc.)
+    pub fn get_conn(&self) -> Option<std::sync::MutexGuard<'_, Connection>> {
+        self.conn.lock().ok()
+    }
+
     pub fn open(working_dir: &Path) -> Result<Self, String> {
         let db_path = working_dir.join("yiyiclaw.db");
         let conn = Connection::open(&db_path)
@@ -393,6 +398,40 @@ impl Database {
         )
         .map_err(|e| format!("Failed to create tasks table: {}", e))?;
 
+        // Reflections table — post-task self-assessment
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS reflections (
+                id TEXT PRIMARY KEY,
+                task_id TEXT,
+                session_id TEXT,
+                outcome TEXT NOT NULL DEFAULT 'success',
+                summary TEXT NOT NULL,
+                lesson TEXT,
+                skill_opportunity TEXT,
+                user_feedback TEXT,
+                created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_reflections_outcome ON reflections(outcome);
+            CREATE INDEX IF NOT EXISTS idx_reflections_created ON reflections(created_at);",
+        )
+        .map_err(|e| format!("Failed to create reflections table: {}", e))?;
+
+        // Corrections table — behavioral rules learned from feedback
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS corrections (
+                id TEXT PRIMARY KEY,
+                trigger_pattern TEXT NOT NULL,
+                wrong_behavior TEXT,
+                correct_behavior TEXT NOT NULL,
+                source TEXT,
+                active INTEGER NOT NULL DEFAULT 1,
+                hit_count INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_corrections_active ON corrections(active);",
+        )
+        .map_err(|e| format!("Failed to create corrections table: {}", e))?;
+
         Ok(())
     }
 
@@ -470,6 +509,18 @@ impl Database {
                 "ALTER TABLE tasks ADD COLUMN workspace_path TEXT;"
             ).map_err(|e| format!("Migration error (tasks workspace_path): {}", e))?;
             log::info!("Migrated tasks table: added workspace_path column");
+        }
+
+        // Growth System: add access_count and last_accessed_at to memories table
+        let has_access_count: bool = conn
+            .prepare("SELECT access_count FROM memories LIMIT 0")
+            .is_ok();
+        if !has_access_count {
+            conn.execute_batch(
+                "ALTER TABLE memories ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE memories ADD COLUMN last_accessed_at INTEGER DEFAULT NULL;"
+            ).map_err(|e| format!("Migration error (memories growth): {}", e))?;
+            log::info!("Migrated memories table: added access_count, last_accessed_at columns");
         }
 
         Ok(())
@@ -1926,6 +1977,17 @@ impl Database {
                 .collect()
         };
 
+        // Growth System: bump access_count for returned memories
+        if !results.is_empty() {
+            let now = now_ts();
+            for mem in &results {
+                conn.execute(
+                    "UPDATE memories SET access_count = access_count + 1, last_accessed_at = ?1 WHERE id = ?2",
+                    params![now, mem.id],
+                ).ok();
+            }
+        }
+
         Ok(results)
     }
 
@@ -2398,6 +2460,97 @@ impl Database {
         )
         .map_err(|e| format!("Failed to pin task: {}", e))?;
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Reflections & Corrections (Growth System)
+    // -----------------------------------------------------------------------
+
+    /// Save a post-task reflection.
+    pub fn add_reflection(
+        &self,
+        task_id: Option<&str>,
+        session_id: Option<&str>,
+        outcome: &str,
+        summary: &str,
+        lesson: Option<&str>,
+        skill_opportunity: Option<&str>,
+    ) -> Result<String, String> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = now_ts();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO reflections (id, task_id, session_id, outcome, summary, lesson, skill_opportunity, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![id, task_id, session_id, outcome, summary, lesson, skill_opportunity, now],
+        )
+        .map_err(|e| format!("Failed to add reflection: {}", e))?;
+        Ok(id)
+    }
+
+    /// Save a behavioral correction learned from user feedback.
+    pub fn add_correction(
+        &self,
+        trigger_pattern: &str,
+        wrong_behavior: Option<&str>,
+        correct_behavior: &str,
+        source: Option<&str>,
+    ) -> Result<String, String> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = now_ts();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO corrections (id, trigger_pattern, wrong_behavior, correct_behavior, source, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, trigger_pattern, wrong_behavior, correct_behavior, source, now],
+        )
+        .map_err(|e| format!("Failed to add correction: {}", e))?;
+        Ok(id)
+    }
+
+    /// Get active corrections for system prompt injection (most recent first, limited).
+    pub fn get_active_corrections(&self, limit: usize) -> Vec<(String, String, String)> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = match conn.prepare(
+            "SELECT trigger_pattern, correct_behavior, source
+             FROM corrections WHERE active = 1
+             ORDER BY hit_count DESC, created_at DESC LIMIT ?1",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        stmt.query_map(params![limit as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2).unwrap_or_default(),
+            ))
+        })
+        .ok()
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
+    }
+
+    /// Get recent reflections for growth analysis.
+    pub fn get_recent_reflections(&self, limit: usize) -> Vec<(String, String, Option<String>)> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = match conn.prepare(
+            "SELECT outcome, summary, lesson FROM reflections
+             ORDER BY created_at DESC LIMIT ?1",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        stmt.query_map(params![limit as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })
+        .ok()
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
     }
 
     pub fn delete_task(&self, task_id: &str) -> Result<(), String> {

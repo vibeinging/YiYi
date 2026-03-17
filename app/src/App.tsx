@@ -14,6 +14,7 @@ import { CronJobsPage } from './pages/CronJobs';
 import { WorkspacePage } from './pages/Workspace';
 import { MCPPage } from './pages/MCP';
 import { HeartbeatPage } from './pages/Heartbeat';
+import { GrowthPage } from './pages/Growth';
 import { useTheme } from './hooks/useTheme';
 import { useDragRegion } from './hooks/useDragRegion';
 import { ToastProvider } from './components/Toast';
@@ -26,7 +27,7 @@ import { TaskDetailOverlay } from './components/TaskDetailOverlay';
 import { useTaskSidebarStore } from './stores/taskSidebarStore';
 import { ClaudeCodeTerminal } from './pages/ClaudeCodeTerminal';
 
-export type Page = 'chat' | 'skills' | 'cronjobs' | 'workspace' | 'mcp' | 'heartbeat' | 'bots' | 'terminal' | 'settings';
+export type Page = 'chat' | 'skills' | 'cronjobs' | 'workspace' | 'mcp' | 'heartbeat' | 'growth' | 'bots' | 'terminal' | 'settings';
 
 // Check for standalone window views before rendering the main app
 const standaloneView = new URLSearchParams(window.location.search).get('view');
@@ -188,6 +189,7 @@ function MainApp() {
       case 'workspace': return <WorkspacePage />;
       case 'mcp': return <MCPPage />;
       case 'heartbeat': return <HeartbeatPage />;
+      case 'growth': return <GrowthPage />;
       case 'bots': return <BotsPage consumeNotifContext={consumeNotifContext} />;
       case 'terminal': return <TerminalPage />;
       case 'settings': return <SettingsPage />;
