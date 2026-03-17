@@ -2554,9 +2554,27 @@ impl Database {
         .unwrap_or_default()
     }
 
-    /// Get all active corrections (for consolidation into PRINCIPLES.md).
+    /// Get all active corrections ordered by time ASC (for consolidation — newer = higher priority).
     pub fn get_all_active_corrections(&self) -> Vec<(String, String, String)> {
-        self.get_active_corrections(500)
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = match conn.prepare(
+            "SELECT trigger_pattern, correct_behavior, source
+             FROM corrections WHERE active = 1
+             ORDER BY created_at ASC",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2).unwrap_or_default(),
+            ))
+        })
+        .ok()
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
     }
 
     /// Count active corrections.

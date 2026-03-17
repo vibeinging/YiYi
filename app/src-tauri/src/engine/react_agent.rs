@@ -2098,9 +2098,10 @@ Raw correction rules ({count} total):
 {existing_context}
 Task: Merge these into a concise list of behavioral principles (max 10 items).
 - Combine similar/overlapping rules
-- Resolve any contradictions (prefer the more specific rule)
+- Resolve contradictions: later rules (higher number) override earlier ones — the user's most recent feedback is the truth
 - Write each principle as a short, actionable statement
 - Remove redundant or trivial rules
+- Drop rules that are clearly outdated or superseded by newer ones
 - Keep the language matching the original rules (Chinese or English)
 
 Respond with ONLY the consolidated principles, one per line, prefixed with "- ".
