@@ -3,7 +3,7 @@
  * Apple-inspired Design with Tabs
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Palette,
@@ -17,7 +17,14 @@ import {
   Trash2,
   Lock,
   Unlock,
+  Download,
+  RefreshCw,
+  CheckCircle,
+  AlertCircle,
+  Loader2,
 } from 'lucide-react';
+import { check, type Update } from '@tauri-apps/plugin-updater';
+import { relaunch } from '@tauri-apps/plugin-process';
 import { LanguageSwitcher } from '../components/LanguageSwitcher';
 import { PageHeader } from '../components/PageHeader';
 import { ModelsPage } from './Models';
@@ -37,6 +44,170 @@ import {
   type SensitivePattern,
 } from '../api/workspace';
 import { toast } from '../components/Toast';
+
+type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'installing' | 'up-to-date' | 'error';
+
+function UpdateChecker() {
+  const { t } = useTranslation();
+  const [status, setStatus] = useState<UpdateStatus>('idle');
+  const [update, setUpdate] = useState<Update | null>(null);
+  const [progress, setProgress] = useState(0);
+  const [error, setError] = useState('');
+
+  const handleCheck = useCallback(async () => {
+    setStatus('checking');
+    setError('');
+    try {
+      const result = await check();
+      if (result) {
+        setUpdate(result);
+        setStatus('available');
+      } else {
+        setStatus('up-to-date');
+      }
+    } catch (e) {
+      setError(String(e));
+      setStatus('error');
+    }
+  }, []);
+
+  const handleInstall = useCallback(async () => {
+    if (!update) return;
+    setStatus('downloading');
+    try {
+      let totalBytes = 0;
+      let downloadedBytes = 0;
+      await update.downloadAndInstall((event) => {
+        if ('contentLength' in event) {
+          totalBytes = (event as any).contentLength ?? 0;
+        }
+        if ('chunkLength' in event) {
+          downloadedBytes += (event as any).chunkLength ?? 0;
+          if (totalBytes > 0) {
+            setProgress(Math.round((downloadedBytes / totalBytes) * 100));
+          }
+        }
+      });
+      setStatus('installing');
+      await relaunch();
+    } catch (e) {
+      setError(String(e));
+      setStatus('error');
+    }
+  }, [update]);
+
+  return (
+    <div className="pt-3 border-t border-[var(--color-border)]">
+      <div className="flex items-center gap-3">
+        {status === 'idle' && (
+          <button
+            onClick={handleCheck}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-medium transition-colors"
+            style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-primary)' }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--color-bg-subtle)'; }}
+          >
+            <RefreshCw size={14} />
+            {t('settings.checkUpdate')}
+          </button>
+        )}
+
+        {status === 'checking' && (
+          <div className="flex items-center gap-2 px-4 py-2 text-[13px] text-[var(--color-text-muted)]">
+            <Loader2 size={14} className="animate-spin" />
+            {t('settings.checking')}
+          </div>
+        )}
+
+        {status === 'up-to-date' && (
+          <div className="flex items-center gap-2 px-4 py-2">
+            <CheckCircle size={14} style={{ color: 'var(--color-success)' }} />
+            <span className="text-[13px]" style={{ color: 'var(--color-success)' }}>
+              {t('settings.upToDate')}
+            </span>
+            <button
+              onClick={() => setStatus('idle')}
+              className="ml-2 text-[12px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+            >
+              {t('settings.checkUpdate')}
+            </button>
+          </div>
+        )}
+
+        {status === 'available' && update && (
+          <div className="flex-1 space-y-2">
+            <div className="flex items-center gap-2">
+              <Download size={14} style={{ color: 'var(--color-primary)' }} />
+              <span className="text-[13px] font-medium" style={{ color: 'var(--color-primary)' }}>
+                {t('settings.updateVersion', { version: update.version })}
+              </span>
+            </div>
+            {update.body && (
+              <div
+                className="p-3 rounded-xl text-[12px] leading-relaxed max-h-32 overflow-y-auto"
+                style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-secondary)' }}
+              >
+                <div className="text-[11px] font-medium mb-1" style={{ color: 'var(--color-text-muted)' }}>
+                  {t('settings.releaseNotes')}
+                </div>
+                {update.body}
+              </div>
+            )}
+            <button
+              onClick={handleInstall}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-medium transition-colors"
+              style={{ background: 'var(--color-primary)', color: '#FFFFFF' }}
+            >
+              <Download size={14} />
+              {t('settings.installAndRestart')}
+            </button>
+          </div>
+        )}
+
+        {status === 'downloading' && (
+          <div className="flex-1 space-y-2">
+            <div className="flex items-center gap-2 text-[13px] text-[var(--color-text-muted)]">
+              <Loader2 size={14} className="animate-spin" />
+              {progress > 0
+                ? t('settings.downloadProgress', { percent: progress })
+                : t('settings.downloading')}
+            </div>
+            {progress > 0 && (
+              <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--color-bg-subtle)' }}>
+                <div
+                  className="h-full rounded-full transition-all duration-300"
+                  style={{ width: `${progress}%`, background: 'var(--color-primary)' }}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
+        {status === 'installing' && (
+          <div className="flex items-center gap-2 text-[13px] text-[var(--color-text-muted)]">
+            <Loader2 size={14} className="animate-spin" />
+            {t('settings.installing')}
+          </div>
+        )}
+
+        {status === 'error' && (
+          <div className="flex items-center gap-2">
+            <AlertCircle size={14} style={{ color: 'var(--color-error)' }} />
+            <span className="text-[13px]" style={{ color: 'var(--color-error)' }}>
+              {t('settings.updateFailed')}
+            </span>
+            <button
+              onClick={handleCheck}
+              className="ml-2 text-[12px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+            >
+              {t('settings.checkUpdate')}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 type SettingsTab = 'general' | 'models' | 'environments' | 'workspace';
 
@@ -284,9 +455,9 @@ export function SettingsPage() {
               </div>
             </div>
 
-            {/* About */}
+            {/* About & Update */}
             <div className="p-5 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between mb-4">
                 <div>
                   <h2 className="font-semibold text-[14px] mb-1">{t('settings.about')}</h2>
                   <p className="text-[12px] text-[var(--color-text-muted)]">YiYiClaw v0.1.0</p>
@@ -295,6 +466,7 @@ export function SettingsPage() {
                   © 2024 YiYiClaw
                 </div>
               </div>
+              <UpdateChecker />
             </div>
           </div>
         )}

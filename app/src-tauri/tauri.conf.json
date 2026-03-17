@@ -44,6 +44,15 @@
       "wheels/": "wheels/",
       "python-stdlib/": "python-stdlib/",
       "skills/": "skills/"
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/anthropics/yiyiclaw/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIzRTUwNDJFQjYwREJGM0MKUldROHZ3MjJMZ1RscytRWHQrUEtmOWlRMmt3S2FBUTJOUDBkNFA5YWd2bEdmbFc3RU9xcUt2MHYK"
     }
   }
 }

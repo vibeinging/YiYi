@@ -12,6 +12,9 @@
     "core:webview:allow-create-webview-window",
     "shell:allow-open",
     "shell:allow-execute",
-    "notification:default"
+    "notification:default",
+    "updater:default",
+    "process:allow-restart",
+    "process:allow-exit"
   ]
 }
