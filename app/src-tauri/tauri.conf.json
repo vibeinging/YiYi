@@ -45,7 +45,20 @@
       "python-stdlib/": "python-stdlib/",
       "skills/": "skills/"
     },
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": true,
+    "macOS": {
+      "frameworks": ["libs/libpython3.13.dylib"],
+      "dmg": {
+        "appPosition": { "x": 180, "y": 170 },
+        "applicationFolderPosition": { "x": 480, "y": 170 },
+        "windowSize": { "width": 660, "height": 400 },
+        "background": "icons/dmg-background.png"
+      },
+      "minimumSystemVersion": "10.15"
+    },
+    "category": "Productivity",
+    "shortDescription": "Your AI companion that grows with you",
+    "longDescription": "YiYiClaw is a desktop AI personal assistant that can operate your computer, execute tasks, manage files, and learn from every interaction. She grows smarter the more you use her."
   },
   "plugins": {
     "updater": {

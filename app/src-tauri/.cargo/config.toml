@@ -1,4 +1,6 @@
 [env]
-# x86_64 Python for PyO3 linking (Homebrew)
-# Override with PYO3_PYTHON env var if using a different Python
-PYO3_PYTHON = "/usr/local/Cellar/python@3.13/3.13.7/bin/python3.13"
+# Python for PyO3 linking
+# Override with PYO3_PYTHON env var per target architecture
+# ARM:   PYO3_PYTHON=/opt/anaconda3/envs/py313/bin/python3.13
+# Intel: PYO3_PYTHON=/usr/local/Cellar/python@3.13/3.13.7/bin/python3.13
+# Use build.sh to handle this automatically

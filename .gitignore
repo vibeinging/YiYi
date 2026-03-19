@@ -87,3 +87,4 @@ openspec
 /AGENTS.md
 CLAUDE.md
 *.tmp
+app/src-tauri/libs/
