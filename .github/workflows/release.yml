@@ -41,11 +41,41 @@ jobs:
         with:
           targets: ${{ matrix.rust_target }}
 
+      # ── Caching ──
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: app/src-tauri
           cache-on-failure: true
+
+      - name: Cache yarn dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            app/node_modules
+            ~/.cache/yarn
+          key: yarn-${{ runner.os }}-${{ hashFiles('app/package.json') }}
+          restore-keys: |
+            yarn-${{ runner.os }}-
+
+      - name: Cache Python wheels
+        uses: actions/cache@v4
+        with:
+          path: app/src-tauri/wheels
+          key: wheels-${{ runner.os }}-${{ hashFiles('app/src-tauri/wheels/requirements.txt') }}
+
+      - name: Cache Python stdlib
+        uses: actions/cache@v4
+        with:
+          path: app/src-tauri/python-stdlib
+          key: stdlib-${{ runner.os }}-py3.13
+
+      # ── C/C++ compiler cache (Linux) ──
+      - name: Setup ccache (Linux)
+        if: runner.os == 'Linux'
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ccache-${{ matrix.rust_target }}
 
       # ── Linux system deps ──
       - name: Install Linux dependencies
@@ -76,6 +106,12 @@ jobs:
         shell: bash
         run: |
           cd app/src-tauri
+          # Skip if cache hit and wheels exist
+          if ls wheels/*.whl 1>/dev/null 2>&1; then
+            echo "Wheels cached, skipping download"
+            ls -la wheels/
+            exit 0
+          fi
           rm -f wheels/*macosx* wheels/*manylinux* wheels/*win* wheels/*linux*
           pip download \
             -r wheels/requirements.txt \
@@ -91,6 +127,11 @@ jobs:
         shell: bash
         run: |
           cd app/src-tauri
+          # Skip if cached
+          if [ -d "python-stdlib/lib" ]; then
+            echo "Python stdlib cached, skipping"
+            exit 0
+          fi
           PYVER=$(python3 -c "import sys; print(f'python{sys.version_info.major}.{sys.version_info.minor}')")
           STDLIB_SRC=$(python3 -c "import sysconfig; print(sysconfig.get_path('stdlib'))")
           if [ -d "$STDLIB_SRC" ]; then
@@ -106,6 +147,11 @@ jobs:
         shell: pwsh
         run: |
           cd app/src-tauri
+          # Skip if cached
+          if (Test-Path "python-stdlib/lib") {
+            Write-Host "Python stdlib cached, skipping"
+            exit 0
+          }
           $pyver = python -c "import sys; print(f'python{sys.version_info.major}.{sys.version_info.minor}')"
           $stdlib = python -c "import sysconfig; print(sysconfig.get_path('stdlib'))"
           if (Test-Path "$stdlib") {
@@ -127,7 +173,6 @@ jobs:
         shell: bash
         run: |
           cd app/src-tauri
-          # Replace createUpdaterArtifacts with false when no signing key
           sed -i.bak 's/"createUpdaterArtifacts": true/"createUpdaterArtifacts": false/' tauri.conf.json
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
