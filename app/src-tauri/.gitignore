@@ -5,7 +5,7 @@
 
 # Runtime resources (bundled Python stdlib & wheels)
 /python-stdlib/
-/wheels/
+/wheels/*.whl
 
 # Agent working data
 /memory/
