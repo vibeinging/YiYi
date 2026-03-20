@@ -141,7 +141,6 @@ jobs:
           PYO3_PYTHON: ${{ env.PYO3_PYTHON }}
         with:
           projectPath: app
-          tauriScript: npx tauri
           args: --target ${{ matrix.rust_target }}
           tagName: ${{ github.ref_name }}
           releaseName: "YiYi ${{ github.ref_name }}"
