@@ -117,18 +117,15 @@ jobs:
           }
 
       # ── Frontend ──
-      - name: Upgrade npm
-        run: npm install -g npm@latest
-
       - name: Install frontend dependencies
         working-directory: app
-        run: npm install
+        run: yarn install --frozen-lockfile || yarn install
 
       # ── Build ──
       - name: Build Tauri app
         working-directory: app
         shell: bash
-        run: npx tauri build --target ${{ matrix.rust_target }}
+        run: yarn tauri build --target ${{ matrix.rust_target }}
         env:
           PYO3_PYTHON: ${{ env.PYO3_PYTHON }}
 
