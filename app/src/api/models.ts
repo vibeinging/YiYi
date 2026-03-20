@@ -17,7 +17,7 @@ export interface ProviderInfo {
   is_local: boolean;
   configured: boolean;
   base_url: string | null;
-  api_key_masked: string | null;
+  api_key_saved: string | null;
 }
 
 // Frontend-friendly version with computed fields
@@ -27,7 +27,7 @@ export interface ProviderDisplay extends ProviderInfo {
   needs_base_url: boolean;
   current_api_key: string;
   current_base_url: string;
-  api_key_masked: string | null;
+  api_key_saved: string | null;
 }
 
 export interface ModelSlotConfig {

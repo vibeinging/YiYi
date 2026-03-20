@@ -352,18 +352,25 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
 
         {/* Current active model */}
         {activeLlm && activeLlm.model && (
-          <div className="mb-8 p-5 rounded-2xl" style={{ background: 'var(--color-bg-elevated)' }}>
+          <div
+            className="mb-8 p-5 rounded-2xl cursor-pointer transition-all hover:ring-2 hover:ring-[var(--color-primary)] hover:ring-opacity-30"
+            style={{ background: 'var(--color-bg-elevated)' }}
+            onClick={() => setExpandedProvider(expandedProvider === activeLlm.provider_id ? null : activeLlm.provider_id)}
+          >
             <p className="text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--color-text-tertiary)' }}>
               {t('models.currentModel')}
             </p>
-            <div className="flex items-center gap-3">
-              <span className="text-[15px] font-semibold" style={{ color: 'var(--color-text)' }}>{activeLlm.model}</span>
-              <span
-                className="text-[12px] px-2.5 py-1 rounded-lg font-medium"
-                style={{ background: 'var(--color-primary-subtle)', color: 'var(--color-primary)' }}
-              >
-                {providers.find(p => p.id === activeLlm.provider_id)?.name || activeLlm.provider_id}
-              </span>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="text-[15px] font-semibold" style={{ color: 'var(--color-text)' }}>{activeLlm.model}</span>
+                <span
+                  className="text-[12px] px-2.5 py-1 rounded-lg font-medium"
+                  style={{ background: 'var(--color-primary-subtle)', color: 'var(--color-primary)' }}
+                >
+                  {providers.find(p => p.id === activeLlm.provider_id)?.name || activeLlm.provider_id}
+                </span>
+              </div>
+              <ChevronDown size={16} style={{ color: 'var(--color-text-muted)' }} />
             </div>
           </div>
         )}
@@ -486,19 +493,13 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
                             <div className="relative">
                               <input
                                 type={showApiKey[meta.id] ? 'text' : 'password'}
-                                value={apiKeyInputs[meta.id] ?? (showApiKey[meta.id] ? '' : (provider?.api_key_masked || ''))}
+                                value={apiKeyInputs[meta.id] ?? (provider?.api_key_saved || '')}
                                 onChange={(e) => setApiKeyInputs(prev => ({ ...prev, [meta.id]: e.target.value }))}
                                 placeholder={configured ? t('models.apiKeyPlaceholder') : `${t('models.apiKey')} (${meta.id.includes('coding') ? 'sk-sp...' : ''})`}
                                 className="w-full rounded-lg px-3 py-2 pr-9 text-[13px] outline-none"
                                 style={{ background: 'var(--color-bg-elevated)', color: 'var(--color-text)' }}
-                                onFocus={() => {
-                                  // When user focuses and no input yet, clear the masked value so they can type fresh
-                                  if (apiKeyInputs[meta.id] === undefined && provider?.api_key_masked) {
-                                    setApiKeyInputs(prev => ({ ...prev, [meta.id]: '' }));
-                                  }
-                                }}
                               />
-                              {(provider?.api_key_masked || apiKeyInputs[meta.id]) && (
+                              {(provider?.api_key_saved || apiKeyInputs[meta.id]) && (
                                 <button
                                   type="button"
                                   onClick={() => setShowApiKey(prev => ({ ...prev, [meta.id]: !prev[meta.id] }))}
@@ -791,18 +792,13 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
                           <div className="relative">
                             <input
                               type={showApiKey[provider.id] ? 'text' : 'password'}
-                              value={apiKeyInputs[provider.id] ?? (showApiKey[provider.id] ? '' : (provider.api_key_masked || ''))}
+                              value={apiKeyInputs[provider.id] ?? (provider.api_key_saved || '')}
                               onChange={(e) => setApiKeyInputs(prev => ({ ...prev, [provider.id]: e.target.value }))}
                               placeholder={t('models.apiKeyPlaceholder')}
                               className="w-full rounded-lg px-3 py-2 pr-9 text-[13px] outline-none"
                               style={{ background: 'var(--color-bg-elevated)', color: 'var(--color-text)' }}
-                              onFocus={() => {
-                                if (apiKeyInputs[provider.id] === undefined && provider.api_key_masked) {
-                                  setApiKeyInputs(prev => ({ ...prev, [provider.id]: '' }));
-                                }
-                              }}
                             />
-                            {(provider.api_key_masked || apiKeyInputs[provider.id]) && (
+                            {(provider.api_key_saved || apiKeyInputs[provider.id]) && (
                               <button
                                 type="button"
                                 onClick={() => setShowApiKey(prev => ({ ...prev, [provider.id]: !prev[provider.id] }))}

@@ -15,7 +15,7 @@ interface ChatWelcomeProps {
 }
 
 export function ChatWelcome({ aiName, onSendPrompt }: ChatWelcomeProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [expandedAction, setExpandedAction] = useState<number | null>(null);
   const [morningGreeting, setMorningGreeting] = useState<string | null>(null);
 
@@ -89,7 +89,7 @@ export function ChatWelcome({ aiName, onSendPrompt }: ChatWelcomeProps) {
             <div className="flex items-center gap-1.5 mb-1.5">
               <Sprout size={14} style={{ color: '#AF52DE' }} />
               <span className="text-[12px] font-medium" style={{ color: '#AF52DE' }}>
-                YiYi's Growth Insight
+                {i18n.language === 'zh' ? 'YiYi 的成长感悟' : "YiYi's Growth Insight"}
               </span>
             </div>
             {morningGreeting}

@@ -133,24 +133,8 @@ export function useChatEventBridge() {
         },
       ),
 
-      // Task streaming events (per-task parallel streaming)
-      listen<{ taskId: string; text: string }>('task://stream_chunk', (event) => {
-        if (cancelled) return;
-        const taskId = event.payload.taskId;
-        if (taskId) store().taskStreamAppendChunk(taskId, event.payload.text || '');
-      }),
-
-      listen<{ taskId: string; name: string; preview: string }>('task://tool_start', (event) => {
-        if (cancelled) return;
-        const { taskId, name, preview } = event.payload;
-        if (taskId) store().taskStreamToolStart(taskId, name || '', preview || '');
-      }),
-
-      listen<{ taskId: string; name: string; preview: string }>('task://tool_end', (event) => {
-        if (cancelled) return;
-        const { taskId, name, preview } = event.payload;
-        if (taskId) store().taskStreamToolEnd(taskId, name || '', preview || '');
-      }),
+      // Task streaming events (task://stream_chunk, task://tool_start, task://tool_end)
+      // are handled exclusively by useTaskEventBridge to avoid duplicate subscriptions.
 
       // Claude Code streaming events
       listen<{ type: string; session_id: string; content?: string; tool_name?: string; working_dir?: string }>(

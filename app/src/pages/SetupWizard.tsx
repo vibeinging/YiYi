@@ -680,6 +680,16 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         }
         .sw-btn-back:hover { transform: translateX(-2px); }
         .sw-float { animation: sw-float 3s ease-in-out infinite; }
+        @keyframes sw-glow-hint {
+          0%, 100% { border-color: var(--color-border); box-shadow: none; }
+          50% { border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(var(--color-primary-rgb), 0.12); }
+        }
+        .sw-input-hint {
+          animation: sw-glow-hint 2s cubic-bezier(0.4, 0, 0.6, 1) 0.6s 2;
+        }
+        .sw-input-hint:focus { animation: none; border-color: var(--color-primary) !important; box-shadow: 0 0 0 3px rgba(var(--color-primary-rgb), 0.15); }
+        .sw-stagger-5 { animation: sw-fade-up 0.45s cubic-bezier(0.25, 1, 0.5, 1) 0.33s both; }
+        .sw-stagger-6 { animation: sw-fade-up 0.45s cubic-bezier(0.25, 1, 0.5, 1) 0.40s both; }
         @media (prefers-reduced-motion: reduce) {
           *, *::before, *::after {
             animation-duration: 0.01ms !important;
@@ -1266,7 +1276,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                 </div>
 
                 {/* Default workspace */}
-                <div className="mb-8">
+                <div className="mb-8 sw-stagger-1">
                   <div className="text-[13px] font-semibold mb-3 uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>
                     {lang === 'zh' ? '默认工作目录' : 'Default Workspace'}
                   </div>
@@ -1293,7 +1303,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                 </div>
 
                 {/* Authorized folders */}
-                <div className="mb-6">
+                <div className="mb-6 sw-stagger-2">
                   <div className="flex items-center justify-between mb-2">
                     <div className="text-[12px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>
                       {lang === 'zh' ? '授权文件夹' : 'Authorized Folders'}
@@ -1358,7 +1368,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
 
                 {/* Security note */}
                 <div
-                  className="flex items-start gap-3 px-4 py-3 rounded-xl"
+                  className="flex items-start gap-3 px-4 py-3 rounded-xl sw-stagger-3"
                   style={{ background: 'var(--color-bg-subtle)', border: '1px solid var(--color-border)' }}
                 >
                   <Shield size={18} className="shrink-0 mt-0.5" style={{ color: 'var(--color-warning)' }} />
@@ -1390,42 +1400,46 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
 
                 {/* Names row */}
                 <div className="grid grid-cols-2 gap-6 mb-8">
-                  <div className="p-6 rounded-2xl border" style={{ background: 'var(--color-bg-elevated)', borderColor: 'var(--color-border)' }}>
+                  <div className="p-6 rounded-2xl border sw-stagger-1" style={{ background: 'var(--color-bg-elevated)', borderColor: 'var(--color-border)' }}>
                     <label className="text-[13px] font-semibold block mb-3" style={{ color: 'var(--color-text-muted)' }}>
                       {lang === 'zh' ? 'AI 的名字' : 'AI Name'}
                     </label>
                     <input
+                      key={`ai-name-${currentStep}`}
                       value={aiName}
                       onChange={(e) => setAiName(e.target.value)}
                       placeholder="YiYi"
-                      className="w-full px-4 py-3 rounded-xl text-[15px] font-medium outline-none"
+                      className="w-full px-4 py-3 rounded-xl text-[15px] font-medium outline-none sw-input-hint"
                       style={{
                         background: 'var(--color-bg-subtle)',
                         color: 'var(--color-text)',
                         border: '1px solid var(--color-border)',
+                        transition: 'border-color 0.2s, box-shadow 0.2s',
                       }}
                     />
                   </div>
-                  <div className="p-6 rounded-2xl border" style={{ background: 'var(--color-bg-elevated)', borderColor: 'var(--color-border)' }}>
+                  <div className="p-6 rounded-2xl border sw-stagger-2" style={{ background: 'var(--color-bg-elevated)', borderColor: 'var(--color-border)' }}>
                     <label className="text-[13px] font-semibold block mb-3" style={{ color: 'var(--color-text-muted)' }}>
                       {lang === 'zh' ? '你的称呼（主人名字）' : 'Your Name (Owner)'}
                     </label>
                     <input
+                      key={`owner-name-${currentStep}`}
                       value={ownerName}
                       onChange={(e) => setOwnerName(e.target.value)}
                       placeholder={lang === 'zh' ? '你的名字或昵称' : 'Your name or nickname'}
-                      className="w-full px-4 py-3 rounded-xl text-[15px] font-medium outline-none"
+                      className="w-full px-4 py-3 rounded-xl text-[15px] font-medium outline-none sw-input-hint"
                       style={{
                         background: 'var(--color-bg-subtle)',
                         color: 'var(--color-text)',
                         border: '1px solid var(--color-border)',
+                        transition: 'border-color 0.2s, box-shadow 0.2s',
                       }}
                     />
                   </div>
                 </div>
 
                 {/* Tone style */}
-                <div className="mb-8">
+                <div className="mb-8 sw-stagger-3">
                   <div className="text-[13px] font-semibold mb-4" style={{ color: 'var(--color-text-muted)' }}>
                     {lang === 'zh' ? '回复语气' : 'Response Tone'}
                   </div>
@@ -1451,7 +1465,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                 </div>
 
                 {/* Role preset */}
-                <div className="mb-8">
+                <div className="mb-8 sw-stagger-4">
                   <div className="text-[13px] font-semibold mb-4" style={{ color: 'var(--color-text-muted)' }}>
                     {lang === 'zh' ? '角色定位' : 'Role'}
                   </div>
@@ -1533,7 +1547,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                 </div>
 
                 {/* Enable toggle */}
-                <div className="mb-8">
+                <div className="mb-8 sw-stagger-1">
                   <label
                     className="flex items-center gap-3 cursor-pointer select-none"
                     style={{ color: 'var(--color-text)' }}
@@ -1553,7 +1567,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                 {/* Time selection (only when enabled) */}
                 {meditationEnabled && (
                   <>
-                    <div className="mb-6">
+                    <div className="mb-6 sw-stagger-2">
                       <label className="text-[13px] font-semibold block mb-3" style={{ color: 'var(--color-text-muted)' }}>
                         {lang === 'zh' ? '冥想开始时间' : 'Meditation start time'}
                       </label>
@@ -1561,7 +1575,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                         type="time"
                         value={meditationStart}
                         onChange={(e) => setMeditationStart(e.target.value)}
-                        className="px-5 py-3.5 rounded-xl text-[14px] outline-none"
+                        className="px-5 py-3.5 rounded-xl text-[14px] outline-none sw-input-hint"
                         style={{
                           background: 'var(--color-bg-subtle)',
                           color: 'var(--color-text)',
@@ -1571,7 +1585,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                     </div>
 
                     {/* Quick presets */}
-                    <div className="mb-8">
+                    <div className="mb-8 sw-stagger-3">
                       <div className="flex gap-3">
                         {[
                           { time: '00:00', emoji: '\uD83C\uDF03', label: { zh: '夜猫子', en: 'Night Owl' } },
@@ -1647,7 +1661,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                     </div>
 
                     {/* Notification toggle */}
-                    <div>
+                    <div className="sw-stagger-4">
                       <label
                         className="flex items-center gap-3 cursor-pointer select-none"
                         style={{ color: 'var(--color-text)' }}

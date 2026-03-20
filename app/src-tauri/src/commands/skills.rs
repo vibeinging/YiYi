@@ -79,6 +79,7 @@ const BUILTIN_SKILL_NAMES: &[&str] = &[
     "task_proposer",
     "seo",
     "wechat_writer",
+    "app_guide",
 ];
 
 /// Seed builtin skills into active_skills/ if not already present.

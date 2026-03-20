@@ -605,7 +605,8 @@ fn has_meditation_today(db: &std::sync::Arc<crate::engine::db::Database>) -> boo
     }
 }
 
-/// Check if catch-up meditation is needed (last meditation was >24 h ago, or never ran).
+/// Check if catch-up meditation is needed (last meditation was >24 h ago).
+/// If never meditated before, do NOT catch up — wait for the scheduled time.
 fn should_catch_up(db: &std::sync::Arc<crate::engine::db::Database>) -> bool {
     match db.get_latest_meditation_session() {
         Some(session) => {
@@ -616,7 +617,7 @@ fn should_catch_up(db: &std::sync::Arc<crate::engine::db::Database>) -> bool {
                 false // Still running or never finished
             }
         }
-        None => true, // Never meditated — should catch up
+        None => false, // Never meditated — wait for scheduled time, don't auto-trigger
     }
 }
 
