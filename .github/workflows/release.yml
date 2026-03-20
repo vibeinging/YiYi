@@ -117,9 +117,12 @@ jobs:
           }
 
       # ── Frontend ──
+      - name: Upgrade npm
+        run: npm install -g npm@latest
+
       - name: Install frontend dependencies
         working-directory: app
-        run: npm install --legacy-peer-deps
+        run: npm install
 
       # ── Build ──
       - name: Build Tauri app
