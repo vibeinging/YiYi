@@ -19,10 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
-            rust_target: aarch64-apple-darwin
-          - platform: macos-latest
-            rust_target: x86_64-apple-darwin
+          # macOS (ARM/Intel) 本地打包后手动上传，节省 CI 资源
           - platform: windows-latest
             rust_target: x86_64-pc-windows-msvc
           - platform: ubuntu-22.04
@@ -69,42 +66,7 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Prepare Python dylib for macOS
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          cd app/src-tauri
-          mkdir -p libs
-
-          PYTHON_PATH=$(which python3.13 || which python3)
-          PYTHON_PREFIX=$(python3 -c "import sys; print(sys.prefix)")
-
-          # Find libpython dylib
-          DYLIB=""
-          for candidate in \
-            "$PYTHON_PREFIX/lib/libpython3.13.dylib" \
-            "$PYTHON_PREFIX/Frameworks/Python.framework/Versions/3.13/lib/libpython3.13.dylib" \
-            "/Library/Frameworks/Python.framework/Versions/3.13/lib/libpython3.13.dylib"; do
-            if [ -f "$candidate" ]; then
-              DYLIB="$candidate"
-              break
-            fi
-          done
-
-          if [ -z "$DYLIB" ]; then
-            echo "::error::Could not find libpython3.13.dylib"
-            find "$PYTHON_PREFIX" -name "libpython*.dylib" 2>/dev/null || true
-            exit 1
-          fi
-
-          echo "Found Python dylib: $DYLIB"
-          cp "$DYLIB" libs/libpython3.13.dylib
-
-          # Set PYO3_PYTHON for the build
-          echo "PYO3_PYTHON=$PYTHON_PATH" >> "$GITHUB_ENV"
-
-      - name: Set PYO3_PYTHON (Linux/Windows)
-        if: runner.os != 'macOS'
+      - name: Set PYO3_PYTHON
         shell: bash
         run: |
           PYTHON_PATH=$(which python3.13 || which python3 || which python)
@@ -187,34 +149,3 @@ jobs:
           releaseDraft: true
           prerelease: false
 
-      # ── macOS post-build: fix dylib rpath ──
-      - name: Fix macOS dylib rpath
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          TARGET="${{ matrix.rust_target }}"
-          APP_DIR="app/src-tauri/target/$TARGET/release/bundle/macos/YiYi.app"
-          BINARY="$APP_DIR/Contents/MacOS/yiyi"
-          FW_DIR="$APP_DIR/Contents/Frameworks"
-
-          if [ -f "$BINARY" ] && [ -f "$FW_DIR/libpython3.13.dylib" ]; then
-            echo "Fixing dylib references..."
-
-            # Fix dylib install name
-            install_name_tool -id "@rpath/libpython3.13.dylib" \
-              "$FW_DIR/libpython3.13.dylib" 2>/dev/null || true
-
-            # Fix binary reference (Intel builds use absolute paths)
-            for old_path in \
-              "/Library/Frameworks/Python.framework/Versions/3.13/lib/libpython3.13.dylib" \
-              "/usr/local/opt/python@3.13/Frameworks/Python.framework/Versions/3.13/Python" \
-              "/usr/local/Cellar/python@3.13/3.13.7/Frameworks/Python.framework/Versions/3.13/Python"; do
-              install_name_tool -change "$old_path" "@rpath/libpython3.13.dylib" \
-                "$BINARY" 2>/dev/null || true
-            done
-
-            echo "Linkage after fix:"
-            otool -L "$BINARY" | grep -i python || echo "(no python refs found)"
-          else
-            echo "App bundle or dylib not found, skipping rpath fix"
-          fi
