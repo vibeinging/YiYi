@@ -1,5 +1,7 @@
 <div align="center">
 
+**[English](README_EN.md)** | **中文**
+
 <img src="app/src-tauri/icons/icon.png" width="120" height="120" alt="YiYi Logo" />
 
 # YiYi
