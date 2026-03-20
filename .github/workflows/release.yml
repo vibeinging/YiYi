@@ -119,7 +119,7 @@ jobs:
       # ── Frontend ──
       - name: Install frontend dependencies
         working-directory: app
-        run: npm ci
+        run: npm install --legacy-peer-deps
 
       # ── Build ──
       - name: Build Tauri app
