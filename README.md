@@ -1,98 +1,83 @@
 <div align="center">
 
-**English** | **[中文](README_CN.md)**
-
 <img src="app/src-tauri/icons/icon.png" width="120" height="120" alt="YiYi Logo" />
 
 # YiYi
 
-**Your AI Companion That Grows With You**
+**你的 AI 桌面伙伴，越用越懂你**
 
-She's not a tool — she's a companion.<br/>
-She can operate your computer, remember your preferences, connect your world, and become smarter with every interaction.
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/HungryFour/YiYi?include_prereleases)](https://github.com/HungryFour/YiYi/releases)
 
-[![GitHub release](https://img.shields.io/github/v/release/HungryFour/YiYi?style=flat-square&color=orange)](https://github.com/HungryFour/YiYi/releases)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue?style=flat-square)](https://github.com/HungryFour/YiYi/releases)
-[![License](https://img.shields.io/github/license/HungryFour/YiYi?style=flat-square)](LICENSE)
-
-**[Download Now](https://github.com/HungryFour/YiYi/releases)**
+中文 | [English](./README_EN.md)
 
 </div>
 
 ---
 
-## What Can She Do?
+## 什么是 YiYi
 
-### 🧠 Autonomously Complete Complex Tasks
+YiYi 是一个**桌面 AI 个人助手**。她不只是聊天机器人——她能操作你的电脑、执行任务、管理文件，并且会从每次互动中学习和成长。
 
-YiYi is powered by a **ReAct Agent Engine** — she doesn't just answer questions, she thinks, acts, observes, and iterates until the job is done.
+- **多模型支持**：OpenAI、Claude、DeepSeek、智谱、通义千问、Moonshot 等，随时切换
+- **电脑操作**：文件读写、终端命令、浏览器操作、截图分析
+- **技能系统**：20+ 内置技能，支持自定义扩展，像 App Store 一样丰富
+- **多平台 Bot**：同时接入 Discord、QQ、Telegram、钉钉、飞书、企业微信
+- **定时任务**：cron 表达式或自然语言，自动执行周期性工作
+- **成长系统**：反思、记忆、冥想——用得越多，她就越懂你
+- **MCP 协议**：连接外部工具服务器，无限扩展能力
 
-> "Extract data from this PDF into Excel, email it to my boss, and do it automatically every Friday."
->
-> — YiYi: Done.
+## 快速开始
 
-40+ built-in tools at her fingertips — shell, file I/O, browser automation, screenshots, calendar... She can even spawn sub-agents to parallelize complex workflows.
+### 下载安装
 
-### 🎯 24 Built-in Skills, Ready to Go
+前往 [Releases](https://github.com/HungryFour/YiYi/releases) 下载对应平台的安装包：
 
-| | |
-|:---|:---|
-| 📄 **Office** — Word / Excel / PDF / PPT | 🌐 **Browser** — Automation, web testing, SEO |
-| ✉️ **Communication** — Email, news aggregation | 🎨 **Creative** — Canvas design, generative art, frontend dev |
-| ⏰ **Automation** — Cron jobs, auto-continue | 🔧 **Dev** — Coding assistant, MCP, Claude Code |
+| 平台 | 文件 |
+|------|------|
+| macOS (Apple Silicon) | `YiYi_x.x.x_aarch64.dmg` |
+| macOS (Intel) | `YiYi_x.x.x_x64.dmg` |
+| Windows | `YiYi_x.x.x_x64-setup.exe` |
+| Linux (Debian/Ubuntu) | `YiYi_x.x.x_amd64.deb` |
+| Linux (通用) | `YiYi_x.x.x_amd64.AppImage` |
 
-Need more? Build your own, or install from the skill marketplace.
+### 首次使用
 
-### 🤖 One YiYi, Seven Platforms
+1. 打开 YiYi，按照引导向导设置语言和 AI 模型
+2. 填入模型提供商的 API Key
+3. 开始对话！
 
-Deploy YiYi as your bot and summon her wherever you are:
+## 技术架构
 
-**Discord** · **QQ** · **Telegram** · **DingTalk** · **Feishu** · **WeCom** · **Webhook**
+- **前端**：React 18 + TypeScript + Tailwind CSS + Vite
+- **后端**：Rust + Tauri v2
+- **AI 引擎**：ReAct Agent（思考 → 行动 → 观察循环）
+- **数据库**：SQLite (WAL 模式)
+- **Python 集成**：PyO3 嵌入式 Python 运行时
 
-Ask her to research in WeChat groups, manage your Discord server, track news on Telegram — same YiYi, same memory.
+## 开发
 
-### 🌱 She Grows
+```bash
+# 克隆仓库
+git clone https://github.com/HungryFour/YiYi.git
+cd YiYi
 
-This is what makes YiYi special.
+# 安装前端依赖
+cd app && npm install
 
-- **She remembers every correction** and won't make the same mistake twice
-- **Daily "meditation"** — distills scattered experience into behavioral principles
-- **Three-tier memory** — important things are never forgotten
-- **Capability profile** — watch her get stronger across domains over time
+# 开发模式运行
+npm run tauri dev
 
-The more you use her, the better she knows you.
+# 构建生产版本
+npm run tauri build
+```
 
-### 🔌 MCP Protocol, Infinite Extension
+### 前置要求
 
-YiYi natively supports **MCP (Model Context Protocol)**:
+- Node.js 20+
+- Rust 1.77+
+- Python 3.13（PyO3 需要）
 
-- Connect to any MCP tool server for instant new capabilities
-- Expose her own skills to other AI applications
+## 许可证
 
-### ⏰ Scheduled Tasks
-
-Set the time, YiYi handles the rest — morning briefings, weekly data crunching, reminders to take a break.
-
-### 💻 Built-in Terminal
-
-Open a terminal right inside YiYi, or plug in Claude Code for a seamless dev experience.
-
----
-
-## 🖥️ Screenshots
-
-> 🚧 Coming soon
-
----
-
-<div align="center">
-
-**Tauri 2 · Rust · React · TypeScript · SQLite · MCP**
-
-**[Download YiYi](https://github.com/HungryFour/YiYi/releases)** · [Feedback](https://github.com/HungryFour/YiYi/issues)
-
----
-
-Named after a daughter, built to be the best AI companion 🧡
-
-</div>
+[Apache License 2.0](LICENSE)
