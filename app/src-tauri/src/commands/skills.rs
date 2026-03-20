@@ -34,8 +34,9 @@ fn skills_dir(working_dir: &Path, source: &str) -> PathBuf {
 /// Embedded skills directory (complete with scripts, references, etc.)
 static EMBEDDED_SKILLS: Dir = include_dir!("$CARGO_MANIFEST_DIR/skills");
 
-/// System-internal skills — cannot be edited, disabled, or deleted by users.
-const SYSTEM_SKILL_NAMES: &[&str] = &[
+/// System-internal skills — always active, cannot be edited/disabled/deleted.
+/// Loaded from embedded resources regardless of active_skills/ directory.
+pub const SYSTEM_SKILL_NAMES: &[&str] = &[
     "auto_continue",
     "task_proposer",
 ];
@@ -43,6 +44,14 @@ const SYSTEM_SKILL_NAMES: &[&str] = &[
 /// Returns true if the skill is a system-internal skill.
 pub fn is_system_skill(name: &str) -> bool {
     SYSTEM_SKILL_NAMES.contains(&name)
+}
+
+/// Get embedded SKILL.md content for a builtin skill by name.
+pub fn get_embedded_skill_content(name: &str) -> Option<String> {
+    let dir = EMBEDDED_SKILLS.get_dir(name)?;
+    let file = dir.get_file(format!("{}/SKILL.md", name))
+        .or_else(|| dir.get_file("SKILL.md"))?;
+    Some(String::from_utf8_lossy(file.contents()).to_string())
 }
 
 /// Names of all builtin skills
@@ -67,6 +76,9 @@ const BUILTIN_SKILL_NAMES: &[&str] = &[
     "theme_factory",
     "webapp_testing",
     "auto_continue",
+    "task_proposer",
+    "seo",
+    "wechat_writer",
 ];
 
 /// Seed builtin skills into active_skills/ if not already present.
@@ -557,7 +569,7 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), String> {
 // AI Skill Generation
 // ============================================================================
 
-const SKILL_GENERATION_PROMPT: &str = r#"You are a skill author for YiYiClaw, an AI assistant platform. Generate a complete SKILL.md file based on the user's description.
+const SKILL_GENERATION_PROMPT: &str = r#"You are a skill author for YiYi, an AI assistant platform. Generate a complete SKILL.md file based on the user's description.
 
 A SKILL.md has this structure:
 1. YAML frontmatter (between --- markers) with: name, description, metadata (emoji, requires)
@@ -579,7 +591,7 @@ name: weather
 description: "Query weather information for any city worldwide"
 metadata:
   {
-    "yiyiclaw":
+    "yiyi":
       {
         "emoji": "🌤️",
         "requires": {}

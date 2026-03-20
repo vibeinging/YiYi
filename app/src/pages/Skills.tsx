@@ -85,7 +85,9 @@ export function SkillsPage() {
         source: sourceFilter === 'all' ? undefined : sourceFilter,
         enabledOnly: showEnabledOnly,
       });
-      setSkills(data);
+      // Hide internal system skills from the UI
+      const HIDDEN_SKILLS = ['auto_continue', 'task_proposer'];
+      setSkills(data.filter((s: any) => !HIDDEN_SKILLS.includes(s.name)));
     } catch (error) {
       console.error('Failed to load skills:', error);
     } finally {

@@ -24,7 +24,7 @@ pub struct TrayMenuState {
 
 /// Create and configure the system tray icon with menu.
 pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let show_item = MenuItemBuilder::with_id(MENU_SHOW, "打开 YiYiClaw").build(app)?;
+    let show_item = MenuItemBuilder::with_id(MENU_SHOW, "打开 YiYi").build(app)?;
     let new_session_item =
         MenuItemBuilder::with_id(MENU_NEW_SESSION, "新对话").build(app)?;
     let bot_status_item = MenuItemBuilder::with_id(MENU_BOT_STATUS, "Bot 状态: 检查中...")
@@ -57,7 +57,7 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 
     TrayIconBuilder::with_id("main")
         .icon(icon)
-        .tooltip("YiYiClaw")
+        .tooltip("YiYi")
         .menu(&menu)
         .on_menu_event(|app, event| {
             handle_menu_event(app, event.id().as_ref());

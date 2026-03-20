@@ -172,8 +172,8 @@ impl QQBot {
                                                                     "shard": [0, 1],
                                                                     "properties": {
                                                                         "os": "linux",
-                                                                        "browser": "yiyiclaw",
-                                                                        "device": "yiyiclaw"
+                                                                        "browser": "yiyi",
+                                                                        "device": "yiyi"
                                                                     }
                                                                 }
                                                             });

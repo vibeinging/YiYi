@@ -87,7 +87,7 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   const inputRef = useRef<ChatInputHandle>(null);
 
   // --- AI name ---
-  const [aiName, setAiName] = useState('YiYiClaw');
+  const [aiName, setAiName] = useState('YiYi');
   const refreshAiName = () => {
     loadWorkspaceFile('SOUL.md').then((content) => {
       const match = content.match(/^---\s*\nname:\s*(.+)\s*\n/m);

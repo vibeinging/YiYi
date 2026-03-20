@@ -404,6 +404,17 @@ pub fn send_notification_with_context(
     body: &str,
     context: serde_json::Value,
 ) {
+    // Only send notification when the window is NOT focused (minimized, hidden, or in background).
+    // Don't bother the user when they're actively looking at the app.
+    if let Some(handle) = crate::engine::tools::get_app_handle() {
+        use tauri::Manager;
+        if let Some(window) = handle.get_webview_window("main") {
+            if window.is_focused().unwrap_or(false) {
+                return;
+            }
+        }
+    }
+
     let title = title.to_string();
     let body = body.to_string();
 

@@ -3,7 +3,7 @@ name: xlsx
 description: "Use this skill for spreadsheet tasks — reading, creating, or analyzing .xlsx, .xls, .csv, or .tsv files."
 metadata:
   {
-    "yiyiclaw":
+    "yiyi":
       {
         "emoji": "📊",
         "requires": {}

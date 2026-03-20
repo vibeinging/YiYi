@@ -5,8 +5,9 @@
 import { useState, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  Send, X, Paperclip, FileText, Square, Loader2, Sparkles,
+  Send, X, Paperclip, FileText, Square, Loader2, Sparkles, FolderOpen,
 } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import { QuickActionsOverlay } from './QuickActionsOverlay';
 import { MentionPicker, buildMentionList } from '../MentionPicker';
 import { MentionInput, type MentionInputHandle, type MentionTag } from '../MentionInput';
@@ -426,6 +427,21 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
               title={t('chat.addFile')}>
               <Paperclip size={18} />
+            </button>
+
+            <button type="button" onClick={async () => {
+                try {
+                  const path = await invoke<string | null>('pick_folder');
+                  if (path) inputRef.current?.insertText(path);
+                } catch { /* user cancelled */ }
+              }}
+              disabled={loading}
+              className="w-9 h-9 flex items-center justify-center rounded-xl shrink-0 transition-all disabled:opacity-30"
+              style={{ color: 'var(--color-text-muted)' }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+              title={t('chat.addFolder', '选择文件夹')}>
+              <FolderOpen size={18} />
             </button>
 
             <button type="button" onClick={() => setShowQuickActions((v) => !v)}

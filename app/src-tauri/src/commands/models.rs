@@ -80,7 +80,7 @@ async fn send_test_request(
     }
 
     let start = std::time::Instant::now();
-    match req.timeout(std::time::Duration::from_secs(30)).send().await {
+    match req.timeout(std::time::Duration::from_secs(10)).send().await {
         Ok(resp) => {
             let latency = start.elapsed().as_millis() as u64;
             let status = resp.status();
@@ -221,7 +221,10 @@ pub async fn test_provider(
 
     drop(providers);
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap_or_default();
     let start = std::time::Instant::now();
 
     // Send a real chat completion with "hello"

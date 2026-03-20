@@ -3,7 +3,7 @@ use tauri::{Emitter, State};
 use crate::engine::db::TaskInfo;
 use crate::state::AppState;
 
-/// Generate a TASK.md file in ~/.yiyiclaw/tasks/{task_id}/
+/// Generate a TASK.md file in ~/.yiyi/tasks/{task_id}/
 fn generate_task_md(
     working_dir: &std::path::Path,
     task_id: &str,

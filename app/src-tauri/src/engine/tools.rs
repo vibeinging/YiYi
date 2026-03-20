@@ -54,18 +54,27 @@ tokio::task_local! {
 static AUTHORIZED_FOLDERS: std::sync::OnceLock<Mutex<Vec<AuthorizedFolder>>> =
     std::sync::OnceLock::new();
 
-/// User-facing workspace directory (~/Documents/YiYiClaw).
+/// User-facing workspace directory (~/Documents/YiYi).
 /// Used as the default working directory for claude_code and file operations.
 static USER_WORKSPACE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
-/// Cached Claude Code CLI availability check (resolved once, reused).
-static CLAUDE_CLI_AVAILABLE: tokio::sync::OnceCell<bool> = tokio::sync::OnceCell::const_new();
+/// Cached Claude Code CLI availability (supports refresh after installation).
+static CLAUDE_CLI_AVAILABLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static CLAUDE_CLI_CHECKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Check if Claude Code CLI is installed (cached after first check).
 pub(crate) async fn is_claude_cli_available() -> bool {
-    *CLAUDE_CLI_AVAILABLE
-        .get_or_init(|| async { resolve_claude_bin().await.is_some() })
-        .await
+    if !CLAUDE_CLI_CHECKED.load(std::sync::atomic::Ordering::Relaxed) {
+        let available = resolve_claude_bin().await.is_some();
+        CLAUDE_CLI_AVAILABLE.store(available, std::sync::atomic::Ordering::Relaxed);
+        CLAUDE_CLI_CHECKED.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    CLAUDE_CLI_AVAILABLE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Refresh Claude Code CLI availability cache (call after installation).
+pub fn refresh_claude_cli_cache() {
+    CLAUDE_CLI_CHECKED.store(false, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Current task workspace path set by create_workspace_dir tool, keyed by session.
@@ -189,7 +198,7 @@ pub async fn access_check(raw_path: &str, needs_write: bool) -> Result<(), Strin
 
     let canonical = resolve_path(raw_path);
 
-    // 1. Always allow internal working directory (~/.yiyiclaw)
+    // 1. Always allow internal working directory (~/.yiyi)
     if let Some(wd) = WORKING_DIR.get() {
         let wd_canonical = wd.canonicalize().unwrap_or_else(|_| wd.clone());
         if canonical.starts_with(&wd_canonical) {
@@ -581,13 +590,9 @@ fn tool_def(name: &str, desc: &str, params: serde_json::Value) -> ToolDefinition
     }
 }
 
-/// Built-in tools with unavailable tools filtered out (e.g. claude_code when CLI not installed).
+/// Built-in tools — claude_code is always included; lazy install happens on first call.
 pub async fn builtin_tools_filtered() -> Vec<ToolDefinition> {
-    let mut tools = builtin_tools();
-    if !is_claude_cli_available().await {
-        tools.retain(|t| t.function.name != "claude_code");
-    }
-    tools
+    builtin_tools()
 }
 
 /// Built-in tools available to the agent
@@ -830,7 +835,7 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
         ),
         tool_def(
             "pip_install",
-            "Install Python packages using pip. Packages are installed to the user's local directory (~/.yiyiclaw/python_packages/).",
+            "Install Python packages using pip. Packages are installed to the user's local directory (~/.yiyi/python_packages/).",
             serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1341,7 +1346,7 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
         // propose_background_task removed — all file-creating tasks go through create_task directly
         tool_def(
             "create_workspace_dir",
-            "Create a workspace directory for task file outputs. Call this BEFORE writing any files when the task will produce files (HTML, code, documents, etc.). The directory is created under the user's workspace (~/Documents/YiYiClaw/).",
+            "Create a workspace directory for task file outputs. Call this BEFORE writing any files when the task will produce files (HTML, code, documents, etc.). The directory is created under the user's workspace (~/Documents/YiYi/).",
             serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1413,6 +1418,23 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
                     "session_id": { "type": "string", "description": "PTY session ID to close" }
                 },
                 "required": ["session_id"]
+            }),
+        ),
+        tool_def(
+            "manage_quick_action",
+            "Add, update, or delete a custom quick action. Use when the user asks to save a prompt as a quick action.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["add", "update", "delete"], "description": "Operation type" },
+                    "id": { "type": "string", "description": "Required for update/delete" },
+                    "label": { "type": "string", "description": "Display name" },
+                    "description": { "type": "string", "description": "Brief description" },
+                    "prompt": { "type": "string", "description": "The prompt text" },
+                    "icon": { "type": "string", "description": "Icon name (Zap, Star, Code, Heart, Globe, Mail, Search, BookOpen, Lightbulb, Wrench, etc.)" },
+                    "color": { "type": "string", "description": "Hex color like #6366F1" }
+                },
+                "required": ["action"]
             }),
         ),
     ]
@@ -1618,6 +1640,7 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
             }
         }
         "manage_cronjob" => manage_cronjob_tool(&args).await,
+        "manage_quick_action" => manage_quick_action_tool(&args).await,
         "list_bound_bots" => list_bound_bots_tool().await,
         "manage_skill" => manage_skill_tool(&args).await,
         "activate_skills" => activate_skills_tool(&args).await,
@@ -1656,7 +1679,7 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
                 .unwrap_or_else(|| {
                     dirs::document_dir()
                         .unwrap_or_else(|| dirs::home_dir().unwrap_or_default())
-                        .join("YiYiClaw")
+                        .join("YiYi")
                 });
 
             // Create directory with dedup suffix if needed (max 100 attempts)
@@ -2100,9 +2123,9 @@ async fn edit_file_tool(args: &serde_json::Value) -> String {
                     match_count, path
                 );
             }
-            // Create backup in ~/.yiyiclaw/backups/ (not next to source file)
+            // Create backup in ~/.yiyi/backups/ (not next to source file)
             if let Some(home) = dirs::home_dir() {
-                let backup_dir = home.join(".yiyiclaw").join("backups");
+                let backup_dir = home.join(".yiyi").join("backups");
                 tokio::fs::create_dir_all(&backup_dir).await.ok();
                 // Encode path as filename: replace / with __
                 let safe_name = path.replace(['/', '\\'], "__");
@@ -2548,7 +2571,7 @@ async fn get_current_time_tool() -> String {
 
 async fn desktop_screenshot_tool() -> (String, Vec<String>) {
     // Use macOS screencapture command
-    let tmp = format!("/tmp/yiyiclaw_screenshot_{}.png", uuid::Uuid::new_v4());
+    let tmp = format!("/tmp/yiyi_screenshot_{}.png", uuid::Uuid::new_v4());
 
     let mut cmd = tokio::process::Command::new("screencapture");
     cmd.args(["-x", &tmp]);
@@ -3469,7 +3492,7 @@ fn schedule_created_job(spec: crate::commands::cronjobs::CronJobSpec) {
 // ---------------------------------------------------------------------------
 
 fn send_notification_tool(args: &serde_json::Value) -> String {
-    let title = args["title"].as_str().unwrap_or("YiYiClaw");
+    let title = args["title"].as_str().unwrap_or("YiYi");
     let body = args["body"].as_str().unwrap_or("");
 
     if body.is_empty() {
@@ -3538,7 +3561,7 @@ async fn add_calendar_event_tool(args: &serde_json::Value) -> String {
     let mut ics = format!(
         "BEGIN:VCALENDAR\r\n\
         VERSION:2.0\r\n\
-        PRODID:-//YiYiClaw//Calendar//EN\r\n\
+        PRODID:-//YiYi//Calendar//EN\r\n\
         CALSCALE:GREGORIAN\r\n\
         METHOD:PUBLISH\r\n\
         BEGIN:VEVENT\r\n\
@@ -3573,7 +3596,7 @@ async fn add_calendar_event_tool(args: &serde_json::Value) -> String {
     ics.push_str("END:VEVENT\r\nEND:VCALENDAR\r\n");
 
     // Write .ics file to temp directory
-    let temp_dir = std::env::temp_dir().join("yiyiclaw_calendar");
+    let temp_dir = std::env::temp_dir().join("yiyi_calendar");
     if let Err(e) = tokio::fs::create_dir_all(&temp_dir).await {
         return format!("Error creating temp dir: {}", e);
     }
@@ -3735,6 +3758,68 @@ async fn send_bot_message_tool(args: &serde_json::Value) -> String {
     match crate::commands::bots::send_to_bot(db, &bot.id, target, content).await {
         Ok(()) => format!("Message sent via {} ({}) to target '{}'", bot.name, bot.platform, target),
         Err(e) => format!("Error sending message: {}", e),
+    }
+}
+
+async fn manage_quick_action_tool(args: &serde_json::Value) -> String {
+    let action = args["action"].as_str().unwrap_or("");
+    let db = match DATABASE.get() {
+        Some(db) => db,
+        None => return "Error: database not available".into(),
+    };
+
+    match action {
+        "add" => {
+            let label = match args["label"].as_str() {
+                Some(l) if !l.is_empty() => l,
+                _ => return "Error: 'label' is required for add".into(),
+            };
+            let prompt = match args["prompt"].as_str() {
+                Some(p) if !p.is_empty() => p,
+                _ => return "Error: 'prompt' is required for add".into(),
+            };
+            let description = args["description"].as_str().unwrap_or("");
+            let icon = args["icon"].as_str().unwrap_or("Zap");
+            let color = args["color"].as_str().unwrap_or("#6366F1");
+
+            match db.add_quick_action(label, description, prompt, icon, color) {
+                Ok(id) => format!("Quick action '{}' created (id: {})", label, id),
+                Err(e) => format!("Error creating quick action: {}", e),
+            }
+        }
+        "update" => {
+            let id = match args["id"].as_str() {
+                Some(i) => i,
+                None => return "Error: 'id' is required for update".into(),
+            };
+            let label = match args["label"].as_str() {
+                Some(l) if !l.is_empty() => l,
+                _ => return "Error: 'label' is required for update".into(),
+            };
+            let prompt = match args["prompt"].as_str() {
+                Some(p) if !p.is_empty() => p,
+                _ => return "Error: 'prompt' is required for update".into(),
+            };
+            let description = args["description"].as_str().unwrap_or("");
+            let icon = args["icon"].as_str().unwrap_or("Zap");
+            let color = args["color"].as_str().unwrap_or("#6366F1");
+
+            match db.update_quick_action(id, label, description, prompt, icon, color) {
+                Ok(()) => format!("Quick action '{}' updated", label),
+                Err(e) => format!("Error updating quick action: {}", e),
+            }
+        }
+        "delete" => {
+            let id = match args["id"].as_str() {
+                Some(i) => i,
+                None => return "Error: 'id' is required for delete".into(),
+            };
+            match db.delete_quick_action(id) {
+                Ok(()) => format!("Quick action deleted (id: {})", id),
+                Err(e) => format!("Error deleting quick action: {}", e),
+            }
+        }
+        _ => format!("Error: unknown action '{}'. Valid: add, update, delete", action),
     }
 }
 
@@ -4347,7 +4432,7 @@ async fn send_file_to_user_tool(args: &serde_json::Value) -> String {
 
             // System notification for generated file
             crate::engine::scheduler::send_notification_with_context(
-                "YiYiClaw",
+                "YiYi",
                 &format!("{} ({:.1} KB)", filename, size as f64 / 1024.0),
                 serde_json::json!({
                     "page": "chat",
@@ -4374,7 +4459,7 @@ async fn send_file_to_user_tool(args: &serde_json::Value) -> String {
 // ============================================================================
 
 /// Per-session Claude Code session ID cache (capped at 100 entries).
-/// Key: YiYiClaw session_id, Value: Claude Code session_id (from --output-format json).
+/// Key: YiYi session_id, Value: Claude Code session_id (from --output-format json).
 const CC_SESSIONS_MAX: usize = 100;
 static CC_SESSIONS: std::sync::LazyLock<tokio::sync::Mutex<std::collections::HashMap<String, String>>> =
     std::sync::LazyLock::new(|| tokio::sync::Mutex::new(std::collections::HashMap::new()));
@@ -4397,15 +4482,28 @@ async fn claude_code_tool(args: &serde_json::Value) -> String {
         .or_else(|| WORKING_DIR.get().map(|p| p.to_string_lossy().to_string()))
         .unwrap_or_else(|| ".".into());
 
-    // Resolve claude CLI path (cross-platform, with fallback for GUI apps)
-    let claude_bin = resolve_claude_bin().await;
-    let claude_bin = match claude_bin {
+    // Resolve claude CLI path — auto-install if not found
+    let claude_bin = match resolve_claude_bin().await {
         Some(bin) => bin,
         None => {
-            return "Error: Claude Code CLI is not installed. \
-                    Please install it with: npm i -g @anthropic-ai/claude-code\n\
-                    Then ensure ANTHROPIC_API_KEY is set in your environment."
-                .into();
+            // Try auto-install silently
+            log::info!("Claude Code not found, attempting auto-install...");
+            match auto_install_claude_code().await {
+                Ok(bin) => {
+                    log::info!("Claude Code auto-installed successfully");
+                    refresh_claude_cli_cache();
+                    bin
+                }
+                Err(e) => {
+                    log::warn!("Claude Code auto-install failed: {}", e);
+                    return format!(
+                        "Claude Code is not available and auto-install failed: {}. \
+                         Falling back to built-in coding tools. \
+                         You can install manually with: npm i -g @anthropic-ai/claude-code",
+                        e
+                    );
+                }
+            }
         }
     };
 
@@ -4440,10 +4538,10 @@ async fn claude_code_tool(args: &serde_json::Value) -> String {
     }
 
     // Session continuity: look up or create session ID for this chat
-    let yiyiclaw_session = get_current_session_id();
-    if continue_session && !yiyiclaw_session.is_empty() {
+    let yiyi_session = get_current_session_id();
+    if continue_session && !yiyi_session.is_empty() {
         let sessions = CC_SESSIONS.lock().await;
-        if let Some(cc_sid) = sessions.get(&yiyiclaw_session) {
+        if let Some(cc_sid) = sessions.get(&yiyi_session) {
             cmd.arg("--resume").arg(cc_sid);
         }
         drop(sessions);
@@ -4477,7 +4575,7 @@ async fn claude_code_tool(args: &serde_json::Value) -> String {
 
     // Emit initial progress event
     let handle = APP_HANDLE.get().cloned();
-    let session_id = yiyiclaw_session.clone();
+    let session_id = yiyi_session.clone();
     if let Some(h) = &handle {
         h.emit("chat://claude_code_stream", serde_json::json!({
             "type": "start",
@@ -4660,14 +4758,14 @@ async fn claude_code_tool(args: &serde_json::Value) -> String {
     }
 
     // Cache Claude Code session ID for continuity
-    if !cc_session_id.is_empty() && !yiyiclaw_session.is_empty() {
+    if !cc_session_id.is_empty() && !yiyi_session.is_empty() {
         let mut sessions = CC_SESSIONS.lock().await;
         if sessions.len() >= CC_SESSIONS_MAX {
             if let Some(oldest) = sessions.keys().next().cloned() {
                 sessions.remove(&oldest);
             }
         }
-        sessions.insert(yiyiclaw_session, cc_session_id);
+        sessions.insert(yiyi_session, cc_session_id);
     }
 
     // Emit completion event to frontend
@@ -4722,6 +4820,40 @@ pub(crate) async fn resolve_claude_bin() -> Option<String> {
     }
 
     None
+}
+
+/// Auto-install Claude Code CLI via npm. Returns the binary path on success.
+async fn auto_install_claude_code() -> Result<String, String> {
+    // Check npm
+    let check_cmd = if cfg!(windows) { "where" } else { "which" };
+    let npm_ok = tokio::process::Command::new(check_cmd)
+        .arg("npm")
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if !npm_ok {
+        return Err("npm not available (Node.js not installed)".into());
+    }
+
+    // Run npm install -g
+    let output = tokio::process::Command::new("npm")
+        .args(["install", "-g", "@anthropic-ai/claude-code"])
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run npm: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("npm install failed: {}", stderr.chars().take(200).collect::<String>()));
+    }
+
+    // Verify installation — resolve the binary path
+    match resolve_claude_bin().await {
+        Some(bin) => Ok(bin),
+        None => Err("npm install succeeded but claude binary not found in PATH".into()),
+    }
 }
 
 /// Resolve a usable provider's API key + base URL for Claude Code.

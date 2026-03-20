@@ -1,6 +1,6 @@
 [package]
-name = "yiyiclaw"
-version = "0.1.0"
+name = "yiyi"
+version = "0.0.1"
 description = "A Tauri App"
 authors = ["you"]
 license = ""

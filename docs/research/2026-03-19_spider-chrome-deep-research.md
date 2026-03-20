@@ -1,7 +1,7 @@
 # spider_chrome / chromey Deep Research
 
 **Date**: 2026-03-19
-**Purpose**: Evaluate spider_chrome as a replacement for chromiumoxide in YiYiClaw browser automation
+**Purpose**: Evaluate spider_chrome as a replacement for chromiumoxide in YiYi browser automation
 
 ---
 
@@ -292,7 +292,7 @@ The API is oriented toward automation, not just crawling. The Wikipedia search e
 7. **Single key maintainer** -- bus factor risk (Jeff Mendez)
 8. **docs.rs 404** -- documentation not readily accessible online
 
-### Recommendation for YiYiClaw
+### Recommendation for YiYi
 
 chromey/spider_chrome is a **strong candidate** to replace chromiumoxide for browser automation. The key advantages are:
 - Critical hang/timeout fixes that we've been hitting

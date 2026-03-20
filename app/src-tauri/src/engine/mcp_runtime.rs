@@ -229,7 +229,7 @@ impl MCPRuntime {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
                 "clientInfo": {
-                    "name": "yiyiclaw",
+                    "name": "yiyi",
                     "version": "0.1.0"
                 }
             }
@@ -300,7 +300,7 @@ impl MCPRuntime {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
                 "clientInfo": {
-                    "name": "yiyiclaw",
+                    "name": "yiyi",
                     "version": "0.1.0"
                 }
             }

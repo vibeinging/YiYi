@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 /// - `http://...` / `https://...` — Direct download (Discord attachments, etc.)
 ///
 /// Returns the local path where the file was saved, under
-/// `{workspace_dir}/.yiyiclaw/media/{platform}/{filename}`.
+/// `{workspace_dir}/.yiyi/media/{platform}/{filename}`.
 pub async fn download_bot_media(
     platform: &str,
     url: &str,
@@ -51,7 +51,7 @@ pub async fn download_bot_media(
 /// Ensure the media directory exists and return it.
 fn ensure_media_dir(workspace_dir: &Path, platform: &str) -> Result<PathBuf, String> {
     let media_dir = workspace_dir
-        .join(".yiyiclaw")
+        .join(".yiyi")
         .join("media")
         .join(platform);
     std::fs::create_dir_all(&media_dir)

@@ -3,7 +3,7 @@ name: pptx
 description: "Use this skill whenever the user wants to do anything with PowerPoint presentations — reading, extracting text, creating professional slide decks."
 metadata:
   {
-    "yiyiclaw":
+    "yiyi":
       {
         "emoji": "📊",
         "requires": {}

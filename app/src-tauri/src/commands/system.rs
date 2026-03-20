@@ -1,6 +1,7 @@
 use serde::Serialize;
 use tauri::State;
 
+use crate::engine::db::QuickActionRow;
 use crate::state::AppState;
 use crate::state::providers::ModelInfo;
 
@@ -796,8 +797,56 @@ pub async fn consolidate_principles(
     let config = resolve_llm_config(&state).await?;
     let working_dir = state.db.get_config("working_dir")
         .map(std::path::PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|h| h.join(".yiyiclaw")))
+        .or_else(|| dirs::home_dir().map(|h| h.join(".yiyi")))
         .ok_or("Cannot determine working directory")?;
 
     consolidate_corrections_to_principles(&config, &state.db, &working_dir).await
+}
+
+// ---------------------------------------------------------------------------
+// Quick Actions API
+// ---------------------------------------------------------------------------
+
+/// List all custom quick actions.
+#[tauri::command]
+pub async fn list_quick_actions(
+    state: State<'_, AppState>,
+) -> Result<Vec<QuickActionRow>, String> {
+    Ok(state.db.list_quick_actions())
+}
+
+/// Add a new custom quick action.
+#[tauri::command]
+pub async fn add_quick_action(
+    state: State<'_, AppState>,
+    label: String,
+    description: String,
+    prompt: String,
+    icon: String,
+    color: String,
+) -> Result<String, String> {
+    state.db.add_quick_action(&label, &description, &prompt, &icon, &color)
+}
+
+/// Update an existing custom quick action.
+#[tauri::command]
+pub async fn update_quick_action(
+    state: State<'_, AppState>,
+    id: String,
+    label: String,
+    description: String,
+    prompt: String,
+    icon: String,
+    color: String,
+) -> Result<(), String> {
+    state.db.update_quick_action(&id, &label, &description, &prompt, &icon, &color)
+}
+
+/// Delete a custom quick action.
+#[tauri::command]
+pub async fn delete_quick_action(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    state.db.delete_quick_action(&id)
 }

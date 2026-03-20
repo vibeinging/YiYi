@@ -229,7 +229,7 @@ These are primarily for **testing Tauri apps themselves**, not for controlling e
 
 ---
 
-## Recommendation for YiYiClaw
+## Recommendation for YiYi
 
 ### Preferred Architecture: Hybrid CDP Approach
 

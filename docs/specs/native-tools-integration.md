@@ -21,9 +21,9 @@
 
 这些能力不再需要第三方 API 拼接，而是模型**原生支持**——只需在请求参数中声明即可自动触发。
 
-### 1.2 YiYiClaw 的机会
+### 1.2 YiYi 的机会
 
-YiYiClaw 作为多 Provider 桌面 AI 助手，天然具备接入所有厂商的基础设施。核心问题是：
+YiYi 作为多 Provider 桌面 AI 助手，天然具备接入所有厂商的基础设施。核心问题是：
 
 > **如何让完全不懂 AI 的普通用户，通过一句自然语言，自动享受到各家模型最强的原生能力？**
 
@@ -62,7 +62,7 @@ YiYiClaw 作为多 Provider 桌面 AI 助手，天然具备接入所有厂商的
 
 #### 模式 B：MCP Server 对接（补充模式）
 
-对接厂商提供的 MCP Server（如智谱的 Web Reader MCP、Web Search MCP）。YiYiClaw 已有 `mcp_runtime.rs` 基础设施。
+对接厂商提供的 MCP Server（如智谱的 Web Reader MCP、Web Search MCP）。YiYi 已有 `mcp_runtime.rs` 基础设施。
 
 **优势**：
 - 标准化协议，一次实现多处复用
@@ -300,7 +300,7 @@ for native_config in &native_tools_config {
 
 ### 4.1 核心原则：用户不选择，系统替他们决定
 
-| 传统 AI 产品 | YiYiClaw 方式 |
+| 传统 AI 产品 | YiYi 方式 |
 |-------------|--------------|
 | 用户选模型 | 系统根据任务自动选 |
 | 用户开启"联网搜索"开关 | 默认开启，Agent 自动判断 |
@@ -532,4 +532,4 @@ for native_config in &native_tools_config {
 
 **核心思路**：不造轮子，抱大腿。把各家模型最强的原生能力，通过 Provider 能力声明系统自动暴露给用户。用户只需要配一个 API key，就能获得该厂商的全部能力——搜索、看图、画图、语音、视频——而无需理解任何技术概念。
 
-**一句话**：让 YiYiClaw 成为连接普通人和 AI 能力的最短路径。
+**一句话**：让 YiYi 成为连接普通人和 AI 能力的最短路径。

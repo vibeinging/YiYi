@@ -49,7 +49,7 @@ pub fn run() {
                 let ident = if tauri::is_dev() {
                     "com.apple.Terminal" // dev: Terminal icon (matches Tauri plugin behavior)
                 } else {
-                    "com.yiyiclaw.desktop"
+                    "com.yiyi.desktop"
                 };
                 let _ = mac_notification_sys::set_application(ident);
 
@@ -310,6 +310,10 @@ pub fn run() {
             commands::system::get_latest_meditation,
             commands::system::trigger_meditation,
             commands::system::get_meditation_status,
+            commands::system::list_quick_actions,
+            commands::system::add_quick_action,
+            commands::system::update_quick_action,
+            commands::system::delete_quick_action,
             // Models & Providers
             commands::models::list_providers,
             commands::models::configure_provider,

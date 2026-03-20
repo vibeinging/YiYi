@@ -3,7 +3,7 @@ name: bot_setup
 description: "当用户要求添加/配置/连接机器人（Bot）到任意平台（飞书、钉钉、QQ、Discord、Telegram、企业微信）时使用此技能。会自动打开浏览器引导用户在对应开放平台创建应用、获取凭据，然后调用 manage_bot 完成创建。"
 metadata:
   {
-    "yiyiclaw":
+    "yiyi":
       {
         "emoji": "🤖",
         "requires": {}
@@ -64,7 +64,7 @@ metadata:
 - 创建版本并提交审核
 - 审核通过后即可使用
 
-**步骤 7: 在 YiYiClaw 创建 Bot**
+**步骤 7: 在 YiYi 创建 Bot**
 ```json
 {
   "action": "create",
@@ -94,7 +94,7 @@ metadata:
 - 安全设置选择「加签」，复制 **Secret**
 - 复制 **Webhook URL**
 
-**步骤 3: 在 YiYiClaw 创建 Bot**
+**步骤 3: 在 YiYi 创建 Bot**
 ```json
 {
   "action": "create",
@@ -122,7 +122,7 @@ metadata:
 - 在应用详情中复制 **App ID** 和 **Client Secret**
 - 配置沙箱或正式环境的频道权限
 
-**步骤 3: 在 YiYiClaw 创建 Bot**
+**步骤 3: 在 YiYi 创建 Bot**
 ```json
 {
   "action": "create",
@@ -157,7 +157,7 @@ metadata:
   - Bot Permissions: `Send Messages`, `Read Message History`
 - 复制生成的邀请链接，在浏览器中打开以将 Bot 邀请到你的服务器
 
-**步骤 4: 在 YiYiClaw 创建 Bot**
+**步骤 4: 在 YiYi 创建 Bot**
 ```json
 {
   "action": "create",
@@ -180,7 +180,7 @@ metadata:
 - 按提示输入 Bot 名称和用户名
 - BotFather 会返回 **Bot Token**
 
-**步骤 2: 在 YiYiClaw 创建 Bot**
+**步骤 2: 在 YiYi 创建 Bot**
 ```json
 {
   "action": "create",
@@ -212,7 +212,7 @@ metadata:
 - 在应用的「接收消息」中设置回调 URL: `http://<你的IP>:9090/webhook/wecom`
 - 配置 Token 和 EncodingAESKey
 
-**步骤 4: 在 YiYiClaw 创建 Bot**
+**步骤 4: 在 YiYi 创建 Bot**
 ```json
 {
   "action": "create",

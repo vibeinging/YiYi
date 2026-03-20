@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# YiYiClaw 重置脚本
+# YiYi 重置脚本
 # 清除所有数据，让应用回到初始设置状态
 #
 # 用法:
@@ -11,9 +11,9 @@
 #
 set -euo pipefail
 
-DATA_DIR="${YIYICLAW_WORKING_DIR:-$HOME/.yiyiclaw}"
-SECRET_DIR="$(dirname "$DATA_DIR")/.yiyiclaw.secret"
-WORKSPACE_DIR="${YIYICLAW_WORKSPACE:-$HOME/Documents/YiYiClaw}"
+DATA_DIR="${YIYI_WORKING_DIR:-${YIYICLAW_WORKING_DIR:-$HOME/.yiyi}}"
+SECRET_DIR="$(dirname "$DATA_DIR")/.yiyi.secret"
+WORKSPACE_DIR="${YIYI_WORKSPACE:-${YIYICLAW_WORKSPACE:-$HOME/Documents/YiYi}}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -51,7 +51,7 @@ done
 
 # ── 打印信息 ──
 echo ""
-echo -e "${BOLD}YiYiClaw 重置工具${NC}"
+echo -e "${BOLD}YiYi 重置工具${NC}"
 echo -e "─────────────────────────────"
 echo ""
 echo -e "数据目录:   ${CYAN}${DATA_DIR}${NC}"
@@ -69,7 +69,7 @@ fi
 echo -e "${BOLD}当前数据:${NC}"
 echo ""
 
-if ls "$DATA_DIR"/yiyiclaw.db* &>/dev/null || ls "$DATA_DIR"/yiclaw.db* &>/dev/null; then
+if ls "$DATA_DIR"/yiyi.db* &>/dev/null || ls "$DATA_DIR"/yiclaw.db* &>/dev/null; then
     echo -e "  ${RED}[数据库]${NC}  会话、消息、定时任务、Bot 配置、Provider 设置"
 fi
 
@@ -129,12 +129,12 @@ do_soft_reset() {
     echo ""
     echo -e "${YELLOW}执行软重置...${NC}"
 
-    rm -f "$DATA_DIR"/yiyiclaw.db*
+    rm -f "$DATA_DIR"/yiyi.db*
     rm -f "$DATA_DIR"/yiclaw.db*
     echo -e "  ${GREEN}✓${NC} 已清除数据库"
 
     echo ""
-    echo -e "${GREEN}${BOLD}软重置完成。${NC}重新启动 YiYiClaw 将进入初始设置向导。"
+    echo -e "${GREEN}${BOLD}软重置完成。${NC}重新启动 YiYi 将进入初始设置向导。"
     echo -e "配置文件、技能和插件已保留。"
 }
 
@@ -153,7 +153,7 @@ do_hard_reset() {
     echo -e "${YELLOW}执行硬重置...${NC}"
 
     # 数据库
-    rm -f "$DATA_DIR"/yiyiclaw.db*
+    rm -f "$DATA_DIR"/yiyi.db*
     rm -f "$DATA_DIR"/yiclaw.db*
     echo -e "  ${GREEN}✓${NC} 已清除数据库"
 
@@ -202,7 +202,7 @@ do_hard_reset() {
     fi
 
     echo ""
-    echo -e "${GREEN}${BOLD}硬重置完成。${NC}重新启动 YiYiClaw 将回到全新安装状态。"
+    echo -e "${GREEN}${BOLD}硬重置完成。${NC}重新启动 YiYi 将回到全新安装状态。"
 }
 
 # ── 执行 ──

@@ -290,7 +290,7 @@ function buildSoulContent(
   customDesc: string,
   lang: 'zh' | 'en',
 ): string {
-  const name = aiName.trim() || 'YiYiClaw';
+  const name = aiName.trim() || 'YiYi';
   const owner = ownerName.trim();
 
   const toneMap: Record<string, { zh: string; en: string }> = {
@@ -380,6 +380,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<TestConnectionResponse | null>(null);
   const [modelSaving, setModelSaving] = useState(false);
+  const [providerListAtBottom, setProviderListAtBottom] = useState(false);
 
   // Workspace step
   const [workspacePath, setWorkspacePath] = useState('');
@@ -387,7 +388,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
 
   // Persona step
-  const [aiName, setAiName] = useState('YiYiClaw');
+  const [aiName, setAiName] = useState('YiYi');
   const [ownerName, setOwnerName] = useState('');
   const [toneStyle, setToneStyle] = useState('balanced');
   const [selectedRole, setSelectedRole] = useState('assistant');
@@ -401,6 +402,27 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
 
   const lang = selectedLang.startsWith('zh') ? 'zh' : 'en';
   const stepIndex = STEPS.indexOf(currentStep);
+
+  // Track provider list scroll to hide "scroll for more" indicator at bottom
+  useEffect(() => {
+    if (currentStep !== 'model') return;
+    const check = () => {
+      const el = document.getElementById('provider-list');
+      if (!el) return;
+      setProviderListAtBottom(el.scrollTop + el.clientHeight >= el.scrollHeight - 10);
+    };
+    // Wait for DOM to render
+    const timer = setTimeout(() => {
+      check();
+      const el = document.getElementById('provider-list');
+      el?.addEventListener('scroll', check);
+    }, 100);
+    return () => {
+      clearTimeout(timer);
+      const el = document.getElementById('provider-list');
+      el?.removeEventListener('scroll', check);
+    };
+  }, [currentStep]);
 
   // Animate step transition
   const transitionTo = (target: Step) => {
@@ -467,18 +489,20 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     localStorage.setItem('language', lng);
   };
 
-  const handleTestConnection = async () => {
+  const handleTestConnection = async (): Promise<boolean> => {
     const provider = QUICK_PROVIDERS.find(p => p.id === selectedProvider);
-    if (!provider || !apiKey.trim()) return;
+    if (!provider || !apiKey.trim()) return false;
 
     setTesting(true);
     setTestResult(null);
     try {
-      const modelId = selectedModel || provider.models[0]?.id;
+      const modelId = useCustomModel ? customModelId.trim() : (selectedModel || provider.models[0]?.id);
       const result = await testProvider(provider.id, apiKey.trim(), baseUrl || provider.baseUrl, modelId);
       setTestResult(result);
+      return result.success;
     } catch (e: any) {
       setTestResult({ success: false, message: e.toString() });
+      return false;
     } finally {
       setTesting(false);
     }
@@ -487,6 +511,13 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
   const handleModelSave = async () => {
     const provider = QUICK_PROVIDERS.find(p => p.id === selectedProvider);
     if (!provider || !apiKey.trim()) return;
+
+    // If already tested successfully, skip re-test; otherwise test first
+    const alreadyPassed = testResult?.success === true;
+    if (!alreadyPassed) {
+      const ok = await handleTestConnection();
+      if (!ok) return; // Test failed — stay on this step
+    }
 
     const modelId = useCustomModel ? customModelId.trim() : (selectedModel || provider.models[0].id);
     setModelSaving(true);
@@ -530,7 +561,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       if (soulContent.trim()) {
         await invoke('save_workspace_file', {
           filename: 'SOUL.md',
-          content: `---\nname: ${aiName.trim() || 'YiYiClaw'}\n---\n\n${soulContent}`,
+          content: `---\nname: ${aiName.trim() || 'YiYi'}\n---\n\n${soulContent}`,
         });
       }
 
@@ -574,10 +605,10 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     else if (currentStep === 'meditation') transitionTo('persona');
   };
 
-  // Slide animation style
+  // Slide animation style — uses quart easing for natural deceleration
   const contentStyle: React.CSSProperties = {
-    transition: slideDir ? 'transform 0.25s ease, opacity 0.25s ease' : 'none',
-    transform: slideDir === 'up' ? 'translateY(-30px)' : slideDir === 'down' ? 'translateY(30px)' : 'translateY(0)',
+    transition: slideDir ? 'transform 0.3s cubic-bezier(0.25, 1, 0.5, 1), opacity 0.25s ease' : 'none',
+    transform: slideDir === 'up' ? 'translateY(-24px)' : slideDir === 'down' ? 'translateY(24px)' : 'translateY(0)',
     opacity: slideDir ? 0 : 1,
   };
 
@@ -586,6 +617,77 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       className="h-screen flex"
       style={{ background: 'var(--color-bg)' }}
     >
+      {/* Setup Wizard animations */}
+      <style>{`
+        @keyframes sw-fade-up {
+          from { opacity: 0; transform: translateY(16px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes sw-fade-in {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        @keyframes sw-scale-in {
+          from { opacity: 0; transform: scale(0.9); }
+          to { opacity: 1; transform: scale(1); }
+        }
+        @keyframes sw-logo-enter {
+          from { opacity: 0; transform: scale(0.8) translateY(12px); }
+          to { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        @keyframes sw-pulse-ring {
+          0% { box-shadow: 0 0 0 0 var(--color-primary-subtle); }
+          70% { box-shadow: 0 0 0 8px transparent; }
+          100% { box-shadow: 0 0 0 0 transparent; }
+        }
+        @keyframes sw-check-pop {
+          0% { transform: scale(0); opacity: 0; }
+          50% { transform: scale(1.2); }
+          100% { transform: scale(1); opacity: 1; }
+        }
+        @keyframes sw-line-fill {
+          from { background-size: 100% 0%; }
+          to { background-size: 100% 100%; }
+        }
+        @keyframes sw-float {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-4px); }
+        }
+        .sw-step-dot { transition: all 0.4s cubic-bezier(0.25, 1, 0.5, 1); }
+        .sw-step-dot.active { animation: sw-pulse-ring 1.5s ease-out; }
+        .sw-check-enter { animation: sw-check-pop 0.35s cubic-bezier(0.25, 1, 0.5, 1) forwards; }
+        .sw-card {
+          transition: transform 0.2s cubic-bezier(0.25, 1, 0.5, 1), box-shadow 0.2s ease, border-color 0.2s ease;
+        }
+        .sw-card:hover { transform: translateY(-1px); }
+        .sw-card:active { transform: scale(0.98); }
+        .sw-stagger-1 { animation: sw-fade-up 0.45s cubic-bezier(0.25, 1, 0.5, 1) 0.05s both; }
+        .sw-stagger-2 { animation: sw-fade-up 0.45s cubic-bezier(0.25, 1, 0.5, 1) 0.12s both; }
+        .sw-stagger-3 { animation: sw-fade-up 0.45s cubic-bezier(0.25, 1, 0.5, 1) 0.19s both; }
+        .sw-stagger-4 { animation: sw-fade-up 0.45s cubic-bezier(0.25, 1, 0.5, 1) 0.26s both; }
+        .sw-hero-logo { animation: sw-logo-enter 0.6s cubic-bezier(0.25, 1, 0.5, 1) 0.1s both; }
+        .sw-hero-title { animation: sw-fade-up 0.5s cubic-bezier(0.25, 1, 0.5, 1) 0.25s both; }
+        .sw-hero-sub { animation: sw-fade-up 0.5s cubic-bezier(0.25, 1, 0.5, 1) 0.35s both; }
+        .sw-hero-cards { animation: sw-fade-up 0.5s cubic-bezier(0.25, 1, 0.5, 1) 0.45s both; }
+        .sw-sidebar-logo { animation: sw-scale-in 0.5s cubic-bezier(0.25, 1, 0.5, 1) 0.1s both; }
+        .sw-btn-next {
+          transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.2s ease;
+        }
+        .sw-btn-next:hover:not(:disabled) { transform: translateX(2px); box-shadow: 0 4px 16px rgba(0,0,0,0.15); }
+        .sw-btn-next:active:not(:disabled) { transform: translateX(0) scale(0.97); }
+        .sw-btn-back {
+          transition: transform 0.15s ease, opacity 0.2s ease;
+        }
+        .sw-btn-back:hover { transform: translateX(-2px); }
+        .sw-float { animation: sw-float 3s ease-in-out infinite; }
+        @media (prefers-reduced-motion: reduce) {
+          *, *::before, *::after {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: 0.05ms !important;
+          }
+        }
+      `}</style>
       {/* Left: Vertical progress rail */}
       <div
         className="w-[260px] shrink-0 flex flex-col items-center pt-20 pb-10 px-6"
@@ -596,9 +698,9 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       >
         {/* Brand */}
         <div className="mb-16 text-center">
-          <img src={yiyiLogo} alt="YiYiClaw" className="w-14 h-14 rounded-2xl mx-auto mb-3" />
+          <img src={yiyiLogo} alt="YiYi" className="w-14 h-14 rounded-2xl mx-auto mb-3 sw-sidebar-logo" />
           <div className="text-[20px] font-extrabold tracking-tight" style={{ color: 'var(--color-text)' }}>
-            YiYiClaw
+            YiYi
           </div>
           <div className="text-[12px] mt-1 font-medium tracking-wide" style={{ color: 'var(--color-text-muted)' }}>
             {lang === 'zh' ? '初始设置' : 'Setup'}
@@ -617,9 +719,9 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                 {/* Dot + Line column */}
                 <div className="flex flex-col items-center">
                   <div
-                    className={`w-11 h-11 rounded-full flex items-center justify-center transition-all duration-300 ${
+                    className={`w-11 h-11 rounded-full flex items-center justify-center sw-step-dot ${
                       isDone ? 'bg-[var(--color-success)]' :
-                      isActive ? 'bg-[var(--color-primary)]' :
+                      isActive ? 'bg-[var(--color-primary)] active' :
                       'bg-[var(--color-bg-subtle)]'
                     }`}
                     style={{
@@ -627,7 +729,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                     }}
                   >
                     {isDone ? (
-                      <Check size={18} className="text-white" />
+                      <Check size={18} className="text-white sw-check-enter" />
                     ) : (
                       <Icon size={18} className={isActive ? 'text-white' : ''} style={{ color: isActive ? undefined : 'var(--color-text-muted)' }} />
                     )}
@@ -664,7 +766,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
 
         {/* Version */}
         <div className="text-[11px] font-medium" style={{ color: 'var(--color-text-tertiary)' }}>
-          v0.1.0
+          v0.0.1
         </div>
       </div>
 
@@ -679,15 +781,15 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
             {/* Step: Language */}
             {currentStep === 'language' && (
               <div className="text-center pt-20">
-                <img src={yiyiLogo} alt="YiYiClaw" className="w-24 h-24 rounded-3xl mx-auto mb-8" style={{ boxShadow: '0 8px 32px rgba(0,0,0,0.12)' }} />
-                <h1 className="text-4xl font-extrabold mb-4 tracking-tight" style={{ color: 'var(--color-text)' }}>
-                  {lang === 'zh' ? '欢迎使用 YiYiClaw' : 'Welcome to YiYiClaw'}
+                <img src={yiyiLogo} alt="YiYi" className="w-24 h-24 rounded-3xl mx-auto mb-8 sw-hero-logo sw-float" style={{ boxShadow: '0 8px 32px rgba(0,0,0,0.12)' }} />
+                <h1 className="text-4xl font-extrabold mb-4 tracking-tight sw-hero-title" style={{ color: 'var(--color-text)' }}>
+                  {lang === 'zh' ? '欢迎使用 YiYi' : 'Welcome to YiYi'}
                 </h1>
-                <p className="text-[16px] mb-12" style={{ color: 'var(--color-text-secondary)' }}>
+                <p className="text-[16px] mb-12 sw-hero-sub" style={{ color: 'var(--color-text-secondary)' }}>
                   {lang === 'zh' ? '选择你偏好的语言' : 'Choose your preferred language'}
                 </p>
 
-                <div className="flex gap-6 justify-center">
+                <div className="flex gap-6 justify-center sw-hero-cards">
                   {[
                     { id: 'zh', label: '中文', sub: 'Chinese' },
                     { id: 'en', label: 'English', sub: '英语' },
@@ -695,7 +797,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                     <button
                       key={l.id}
                       onClick={() => handleLangSelect(l.id)}
-                      className="w-52 p-7 rounded-2xl border-2 transition-all text-center relative"
+                      className="w-52 p-7 rounded-2xl border-2 text-center relative sw-card"
                       style={{
                         background: selectedLang === l.id ? 'var(--color-primary)' : 'var(--color-bg-elevated)',
                         borderColor: selectedLang === l.id ? 'var(--color-primary)' : 'var(--color-border)',
@@ -725,8 +827,8 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                   </h1>
                   <p className="text-[15px] leading-relaxed max-w-[500px] mx-auto" style={{ color: 'var(--color-text-secondary)' }}>
                     {lang === 'zh'
-                      ? 'YiYiClaw 本身是一个助手框架，它需要连接一个 AI 模型才能工作 —— 就像给它装上一颗会思考的大脑。选一个你喜欢的，填上 Key 就行'
-                      : 'YiYiClaw is an assistant framework — it needs an AI model to work, like giving it a brain that can think. Just pick one you like and enter the API Key'}
+                      ? 'YiYi 本身是一个助手框架，它需要连接一个 AI 模型才能工作 —— 就像给它装上一颗会思考的大脑。选一个你喜欢的，填上 Key 就行'
+                      : 'YiYi is an assistant framework — it needs an AI model to work, like giving it a brain that can think. Just pick one you like and enter the API Key'}
                   </p>
                 </div>
 
@@ -854,13 +956,17 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                       ))}
                     </div>
                     </div>
-                    {/* Scroll indicator */}
-                    <div className="absolute bottom-0 left-0 right-0 h-8 pointer-events-none" style={{ background: 'linear-gradient(to top, var(--color-bg), transparent)' }} />
-                    <div className="absolute bottom-1 left-0 right-0 text-center pointer-events-none">
-                      <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: 'var(--color-bg-elevated)', color: 'var(--color-text-muted)', border: '1px solid var(--color-border)' }}>
-                        {lang === 'zh' ? '↓ 滑动查看更多' : '↓ Scroll for more'}
-                      </span>
-                    </div>
+                    {/* Scroll indicator — auto-hide when scrolled to bottom */}
+                    {!providerListAtBottom && (
+                      <>
+                        <div className="absolute bottom-0 left-0 right-0 h-8 pointer-events-none" style={{ background: 'linear-gradient(to top, var(--color-bg), transparent)' }} />
+                        <div className="absolute bottom-1 left-0 right-0 text-center pointer-events-none">
+                          <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: 'var(--color-bg-elevated)', color: 'var(--color-text-muted)', border: '1px solid var(--color-border)' }}>
+                            {lang === 'zh' ? '↓ 滑动查看更多' : '↓ Scroll for more'}
+                          </span>
+                        </div>
+                      </>
+                    )}
                   </div>
 
                   {/* Right: Configuration */}
@@ -872,12 +978,12 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                           className="rounded-2xl px-7 py-6 mb-10 flex items-start gap-4"
                           style={{ background: 'rgba(255,106,0,0.05)', border: '1px solid rgba(255,106,0,0.10)' }}
                         >
-                          <Sparkles size={20} className="shrink-0 mt-1" style={{ color: '#FF6A00' }} />
+                          <Sparkles size={22} className="shrink-0 mt-1" style={{ color: '#FF6A00' }} />
                           <div>
-                            <div className="text-[15px] font-bold mb-1.5" style={{ color: 'var(--color-text)' }}>
+                            <div className="text-[18px] font-bold mb-1.5" style={{ color: 'var(--color-text)' }}>
                               {lang === 'zh' ? '不知道选哪个？' : 'Not sure which to pick?'}
                             </div>
-                            <p className="text-[14px] leading-[1.7]" style={{ color: 'var(--color-text-secondary)' }}>
+                            <p className="text-[16px] leading-[1.7]" style={{ color: 'var(--color-text-secondary)' }}>
                               {lang === 'zh'
                                 ? '试试左侧「特惠套餐」—— 一个 Key 就能用多个模型，不用逐个注册，适合刚上手。'
                                 : 'Try "Special Plans" on the left — one Key for multiple models, no need to register each. Great for getting started.'}
@@ -886,7 +992,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                         </div>
 
                         {/* Model guide */}
-                        <div className="text-[13px] font-bold uppercase tracking-wider mb-6 px-1" style={{ color: 'var(--color-text-tertiary)' }}>
+                        <div className="text-[15px] font-bold uppercase tracking-wider mb-6 px-1" style={{ color: 'var(--color-text-tertiary)' }}>
                           {lang === 'zh' ? '选型参考' : 'Quick Reference'}
                         </div>
 
@@ -902,14 +1008,24 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                           ]).map((m, i) => (
                             <div key={i} className="flex items-center gap-4">
                               <div className="w-3 h-3 rounded-full shrink-0" style={{ background: m.color }} />
-                              <span className="text-[15px] font-semibold shrink-0 w-[90px]" style={{ color: 'var(--color-text)' }}>{m.name[lang]}</span>
-                              <span className="text-[14px]" style={{ color: 'var(--color-text-tertiary)' }}>{m.hint[lang]}</span>
+                              <span className="text-[18px] font-semibold shrink-0 w-[100px]" style={{ color: 'var(--color-text)' }}>{m.name[lang]}</span>
+                              <span className="text-[16px]" style={{ color: 'var(--color-text-tertiary)' }}>{m.hint[lang]}</span>
                             </div>
                           ))}
                         </div>
 
-                        <p className="text-[13px] text-center" style={{ color: 'var(--color-text-muted)' }}>
-                          {lang === 'zh' ? '← 从左侧选择一个提供商开始' : '← Pick a provider from the left'}
+                        <style>{`
+                          @keyframes point-left {
+                            0%, 100% { transform: translateX(0); opacity: 0.6; }
+                            50% { transform: translateX(-8px); opacity: 1; }
+                          }
+                        `}</style>
+                        <p className="text-[18px] text-center font-medium flex items-center justify-center gap-3" style={{ color: 'var(--color-text-muted)' }}>
+                          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" style={{ animation: 'point-left 2.5s cubic-bezier(0.4, 0, 0.2, 1) infinite', flexShrink: 0 }}>
+                            <path d="M14 6L8 12L14 18" stroke="#10B981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                            <line x1="9" y1="12" x2="20" y2="12" stroke="#10B981" strokeWidth="2.5" strokeLinecap="round" />
+                          </svg>
+                          <span>{lang === 'zh' ? '从左侧选择一个提供商开始' : 'Pick a provider from the left'}</span>
                         </p>
                       </div>
                     ) : (() => {
@@ -992,7 +1108,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                               {showBaseUrl && (
                                 <input
                                   value={baseUrl}
-                                  onChange={(e) => setBaseUrl(e.target.value)}
+                                  onChange={(e) => { setBaseUrl(e.target.value); setTestResult(null); }}
                                   placeholder={provider.baseUrl}
                                   className="w-full mt-2 px-4 py-2 rounded-lg text-[12px] outline-none"
                                   style={{
@@ -1036,7 +1152,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                                 {provider.models.map((m) => (
                                   <button
                                     key={m.id}
-                                    onClick={() => setSelectedModel(m.id)}
+                                    onClick={() => { setSelectedModel(m.id); setTestResult(null); }}
                                     className="w-full flex items-center gap-3.5 px-4 py-3 rounded-xl border-2 text-left transition-all"
                                     style={{
                                       background: selectedModel === m.id ? 'var(--color-primary)' : 'transparent',
@@ -1074,7 +1190,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                                 </p>
                                 <input
                                   value={customModelId}
-                                  onChange={(e) => setCustomModelId(e.target.value)}
+                                  onChange={(e) => { setCustomModelId(e.target.value); setTestResult(null); }}
                                   placeholder={lang === 'zh' ? '模型 ID...' : 'Model ID...'}
                                   className="w-full px-4 py-2.5 rounded-lg text-[13px] outline-none"
                                   style={{
@@ -1160,7 +1276,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                   >
                     <FolderOpen size={20} style={{ color: 'var(--color-primary)' }} />
                     <code className="text-[14px] flex-1 truncate" style={{ color: 'var(--color-text)' }}>
-                      {workspacePath || '~/Documents/YiYiClaw'}
+                      {workspacePath || '~/Documents/YiYi'}
                     </code>
                     <div
                       className="px-3 py-1 rounded-lg text-[11px] font-semibold"
@@ -1281,7 +1397,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                     <input
                       value={aiName}
                       onChange={(e) => setAiName(e.target.value)}
-                      placeholder="YiYiClaw"
+                      placeholder="YiYi"
                       className="w-full px-4 py-3 rounded-xl text-[15px] font-medium outline-none"
                       style={{
                         background: 'var(--color-bg-subtle)',
@@ -1564,7 +1680,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
               <button
                 onClick={goBack}
                 disabled={animating}
-                className="flex items-center gap-2.5 px-6 py-3 rounded-xl text-[14px] font-medium transition-colors disabled:opacity-40"
+                className="flex items-center gap-2.5 px-6 py-3 rounded-xl text-[14px] font-medium disabled:opacity-40 sw-btn-back"
                 style={{ color: 'var(--color-text-secondary)' }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-subtle)'; }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
@@ -1588,11 +1704,11 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
             )}
             <button
               onClick={goNext}
-              disabled={!canProceed() || modelSaving || finishing || animating}
-              className="flex items-center gap-2.5 px-8 py-3 rounded-xl text-[14px] font-bold text-white transition-all disabled:opacity-40"
+              disabled={!canProceed() || modelSaving || finishing || testing || animating}
+              className="flex items-center gap-2.5 px-8 py-3 rounded-xl text-[14px] font-bold text-white disabled:opacity-40 sw-btn-next"
               style={{ background: 'var(--color-primary)', boxShadow: '0 4px 16px rgba(var(--color-primary-rgb), 0.3)' }}
             >
-              {(modelSaving || finishing) && <Loader2 size={16} className="animate-spin" />}
+              {(modelSaving || finishing || testing) && <Loader2 size={16} className="animate-spin" />}
               {currentStep === 'meditation' ? (
                 <>
                   <Sparkles size={16} />

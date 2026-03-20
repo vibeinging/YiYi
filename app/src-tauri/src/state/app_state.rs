@@ -37,7 +37,7 @@ pub struct StreamingSnapshot {
 }
 
 pub struct AppState {
-    pub working_dir: PathBuf,       // Internal app data (~/.yiyiclaw)
+    pub working_dir: PathBuf,       // Internal app data (~/.yiyi)
     pub user_workspace: std::sync::RwLock<PathBuf>,  // User-facing workspace
     pub secret_dir: PathBuf,
     pub config: Arc<RwLock<Config>>,
@@ -116,18 +116,19 @@ impl AppState {
     }
 
     pub fn new() -> Self {
-        let working_dir = std::env::var("YIYICLAW_WORKING_DIR")
+        let working_dir = std::env::var("YIYI_WORKING_DIR")
+            .or_else(|_| std::env::var("YIYICLAW_WORKING_DIR"))
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
                 dirs::home_dir()
                     .unwrap_or_else(|| PathBuf::from("."))
-                    .join(".yiyiclaw")
+                    .join(".yiyi")
             });
 
         let secret_dir = working_dir
             .parent()
             .unwrap_or(&working_dir)
-            .join(".yiyiclaw.secret");
+            .join(".yiyi.secret");
 
         // Ensure directories exist
         std::fs::create_dir_all(&working_dir).ok();
@@ -141,17 +142,20 @@ impl AppState {
 
         let config = Config::load(&working_dir);
 
-        // Resolve user workspace: config > env > ~/Documents/YiYiClaw
+        // Resolve user workspace: config > env > ~/Documents/YiYi
         let user_workspace = config
             .agents
             .workspace_dir
             .as_ref()
             .map(PathBuf::from)
-            .or_else(|| std::env::var("YIYICLAW_WORKSPACE").ok().map(PathBuf::from))
+            .or_else(|| std::env::var("YIYI_WORKSPACE")
+                .or_else(|_| std::env::var("YIYICLAW_WORKSPACE"))
+                .ok()
+                .map(PathBuf::from))
             .unwrap_or_else(|| {
                 dirs::document_dir()
                     .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
-                    .join("YiYiClaw")
+                    .join("YiYi")
             });
         std::fs::create_dir_all(&user_workspace).ok();
 

@@ -3,7 +3,7 @@ name: skill_creator
 description: "技能创建器：创建新技能、修改和改进现有技能、测试技能性能。当用户想要从零创建技能、编辑或优化现有技能、运行评估来测试技能、基准测试技能性能、或优化技能描述以提高触发准确性时使用。只要用户提到「创建技能」「新建skill」「改进技能」「技能模板」「skill开发」等相关话题，即使没有明确说出skill-creator，也应该使用此技能。"
 metadata:
   {
-    "yiyiclaw":
+    "yiyi":
       {
         "emoji": "🛠️",
         "requires": {},
@@ -16,15 +16,15 @@ metadata:
 
 创建新技能并迭代改进的核心技能。
 
-## YiYiClaw 技能系统说明
+## YiYi 技能系统说明
 
-YiYiClaw 的技能目录位于 `~/.yiyiclaw/active_skills/`，每个技能是一个包含 `SKILL.md` 的文件夹。SKILL.md 使用 YAML frontmatter 定义元数据（name, description, metadata），正文为 Markdown 指令。
+YiYi 的技能目录位于 `~/.yiyi/active_skills/`，每个技能是一个包含 `SKILL.md` 的文件夹。SKILL.md 使用 YAML frontmatter 定义元数据（name, description, metadata），正文为 Markdown 指令。
 
 技能结构：
 ```
 skill-name/
 ├── SKILL.md (必须)
-│   ├── YAML frontmatter (name, description, metadata.yiyiclaw.emoji/requires)
+│   ├── YAML frontmatter (name, description, metadata.yiyi.emoji/requires)
 │   └── Markdown 指令
 └── 附带资源 (可选)
     ├── scripts/    - 可执行脚本
@@ -80,11 +80,11 @@ skill-name/
 
 - **name**: 技能标识符（使用下划线命名，如 `my_skill`）
 - **description**: 触发条件和功能描述。这是主要的触发机制——同时包含技能做什么和什么时候使用。为了对抗「触发不足」的倾向，描述要稍微「积极主动」一些
-- **metadata**: YiYiClaw 特有的元数据
+- **metadata**: YiYi 特有的元数据
   ```yaml
   metadata:
     {
-      "yiyiclaw":
+      "yiyi":
         {
           "emoji": "适合的emoji",
           "requires": {}

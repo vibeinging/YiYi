@@ -10,7 +10,24 @@ import {
   FileText,
   Clock,
   BarChart3,
+  Zap,
+  Star,
+  Heart,
+  Code,
+  Globe,
+  Mail,
+  Search,
+  BookOpen,
+  Lightbulb,
+  Wrench,
+  Sparkles,
+  Rocket,
+  PenTool,
+  Music,
+  Camera,
+  Shield,
 } from 'lucide-react';
+import type { CustomQuickAction } from '../../api/system';
 
 export interface QuickAction {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -19,6 +36,38 @@ export interface QuickAction {
   desc: string;
   examples: string[];
   color: string;
+  /** If set, this is a custom action with this id */
+  customId?: string;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const ICON_MAP: Record<string, ComponentType<any>> = {
+  Zap,
+  Star,
+  Heart,
+  Code,
+  Globe,
+  Mail,
+  Search,
+  BookOpen,
+  Lightbulb,
+  Wrench,
+  Sparkles,
+  Rocket,
+  PenTool,
+  Music,
+  Camera,
+  Shield,
+  MessageSquare,
+  Puzzle,
+  Terminal,
+  FileText,
+  Clock,
+  BarChart3,
+};
+
+export function getIconNames(): string[] {
+  return Object.keys(ICON_MAP);
 }
 
 export function getQuickActions(t: (key: string) => string): QuickAction[] {
@@ -66,4 +115,23 @@ export function getQuickActions(t: (key: string) => string): QuickAction[] {
       color: '#0891b2',
     },
   ];
+}
+
+/**
+ * Merge built-in actions with custom user actions.
+ * Custom actions are appended after builtins.
+ */
+export function mergeWithCustomActions(
+  builtins: QuickAction[],
+  customs: CustomQuickAction[],
+): QuickAction[] {
+  const customActions: QuickAction[] = customs.map((c) => ({
+    icon: ICON_MAP[c.icon] || Zap,
+    label: c.label,
+    desc: c.description,
+    examples: [c.prompt],
+    color: c.color,
+    customId: c.id,
+  }));
+  return [...builtins, ...customActions];
 }

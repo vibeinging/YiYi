@@ -583,7 +583,7 @@ pub fn seed_default_templates(working_dir: &std::path::Path, language: &str) {
 // ---------------------------------------------------------------------------
 
 /// Load persona files asynchronously.
-/// Checks both working_dir (~/.yiyiclaw/) and user_workspace (~/Documents/YiYiClaw/),
+/// Checks both working_dir (~/.yiyi/) and user_workspace (~/Documents/YiYi/),
 /// with user_workspace taking priority (user may customize SOUL.md there via SetupWizard).
 async fn load_persona(working_dir: &std::path::Path, user_workspace: Option<&std::path::Path>) -> String {
     let files = ["AGENTS.md", "SOUL.md", "PROFILE.md"];
@@ -661,7 +661,7 @@ pub async fn build_system_prompt(
     };
 
     let mut prompt = if persona.is_empty() {
-        format!("You are YiYiClaw, a helpful AI assistant. {}\n\n", lang_instruction)
+        format!("You are YiYi, a helpful AI assistant. {}\n\n", lang_instruction)
     } else {
         format!("{}\n\n{}\n\n", persona, lang_instruction)
     };

@@ -3,7 +3,7 @@ name: seo
 description: "SEO content optimization and analysis. Use when the user asks to optimize content for search engines, analyze keywords, write SEO-friendly articles, improve page rankings, or generate meta tags and structured data."
 metadata:
   {
-    "yiyiclaw":
+    "yiyi":
       {
         "emoji": "🔍",
         "requires": {}

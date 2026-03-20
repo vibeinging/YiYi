@@ -112,8 +112,8 @@ impl DiscordBot {
                                                                     "intents": 33281, // GUILDS + GUILD_MESSAGES + DM_MESSAGES + MESSAGE_CONTENT
                                                                     "properties": {
                                                                         "os": "macos",
-                                                                        "browser": "yiyiclaw",
-                                                                        "device": "yiyiclaw"
+                                                                        "browser": "yiyi",
+                                                                        "device": "yiyi"
                                                                     }
                                                                 }
                                                             });

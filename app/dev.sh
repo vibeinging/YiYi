@@ -1,5 +1,5 @@
 #!/bin/bash
-# YiYiClaw Dev - 一键重启开发服务器
+# YiYi Dev - 一键重启开发服务器
 
 echo "Stopping existing processes..."
 
@@ -8,7 +8,7 @@ pkill -9 -f "target/debug/app" 2>/dev/null
 pkill -9 -f "cargo-tauri" 2>/dev/null
 pkill -9 -f "npm run tauri" 2>/dev/null
 
-# 杀掉 YiYiClaw 目录下的 vite/esbuild 进程
+# 杀掉 YiYi 目录下的 vite/esbuild 进程
 pkill -9 -f "YiClaw/app/node_modules/.bin/vite" 2>/dev/null
 pkill -9 -f "YiClaw/app/node_modules/@esbuild" 2>/dev/null
 

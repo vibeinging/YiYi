@@ -21,6 +21,8 @@ import {
   Upload,
   Package,
   Server,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-shell';
 import {
@@ -182,6 +184,7 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const [saving, setSaving] = useState<string | null>(null);
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [apiKeyInputs, setApiKeyInputs] = useState<Record<string, string>>({});
+  const [showApiKey, setShowApiKey] = useState<Record<string, boolean>>({});
   const [baseUrlInputs, setBaseUrlInputs] = useState<Record<string, string>>({});
   const [customModelInput, setCustomModelInput] = useState<Record<string, string>>({});
   const [selectedModel, setSelectedModel] = useState<Record<string, string>>({});
@@ -480,14 +483,35 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
                               style={{ color: 'var(--color-text-secondary)' }}>
                               <Key size={12} /> API Key
                             </label>
-                            <input
-                              type="password"
-                              value={apiKeyInputs[meta.id] || ''}
-                              onChange={(e) => setApiKeyInputs(prev => ({ ...prev, [meta.id]: e.target.value }))}
-                              placeholder={configured ? t('models.apiKeyPlaceholder') : `${t('models.apiKey')} (${meta.id.includes('coding') ? 'sk-sp...' : ''})`}
-                              className="w-full rounded-lg px-3 py-2 text-[13px] outline-none"
-                              style={{ background: 'var(--color-bg-elevated)', color: 'var(--color-text)' }}
-                            />
+                            <div className="relative">
+                              <input
+                                type={showApiKey[meta.id] ? 'text' : 'password'}
+                                value={apiKeyInputs[meta.id] ?? (showApiKey[meta.id] ? '' : (provider?.api_key_masked || ''))}
+                                onChange={(e) => setApiKeyInputs(prev => ({ ...prev, [meta.id]: e.target.value }))}
+                                placeholder={configured ? t('models.apiKeyPlaceholder') : `${t('models.apiKey')} (${meta.id.includes('coding') ? 'sk-sp...' : ''})`}
+                                className="w-full rounded-lg px-3 py-2 pr-9 text-[13px] outline-none"
+                                style={{ background: 'var(--color-bg-elevated)', color: 'var(--color-text)' }}
+                                onFocus={() => {
+                                  // When user focuses and no input yet, clear the masked value so they can type fresh
+                                  if (apiKeyInputs[meta.id] === undefined && provider?.api_key_masked) {
+                                    setApiKeyInputs(prev => ({ ...prev, [meta.id]: '' }));
+                                  }
+                                }}
+                              />
+                              {(provider?.api_key_masked || apiKeyInputs[meta.id]) && (
+                                <button
+                                  type="button"
+                                  onClick={() => setShowApiKey(prev => ({ ...prev, [meta.id]: !prev[meta.id] }))}
+                                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-md transition-colors"
+                                  style={{ color: 'var(--color-text-muted)' }}
+                                  onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--color-text-secondary)'; }}
+                                  onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--color-text-muted)'; }}
+                                  title={showApiKey[meta.id] ? 'Hide' : 'Show'}
+                                >
+                                  {showApiKey[meta.id] ? <EyeOff size={14} /> : <Eye size={14} />}
+                                </button>
+                              )}
+                            </div>
                           </div>
                           <div>
                             <label className="flex items-center gap-1.5 text-[12px] font-medium mb-1.5"
@@ -764,13 +788,34 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
                             style={{ color: 'var(--color-text-secondary)' }}>
                             <Key size={12} /> API Key
                           </label>
-                          <input type="password"
-                            value={apiKeyInputs[provider.id] || ''}
-                            onChange={(e) => setApiKeyInputs(prev => ({ ...prev, [provider.id]: e.target.value }))}
-                            placeholder={t('models.apiKeyPlaceholder')}
-                            className="w-full rounded-lg px-3 py-2 text-[13px] outline-none"
-                            style={{ background: 'var(--color-bg-elevated)', color: 'var(--color-text)' }}
-                          />
+                          <div className="relative">
+                            <input
+                              type={showApiKey[provider.id] ? 'text' : 'password'}
+                              value={apiKeyInputs[provider.id] ?? (showApiKey[provider.id] ? '' : (provider.api_key_masked || ''))}
+                              onChange={(e) => setApiKeyInputs(prev => ({ ...prev, [provider.id]: e.target.value }))}
+                              placeholder={t('models.apiKeyPlaceholder')}
+                              className="w-full rounded-lg px-3 py-2 pr-9 text-[13px] outline-none"
+                              style={{ background: 'var(--color-bg-elevated)', color: 'var(--color-text)' }}
+                              onFocus={() => {
+                                if (apiKeyInputs[provider.id] === undefined && provider.api_key_masked) {
+                                  setApiKeyInputs(prev => ({ ...prev, [provider.id]: '' }));
+                                }
+                              }}
+                            />
+                            {(provider.api_key_masked || apiKeyInputs[provider.id]) && (
+                              <button
+                                type="button"
+                                onClick={() => setShowApiKey(prev => ({ ...prev, [provider.id]: !prev[provider.id] }))}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-md transition-colors"
+                                style={{ color: 'var(--color-text-muted)' }}
+                                onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--color-text-secondary)'; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--color-text-muted)'; }}
+                                title={showApiKey[provider.id] ? 'Hide' : 'Show'}
+                              >
+                                {showApiKey[provider.id] ? <EyeOff size={14} /> : <Eye size={14} />}
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </div>
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">

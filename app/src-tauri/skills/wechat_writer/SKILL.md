@@ -3,7 +3,7 @@ name: wechat_writer
 description: "Write and format articles for WeChat Official Accounts (微信公众号). Use when the user asks to write, format, or optimize content for WeChat publication, including tech articles, product analysis, and general content creation."
 metadata:
   {
-    "yiyiclaw":
+    "yiyi":
       {
         "emoji": "✍️",
         "requires": {}

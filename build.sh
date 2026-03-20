@@ -1,5 +1,5 @@
 #!/bin/bash
-# YiYiClaw Build Script
+# YiYi Build Script
 # Usage: ./build.sh [arm|intel|both]
 # Handles Python dylib bundling for each architecture
 
@@ -55,10 +55,10 @@ build_target() {
     PYO3_PYTHON="$python" npm run tauri build -- --target "$target"
 
     # Post-process: fix rpath in the built binary
-    local binary="$TAURI_DIR/target/$target/release/yiyiclaw"
-    local app_binary="$TAURI_DIR/target/$target/release/bundle/macos/YiYiClaw.app/Contents/MacOS/yiyiclaw"
+    local binary="$TAURI_DIR/target/$target/release/yiyi"
+    local app_binary="$TAURI_DIR/target/$target/release/bundle/macos/YiYi.app/Contents/MacOS/yiyi"
 
-    local app_dir="$TAURI_DIR/target/$target/release/bundle/macos/YiYiClaw.app"
+    local app_dir="$TAURI_DIR/target/$target/release/bundle/macos/YiYi.app"
     if [ -f "$app_binary" ]; then
         echo "  Fixing dylib references in app bundle..."
         local fw_dir="$app_dir/Contents/Frameworks"
@@ -85,13 +85,13 @@ build_target() {
     local dmg_dir="$TAURI_DIR/target/$target/release/bundle/dmg"
     local dmg_name
     if [ "$arch" = "arm" ]; then
-        dmg_name="YiYiClaw_0.1.0_aarch64.dmg"
+        dmg_name="YiYi_0.1.0_aarch64.dmg"
     else
-        dmg_name="YiYiClaw_0.1.0_x64.dmg"
+        dmg_name="YiYi_0.1.0_x64.dmg"
     fi
     echo "  Re-creating DMG..."
     rm -f "$dmg_dir/$dmg_name"
-    hdiutil create -volname "YiYiClaw" -srcfolder "$app_dir" -ov -format UDZO "$dmg_dir/$dmg_name" 2>/dev/null
+    hdiutil create -volname "YiYi" -srcfolder "$app_dir" -ov -format UDZO "$dmg_dir/$dmg_name" 2>/dev/null
 
     echo "  Done! Output:"
     ls -lh "$dmg_dir/$dmg_name"

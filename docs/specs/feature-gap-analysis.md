@@ -1,4 +1,4 @@
-# YiYiClaw 新旧项目功能差异分析与实现计划
+# YiYi 新旧项目功能差异分析与实现计划
 
 > 新项目: Rust/Tauri 桌面应用 (`app/src-tauri/`)
 > 老项目: Python/FastAPI 服务 (`old_project/src/yipaw/`)

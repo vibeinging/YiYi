@@ -93,11 +93,27 @@ pub struct SkillIndexEntry {
 /// Returns:
 /// - `index`: compact list for the system prompt (model uses `activate_skills` tool to load full content)
 /// - `always_active`: full content of skills marked `always_active: true` (injected directly)
+///
+/// System skills (auto_continue, task_proposer) are always loaded from embedded resources,
+/// regardless of whether they exist in active_skills/. They are fundamental app capabilities.
 async fn load_skill_index(state: &AppState) -> (Vec<SkillIndexEntry>, Vec<String>) {
     let skills_dir = state.working_dir.join("active_skills");
     let mut index = Vec::new();
     let mut always_active = Vec::new();
+    let mut loaded_names = std::collections::HashSet::new();
 
+    // 1. Always load system skills from embedded resources (guaranteed to work)
+    for name in super::skills::SYSTEM_SKILL_NAMES {
+        if let Some(content) = super::skills::get_embedded_skill_content(name) {
+            let (_, is_always_active) = parse_skill_frontmatter(&content);
+            if is_always_active {
+                always_active.push(format!("[System skill: {}]\n\n{}", name, content));
+            }
+            loaded_names.insert(name.to_string());
+        }
+    }
+
+    // 2. Load user-enabled skills from active_skills/
     let mut entries = match tokio::fs::read_dir(&skills_dir).await {
         Ok(entries) => entries,
         Err(_) => return (index, always_active),
@@ -105,11 +121,17 @@ async fn load_skill_index(state: &AppState) -> (Vec<SkillIndexEntry>, Vec<String
 
     while let Ok(Some(entry)) = entries.next_entry().await {
         let path = entry.path();
+        let name = path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        // Skip system skills (already loaded from embedded)
+        if loaded_names.contains(&name) {
+            continue;
+        }
+
         let skill_md = path.join("SKILL.md");
         if let Ok(content) = tokio::fs::read_to_string(&skill_md).await {
-            let name = path.file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
             let (description, is_always_active) = parse_skill_frontmatter(&content);
 
             if is_always_active {
@@ -608,8 +630,8 @@ struct SaveResult {
 }
 
 /// Save attachments to filesystem and return metadata + file path hints for non-image files.
-/// `internal_dir` = app data dir (~/.yiyiclaw) for image attachments
-/// `workspace_dir` = user workspace (~/Documents/YiYiClaw) for file uploads
+/// `internal_dir` = app data dir (~/.yiyi) for image attachments
+/// `workspace_dir` = user workspace (~/Documents/YiYi) for file uploads
 fn save_attachments_to_disk(
     internal_dir: &Path,
     workspace_dir: &Path,
@@ -1079,7 +1101,7 @@ pub async fn chat_stream_start(
 
                             let preview: String = last_reply.chars().take(100).collect();
                             crate::engine::scheduler::send_notification_with_context(
-                                "YiYiClaw",
+                                "YiYi",
                                 &preview,
                                 serde_json::json!({
                                     "page": "chat",
@@ -1317,7 +1339,7 @@ pub async fn chat_stream_start(
                             })).ok();
                             let err_preview: String = e.chars().take(100).collect();
                             crate::engine::scheduler::send_notification_with_context(
-                                "YiYiClaw",
+                                "YiYi",
                                 &format!("Agent error: {}", err_preview),
                                 serde_json::json!({
                                     "page": "chat",

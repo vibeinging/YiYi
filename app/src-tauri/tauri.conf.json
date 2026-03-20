@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "YiYiClaw",
-  "version": "0.1.0",
-  "identifier": "com.yiyiclaw.desktop",
+  "productName": "YiYi",
+  "version": "0.0.1",
+  "identifier": "com.yiyi.desktop",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "YiYiClaw",
+        "title": "YiYi",
         "width": 1500,
         "height": 1000,
         "minWidth": 900,
@@ -58,12 +58,12 @@
     },
     "category": "Productivity",
     "shortDescription": "Your AI companion that grows with you",
-    "longDescription": "YiYiClaw is a desktop AI personal assistant that can operate your computer, execute tasks, manage files, and learn from every interaction. She grows smarter the more you use her."
+    "longDescription": "YiYi is a desktop AI personal assistant that can operate your computer, execute tasks, manage files, and learn from every interaction. She grows smarter the more you use her."
   },
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/anthropics/yiyiclaw/releases/latest/download/latest.json"
+        "https://github.com/anthropics/yiyi/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIzRTUwNDJFQjYwREJGM0MKUldROHZ3MjJMZ1RscytRWHQrUEtmOWlRMmt3S2FBUTJOUDBkNFA5YWd2bEdmbFc3RU9xcUt2MHYK"
     }

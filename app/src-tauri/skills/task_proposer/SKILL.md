@@ -2,14 +2,15 @@
 name: task_proposer
 description: "PRIORITY SKILL — Detect long-running tasks and propose background execution BEFORE any work begins. Must run before auto_continue."
 metadata:
-  yiyiclaw:
+  yiyi:
     emoji: "📋"
     always_active: true
+    hidden: true
 ---
 
 # 长任务检测与后台执行（优先级最高）
 
-⚠️ **此规则优先于 auto_continue**：收到用户消息后，你必须**先判断是否为长任务**，再决定是否执行。如果判断为长任务，必须**先调用 `propose_background_task`**，不要直接开始执行任务。
+⚠️ **此规则优先于 auto_continue**：收到用户消息后，你必须**先判断是否为长任务**，再决定是否执行。如果判断为长任务，必须**先调用 `create_task`**，不要直接开始执行任务。
 
 ## 什么是长任务
 
@@ -36,9 +37,10 @@ metadata:
 
 1. **先判断**：分析任务是否满足上述"长任务"条件
 2. **如果是长任务**：
-   - 立即调用 `propose_background_task` 工具
-   - 在 `task_description` 中说明任务内容和预计步骤
-   - 在 `context_summary` 中总结对话背景、用户需求细节
+   - 立即调用 `create_task` 工具
+   - 在 `title` 中简述任务内容
+   - 在 `description` 中详细说明任务需求和对话背景
+   - 可选提供 `plan` 列出执行阶段
    - ⛔ **不要调用 `request_continuation`**，不要开始执行任务
    - 用文字告诉用户你的判断，等待用户选择
 3. **如果不是长任务**：直接执行（此时 auto_continue 规则生效）
@@ -56,16 +58,16 @@ metadata:
 
 你应该：
 1. **停止当前执行**（不再调用 `request_continuation`）
-2. 将已完成的工作和剩余工作总结到 `context_summary` 中，包括：
+2. 将已完成的工作和剩余工作总结到 `description` 中，包括：
    - 用户的原始需求
    - 已完成的步骤和产出
    - 未完成的剩余工作
    - 当前进度状态
-3. 调用 `propose_background_task` 工具
+3. 调用 `create_task` 工具
 4. 等待用户确认
 
 ## 关键规则
 
 - 一次判断即可，**不要反复询问**
-- 调用 `propose_background_task` 后**必须停止**，不要同时调用 `request_continuation`
+- 调用 `create_task` 后**必须停止**，不要同时调用 `request_continuation`
 - 宁可多提议一次，也不要漏掉一个长任务

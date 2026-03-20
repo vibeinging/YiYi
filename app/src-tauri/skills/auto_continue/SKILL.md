@@ -1,7 +1,7 @@
 ---
 name: auto_continue
 description: "Enable multi-round task execution. The model autonomously decides whether a task needs multiple rounds and calls request_continuation tool to signal."
-metadata: { "yiyiclaw": { "emoji": "♾️", "always_active": true } }
+metadata: { "yiyi": { "emoji": "♾️", "always_active": true, "hidden": true } }
 ---
 
 # 多轮任务自主执行
@@ -10,9 +10,9 @@ metadata: { "yiyiclaw": { "emoji": "♾️", "always_active": true } }
 
 ## ⚠️ 前置条件：先检查 task_proposer
 
-**首轮（用户刚发送消息时）**：如果任务可能是长任务（生成文件、创建项目、多文件操作等），必须先由 task_proposer 判断并调用 `propose_background_task`。只有在以下情况才能直接开始多轮执行：
+**首轮（用户刚发送消息时）**：如果任务可能是长任务（生成文件、创建项目、多文件操作等），必须先由 task_proposer 判断并调用 `create_task`。只有在以下情况才能直接开始多轮执行：
 - 任务明确不是长任务（简单问答、单文件操作等）
-- 用户已在 `propose_background_task` 卡片上选择了"在这里继续"
+- 用户已选择"在这里继续"
 - 当前已在多轮执行的**第 2 轮及之后**
 
 ## 判断标准

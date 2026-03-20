@@ -782,7 +782,7 @@ async fn process_message(
                         if let Some(ref f) = *cb {
                             f(text.clone()).await;
                         }
-                        // Save early reply to DB so it shows in YiYiClaw
+                        // Save early reply to DB so it shows in YiYi
                         db_ref.push_message_with_metadata(&sid, "assistant", &text, Some(&reply_meta)).ok();
                         // Notify frontend to refresh messages
                         if let Some(ref ah) = app_h {

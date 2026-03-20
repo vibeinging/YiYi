@@ -1,7 +1,7 @@
 # AI 自我反思/自我成长 Skills 调研
 
 > 调研日期: 2026-03-19
-> 目标: 寻找近期爆火的 AI Agent 自我反思、自我成长、从错误中学习的 Skill/工具，为 YiYiClaw Growth System 提供设计灵感
+> 目标: 寻找近期爆火的 AI Agent 自我反思、自我成长、从错误中学习的 Skill/工具，为 YiYi Growth System 提供设计灵感
 
 ---
 
@@ -83,10 +83,10 @@
 
 ---
 
-## 三、对 YiYiClaw Growth System 的启发
+## 三、对 YiYi Growth System 的启发
 
 ### 已有设计的对齐
-YiYiClaw 当前 growth system (corrections -> PRINCIPLES.md -> 时间优先覆盖) 与行业趋势高度吻合：
+YiYi 当前 growth system (corrections -> PRINCIPLES.md -> 时间优先覆盖) 与行业趋势高度吻合：
 - 纠正捕获 -> 准则提炼 = claude-reflect 的核心模式
 - 时间优先覆盖 = OpenClaw 的 HOT/WARM/COLD 降级思路的简化版
 

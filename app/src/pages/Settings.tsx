@@ -456,7 +456,7 @@ export function SettingsPage() {
                       style={{ background: 'var(--color-bg)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
                       autoFocus
                       onKeyDown={(e) => { if (e.key === 'Enter') handleSaveWorkspace(); if (e.key === 'Escape') { setIsEditing(false); setEditingPath(workspacePath); } }}
-                      placeholder="/Users/you/Documents/YiYiClaw"
+                      placeholder="/Users/you/Documents/YiYi"
                     />
                     <button
                       onClick={handleSaveWorkspace}
@@ -483,7 +483,7 @@ export function SettingsPage() {
                       onClick={() => setIsEditing(true)}
                       title={workspacePath}
                     >
-                      {workspacePath || '~/Documents/YiYiClaw'}
+                      {workspacePath || '~/Documents/YiYi'}
                     </div>
                     <button
                       onClick={() => setIsEditing(true)}
@@ -643,10 +643,10 @@ export function SettingsPage() {
               <div className="flex items-center justify-between mb-4">
                 <div>
                   <h2 className="font-semibold text-[14px] mb-1">{t('settings.about')}</h2>
-                  <p className="text-[12px] text-[var(--color-text-muted)]">YiYiClaw v0.1.0</p>
+                  <p className="text-[12px] text-[var(--color-text-muted)]">YiYi v0.0.1</p>
                 </div>
                 <div className="text-[12px] text-[var(--color-text-muted)]">
-                  © 2024 YiYiClaw
+                  © 2024 YiYi
                 </div>
               </div>
               <UpdateChecker />

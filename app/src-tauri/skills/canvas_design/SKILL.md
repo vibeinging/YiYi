@@ -3,7 +3,7 @@ name: canvas_design
 description: "Create beautiful visual art in .png and .pdf documents using design philosophy. Use when the user asks to create a poster, piece of art, design, or other static visual piece."
 metadata:
   {
-    "yiyiclaw":
+    "yiyi":
       {
         "emoji": "🖼️",
         "requires": {}

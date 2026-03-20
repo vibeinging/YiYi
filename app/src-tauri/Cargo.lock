@@ -7496,8 +7496,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "yiyiclaw"
-version = "0.1.0"
+name = "yiyi"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "async_py",

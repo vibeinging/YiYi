@@ -70,7 +70,7 @@ export function ChatWelcome({ aiName, onSendPrompt }: ChatWelcomeProps) {
                 })()}
               </h1>
               <p className="text-[13.5px] mt-0.5" style={{ color: 'var(--color-text-secondary)' }}>
-                {(t('chat.empty.description') as string).replace('YiYiClaw', aiName).replace(/我是.*?。/, '')}
+                {(t('chat.empty.description') as string).replace('YiYi', aiName).replace(/我是.*?。/, '')}
               </p>
             </div>
           </div>

@@ -141,3 +141,44 @@ export async function saveMeditationConfig(
 ): Promise<void> {
   await invoke('save_meditation_config', { enabled, startTime, notifyOnComplete });
 }
+
+// Quick Actions API
+
+export interface CustomQuickAction {
+  id: string;
+  label: string;
+  description: string;
+  prompt: string;
+  icon: string;
+  color: string;
+  sortOrder: number;
+}
+
+export async function listQuickActions(): Promise<CustomQuickAction[]> {
+  return await invoke<CustomQuickAction[]>('list_quick_actions');
+}
+
+export async function addQuickAction(
+  label: string,
+  description: string,
+  prompt: string,
+  icon: string = 'Zap',
+  color: string = '#6366F1',
+): Promise<string> {
+  return await invoke<string>('add_quick_action', { label, description, prompt, icon, color });
+}
+
+export async function updateQuickAction(
+  id: string,
+  label: string,
+  description: string,
+  prompt: string,
+  icon: string = 'Zap',
+  color: string = '#6366F1',
+): Promise<void> {
+  await invoke('update_quick_action', { id, label, description, prompt, icon, color });
+}
+
+export async function deleteQuickAction(id: string): Promise<void> {
+  await invoke('delete_quick_action', { id });
+}

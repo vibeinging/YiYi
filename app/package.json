@@ -1,6 +1,6 @@
 {
-  "name": "yiyiclaw-app",
-  "version": "0.1.0",
+  "name": "yiyi-app",
+  "version": "0.0.1",
   "type": "module",
   "scripts": {
     "dev": "vite",

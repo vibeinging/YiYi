@@ -3,7 +3,7 @@ name: theme_factory
 description: "Toolkit for styling artifacts with a theme. Apply pre-set themes or generate custom themes with colors/fonts for slides, docs, reportings, HTML landing pages, etc."
 metadata:
   {
-    "yiyiclaw":
+    "yiyi":
       {
         "emoji": "🎭",
         "requires": {}

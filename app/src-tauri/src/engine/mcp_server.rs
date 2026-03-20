@@ -1,9 +1,9 @@
 #![allow(dead_code)]
-//! MCP Server: exposes local YiYiClaw skills as an MCP-compatible JSON-RPC server.
+//! MCP Server: exposes local YiYi skills as an MCP-compatible JSON-RPC server.
 //!
 //! When `skill_server.expose_as_mcp` is true in config, this module starts
 //! an HTTP server that responds to MCP protocol requests, allowing external
-//! tools (other AI agents, editors, etc.) to call YiYiClaw skills.
+//! tools (other AI agents, editors, etc.) to call YiYi skills.
 
 use axum::{extract::State as AxumState, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
@@ -110,7 +110,7 @@ fn load_exposed_skills(working_dir: &Path, config: &SkillServerConfig) -> Vec<Ex
 
         // Extract description from YAML frontmatter
         let description = extract_skill_description(&content).unwrap_or_else(|| {
-            format!("YiYiClaw skill: {}", name)
+            format!("YiYi skill: {}", name)
         });
 
         skills.push(ExposedSkill {
@@ -155,7 +155,7 @@ async fn handle_rpc(
                     "tools": {}
                 },
                 "serverInfo": {
-                    "name": "yiyiclaw-skill-server",
+                    "name": "yiyi-skill-server",
                     "version": "0.1.0"
                 }
             }))
@@ -172,7 +172,7 @@ async fn handle_rpc(
                 .iter()
                 .map(|s| {
                     serde_json::json!({
-                        "name": format!("yiyiclaw_skill_{}", s.name),
+                        "name": format!("yiyi_skill_{}", s.name),
                         "description": s.description,
                         "inputSchema": {
                             "type": "object",
@@ -199,8 +199,8 @@ async fn handle_rpc(
                 .as_str()
                 .unwrap_or("");
 
-            // Strip the yiyiclaw_skill_ prefix to find the skill name
-            let skill_name = tool_name.strip_prefix("yiyiclaw_skill_").unwrap_or(tool_name);
+            // Strip the yiyi_skill_ prefix to find the skill name
+            let skill_name = tool_name.strip_prefix("yiyi_skill_").unwrap_or(tool_name);
 
             let skills = state.skills.read().await;
             if let Some(skill) = skills.iter().find(|s| s.name == skill_name) {

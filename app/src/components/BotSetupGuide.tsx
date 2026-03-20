@@ -62,7 +62,7 @@ const FEISHU_STEPS_ZH: GuideStep[] = [
     description: '在飞书开放平台创建一个企业自建应用',
     instructions: [
       '打开飞书开放平台，点击「创建企业自建应用」',
-      '填写应用名称（如 "YiYiClaw AI 助手"）和描述',
+      '填写应用名称（如 "YiYi AI 助手"）和描述',
       '创建完成后，你会进入应用的管理页面',
     ],
     externalUrl: 'https://open.feishu.cn/app',
@@ -101,7 +101,7 @@ const FEISHU_STEPS_ZH: GuideStep[] = [
       '在左侧菜单点击「事件订阅」',
       '请求方式选择「使用长连接接收事件」(WebSocket 模式)',
       '添加事件：搜索 「接收消息」 并勾选 im.message.receive_v1',
-      '这样 YiYiClaw 就能通过 WebSocket 实时接收消息，无需公网服务器',
+      '这样 YiYi 就能通过 WebSocket 实时接收消息，无需公网服务器',
     ],
   },
   {
@@ -125,7 +125,7 @@ const FEISHU_STEPS_ZH: GuideStep[] = [
       '在左侧菜单点击「版本管理与发布」',
       '点击「创建版本」，填写版本号和更新说明',
       '提交后等待管理员审核（自建应用通常秒过）',
-      '发布成功后，回到 YiYiClaw 点击下方「测试连接」验证',
+      '发布成功后，回到 YiYi 点击下方「测试连接」验证',
     ],
   },
 ];
@@ -137,7 +137,7 @@ const FEISHU_STEPS_EN: GuideStep[] = [
     description: 'Create a custom app on Feishu Open Platform',
     instructions: [
       'Open Feishu Open Platform and click "Create Custom App"',
-      'Fill in app name (e.g. "YiYiClaw AI Assistant") and description',
+      'Fill in app name (e.g. "YiYi AI Assistant") and description',
       'After creation, you\'ll enter the app management page',
     ],
     externalUrl: 'https://open.feishu.cn/app',
@@ -176,7 +176,7 @@ const FEISHU_STEPS_EN: GuideStep[] = [
       'Click "Event Subscriptions" in the left menu',
       'Select "Long Connection (WebSocket)" as the request method',
       'Add event: search "Receive messages" and check im.message.receive_v1',
-      'YiYiClaw will receive messages via WebSocket — no public server needed',
+      'YiYi will receive messages via WebSocket — no public server needed',
     ],
   },
   {
@@ -215,7 +215,7 @@ const DINGTALK_STEPS_ZH: GuideStep[] = [
     instructions: [
       '打开钉钉开放平台，进入「应用开发」→「企业内部开发」',
       '点击「创建应用」，选择「机器人」类型',
-      '填写应用名称（如 "YiYiClaw AI 助手"）和描述',
+      '填写应用名称（如 "YiYi AI 助手"）和描述',
     ],
     externalUrl: 'https://open-dev.dingtalk.com/console/new/app',
     externalLabel: '打开钉钉开放平台',
@@ -267,7 +267,7 @@ const DINGTALK_STEPS_ZH: GuideStep[] = [
       '点击「版本管理与发布」→「上线」',
       '发布后，在钉钉群聊中添加你的机器人',
       '群设置 → 智能群助手 → 添加机器人 → 选择你的应用',
-      '回到 YiYiClaw 点击「测试连接」验证',
+      '回到 YiYi 点击「测试连接」验证',
     ],
   },
 ];
@@ -280,7 +280,7 @@ const DINGTALK_STEPS_EN: GuideStep[] = [
     instructions: [
       'Open DingTalk Open Platform → "App Development" → "Internal Development"',
       'Click "Create App", select "Bot" type',
-      'Fill in app name (e.g. "YiYiClaw AI Assistant") and description',
+      'Fill in app name (e.g. "YiYi AI Assistant") and description',
     ],
     externalUrl: 'https://open-dev.dingtalk.com/console/new/app',
     externalLabel: 'Open DingTalk Platform',
@@ -332,7 +332,7 @@ const DINGTALK_STEPS_EN: GuideStep[] = [
       'Click "Version Management" → "Publish"',
       'After publishing, add the bot to a DingTalk group',
       'Group Settings → Smart Assistant → Add Bot → Select your app',
-      'Return to YiYiClaw and click "Test Connection" to verify',
+      'Return to YiYi and click "Test Connection" to verify',
     ],
   },
 ];
@@ -347,7 +347,7 @@ const WECOM_STEPS_ZH: GuideStep[] = [
     instructions: [
       '使用管理员账号登录企业微信管理后台',
       '点击「应用管理」→「自建」→「创建应用」',
-      '填写应用名称（如 "YiYiClaw AI 助手"）、上传 Logo、选择可见范围',
+      '填写应用名称（如 "YiYi AI 助手"）、上传 Logo、选择可见范围',
       '创建完成后进入应用详情页',
     ],
     externalUrl: 'https://work.weixin.qq.com/wework_admin/frame#apps/createApiApp',
@@ -415,7 +415,7 @@ const WECOM_STEPS_EN: GuideStep[] = [
     instructions: [
       'Log in to WeCom admin console as an administrator',
       'Go to "Applications" → "Self-built" → "Create App"',
-      'Fill in app name (e.g. "YiYiClaw AI Assistant"), upload logo, set visibility',
+      'Fill in app name (e.g. "YiYi AI Assistant"), upload logo, set visibility',
       'After creation, you\'ll enter the app details page',
     ],
     externalUrl: 'https://work.weixin.qq.com/wework_admin/frame#apps/createApiApp',

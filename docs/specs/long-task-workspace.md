@@ -12,7 +12,7 @@
 ### 产出目录（用户可见）
 
 ```
-~/Documents/YiYiClaw/
+~/Documents/YiYi/
 ├── 作品集网站/            # 任务产出文件
 │   ├── index.html
 │   ├── style.css
@@ -87,7 +87,7 @@ Agent 分析需求
   ├─ 需求不明确 → 追问用户（如"帮我做个网站"→"什么类型的网站？"）
   ├─ 无文件产出 → 直接回答（问答、查询、翻译等）
   └─ 有文件产出 →
-      ├─ 1. 创建 workspace 目录（~/Documents/YiYiClaw/{名称}/）
+      ├─ 1. 创建 workspace 目录（~/Documents/YiYi/{名称}/）
       ├─ 2. 判断是否为长任务（task_proposer 规则）
       │   ├─ 是长任务 → 调用 propose_background_task → 弹卡片
       │   └─ 不是长任务 → 直接执行，文件写入该目录

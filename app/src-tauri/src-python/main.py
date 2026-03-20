@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""YiYiClaw embedded Python runtime entry point.
+"""YiYi embedded Python runtime entry point.
 
 Loaded by tauri-plugin-python at app startup.
 Registers functions callable from Rust via PythonExt trait.
@@ -14,8 +14,8 @@ from contextlib import redirect_stdout, redirect_stderr
 # ---------------------------------------------------------------------------
 # Path setup
 # ---------------------------------------------------------------------------
-YIYICLAW_HOME = os.path.expanduser("~/.yiyiclaw")
-USER_PACKAGES = os.path.join(YIYICLAW_HOME, "python_packages")
+YIYI_HOME = os.environ.get("YIYI_WORKING_DIR") or os.environ.get("YIYICLAW_WORKING_DIR") or os.path.expanduser("~/.yiyi")
+USER_PACKAGES = os.path.join(YIYI_HOME, "python_packages")
 os.makedirs(USER_PACKAGES, exist_ok=True)
 
 if USER_PACKAGES not in sys.path:

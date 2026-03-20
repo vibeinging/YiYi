@@ -152,8 +152,22 @@ pub struct ProviderInfo {
     pub is_local: bool,
     pub configured: bool,
     pub base_url: Option<String>,
+    /// Masked API key for display (e.g. "sk-abc...xyz"), never the full key.
+    pub api_key_masked: Option<String>,
     #[serde(default)]
     pub native_tools: Vec<NativeToolConfig>,
+}
+
+/// Mask an API key for safe display: show first 6 and last 4 chars.
+fn mask_api_key(key: &str) -> String {
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() <= 12 {
+        // Too short to meaningfully mask — just show dots
+        return format!("{}••••", &chars[..chars.len().min(4)].iter().collect::<String>());
+    }
+    let prefix: String = chars[..6].iter().collect();
+    let suffix: String = chars[chars.len() - 4..].iter().collect();
+    format!("{}••••••{}", prefix, suffix)
 }
 
 /// In-memory providers state backed by SQLite.
@@ -283,6 +297,7 @@ impl ProvidersState {
                     is_local: def.is_local,
                     configured: settings.map_or(false, |s| s.api_key.is_some()),
                     base_url: settings.and_then(|s| s.base_url.clone()),
+                    api_key_masked: settings.and_then(|s| s.api_key.as_deref().map(mask_api_key)),
                     native_tools: def.native_tools,
                 }
             })
@@ -301,6 +316,7 @@ impl ProvidersState {
                 is_local: def.is_local,
                 configured: custom.settings.api_key.is_some(),
                 base_url: custom.settings.base_url.clone(),
+                api_key_masked: custom.settings.api_key.as_deref().map(mask_api_key),
                 native_tools: def.native_tools.clone(),
             });
         }

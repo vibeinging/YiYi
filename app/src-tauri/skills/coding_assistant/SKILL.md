@@ -3,7 +3,7 @@ name: coding_assistant
 description: "编码助手：智能编码、项目发现、代码搜索、Git工作流，支持 Claude Code CLI 加速"
 metadata:
   {
-    "yiyiclaw":
+    "yiyi":
       {
         "emoji": "💻",
         "requires": {}
@@ -108,7 +108,7 @@ metadata:
 ### 权限模型
 
 - Claude Code 以非交互模式运行（`--dangerously-skip-permissions`）
-- 文件访问由 YiYiClaw 沙箱系统保护
+- 文件访问由 YiYi 沙箱系统保护
 - **敏感操作（删除文件、git push 等）：先问用户再委派**
 
 ### 结果处理
@@ -159,7 +159,7 @@ metadata:
 
 ## 内置工具编码
 
-当 Claude Code 不可用时，使用 YiYiClaw 内置工具完成编码任务。
+当 Claude Code 不可用时，使用 YiYi 内置工具完成编码任务。
 
 > 提示：如果任务较复杂（涉及 3+ 文件），建议用户安装 Claude Code 获得更好体验：
 > "建议安装 Claude Code 获得更专业的编码体验。可以在设置中一键安装，或运行 `npm i -g @anthropic-ai/claude-code`"

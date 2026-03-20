@@ -10,7 +10,7 @@
 
 ### 1.1 问题
 
-YiYiClaw 当前的 Agent 是 **单轮对话驱动** 模式：
+YiYi 当前的 Agent 是 **单轮对话驱动** 模式：
 
 ```
 用户发消息 → ReAct Loop (think → act → observe) × N → 返回结果 → 停止等待
@@ -31,7 +31,7 @@ YiYiClaw 当前的 Agent 是 **单轮对话驱动** 模式：
 | **Slock.ai** (SaaS) | Daemon + 云端 | Claude Code 进程常驻 + 独立 Workspace | 每个 Agent 独立目录 `~/.slock/agents/{id}/`；Activity 实时监控 |
 | **Anthropic 官方** | Two-Agent Harness | 初始化 Agent + 执行 Agent + 文件传递状态 | feature_list.json 任务清单；claude-progress.txt 进度文件；每 session 只做一个 feature |
 
-### 1.3 YiYiClaw 的优势
+### 1.3 YiYi 的优势
 
 - **已有 ReAct Agent 引擎**：加 outer loop 即可升级为自主循环
 - **已有 Skills 系统**：Agent 能力可通过 Skill 扩展
