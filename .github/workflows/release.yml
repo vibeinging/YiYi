@@ -122,6 +122,16 @@ jobs:
         run: yarn install --frozen-lockfile || yarn install
 
       # ── Build ──
+      - name: Disable updater signing if no key
+        if: env.TAURI_SIGNING_PRIVATE_KEY == ''
+        shell: bash
+        run: |
+          cd app/src-tauri
+          # Replace createUpdaterArtifacts with false when no signing key
+          sed -i.bak 's/"createUpdaterArtifacts": true/"createUpdaterArtifacts": false/' tauri.conf.json
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+
       - name: Build Tauri app
         working-directory: app
         shell: bash

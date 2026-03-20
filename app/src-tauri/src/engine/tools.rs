@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 
 /// Global MCP runtime reference for tool routing.
@@ -510,18 +510,24 @@ struct BrowserState {
 
 impl BrowserState {
     fn is_alive(&self) -> bool {
-        // Check if child process still running
         if let Some(id) = self.child.id() {
-            let pid = match i32::try_from(id) {
-                Ok(p) => p,
-                Err(_) => return false,
-            };
-            let ret = unsafe { libc::kill(pid, 0) };
-            if ret == 0 {
-                true
-            } else {
-                // EPERM means the process exists but we lack permission to signal it
-                std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+            #[cfg(unix)]
+            {
+                let pid = match i32::try_from(id) {
+                    Ok(p) => p,
+                    Err(_) => return false,
+                };
+                let ret = unsafe { libc::kill(pid, 0) };
+                if ret == 0 {
+                    true
+                } else {
+                    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = id;
+                true // On Windows, assume alive if we have a PID
             }
         } else {
             false
@@ -3881,12 +3887,39 @@ async fn manage_bot_tool(args: &serde_json::Value) -> String {
             };
 
             let bot_id = row.id.clone();
+            let bot_name = name.to_string();
+            let bot_platform = platform.to_string();
             match db.upsert_bot(&row) {
-                Ok(()) => format!(
-                    "Bot '{}' created successfully!\nPlatform: {}\nBot ID: {}\n\
-                    The bot is enabled by default. Use 'start' action to connect it.",
-                    name, platform, bot_id
-                ),
+                Ok(()) => {
+                    let mut result = format!(
+                        "Bot '{}' created successfully!\nPlatform: {}\nBot ID: {}",
+                        bot_name, bot_platform, bot_id
+                    );
+
+                    // Notify frontend to auto-start the bot
+                    // (start_one_bot cannot be called directly from tools due to Send constraints)
+                    if let Some(app_handle) = APP_HANDLE.get() {
+                        app_handle.emit("bot://auto-start", serde_json::json!({
+                            "bot_id": bot_id,
+                        })).ok();
+                        result.push_str("\nBot start signal sent.");
+                    }
+
+                    // Auto-bind to current session
+                    let session_id = get_current_session_id();
+                    if !session_id.is_empty() {
+                        match db.bind_bot_to_session(&session_id, &bot_id) {
+                            Ok(_) => {
+                                result.push_str(&format!("\nBot bound to current session ({}).", session_id));
+                            }
+                            Err(e) => {
+                                result.push_str(&format!("\nWarning: failed to bind bot to session: {}", e));
+                            }
+                        }
+                    }
+
+                    result
+                }
                 Err(e) => format!("Error creating bot: {}", e),
             }
         }
@@ -3945,12 +3978,35 @@ async fn manage_bot_tool(args: &serde_json::Value) -> String {
                 Err(e) => format!("Error deleting bot: {}", e),
             }
         }
-        "start" | "stop" => {
-            format!(
-                "The '{}' action requires the app runtime. Please tell the user to click the '{}' button on the Bots page.",
-                action,
-                if action == "start" { "启动全部 / Start All" } else { "停止全部 / Stop All" }
-            )
+        "start" => {
+            let bot_id = match args["bot_id"].as_str() {
+                Some(id) => id,
+                None => return "Error: 'bot_id' is required for start".into(),
+            };
+            match APP_HANDLE.get() {
+                Some(app_handle) => {
+                    app_handle.emit("bot://auto-start", serde_json::json!({
+                        "bot_id": bot_id,
+                    })).ok();
+                    format!("Bot '{}' start signal sent.", bot_id)
+                }
+                None => "Error: app runtime not available".into(),
+            }
+        }
+        "stop" => {
+            let bot_id = match args["bot_id"].as_str() {
+                Some(id) => id,
+                None => return "Error: 'bot_id' is required for stop".into(),
+            };
+            match APP_HANDLE.get() {
+                Some(app_handle) => {
+                    app_handle.emit("bot://auto-stop", serde_json::json!({
+                        "bot_id": bot_id,
+                    })).ok();
+                    format!("Bot '{}' stop signal sent.", bot_id)
+                }
+                None => "Error: app runtime not available".into(),
+            }
         }
         _ => format!("Unknown action '{}'. Valid: create, list, update, delete, enable, disable, start, stop", action),
     }

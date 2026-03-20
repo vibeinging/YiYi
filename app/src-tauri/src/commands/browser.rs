@@ -13,16 +13,23 @@ struct BrowserInstance {
 impl BrowserInstance {
     fn is_alive(&self) -> bool {
         if let Some(id) = self.child.id() {
-            let pid = match i32::try_from(id) {
-                Ok(p) => p,
-                Err(_) => return false,
-            };
-            let ret = unsafe { libc::kill(pid, 0) };
-            if ret == 0 {
+            #[cfg(unix)]
+            {
+                let pid = match i32::try_from(id) {
+                    Ok(p) => p,
+                    Err(_) => return false,
+                };
+                let ret = unsafe { libc::kill(pid, 0) };
+                if ret == 0 {
+                    true
+                } else {
+                    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = id;
                 true
-            } else {
-                // EPERM means the process exists but we lack permission to signal it
-                std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
             }
         } else {
             false
