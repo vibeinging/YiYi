@@ -1,87 +1,87 @@
 <div align="center">
 
-**[English](README_EN.md)** | **中文**
+**English** | **[中文](README_CN.md)**
 
 <img src="app/src-tauri/icons/icon.png" width="120" height="120" alt="YiYi Logo" />
 
 # YiYi
 
-**与你一起成长的 AI 伙伴**
+**Your AI Companion That Grows With You**
 
-她不是工具，是伙伴。<br/>
-她能操控你的电脑，记住你的习惯，连接你的世界，并在每一次互动中变得更懂你。
+She's not a tool — she's a companion.<br/>
+She can operate your computer, remember your preferences, connect your world, and become smarter with every interaction.
 
 [![GitHub release](https://img.shields.io/github/v/release/HungryFour/YiYi?style=flat-square&color=orange)](https://github.com/HungryFour/YiYi/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue?style=flat-square)](https://github.com/HungryFour/YiYi/releases)
 [![License](https://img.shields.io/github/license/HungryFour/YiYi?style=flat-square)](LICENSE)
 
-**[立即下载](https://github.com/HungryFour/YiYi/releases)**
+**[Download Now](https://github.com/HungryFour/YiYi/releases)**
 
 </div>
 
 ---
 
-## 她能做什么？
+## What Can She Do?
 
-### 🧠 自主完成复杂任务
+### 🧠 Autonomously Complete Complex Tasks
 
-YiYi 内置 **ReAct Agent 引擎**，不只是回答问题 — 她会像人一样思考、行动、观察，循环迭代直到任务完成。
+YiYi is powered by a **ReAct Agent Engine** — she doesn't just answer questions, she thinks, acts, observes, and iterates until the job is done.
 
-> "帮我把这份 PDF 里的数据整理成 Excel，发邮件给老板，然后每周五自动执行一次。"
+> "Extract data from this PDF into Excel, email it to my boss, and do it automatically every Friday."
 >
-> — YiYi：好的。
+> — YiYi: Done.
 
-40+ 内置工具随时调用，Shell、文件读写、浏览器自动化、截图、日历……她还能拆分出子任务并行处理，效率拉满。
+40+ built-in tools at her fingertips — shell, file I/O, browser automation, screenshots, calendar... She can even spawn sub-agents to parallelize complex workflows.
 
-### 🎯 24 个内置技能，开箱即用
+### 🎯 24 Built-in Skills, Ready to Go
 
 | | |
 |:---|:---|
-| 📄 **办公** — Word / Excel / PDF / PPT | 🌐 **浏览器** — 自动化操作、网页测试、SEO |
-| ✉️ **通讯** — 邮件收发、新闻聚合 | 🎨 **创作** — Canvas 设计、算法艺术、前端开发 |
-| ⏰ **自动化** — 定时任务、自动续行 | 🔧 **开发** — 编程助手、MCP、Claude Code |
+| 📄 **Office** — Word / Excel / PDF / PPT | 🌐 **Browser** — Automation, web testing, SEO |
+| ✉️ **Communication** — Email, news aggregation | 🎨 **Creative** — Canvas design, generative art, frontend dev |
+| ⏰ **Automation** — Cron jobs, auto-continue | 🔧 **Dev** — Coding assistant, MCP, Claude Code |
 
-不够用？自己写一个，或者从技能市场安装。
+Need more? Build your own, or install from the skill marketplace.
 
-### 🤖 一个 YiYi，连接七大平台
+### 🤖 One YiYi, Seven Platforms
 
-把 YiYi 部署为你的 Bot，在任何你常用的平台上随时召唤她：
+Deploy YiYi as your bot and summon her wherever you are:
 
 **Discord** · **QQ** · **Telegram** · **DingTalk** · **Feishu** · **WeCom** · **Webhook**
 
-微信群里让她查资料，Discord 里让她管服务器，Telegram 里让她追踪新闻 — 同一个 YiYi，同一份记忆。
+Ask her to research in WeChat groups, manage your Discord server, track news on Telegram — same YiYi, same memory.
 
-### 🌱 她会成长
+### 🌱 She Grows
 
-这是 YiYi 最特别的地方。
+This is what makes YiYi special.
 
-- **她记得你的每一次纠正**，下次不会再犯同样的错
-- **每天定时"冥想"**，把零散的经验沉淀为行为准则
-- **三级记忆体系**，重要的事情永远不会忘
-- **能力画像**，你能看到她在各个领域一点点变强
+- **She remembers every correction** and won't make the same mistake twice
+- **Daily "meditation"** — distills scattered experience into behavioral principles
+- **Three-tier memory** — important things are never forgotten
+- **Capability profile** — watch her get stronger across domains over time
 
-用得越多，她就越懂你。
+The more you use her, the better she knows you.
 
-### 🔌 MCP 协议，无限扩展
+### 🔌 MCP Protocol, Infinite Extension
 
-YiYi 原生支持 **MCP（Model Context Protocol）**：
+YiYi natively supports **MCP (Model Context Protocol)**:
 
-- 连接任意 MCP 工具服务器，一键获得新能力
-- 同时对外暴露自己的技能，让其他 AI 应用也能调用 YiYi
+- Connect to any MCP tool server for instant new capabilities
+- Expose her own skills to other AI applications
 
-### ⏰ 定时任务
+### ⏰ Scheduled Tasks
 
-设定好时间，YiYi 会自动执行 — 每天早上的日报汇总、每周的数据整理、到点提醒你该休息了。
+Set the time, YiYi handles the rest — morning briefings, weekly data crunching, reminders to take a break.
 
-### 💻 内置终端
+### 💻 Built-in Terminal
 
-直接在 YiYi 里打开终端操作，或者让她接入 Claude Code，开发体验无缝衔接。
+Open a terminal right inside YiYi, or plug in Claude Code for a seamless dev experience.
 
 ---
 
-## 🖥️ 界面预览
+## 🖥️ Screenshots
 
-> 🚧 截图即将更新，敬请期待
+> 🚧 Coming soon
 
 ---
 
@@ -89,10 +89,10 @@ YiYi 原生支持 **MCP（Model Context Protocol）**：
 
 **Tauri 2 · Rust · React · TypeScript · SQLite · MCP**
 
-**[下载 YiYi](https://github.com/HungryFour/YiYi/releases)** · [反馈建议](https://github.com/HungryFour/YiYi/issues)
+**[Download YiYi](https://github.com/HungryFour/YiYi/releases)** · [Feedback](https://github.com/HungryFour/YiYi/issues)
 
 ---
 
-以女儿之名，做最好的 AI 伙伴 🧡
+Named after a daughter, built to be the best AI companion 🧡
 
 </div>
