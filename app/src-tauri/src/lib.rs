@@ -7,10 +7,13 @@ use engine::config_watcher::ConfigWatcher;
 use engine::python_bridge;
 use engine::scheduler::CronScheduler;
 use state::AppState;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // macOS GUI apps don't inherit the user's shell PATH — fix it before anything else.
+    fix_path_env();
+
     // Set PYTHONHOME so the embedded Python finds its stdlib.
     // In dev mode: use the system Python's stdlib.
     // In production: use the bundled python-stdlib/ in the app resources.
@@ -251,6 +254,22 @@ pub fn run() {
                 }
             });
 
+            // Start meditation timer in background
+            {
+                let app_handle = app.handle().clone();
+                start_meditation_timer(app_handle);
+            }
+
+            // One-time migration: seed tiered memory from legacy files
+            {
+                let migration_flag = state.working_dir.join(".tiered_memory_migrated");
+                if !migration_flag.exists() {
+                    crate::engine::tiered_memory::seed_from_files(&state.db, &state.working_dir);
+                    std::fs::write(&migration_flag, "done").ok();
+                    log::info!("Tiered memory seeded from legacy files");
+                }
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -286,6 +305,11 @@ pub fn run() {
             commands::system::get_morning_greeting,
             commands::system::disable_correction,
             commands::system::consolidate_principles,
+            commands::system::save_meditation_config,
+            commands::system::get_meditation_config,
+            commands::system::get_latest_meditation,
+            commands::system::trigger_meditation,
+            commands::system::get_meditation_status,
             // Models & Providers
             commands::models::list_providers,
             commands::models::configure_provider,
@@ -443,6 +467,153 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Spawn a background loop that checks every 60 seconds if it's time to run meditation.
+/// Includes catch-up logic: if the app was off during the scheduled time, meditation
+/// runs on the next check after >24 h since the last session.
+fn start_meditation_timer(app_handle: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        // Wait 30 seconds after app launch before starting checks
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+
+            let state = app_handle.state::<AppState>();
+
+            // 1. Check if meditation is enabled
+            let config = state.config.read().await;
+            if !config.meditation.enabled {
+                continue;
+            }
+            let start_time = config.meditation.start_time.clone();
+            let notify = config.meditation.notify_on_complete;
+            drop(config); // Release lock
+
+            // 2. Check if another meditation is already running
+            if state.meditation_running.load(std::sync::atomic::Ordering::Relaxed) {
+                continue;
+            }
+
+            // 3. Check if meditation already ran today
+            if has_meditation_today(&state.db) {
+                continue;
+            }
+
+            // 4. Check if it's meditation time OR catch-up needed
+            let should_run = is_meditation_time(&start_time) || should_catch_up(&state.db);
+            if !should_run {
+                continue;
+            }
+
+            // 5. Acquire meditation guard (compare-and-swap to prevent races)
+            if state.meditation_running.compare_exchange(
+                false, true,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::Relaxed,
+            ).is_err() {
+                continue; // Another thread won the race
+            }
+
+            // 6. Run meditation
+            log::info!("Starting scheduled meditation session");
+
+            // Get LLM config
+            let llm_config = match crate::commands::agent::resolve_llm_config(&state).await {
+                Ok(c) => c,
+                Err(e) => {
+                    log::error!("Cannot start meditation: no LLM config: {}", e);
+                    state.meditation_running.store(false, std::sync::atomic::Ordering::Relaxed);
+                    continue;
+                }
+            };
+
+            let db = state.db.clone();
+            let working_dir = state.working_dir.clone();
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+            match crate::engine::meditation::run_meditation_session(
+                &llm_config, &db, &working_dir, cancel,
+            )
+            .await
+            {
+                Ok(result) => {
+                    log::info!(
+                        "Meditation completed: {} sessions reviewed, {} memories updated",
+                        result.sessions_reviewed,
+                        result.memories_updated,
+                    );
+
+                    // Send notification if enabled
+                    if notify {
+                        let _ = app_handle.emit(
+                            "meditation-complete",
+                            serde_json::json!({
+                                "sessions_reviewed": result.sessions_reviewed,
+                                "memories_updated": result.memories_updated,
+                                "principles_changed": result.principles_changed,
+                            }),
+                        );
+                    }
+                }
+                Err(e) => {
+                    log::error!("Meditation failed: {}", e);
+                }
+            }
+
+            // Release the meditation guard
+            state.meditation_running.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+    });
+}
+
+/// Check if current time matches the meditation start_time (HH:MM format).
+/// Matches within a 2-minute window since we check every 60 s.
+fn is_meditation_time(start_time: &str) -> bool {
+    use chrono::Timelike;
+    let now = chrono::Local::now();
+    let parts: Vec<&str> = start_time.split(':').collect();
+    if parts.len() != 2 {
+        return false;
+    }
+
+    let hour: u32 = parts[0].parse().unwrap_or(99);
+    let minute: u32 = parts[1].parse().unwrap_or(99);
+
+    now.hour() == hour && (now.minute() == minute || now.minute() == minute.wrapping_add(1))
+}
+
+/// Check if meditation already ran today (completed or running).
+fn has_meditation_today(db: &std::sync::Arc<crate::engine::db::Database>) -> bool {
+    if let Some(session) = db.get_latest_meditation_session() {
+        let today_start = chrono::Local::now()
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis();
+
+        session.started_at >= today_start
+            && (session.status == "completed" || session.status == "running")
+    } else {
+        false
+    }
+}
+
+/// Check if catch-up meditation is needed (last meditation was >24 h ago, or never ran).
+fn should_catch_up(db: &std::sync::Arc<crate::engine::db::Database>) -> bool {
+    match db.get_latest_meditation_session() {
+        Some(session) => {
+            if let Some(finished_at) = session.finished_at {
+                let now = chrono::Utc::now().timestamp_millis();
+                now - finished_at > 24 * 3600 * 1000 // More than 24 h since last meditation
+            } else {
+                false // Still running or never finished
+            }
+        }
+        None => true, // Never meditated — should catch up
+    }
 }
 
 /// Bootstrap core Python packages on first launch.
@@ -631,6 +802,75 @@ fn setup_python_home() {
                 std::env::set_var("PYTHONHOME", &prod_stdlib);
                 eprintln!("[python] Using bundled stdlib: {}", prod_stdlib.display());
                 return;
+            }
+        }
+    }
+}
+
+/// Fix PATH for macOS/Linux GUI apps.
+///
+/// When launched from Finder/Dock, the process inherits a minimal PATH
+/// (e.g. `/usr/bin:/bin:/usr/sbin:/sbin`) that misses Homebrew, nvm, cargo, etc.
+/// We run the user's login shell to get the real PATH and inject it.
+fn fix_path_env() {
+    #[cfg(not(unix))]
+    return;
+
+    #[cfg(unix)]
+    {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+
+        // Use `printenv PATH` — an external command that reads the env var directly.
+        // This is shell-agnostic: works with bash, zsh, fish, nushell, etc.
+        // (`echo $PATH` would break on fish which outputs space-separated lists.)
+        //
+        // Spawn the child process and wait with a timeout: login shell may hang if
+        // the user's profile does interactive work (ssh-agent prompt, conda init, etc.).
+        let child = std::process::Command::new(&shell)
+            .args(["-l", "-c", "/usr/bin/printenv PATH"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+
+        let mut child = match child {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[fix-path] Failed to spawn login shell: {}", e);
+                return;
+            }
+        };
+
+        // Poll with timeout — 3 seconds is generous for sourcing a shell profile
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Some(status),
+                Ok(None) => {
+                    if std::time::Instant::now() >= deadline {
+                        let _ = child.kill();
+                        eprintln!("[fix-path] Login shell timed out, using system default PATH");
+                        break None;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(_) => break None,
+            }
+        };
+
+        if let Some(status) = status {
+            if status.success() {
+                if let Some(stdout) = child.stdout.take() {
+                    use std::io::Read;
+                    let mut buf = String::new();
+                    let mut stdout = stdout;
+                    stdout.read_to_string(&mut buf).ok();
+                    let new_path = buf.trim().to_string();
+                    let current = std::env::var("PATH").unwrap_or_default();
+                    if !new_path.is_empty() && new_path != current {
+                        std::env::set_var("PATH", &new_path);
+                        eprintln!("[fix-path] Updated PATH from login shell");
+                    }
+                }
             }
         }
     }

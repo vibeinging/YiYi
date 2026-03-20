@@ -1,6 +1,7 @@
 pub mod bots;
 pub mod db;
 pub mod config_watcher;
+pub mod meditation;
 pub mod memory;
 pub mod doc_tools;
 pub mod llm_client;
@@ -10,6 +11,7 @@ pub mod python_bridge;
 pub mod react_agent;
 pub mod scheduler;
 pub mod skills_hub;
+pub mod tiered_memory;
 pub mod token_counter;
 pub mod tools;
 pub mod pty_manager;

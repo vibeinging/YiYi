@@ -50,6 +50,8 @@ pub struct AppState {
     pub streaming_state: Arc<std::sync::Mutex<HashMap<String, StreamingSnapshot>>>,
     pub task_cancellations: Arc<std::sync::Mutex<HashMap<String, Arc<AtomicBool>>>>,
     pub pty_manager: Arc<crate::engine::pty_manager::PtyManager>,
+    /// Guard to prevent concurrent meditation sessions.
+    pub meditation_running: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -73,6 +75,7 @@ impl AppState {
             streaming_state: self.streaming_state.clone(),
             task_cancellations: self.task_cancellations.clone(),
             pty_manager: self.pty_manager.clone(),
+            meditation_running: self.meditation_running.clone(),
         }
     }
 
@@ -188,6 +191,7 @@ impl AppState {
             streaming_state: Arc::new(std::sync::Mutex::new(HashMap::new())),
             task_cancellations: Arc::new(std::sync::Mutex::new(HashMap::new())),
             pty_manager: Arc::new(crate::engine::pty_manager::PtyManager::new()),
+            meditation_running: Arc::new(AtomicBool::new(false)),
         }
     }
 }

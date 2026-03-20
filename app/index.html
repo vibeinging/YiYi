@@ -7,8 +7,7 @@
     <title>YiYiClaw - AI Personal Assistant</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  </head>
-  <style>
+    <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { background: #0E0C1A; }
 
@@ -19,10 +18,9 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      background: #0E0C1A;
+      background: #0E0C1A !important;
       transition: opacity 0.3s ease;
       z-index: 9999;
-      pointer-events: none;
     }
 
     /* Logo with entrance animation */
@@ -73,7 +71,8 @@
       0%, 100% { opacity: 0.25; transform: scale(0.85); }
       50%       { opacity: 1;    transform: scale(1.1); }
     }
-  </style>
+    </style>
+  </head>
   <body>
     <div id="app-loading">
       <img class="al-logo" src="/yiyi-logo.png" alt="YiYiClaw" />

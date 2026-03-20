@@ -1,3 +1,4 @@
+use chrono::TimeZone;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -263,12 +264,17 @@ impl Database {
                 session_id TEXT,
                 content TEXT NOT NULL,
                 category TEXT NOT NULL DEFAULT 'fact',
+                tier TEXT NOT NULL DEFAULT 'warm',
+                confidence REAL NOT NULL DEFAULT 0.5,
+                source TEXT NOT NULL DEFAULT 'extraction',
+                reviewed_by_meditation INTEGER DEFAULT 0,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
             CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id);
             CREATE INDEX IF NOT EXISTS idx_memories_updated ON memories(updated_at);
+            -- tier/confidence indexes are created in migrate_tables() after ALTER TABLE
 
             -- Unified users: cross-platform identity linkage
             CREATE TABLE IF NOT EXISTS unified_users (
@@ -409,6 +415,8 @@ impl Database {
                 lesson TEXT,
                 skill_opportunity TEXT,
                 user_feedback TEXT,
+                signal_type TEXT NOT NULL DEFAULT 'silent_completion',
+                confidence REAL NOT NULL DEFAULT 0.50,
                 created_at INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_reflections_outcome ON reflections(outcome);
@@ -426,12 +434,34 @@ impl Database {
                 source TEXT,
                 active INTEGER NOT NULL DEFAULT 1,
                 hit_count INTEGER NOT NULL DEFAULT 0,
+                confidence REAL NOT NULL DEFAULT 0.80,
                 created_at INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_corrections_active ON corrections(active);
             CREATE INDEX IF NOT EXISTS idx_corrections_sort ON corrections(active, hit_count DESC, created_at DESC);",
         )
         .map_err(|e| format!("Failed to create corrections table: {}", e))?;
+
+        // Meditation sessions — daily self-review journal
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS meditation_sessions (
+                id TEXT PRIMARY KEY,
+                started_at INTEGER NOT NULL,
+                finished_at INTEGER,
+                status TEXT DEFAULT 'running',
+                sessions_reviewed INTEGER DEFAULT 0,
+                memories_updated INTEGER DEFAULT 0,
+                principles_changed INTEGER DEFAULT 0,
+                memories_archived INTEGER DEFAULT 0,
+                journal TEXT,
+                error TEXT,
+                depth TEXT DEFAULT 'standard',
+                phases_completed TEXT DEFAULT '',
+                tomorrow_intentions TEXT,
+                growth_synthesis TEXT
+            );",
+        )
+        .map_err(|e| format!("Failed to create meditation_sessions table: {}", e))?;
 
         // Code registry — tracks scripts/tools YiYi has created
         conn.execute_batch(
@@ -544,6 +574,61 @@ impl Database {
                  ALTER TABLE memories ADD COLUMN last_accessed_at INTEGER DEFAULT NULL;"
             ).map_err(|e| format!("Migration error (memories growth): {}", e))?;
             log::info!("Migrated memories table: added access_count, last_accessed_at columns");
+        }
+
+        // Growth V2: add tier, confidence, source, reviewed_by_meditation to memories
+        let has_mem_tier: bool = conn
+            .prepare("SELECT tier FROM memories LIMIT 0")
+            .is_ok();
+        if !has_mem_tier {
+            conn.execute_batch(
+                "ALTER TABLE memories ADD COLUMN tier TEXT NOT NULL DEFAULT 'warm';
+                 ALTER TABLE memories ADD COLUMN confidence REAL NOT NULL DEFAULT 0.5;
+                 ALTER TABLE memories ADD COLUMN source TEXT NOT NULL DEFAULT 'extraction';
+                 ALTER TABLE memories ADD COLUMN reviewed_by_meditation INTEGER DEFAULT 0;"
+            ).map_err(|e| format!("Migration error (memories V2): {}", e))?;
+            conn.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_memories_tier ON memories(tier);
+                 CREATE INDEX IF NOT EXISTS idx_memories_tier_confidence ON memories(tier, confidence DESC);"
+            ).map_err(|e| format!("Migration error (memories V2 indexes): {}", e))?;
+            log::info!("Migrated memories table: added tier, confidence, source, reviewed_by_meditation columns");
+        }
+
+        // Growth V2: add confidence to corrections
+        let has_corr_confidence: bool = conn
+            .prepare("SELECT confidence FROM corrections LIMIT 0")
+            .is_ok();
+        if !has_corr_confidence {
+            conn.execute_batch(
+                "ALTER TABLE corrections ADD COLUMN confidence REAL NOT NULL DEFAULT 0.80;"
+            ).map_err(|e| format!("Migration error (corrections confidence): {}", e))?;
+            log::info!("Migrated corrections table: added confidence column");
+        }
+
+        // Growth V2: add signal_type, confidence to reflections
+        let has_refl_signal: bool = conn
+            .prepare("SELECT signal_type FROM reflections LIMIT 0")
+            .is_ok();
+        if !has_refl_signal {
+            conn.execute_batch(
+                "ALTER TABLE reflections ADD COLUMN signal_type TEXT NOT NULL DEFAULT 'silent_completion';
+                 ALTER TABLE reflections ADD COLUMN confidence REAL NOT NULL DEFAULT 0.50;"
+            ).map_err(|e| format!("Migration error (reflections V2): {}", e))?;
+            log::info!("Migrated reflections table: added signal_type, confidence columns");
+        }
+
+        // Growth V2: add depth, phases_completed, tomorrow_intentions, growth_synthesis to meditation_sessions
+        let has_med_depth: bool = conn
+            .prepare("SELECT depth FROM meditation_sessions LIMIT 0")
+            .is_ok();
+        if !has_med_depth {
+            conn.execute_batch(
+                "ALTER TABLE meditation_sessions ADD COLUMN depth TEXT DEFAULT 'standard';
+                 ALTER TABLE meditation_sessions ADD COLUMN phases_completed TEXT DEFAULT '';
+                 ALTER TABLE meditation_sessions ADD COLUMN tomorrow_intentions TEXT;
+                 ALTER TABLE meditation_sessions ADD COLUMN growth_synthesis TEXT;"
+            ).map_err(|e| format!("Migration error (meditation V2): {}", e))?;
+            log::info!("Migrated meditation_sessions table: added depth, phases_completed, tomorrow_intentions, growth_synthesis columns");
         }
 
         Ok(())
@@ -1960,14 +2045,14 @@ impl Database {
         }
 
         let sql = if category.is_some() {
-            "SELECT m.id, m.session_id, m.content, m.category, m.created_at, m.updated_at
+            "SELECT m.id, m.session_id, m.content, m.category, m.created_at, m.updated_at, m.tier, m.confidence, m.source, m.reviewed_by_meditation, m.access_count, m.last_accessed_at
              FROM memories m
              JOIN memories_fts f ON m.rowid = f.rowid
              WHERE memories_fts MATCH ?1 AND m.category = ?2
              ORDER BY bm25(memories_fts) ASC
              LIMIT ?3"
         } else {
-            "SELECT m.id, m.session_id, m.content, m.category, m.created_at, m.updated_at
+            "SELECT m.id, m.session_id, m.content, m.category, m.created_at, m.updated_at, m.tier, m.confidence, m.source, m.reviewed_by_meditation, m.access_count, m.last_accessed_at
              FROM memories m
              JOIN memories_fts f ON m.rowid = f.rowid
              WHERE memories_fts MATCH ?1
@@ -1985,6 +2070,12 @@ impl Database {
                 category: row.get(3)?,
                 created_at: row.get(4)?,
                 updated_at: row.get(5)?,
+                tier: row.get::<_, String>(6).unwrap_or_else(|_| "warm".into()),
+                confidence: row.get::<_, f64>(7).unwrap_or(0.5),
+                source: row.get::<_, String>(8).unwrap_or_else(|_| "extraction".into()),
+                reviewed_by_meditation: row.get::<_, i32>(9).unwrap_or(0) != 0,
+                access_count: row.get::<_, i64>(10).unwrap_or(0),
+                last_accessed_at: row.get::<_, Option<i64>>(11).unwrap_or(None),
             })
         };
 
@@ -2034,7 +2125,7 @@ impl Database {
         let (sql, rows) = if let Some(cat) = category {
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, session_id, content, category, created_at, updated_at
+                    "SELECT id, session_id, content, category, created_at, updated_at, tier, confidence, source, reviewed_by_meditation, access_count, last_accessed_at
                      FROM memories WHERE category = ?1
                      ORDER BY updated_at DESC LIMIT ?2 OFFSET ?3",
                 )
@@ -2048,6 +2139,12 @@ impl Database {
                         category: row.get(3)?,
                         created_at: row.get(4)?,
                         updated_at: row.get(5)?,
+                        tier: row.get::<_, String>(6).unwrap_or_else(|_| "warm".into()),
+                        confidence: row.get::<_, f64>(7).unwrap_or(0.5),
+                        source: row.get::<_, String>(8).unwrap_or_else(|_| "extraction".into()),
+                        reviewed_by_meditation: row.get::<_, i32>(9).unwrap_or(0) != 0,
+                        access_count: row.get::<_, i64>(10).unwrap_or(0),
+                        last_accessed_at: row.get::<_, Option<i64>>(11).unwrap_or(None),
                     })
                 })
                 .map_err(|e| format!("Query error: {}", e))?
@@ -2057,7 +2154,7 @@ impl Database {
         } else {
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, session_id, content, category, created_at, updated_at
+                    "SELECT id, session_id, content, category, created_at, updated_at, tier, confidence, source, reviewed_by_meditation, access_count, last_accessed_at
                      FROM memories
                      ORDER BY updated_at DESC LIMIT ?1 OFFSET ?2",
                 )
@@ -2071,6 +2168,12 @@ impl Database {
                         category: row.get(3)?,
                         created_at: row.get(4)?,
                         updated_at: row.get(5)?,
+                        tier: row.get::<_, String>(6).unwrap_or_else(|_| "warm".into()),
+                        confidence: row.get::<_, f64>(7).unwrap_or(0.5),
+                        source: row.get::<_, String>(8).unwrap_or_else(|_| "extraction".into()),
+                        reviewed_by_meditation: row.get::<_, i32>(9).unwrap_or(0) != 0,
+                        access_count: row.get::<_, i64>(10).unwrap_or(0),
+                        last_accessed_at: row.get::<_, Option<i64>>(11).unwrap_or(None),
                     })
                 })
                 .map_err(|e| format!("Query error: {}", e))?
@@ -2498,14 +2601,16 @@ impl Database {
         summary: &str,
         lesson: Option<&str>,
         skill_opportunity: Option<&str>,
+        signal_type: &str,
+        confidence: f64,
     ) -> Result<String, String> {
         let id = uuid::Uuid::new_v4().to_string();
         let now = now_ts();
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO reflections (id, task_id, session_id, outcome, summary, lesson, skill_opportunity, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![id, task_id, session_id, outcome, summary, lesson, skill_opportunity, now],
+            "INSERT INTO reflections (id, task_id, session_id, outcome, summary, lesson, skill_opportunity, signal_type, confidence, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![id, task_id, session_id, outcome, summary, lesson, skill_opportunity, signal_type, confidence, now],
         )
         .map_err(|e| format!("Failed to add reflection: {}", e))?;
         Ok(id)
@@ -2518,14 +2623,15 @@ impl Database {
         wrong_behavior: Option<&str>,
         correct_behavior: &str,
         source: Option<&str>,
+        confidence: f64,
     ) -> Result<String, String> {
         let id = uuid::Uuid::new_v4().to_string();
         let now = now_ts();
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO corrections (id, trigger_pattern, wrong_behavior, correct_behavior, source, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![id, trigger_pattern, wrong_behavior, correct_behavior, source, now],
+            "INSERT INTO corrections (id, trigger_pattern, wrong_behavior, correct_behavior, source, confidence, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, trigger_pattern, wrong_behavior, correct_behavior, source, confidence, now],
         )
         .map_err(|e| format!("Failed to add correction: {}", e))?;
         Ok(id)
@@ -2555,10 +2661,10 @@ impl Database {
     }
 
     /// Get all active corrections ordered by time ASC (for consolidation — newer = higher priority).
-    pub fn get_all_active_corrections(&self) -> Vec<(String, String, String)> {
+    pub fn get_all_active_corrections(&self) -> Vec<(String, String, String, f64)> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = match conn.prepare(
-            "SELECT trigger_pattern, correct_behavior, source
+            "SELECT trigger_pattern, correct_behavior, source, confidence
              FROM corrections WHERE active = 1
              ORDER BY created_at ASC",
         ) {
@@ -2570,6 +2676,7 @@ impl Database {
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2).unwrap_or_default(),
+                row.get::<_, f64>(3).unwrap_or(0.80),
             ))
         })
         .ok()
@@ -2582,6 +2689,35 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         conn.query_row("SELECT COUNT(*) FROM corrections WHERE active = 1", [], |r| r.get::<_, i64>(0))
             .unwrap_or(0) as usize
+    }
+
+    /// Get corrections created since a given timestamp (millis), with wrong_behavior included.
+    /// Returns (trigger_pattern, wrong_behavior, correct_behavior, source, created_at).
+    pub fn get_corrections_since(
+        &self,
+        since_timestamp: i64,
+    ) -> Vec<(String, Option<String>, String, String, i64)> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = match conn.prepare(
+            "SELECT trigger_pattern, wrong_behavior, correct_behavior, source, created_at
+             FROM corrections WHERE active = 1 AND created_at >= ?1
+             ORDER BY created_at ASC",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        stmt.query_map(params![since_timestamp], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3).unwrap_or_default(),
+                row.get::<_, i64>(4)?,
+            ))
+        })
+        .ok()
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
     }
 
     /// Disable a correction by id.
@@ -2775,6 +2911,301 @@ impl Database {
 
         Ok(())
     }
+
+    // ── Meditation Sessions ────────────────────────────────────────────
+
+    pub fn create_meditation_session(&self, id: &str) {
+        let conn = self.conn.lock().unwrap();
+        let now = now_ts();
+        conn.execute(
+            "INSERT INTO meditation_sessions (id, started_at, status) VALUES (?1, ?2, 'running')",
+            params![id, now],
+        )
+        .ok();
+    }
+
+    pub fn update_meditation_session(
+        &self,
+        id: &str,
+        status: &str,
+        sessions_reviewed: i32,
+        memories_updated: i32,
+        principles_changed: i32,
+        memories_archived: i32,
+        journal: Option<&str>,
+        error: Option<&str>,
+    ) {
+        let conn = self.conn.lock().unwrap();
+        let now = now_ts();
+        conn.execute(
+            "UPDATE meditation_sessions SET
+                status = ?2,
+                finished_at = ?3,
+                sessions_reviewed = ?4,
+                memories_updated = ?5,
+                principles_changed = ?6,
+                memories_archived = ?7,
+                journal = ?8,
+                error = ?9
+             WHERE id = ?1",
+            params![id, status, now, sessions_reviewed, memories_updated, principles_changed, memories_archived, journal, error],
+        )
+        .ok();
+    }
+
+    pub fn get_latest_meditation_session(&self) -> Option<MeditationSession> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, started_at, finished_at, status, sessions_reviewed,
+                        memories_updated, principles_changed, memories_archived, journal, error,
+                        depth, phases_completed, tomorrow_intentions, growth_synthesis
+                 FROM meditation_sessions ORDER BY started_at DESC LIMIT 1",
+            )
+            .ok()?;
+        stmt.query_row([], |row| {
+            Ok(MeditationSession {
+                id: row.get(0)?,
+                started_at: row.get(1)?,
+                finished_at: row.get(2)?,
+                status: row.get(3)?,
+                sessions_reviewed: row.get(4)?,
+                memories_updated: row.get(5)?,
+                principles_changed: row.get(6)?,
+                memories_archived: row.get(7)?,
+                journal: row.get(8)?,
+                error: row.get(9)?,
+                depth: row.get(10).ok().flatten(),
+                phases_completed: row.get(11).ok().flatten(),
+                tomorrow_intentions: row.get(12).ok().flatten(),
+                growth_synthesis: row.get(13).ok().flatten(),
+            })
+        })
+        .optional()
+        .ok()?
+    }
+
+    /// Get the latest meditation session that is NOT currently running.
+    /// Used to determine the "since" timestamp for a new meditation session.
+    pub fn get_latest_completed_meditation_session(&self) -> Option<MeditationSession> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, started_at, finished_at, status, sessions_reviewed,
+                        memories_updated, principles_changed, memories_archived, journal, error,
+                        depth, phases_completed, tomorrow_intentions, growth_synthesis
+                 FROM meditation_sessions WHERE status != 'running' ORDER BY started_at DESC LIMIT 1",
+            )
+            .ok()?;
+        stmt.query_row([], |row| {
+            Ok(MeditationSession {
+                id: row.get(0)?,
+                started_at: row.get(1)?,
+                finished_at: row.get(2)?,
+                status: row.get(3)?,
+                sessions_reviewed: row.get(4)?,
+                memories_updated: row.get(5)?,
+                principles_changed: row.get(6)?,
+                memories_archived: row.get(7)?,
+                journal: row.get(8)?,
+                error: row.get(9)?,
+                depth: row.get(10).ok().flatten(),
+                phases_completed: row.get(11).ok().flatten(),
+                tomorrow_intentions: row.get(12).ok().flatten(),
+                growth_synthesis: row.get(13).ok().flatten(),
+            })
+        })
+        .optional()
+        .ok()?
+    }
+
+    /// Get today's chat messages for meditation review: (session_id, role, content)
+    pub fn get_today_sessions_messages(&self) -> Vec<(String, String, String)> {
+        let conn = self.conn.lock().unwrap();
+        // Calculate start of today in milliseconds
+        let today_start = {
+            let now = chrono::Local::now();
+            let start_of_day = now.date_naive().and_hms_opt(0, 0, 0).unwrap();
+            let local_start = chrono::Local.from_local_datetime(&start_of_day).unwrap();
+            local_start.timestamp_millis()
+        };
+        let mut stmt = match conn.prepare(
+            "SELECT m.session_id, m.role, m.content
+             FROM messages m
+             WHERE m.timestamp >= ?1
+             ORDER BY m.timestamp ASC",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        stmt.query_map(params![today_start], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    /// Get corrections with confidence >= threshold
+    pub fn get_high_confidence_corrections(&self, limit: usize, min_confidence: f64) -> Vec<(String, Option<String>, String, f64)> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = match conn.prepare(
+            "SELECT trigger_pattern, wrong_behavior, correct_behavior, confidence
+             FROM corrections WHERE active = 1 AND confidence >= ?1
+             ORDER BY confidence DESC, created_at DESC LIMIT ?2",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        stmt.query_map(params![min_confidence, limit as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, f64>(3).unwrap_or(0.80),
+            ))
+        })
+        .ok()
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
+    }
+
+    /// Get memories by tier
+    pub fn get_memories_by_tier(&self, tier: &str, limit: usize) -> Vec<MemoryRow> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = match conn.prepare(
+            "SELECT id, session_id, content, category, created_at, updated_at, tier, confidence, source, reviewed_by_meditation, access_count, last_accessed_at
+             FROM memories WHERE tier = ?1 ORDER BY confidence DESC LIMIT ?2",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        stmt.query_map(params![tier, limit as i64], |row| {
+            Ok(MemoryRow {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                content: row.get(2)?,
+                category: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+                tier: row.get::<_, String>(6).unwrap_or_else(|_| "warm".into()),
+                confidence: row.get::<_, f64>(7).unwrap_or(0.5),
+                source: row.get::<_, String>(8).unwrap_or_else(|_| "extraction".into()),
+                reviewed_by_meditation: row.get::<_, i32>(9).unwrap_or(0) != 0,
+                access_count: row.get::<_, i64>(10).unwrap_or(0),
+                last_accessed_at: row.get::<_, Option<i64>>(11).unwrap_or(None),
+            })
+        })
+        .ok()
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
+    }
+
+    /// Update memory tier and confidence
+    pub fn update_memory_tier(&self, id: &str, tier: &str, confidence: f64) {
+        let conn = self.conn.lock().unwrap();
+        let now = now_ts();
+        conn.execute(
+            "UPDATE memories SET tier = ?1, confidence = ?2, updated_at = ?3 WHERE id = ?4",
+            params![tier, confidence, now, id],
+        )
+        .ok();
+    }
+
+    /// Get unreviewed memories (for meditation)
+    pub fn get_unreviewed_memories(&self, limit: usize) -> Vec<MemoryRow> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = match conn.prepare(
+            "SELECT id, session_id, content, category, created_at, updated_at, tier, confidence, source, reviewed_by_meditation, access_count, last_accessed_at
+             FROM memories WHERE reviewed_by_meditation = 0 ORDER BY created_at DESC LIMIT ?1",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        stmt.query_map(params![limit as i64], |row| {
+            Ok(MemoryRow {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                content: row.get(2)?,
+                category: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+                tier: row.get::<_, String>(6).unwrap_or_else(|_| "warm".into()),
+                confidence: row.get::<_, f64>(7).unwrap_or(0.5),
+                source: row.get::<_, String>(8).unwrap_or_else(|_| "extraction".into()),
+                reviewed_by_meditation: row.get::<_, i32>(9).unwrap_or(0) != 0,
+                access_count: row.get::<_, i64>(10).unwrap_or(0),
+                last_accessed_at: row.get::<_, Option<i64>>(11).unwrap_or(None),
+            })
+        })
+        .ok()
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
+    }
+
+    /// Mark memories as reviewed by meditation
+    pub fn mark_memories_reviewed(&self, ids: &[&str], _meditation_id: &str) {
+        if ids.is_empty() {
+            return;
+        }
+        let conn = self.conn.lock().unwrap();
+        let placeholders: Vec<String> = ids.iter().enumerate().map(|(i, _)| format!("?{}", i + 1)).collect();
+        let sql = format!(
+            "UPDATE memories SET reviewed_by_meditation = 1 WHERE id IN ({})",
+            placeholders.join(", ")
+        );
+        let params: Vec<&dyn rusqlite::types::ToSql> = ids.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+        conn.execute(&sql, params.as_slice()).ok();
+    }
+
+    /// Update meditation session with extended V2 fields
+    pub fn update_meditation_extended(
+        &self,
+        id: &str,
+        depth: &str,
+        phases_completed: &str,
+        tomorrow_intentions: Option<&str>,
+        growth_synthesis: Option<&str>,
+    ) {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE meditation_sessions SET depth = ?1, phases_completed = ?2, tomorrow_intentions = ?3, growth_synthesis = ?4 WHERE id = ?5",
+            params![depth, phases_completed, tomorrow_intentions, growth_synthesis, id],
+        )
+        .ok();
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeditationSession {
+    pub id: String,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    pub status: String,
+    pub sessions_reviewed: i32,
+    pub memories_updated: i32,
+    pub principles_changed: i32,
+    pub memories_archived: i32,
+    pub journal: Option<String>,
+    pub error: Option<String>,
+    #[serde(default = "default_meditation_depth")]
+    pub depth: Option<String>,
+    #[serde(default)]
+    pub phases_completed: Option<String>,
+    #[serde(default)]
+    pub tomorrow_intentions: Option<String>,
+    #[serde(default)]
+    pub growth_synthesis: Option<String>,
+}
+
+fn default_meditation_depth() -> Option<String> {
+    Some("standard".to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2813,8 +3244,14 @@ pub struct MemoryRow {
     pub session_id: Option<String>,
     pub content: String,
     pub category: String,
+    pub tier: String,
+    pub confidence: f64,
+    pub source: String,
+    pub reviewed_by_meditation: bool,
     pub created_at: i64,
     pub updated_at: i64,
+    pub access_count: i64,
+    pub last_accessed_at: Option<i64>,
 }
 
 /// Build an FTS5 query string from a natural-language query.

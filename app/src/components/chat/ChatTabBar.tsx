@@ -6,6 +6,7 @@
 
 import { memo } from 'react';
 import { X, MessageSquare } from 'lucide-react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import logoImg from '../../assets/yiyi-logo.png';
 
 export interface OpenTab {
@@ -25,7 +26,6 @@ interface ChatTabBarProps {
   maxTitleLen?: number;
   onSelectTab: (id: string) => void;
   onCloseTab: (id: string) => void;
-  onDragMouseDown: (e: React.MouseEvent) => void;
 }
 
 const HIGHLIGHT_STYLES: Record<TabHighlight, React.CSSProperties> = {
@@ -52,7 +52,6 @@ export const ChatTabBar = memo(function ChatTabBar({
   maxTitleLen = 12,
   onSelectTab,
   onCloseTab,
-  onDragMouseDown,
 }: ChatTabBarProps) {
   return (
     <>
@@ -79,8 +78,14 @@ export const ChatTabBar = memo(function ChatTabBar({
       `}</style>
 
       <div
-        className="flex items-end shrink-0 overflow-hidden app-drag-region"
-        onMouseDown={onDragMouseDown}
+        data-tauri-drag-region
+        onMouseDown={(e) => {
+          if (e.button !== 0) return;
+          if ((e.target as HTMLElement).closest('button, input, a, textarea, select')) return;
+          e.preventDefault();
+          getCurrentWindow().startDragging();
+        }}
+        className="flex items-end shrink-0 app-drag-region"
         style={{
           background: 'var(--sidebar-bg)',
           paddingLeft: '8px',
@@ -89,7 +94,7 @@ export const ChatTabBar = memo(function ChatTabBar({
           paddingTop: '8px',
         }}
       >
-        <div className="flex items-end flex-1 min-w-0">
+        <div className="flex items-end flex-1 min-w-0 overflow-hidden">
           {tabs.map((tab) => {
             const isActive = tab.id === currentTabId;
             const highlight = highlightTabs?.get(tab.id);

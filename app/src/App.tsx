@@ -237,6 +237,14 @@ function MainApp() {
 
       {/* Main area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Drag region for non-chat pages (Chat has its own ChatTabBar drag region) */}
+        {currentPage !== 'chat' && (
+          <div
+            data-tauri-drag-region
+            className="h-10 shrink-0 app-drag-region"
+            style={{ background: 'var(--color-bg)' }}
+          />
+        )}
         {/* File notification bar */}
         {fileNotification && (
           <div

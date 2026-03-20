@@ -133,3 +133,11 @@ export async function getGrowthReport(): Promise<GrowthData> {
 export async function getMorningGreeting(): Promise<string | null> {
   return await invoke<string | null>('get_morning_greeting');
 }
+
+export async function saveMeditationConfig(
+  enabled: boolean,
+  startTime: string,
+  notifyOnComplete: boolean,
+): Promise<void> {
+  await invoke('save_meditation_config', { enabled, startTime, notifyOnComplete });
+}

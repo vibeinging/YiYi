@@ -22,7 +22,11 @@ import {
   CheckCircle,
   AlertCircle,
   Loader2,
+  Brain,
+  Play,
+  FileText,
 } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { LanguageSwitcher } from '../components/LanguageSwitcher';
@@ -219,6 +223,18 @@ export function SettingsPage() {
   const [isEditing, setIsEditing] = useState(false);
   const [workspaceSaved, setWorkspaceSaved] = useState(false);
 
+  // Meditation state
+  const [meditationEnabled, setMeditationEnabled] = useState(false);
+  const [meditationStart, setMeditationStart] = useState('02:00');
+  const [meditationNotify, setMeditationNotify] = useState(true);
+  const [meditationLast, setMeditationLast] = useState<{
+    date: string;
+    duration_minutes: number;
+    summary: string;
+    journal_path?: string;
+  } | null>(null);
+  const [meditationTriggering, setMeditationTriggering] = useState(false);
+
   // Workspace authorization state
   const [folders, setFolders] = useState<AuthorizedFolder[]>([]);
   const [foldersLoading, setFoldersLoading] = useState(false);
@@ -231,7 +247,53 @@ export function SettingsPage() {
       setWorkspacePath(p);
       setEditingPath(p);
     }).catch(() => {});
+
+    // Load meditation config
+    invoke('get_meditation_config').then((config: any) => {
+      if (config) {
+        setMeditationEnabled(config.enabled ?? false);
+        setMeditationStart(config.start_time ?? '02:00');
+        setMeditationNotify(config.notify_on_complete ?? true);
+      }
+    }).catch((e) => console.error('Failed to load meditation config:', e));
+
+    // Load latest meditation session
+    invoke('get_latest_meditation').then((session: any) => {
+      if (session) setMeditationLast(session);
+    }).catch(() => {});
   }, []);
+
+  const saveMeditationConfig = async (
+    enabled = meditationEnabled,
+    startTime = meditationStart,
+    notifyOnComplete = meditationNotify,
+  ) => {
+    try {
+      await invoke('save_meditation_config', {
+        enabled,
+        startTime,
+        notifyOnComplete,
+      });
+    } catch (e) {
+      console.error('Failed to save meditation config:', e);
+    }
+  };
+
+  const handleTriggerMeditation = async () => {
+    setMeditationTriggering(true);
+    try {
+      await invoke('trigger_meditation');
+      toast.success(t('settings.meditationComplete'));
+      // Refresh latest session
+      const session: any = await invoke('get_latest_meditation');
+      if (session) setMeditationLast(session);
+    } catch (e) {
+      console.error('Failed to trigger meditation:', e);
+      toast.error(String(e));
+    } finally {
+      setMeditationTriggering(false);
+    }
+  };
 
   const loadFolders = () => {
     setFoldersLoading(true);
@@ -452,6 +514,127 @@ export function SettingsPage() {
                   </div>
                   <LanguageSwitcher />
                 </div>
+              </div>
+            </div>
+
+            {/* Meditation */}
+            <div className="p-5 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
+              <div className="flex items-center gap-2 mb-1">
+                <Brain size={18} className="text-[var(--color-primary)]" />
+                <h2 className="font-semibold text-[14px]">{t('settings.meditation')}</h2>
+              </div>
+              <p className="text-[12px] text-[var(--color-text-muted)] mb-4 ml-[26px]">
+                {t('settings.meditationDesc')}
+              </p>
+
+              <div className="space-y-3">
+                {/* Enable toggle */}
+                <div className="flex items-center justify-between p-3 rounded-xl hover:bg-[var(--color-bg-subtle)] transition-colors">
+                  <div className="text-[13px] font-medium">{t('settings.meditationEnabled')}</div>
+                  <button
+                    onClick={() => {
+                      const next = !meditationEnabled;
+                      setMeditationEnabled(next);
+                      saveMeditationConfig(next, meditationStart, meditationNotify);
+                    }}
+                    className="relative w-9 h-5 rounded-full transition-colors shrink-0"
+                    style={{ background: meditationEnabled ? 'var(--color-success)' : 'var(--color-bg-muted)' }}
+                  >
+                    <div
+                      className="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform"
+                      style={{ transform: meditationEnabled ? 'translateX(18px)' : 'translateX(2px)' }}
+                    />
+                  </button>
+                </div>
+
+                {meditationEnabled && (
+                  <>
+                    {/* Start time */}
+                    <div className="flex items-center justify-between p-3 rounded-xl hover:bg-[var(--color-bg-subtle)] transition-colors">
+                      <div className="text-[13px] font-medium">{t('settings.meditationStartTime')}</div>
+                      <input
+                        type="time"
+                        value={meditationStart}
+                        onChange={(e) => {
+                          setMeditationStart(e.target.value);
+                        }}
+                        onBlur={() => saveMeditationConfig()}
+                        className="px-3 py-1.5 rounded-lg text-[13px] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50"
+                        style={{ background: 'var(--color-bg)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+                      />
+                    </div>
+
+                    {/* Notify toggle */}
+                    <div className="flex items-center justify-between p-3 rounded-xl hover:bg-[var(--color-bg-subtle)] transition-colors">
+                      <div className="text-[13px] font-medium">{t('settings.meditationNotify')}</div>
+                      <button
+                        onClick={() => {
+                          const next = !meditationNotify;
+                          setMeditationNotify(next);
+                          saveMeditationConfig(meditationEnabled, meditationStart, next);
+                        }}
+                        className="relative w-9 h-5 rounded-full transition-colors shrink-0"
+                        style={{ background: meditationNotify ? 'var(--color-success)' : 'var(--color-bg-muted)' }}
+                      >
+                        <div
+                          className="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform"
+                          style={{ transform: meditationNotify ? 'translateX(18px)' : 'translateX(2px)' }}
+                        />
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {/* Last meditation session */}
+                <div className="p-3 rounded-xl" style={{ background: 'var(--color-bg-subtle)' }}>
+                  <div className="text-[12px] font-medium mb-2" style={{ color: 'var(--color-text-muted)' }}>
+                    {t('settings.meditationLastSession')}
+                  </div>
+                  {meditationLast ? (
+                    <div className="space-y-1">
+                      <div className="text-[13px]" style={{ color: 'var(--color-text)' }}>
+                        {meditationLast.date} &middot; {meditationLast.duration_minutes} min
+                      </div>
+                      <div className="text-[12px]" style={{ color: 'var(--color-text-secondary)' }}>
+                        {meditationLast.summary}
+                      </div>
+                      {meditationLast.journal_path && (
+                        <button
+                          className="flex items-center gap-1 mt-1 text-[12px] font-medium transition-colors"
+                          style={{ color: 'var(--color-primary)' }}
+                          onClick={() => {
+                            // Navigate to workspace or open journal
+                            invoke('open_path', { path: meditationLast.journal_path }).catch(() => {});
+                          }}
+                        >
+                          <FileText size={12} />
+                          {t('settings.meditationJournal')}
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
+                      {t('settings.meditationNoSession')}
+                    </div>
+                  )}
+                </div>
+
+                {/* Trigger button */}
+                <button
+                  onClick={handleTriggerMeditation}
+                  disabled={meditationTriggering}
+                  className="flex items-center justify-center gap-2 w-full px-4 py-2.5 rounded-xl text-[13px] font-medium transition-colors disabled:opacity-50"
+                  style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-primary)' }}
+                  onMouseEnter={(e) => { if (!meditationTriggering) e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--color-bg-subtle)'; }}
+                >
+                  {meditationTriggering ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <Play size={14} />
+                  )}
+                  {meditationTriggering ? t('settings.meditationRunning') : t('settings.meditationTrigger')}
+                </button>
               </div>
             </div>
 

@@ -25,6 +25,41 @@ pub enum ToolPersistEvent {
 
 pub type PersistToolFn = Arc<dyn Fn(ToolPersistEvent) + Send + Sync>;
 
+/// Classification of growth signals for confidence scoring.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SignalType {
+    ExplicitCorrection,   // User said "wrong/不对" → confidence 0.90
+    ExplicitPraise,       // User said "perfect/完美" → confidence 0.85
+    ToolError,            // Tool returned error → confidence 0.70
+    MaxIterations,        // Hit iteration limit → confidence 0.65
+    AgentError,           // Agent execution error → confidence 0.70
+    SilentCompletion,     // No explicit feedback → confidence 0.35
+}
+
+impl SignalType {
+    pub fn base_confidence(&self) -> f64 {
+        match self {
+            Self::ExplicitCorrection => 0.90,
+            Self::ExplicitPraise => 0.85,
+            Self::ToolError => 0.70,
+            Self::MaxIterations => 0.65,
+            Self::AgentError => 0.70,
+            Self::SilentCompletion => 0.35,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ExplicitCorrection => "explicit_correction",
+            Self::ExplicitPraise => "explicit_praise",
+            Self::ToolError => "tool_error",
+            Self::MaxIterations => "max_iterations",
+            Self::AgentError => "agent_error",
+            Self::SilentCompletion => "silent_completion",
+        }
+    }
+}
+
 const DEFAULT_MAX_ITERATIONS: usize = 200;
 /// Token threshold to trigger context compaction.
 const COMPACT_THRESHOLD: usize = 80_000;
@@ -867,33 +902,21 @@ When setting up bots, open the developer console:
         tool_list = tool_list,
     ));
 
-    // Load behavioral principles from Growth System (consolidated from corrections)
-    let principles = super::memory::read_principles_md(working_dir);
-    if !principles.is_empty() {
-        let truncated = if principles.len() > 800 {
-            let boundary = principles
-                .char_indices()
-                .take_while(|(i, _)| *i <= 800)
-                .last()
-                .map(|(i, c)| i + c.len_utf8())
-                .unwrap_or(0);
-            &principles[..boundary]
+    // Load HOT-tier context from DB (unified principles + long-term memory)
+    if let Some(db) = super::tools::get_database() {
+        let hot_context = super::tiered_memory::load_hot_context(&db, 2500);
+        if !hot_context.is_empty() {
+            prompt.push_str(&hot_context);
         } else {
-            &principles
-        };
-        prompt.push_str(&format!(
-            "\n\n## Behavioral Principles (learned from your feedback)\n{}\n",
-            sanitize_prompt_field(truncated, 800)
-        ));
-    } else if let Some(db) = super::tools::get_database() {
-        // Fallback: if no PRINCIPLES.md yet, inject raw corrections (will be consolidated later)
-        let corrections = db.get_active_corrections(5);
-        if !corrections.is_empty() {
-            prompt.push_str("\n\n## Learned Behaviors (from past feedback)\n");
-            for (trigger, behavior, _) in &corrections {
-                let safe_trigger = sanitize_prompt_field(trigger, 80);
-                let safe_behavior = sanitize_prompt_field(behavior, 150);
-                prompt.push_str(&format!("- {}: {}\n", safe_trigger, safe_behavior));
+            // Fallback: if no HOT-tier memories yet, inject high-confidence corrections directly
+            let corrections = db.get_high_confidence_corrections(5, 0.60);
+            if !corrections.is_empty() {
+                prompt.push_str("\n\n## Learned Behaviors (from past feedback)\n");
+                for (trigger, _, behavior, _confidence) in &corrections {
+                    let safe_trigger = sanitize_prompt_field(trigger, 80);
+                    let safe_behavior = sanitize_prompt_field(behavior, 150);
+                    prompt.push_str(&format!("- {}: {}\n", safe_trigger, safe_behavior));
+                }
             }
         }
     }
@@ -938,26 +961,8 @@ When setting up bots, open the developer console:
         }
     }
 
-    // Load MEMORY.md into system prompt
-    let memory_content = super::memory::read_memory_md(working_dir);
-    if !memory_content.is_empty() {
-        let truncated = if memory_content.len() > 2000 {
-            // Find a safe UTF-8 boundary near 2000 bytes
-            let boundary = memory_content
-                .char_indices()
-                .take_while(|(i, _)| *i <= 2000)
-                .last()
-                .map(|(i, c)| i + c.len_utf8())
-                .unwrap_or(0);
-            format!(
-                "{}...\n(truncated, use memory_read tool for full content)",
-                &memory_content[..boundary]
-            )
-        } else {
-            memory_content
-        };
-        prompt.push_str(&format!("\n\n# Long-term Memory\n{truncated}"));
-    }
+    // Long-term memory is now included in HOT-tier context loaded above (via tiered_memory::load_hot_context).
+    // No separate MEMORY.md file read needed.
 
     // Skill index — model calls activate_skills tool to load full content on demand
     if !skill_index.is_empty() {
@@ -1379,7 +1384,6 @@ Extract memories (JSON array only):"#
 
     let valid_categories = ["fact", "preference", "experience", "decision", "note"];
     let mut added = 0;
-    let mut important_items: Vec<String> = Vec::new();
     for mem in &memories {
         let cat = if valid_categories.contains(&mem.category.as_str()) {
             &mem.category
@@ -1387,32 +1391,25 @@ Extract memories (JSON array only):"#
             "note"
         };
         if !mem.content.is_empty() {
-            if db.memory_add(&mem.content, cat, session_id).is_ok() {
+            if let Ok(mem_id) = db.memory_add(&mem.content, cat, session_id) {
                 added += 1;
+
+                // Auto-promote high-value memories to HOT tier if there's room
+                if matches!(cat, "fact" | "preference" | "principle") {
+                    let hot_count = db.get_memories_by_tier("hot", 20).len();
+                    if hot_count < 15 {
+                        db.update_memory_tier(&mem_id, "hot", 0.8);
+                        // Sync to files immediately for non-meditation users
+                        if let Some(working_dir) = super::tools::get_working_dir() {
+                            super::tiered_memory::sync_hot_to_files(&db, &working_dir);
+                        }
+                    }
+                }
             }
-            // Also write to diary
+            // Also write to diary (diary is separate from tiered memory)
             if let Some(working_dir) = super::tools::get_working_dir() {
                 let _ = super::memory::append_diary(&working_dir, &mem.content, Some(cat));
             }
-            // Collect important memories for MEMORY.md promotion
-            if matches!(cat, "fact" | "preference" | "decision") {
-                important_items.push(mem.content.clone());
-            }
-        }
-    }
-
-    // Promote important memories to MEMORY.md
-    if !important_items.is_empty() {
-        if let Some(working_dir) = super::tools::get_working_dir() {
-            let mut existing = super::memory::read_memory_md(&working_dir);
-            if existing.is_empty() {
-                existing = "# Memory\n".to_string();
-            }
-            existing.push_str("\n\n## Auto-extracted\n");
-            for item in &important_items {
-                existing.push_str(&format!("- {item}\n"));
-            }
-            let _ = super::memory::write_memory_md(&working_dir, &existing);
         }
     }
 
@@ -1434,6 +1431,7 @@ pub async fn reflect_on_task(
     task_description: &str,
     result_text: &str,
     was_successful: bool,
+    signal_type: SignalType,
 ) {
     use super::tools::get_database;
 
@@ -1459,12 +1457,14 @@ pub async fn reflect_on_task(
     let desc_preview: String = task_description.chars().take(1500).collect();
     let result_preview: String = result_text.chars().take(1500).collect();
     let outcome_hint = if was_successful { "success" } else { "failure" };
+    let signal_hint = signal_type.as_str();
 
     let reflection_prompt = format!(
         r#"You are reflecting on a completed task. Analyze what happened and extract lessons.
 
 Task: {desc_preview}
 Outcome: {outcome_hint}
+Signal: {signal_hint}
 Result: {result_preview}
 
 Respond ONLY with a JSON object:
@@ -1494,6 +1494,7 @@ JSON only:"#
                 task_id, session_id, outcome_hint,
                 &format!("Task completed ({outcome_hint}), LLM reflection unavailable"),
                 None, None,
+                signal_type.as_str(), signal_type.base_confidence(),
             ).ok();
             return;
         }
@@ -1527,6 +1528,7 @@ JSON only:"#
                 task_id, session_id, outcome_hint,
                 &format!("Task {outcome_hint}"),
                 None, None,
+                signal_type.as_str(), signal_type.base_confidence(),
             ).ok();
             return;
         }
@@ -1540,14 +1542,17 @@ JSON only:"#
         task_id, session_id, outcome, summary,
         parsed.lesson.as_deref(),
         parsed.skill_opportunity.as_deref(),
+        signal_type.as_str(), signal_type.base_confidence(),
     ) {
-        log::info!("Reflection saved: {} (outcome: {})", ref_id, outcome);
+        log::info!("Reflection saved: {} (outcome: {}, signal: {})", ref_id, outcome, signal_type.as_str());
     }
 
-    // If there's a lesson, also save it as a memory
-    if let Some(ref lesson) = parsed.lesson {
-        if !lesson.is_empty() {
-            db.memory_add(lesson, "experience", session_id).ok();
+    // Only promote lessons from explicit signals — silence is not approval
+    if signal_type != SignalType::SilentCompletion {
+        if let Some(ref lesson) = parsed.lesson {
+            if !lesson.is_empty() {
+                db.memory_add(lesson, "experience", session_id).ok();
+            }
         }
     }
 }
@@ -1647,6 +1652,7 @@ JSON only:"#
         parsed.wrong_behavior.as_deref(),
         &parsed.correct_behavior,
         Some("user_feedback"),
+        0.90,
     ) {
         Ok(id) => {
             log::info!("Correction rule saved: {}", id);
@@ -1977,6 +1983,8 @@ Morning greeting:"#
         &format!("Morning reflection: {}", &greeting.chars().take(100).collect::<String>()),
         None,
         None,
+        "silent_completion",
+        0.50,
     ).ok();
 
     Some(greeting)
@@ -2076,18 +2084,30 @@ pub async fn consolidate_corrections_to_principles(
         Err(_) => return Err("Too many concurrent growth LLM calls".into()),
     };
 
-    let all_corrections = db.get_all_active_corrections();
-    if all_corrections.is_empty() {
+    let all_corrections_raw = db.get_all_active_corrections();
+    if all_corrections_raw.is_empty() {
         return Ok("No active corrections to consolidate.".into());
+    }
+
+    // Filter out low-confidence corrections before sending to LLM
+    let all_corrections: Vec<_> = all_corrections_raw
+        .iter()
+        .filter(|(_, _, _, confidence)| *confidence >= 0.50)
+        .collect();
+    if all_corrections.is_empty() {
+        return Ok("No high-confidence corrections to consolidate.".into());
     }
 
     // Load existing principles for context
     let existing_principles = super::memory::read_principles_md(working_dir);
 
-    // Build correction list for LLM
+    // Build correction list for LLM (include confidence info)
     let mut corrections_text = String::new();
-    for (i, (trigger, behavior, _)) in all_corrections.iter().enumerate() {
-        corrections_text.push_str(&format!("{}. When {}: {}\n", i + 1, trigger, behavior));
+    for (i, (trigger, behavior, _, confidence)) in all_corrections.iter().enumerate() {
+        corrections_text.push_str(&format!(
+            "{}. [confidence: {:.2}] When {}: {}\n",
+            i + 1, confidence, trigger, behavior
+        ));
     }
 
     let prompt_text = format!(
@@ -2096,9 +2116,12 @@ pub async fn consolidate_corrections_to_principles(
 Raw correction rules ({count} total):
 {corrections}
 {existing_context}
+Each correction has a confidence score. Higher confidence corrections should take priority.
+
 Task: Merge these into a concise list of behavioral principles (max 10 items).
 - Combine similar/overlapping rules
 - Resolve contradictions: later rules (higher number) override earlier ones — the user's most recent feedback is the truth
+- Higher confidence corrections take priority over lower confidence ones
 - Write each principle as a short, actionable statement
 - Remove redundant or trivial rules
 - Drop rules that are clearly outdated or superseded by newer ones
@@ -2132,31 +2155,57 @@ Consolidated principles:"#,
         Err(e) => return Err(format!("LLM consolidation failed: {}", e)),
     };
 
-    // Extract only lines starting with "- "
-    let principles: Vec<&str> = result
+    // Extract only lines starting with "- " or "* ", strip the prefix
+    let principles: Vec<String> = result
         .lines()
         .map(|l| l.trim())
         .filter(|l| l.starts_with("- ") || l.starts_with("* "))
+        .map(|l| l.trim_start_matches("- ").trim_start_matches("* ").trim().to_string())
+        .filter(|l| !l.is_empty())
         .collect();
 
     if principles.is_empty() {
         return Err("LLM returned no valid principles".into());
     }
 
-    let principles_content = principles.join("\n");
+    // Before adding new consolidated principles, demote old HOT-tier principles to WARM.
+    // Consolidation replaces (not appends), so old principles should give way to new ones.
+    let old_hot_principles = db.get_memories_by_tier("hot", 100);
+    for old in &old_hot_principles {
+        if old.category == "principle" || old.category == "learned_rule" {
+            db.update_memory_tier(&old.id, "warm", old.confidence * 0.5);
+        }
+    }
 
-    // Write to PRINCIPLES.md
-    super::memory::write_principles_md(working_dir, &principles_content)?;
+    // Save each principle as a separate HOT-tier memory entry
+    let mut saved = 0;
+    for principle in &principles {
+        if let Ok(mem_id) = db.memory_add(principle, "principle", None) {
+            db.update_memory_tier(&mem_id, "hot", 0.9);
+            saved += 1;
+        }
+    }
+
+    // Sync HOT-tier to files (updates PRINCIPLES.md and MEMORY.md cache)
+    super::tiered_memory::sync_hot_to_files(db, working_dir);
+
+    // Deactivate consumed corrections
+    if let Some(conn) = db.get_conn() {
+        conn.execute(
+            "UPDATE corrections SET active = 0 WHERE active = 1",
+            [],
+        ).ok();
+    }
 
     log::info!(
-        "Consolidated {} corrections into {} principles",
+        "Consolidated {} corrections into {} principle memories (HOT tier)",
         all_corrections.len(),
-        principles.len()
+        saved
     );
 
     Ok(format!(
         "Consolidated {} corrections into {} principles.",
         all_corrections.len(),
-        principles.len()
+        saved
     ))
 }

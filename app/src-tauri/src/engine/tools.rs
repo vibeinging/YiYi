@@ -5279,6 +5279,11 @@ pub fn spawn_task_execution(
                     &desc,
                     &res,
                     was_successful,
+                    if was_successful {
+                        super::react_agent::SignalType::SilentCompletion
+                    } else {
+                        super::react_agent::SignalType::ToolError
+                    },
                 ).await;
             });
         }

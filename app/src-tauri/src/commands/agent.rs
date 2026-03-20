@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::engine::db;
 use crate::engine::llm_client::{LLMConfig, LLMMessage, MessageContent};
 use crate::engine::react_agent;
-use crate::engine::react_agent::{PersistToolFn, ToolPersistEvent};
+use crate::engine::react_agent::{PersistToolFn, SignalType, ToolPersistEvent};
 use crate::engine::tools::{mcp_tools_as_definitions, ToolDefinition};
 use crate::state::app_state::{StreamingSnapshot, ToolSnapshot};
 use crate::state::AppState;
@@ -850,7 +850,9 @@ pub async fn chat_stream_start(
         let thinking_buf = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
         let thinking_buf_for_event = thinking_buf.clone();
         let tool_call_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let tool_error_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let tool_count_for_event = tool_call_count.clone();
+        let tool_error_for_event = tool_error_count.clone();
         let on_event = move |evt: react_agent::AgentStreamEvent| {
             match &evt {
                 react_agent::AgentStreamEvent::Token(text) => {
@@ -897,6 +899,12 @@ pub async fn chat_stream_start(
                 }
                 react_agent::AgentStreamEvent::ToolEnd { name, result_preview } => {
                     tool_count_for_event.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if result_preview.starts_with("Error:")
+                        || result_preview.starts_with("error:")
+                        || result_preview.starts_with("Failed")
+                        || result_preview.starts_with("failed") {
+                        tool_error_for_event.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
                     handle
                         .emit(
                             "chat://tool_status",
@@ -1127,7 +1135,20 @@ pub async fn chat_stream_start(
                                         .and_then(|m| m.content.as_ref())
                                         .map(|c| c.clone().into_text())
                                         .unwrap_or_default();
-                                    let prev_reply = last_reply.clone();
+                                    // Use the PREVIOUS assistant reply from history (the bad reply
+                                    // the user is correcting), not last_reply which is the response
+                                    // to the current correction message.
+                                    let prev_reply: String = ctx.llm_history.iter()
+                                        .rev()
+                                        .filter(|m| m.role == "assistant")
+                                        .next()
+                                        .and_then(|m| m.content.as_ref())
+                                        .map(|c| c.clone().into_text())
+                                        .unwrap_or_default();
+                                    let prev_request_for_reflect = prev_request.clone();
+                                    let prev_reply_for_reflect = prev_reply.clone();
+                                    let config_fb_reflect = config_fb.clone();
+                                    let sid_fb_reflect = sid_clone.clone();
                                     tokio::spawn(async move {
                                         react_agent::learn_from_feedback(
                                             &config_fb,
@@ -1136,6 +1157,74 @@ pub async fn chat_stream_start(
                                             &prev_reply,
                                         ).await;
                                     });
+
+                                    // Also reflect on the previous exchange as a failure
+                                    if !prev_request_for_reflect.is_empty() {
+                                        log::info!("User correction detected, reflecting on previous exchange as failure");
+                                        tokio::spawn(async move {
+                                            react_agent::reflect_on_task(
+                                                &config_fb_reflect,
+                                                None,
+                                                Some(&sid_fb_reflect),
+                                                &prev_request_for_reflect,
+                                                &prev_reply_for_reflect,
+                                                false,
+                                                SignalType::ExplicitCorrection,
+                                            ).await;
+                                        });
+                                    }
+                                }
+
+                                // --- Positive feedback detection ---
+                                // Detect explicit praise to reinforce correct behaviors
+                                // "好的" means "OK" (acknowledgment), not praise — excluded
+                                let praise_keywords_zh = ["很好", "太好了", "完美", "就是这样", "对的", "正是我要的", "没错"];
+                                let praise_keywords_en = ["perfect", "great", "exactly", "well done", "good job", "nice work"];
+
+                                let is_short_msg = msg.chars().count() < 15;
+
+                                let starts_with_praise = praise_keywords_zh.iter().any(|p| msg.starts_with(p))
+                                    || praise_keywords_en.iter().any(|p| msg_lower.starts_with(p));
+
+                                // Exclude false positives where a praise word is part of a longer non-praise phrase
+                                let false_positive_prefixes = ["很好奇", "很好的", "好的", "对的话", "就是这样的"];
+                                let is_false_positive = false_positive_prefixes.iter().any(|fp| msg.starts_with(fp));
+
+                                // Filter out messages with continuation ("好的，接下来...")
+                                let has_continuation = msg_lower.contains("但是") || msg_lower.contains("不过")
+                                    || msg_lower.contains("but ") || msg_lower.contains("however")
+                                    || msg_lower.contains("接下来") || msg_lower.contains("然后")
+                                    || msg_lower.contains("帮我") || msg_lower.contains("再");
+
+                                let is_praise = is_short_msg && starts_with_praise && !has_continuation && !is_false_positive;
+
+                                if is_praise && !is_correction {
+                                    // Reflect on the PREVIOUS exchange as a confirmed success
+                                    let prev_request: String = ctx.llm_history.iter()
+                                        .rev()
+                                        .find(|m| m.role == "user")
+                                        .and_then(|m| m.content.as_ref())
+                                        .map(|c| c.clone().into_text())
+                                        .unwrap_or_default();
+
+                                    if !prev_request.is_empty() {
+                                        let config_praise = ctx.config.clone();
+                                        let prev_req = prev_request.clone();
+                                        let prev_resp = last_reply.clone();
+                                        let sid_praise = sid_clone.clone();
+                                        tokio::spawn(async move {
+                                            react_agent::reflect_on_task(
+                                                &config_praise,
+                                                None,
+                                                Some(&sid_praise),
+                                                &prev_req,
+                                                &prev_resp,
+                                                true,
+                                                SignalType::ExplicitPraise,
+                                            ).await;
+                                        });
+                                        log::debug!("Praise detected, reinforcing previous exchange");
+                                    }
                                 }
                             }
 
@@ -1145,6 +1234,28 @@ pub async fn chat_stream_start(
                                 let user_msg = ctx.augmented_message.clone();
                                 let reply_ref = last_reply.clone();
                                 let sid_ref = sid_clone.clone();
+
+                                // Determine success: no tool errors and didn't hit max iterations/rounds
+                                let had_tool_errors = tool_error_count.load(std::sync::atomic::Ordering::Relaxed) > 0;
+                                let hit_max_iterations = stop_reason == "max_rounds";
+                                let was_successful = !had_tool_errors && !hit_max_iterations;
+
+                                let signal_type = if had_tool_errors {
+                                    SignalType::ToolError
+                                } else if hit_max_iterations {
+                                    SignalType::MaxIterations
+                                } else {
+                                    SignalType::SilentCompletion
+                                };
+
+                                log::debug!(
+                                    "Reflection: was_successful={}, tool_errors={}, stop_reason={}, signal={:?}",
+                                    was_successful,
+                                    tool_error_count.load(std::sync::atomic::Ordering::Relaxed),
+                                    stop_reason,
+                                    signal_type,
+                                );
+
                                 tokio::spawn(async move {
                                     react_agent::reflect_on_task(
                                         &config_ref,
@@ -1152,7 +1263,8 @@ pub async fn chat_stream_start(
                                         Some(&sid_ref),
                                         &user_msg,
                                         &reply_ref,
-                                        true,
+                                        was_successful,
+                                        signal_type,
                                     ).await;
                                 });
                             }
@@ -1212,6 +1324,26 @@ pub async fn chat_stream_start(
                                     "session_id": sid_clone,
                                 }),
                             );
+
+                            // Reflect on agent error as a failure (e.g. max iterations hit)
+                            if tool_call_count.load(std::sync::atomic::Ordering::Relaxed) > 0 {
+                                let config_err = ctx.config.clone();
+                                let user_msg_err = ctx.augmented_message.clone();
+                                let err_msg = e.clone();
+                                let sid_err = sid_clone.clone();
+                                log::debug!("Agent error, reflecting as failure: {}", &err_msg);
+                                tokio::spawn(async move {
+                                    react_agent::reflect_on_task(
+                                        &config_err,
+                                        None,
+                                        Some(&sid_err),
+                                        &user_msg_err,
+                                        &err_msg,
+                                        false,
+                                        SignalType::AgentError,
+                                    ).await;
+                                });
+                            }
                         }
                         break;
                     }

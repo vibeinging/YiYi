@@ -589,6 +589,27 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   }, []);
 
   // --- Derived state ---
+  // --- Meditation status ---
+  const [meditationStatus, setMeditationStatus] = useState<'idle' | 'running' | 'completed' | null>(null);
+
+  useEffect(() => {
+    const checkMeditation = () => {
+      invoke('get_meditation_status').then((status: any) => {
+        if (status && (status === 'running' || status === 'completed')) {
+          setMeditationStatus(status);
+          if (status === 'completed') {
+            setTimeout(() => setMeditationStatus(null), 5000);
+          }
+        } else {
+          setMeditationStatus(null);
+        }
+      }).catch(() => {});
+    };
+    checkMeditation();
+    const interval = setInterval(checkMeditation, 30_000);
+    return () => clearInterval(interval);
+  }, []);
+
   const isCronSession = currentSessionId.startsWith('cron:');
   const cronJobId = isCronSession ? currentSessionId.slice(5) : '';
   const sidebarTasks = useTaskSidebarStore((s) => s.tasks);
@@ -610,7 +631,6 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
         highlightTabs={highlightTabs}
         onSelectTab={handleSelectTab}
         onCloseTab={handleCloseTab}
-        onDragMouseDown={drag.onMouseDown}
       />
 
       {/* Bot binding bar */}
@@ -712,6 +732,22 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
           onSendPrompt={sendQuickPrompt}
           renderUserContent={renderUserContent}
         />
+      )}
+
+      {/* Meditation status indicator */}
+      {meditationStatus === 'running' && (
+        <div className="flex items-center gap-2 px-4 py-2 text-[13px] rounded-xl mx-4 mb-2"
+          style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-muted)' }}>
+          <span className="animate-pulse">&#x1F9D8;</span>
+          <span>{t('settings.meditationRunning')}</span>
+        </div>
+      )}
+      {meditationStatus === 'completed' && (
+        <div className="flex items-center gap-2 px-4 py-2 text-[13px] rounded-xl mx-4 mb-2"
+          style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-success)' }}>
+          <span>&#x2728;</span>
+          <span>{t('settings.meditationComplete')}</span>
+        </div>
       )}
 
       {/* Input */}

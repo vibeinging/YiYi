@@ -15,6 +15,8 @@ pub struct Config {
     /// Configuration for exposing local skills as an MCP server.
     #[serde(default)]
     pub skill_server: SkillServerConfig,
+    #[serde(default)]
+    pub meditation: MeditationConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -152,6 +154,23 @@ pub struct AgentsConfig {
     /// If None, defaults to ~/Documents/YiYiClaw.
     #[serde(default)]
     pub workspace_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeditationConfig {
+    pub enabled: bool,
+    pub start_time: String, // "HH:MM" format, e.g. "23:00"
+    pub notify_on_complete: bool,
+}
+
+impl Default for MeditationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            start_time: "23:00".to_string(),
+            notify_on_complete: true,
+        }
+    }
 }
 
 impl Config {

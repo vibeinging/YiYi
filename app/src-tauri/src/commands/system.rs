@@ -679,6 +679,112 @@ pub async fn disable_correction(
     state.db.disable_correction(&correction_id)
 }
 
+// ---------------------------------------------------------------------------
+// Meditation API
+// ---------------------------------------------------------------------------
+
+/// Save meditation configuration.
+#[tauri::command]
+pub async fn save_meditation_config(
+    state: State<'_, AppState>,
+    enabled: bool,
+    start_time: String,
+    notify_on_complete: bool,
+) -> Result<(), String> {
+    let mut config = state.config.write().await;
+    config.meditation.enabled = enabled;
+    config.meditation.start_time = start_time;
+    config.meditation.notify_on_complete = notify_on_complete;
+    config.save(&state.working_dir)
+}
+
+/// Get current meditation configuration.
+#[tauri::command]
+pub async fn get_meditation_config(
+    state: State<'_, AppState>,
+) -> Result<crate::state::config::MeditationConfig, String> {
+    let config = state.config.read().await;
+    Ok(config.meditation.clone())
+}
+
+/// Get the latest meditation session from the database.
+#[tauri::command]
+pub async fn get_latest_meditation(
+    state: State<'_, AppState>,
+) -> Result<Option<crate::engine::db::MeditationSession>, String> {
+    Ok(state.db.get_latest_meditation_session())
+}
+
+/// Manually trigger a meditation session (runs in background).
+#[tauri::command]
+pub async fn trigger_meditation(
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    use crate::engine::meditation::run_meditation_session;
+    use crate::commands::agent::resolve_llm_config;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    // Prevent concurrent meditation sessions
+    if state.meditation_running.compare_exchange(
+        false, true,
+        std::sync::atomic::Ordering::SeqCst,
+        std::sync::atomic::Ordering::Relaxed,
+    ).is_err() {
+        return Err("A meditation session is already running".into());
+    }
+
+    let config = resolve_llm_config(&state).await.map_err(|e| {
+        state.meditation_running.store(false, std::sync::atomic::Ordering::Relaxed);
+        e
+    })?;
+    let db = state.db.clone();
+    let working_dir = state.working_dir.clone();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let meditation_guard = state.meditation_running.clone();
+
+    tauri::async_runtime::spawn(async move {
+        match run_meditation_session(&config, &db, &working_dir, cancel).await {
+            Ok(r) => log::info!(
+                "Manual meditation completed: {} sessions reviewed, journal len={}",
+                r.sessions_reviewed,
+                r.journal.len()
+            ),
+            Err(e) => log::error!("Manual meditation failed: {}", e),
+        }
+        meditation_guard.store(false, std::sync::atomic::Ordering::Relaxed);
+    });
+
+    Ok(())
+}
+
+/// Get the current meditation status (for Chat page polling).
+/// Returns "running", "completed", or "idle".
+#[tauri::command]
+pub async fn get_meditation_status(
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    match state.db.get_latest_meditation_session() {
+        Some(session) => {
+            if session.status == "running" {
+                Ok("running".to_string())
+            } else if session.status == "completed" {
+                // Show "completed" only if finished within the last 5 minutes
+                if let Some(finished_at) = session.finished_at {
+                    let now = chrono::Utc::now().timestamp_millis();
+                    if now - finished_at < 300 * 1000 {
+                        return Ok("completed".to_string());
+                    }
+                }
+                Ok("idle".to_string())
+            } else {
+                Ok("idle".to_string())
+            }
+        }
+        None => Ok("idle".to_string()),
+    }
+}
+
 /// Manually trigger principles consolidation.
 #[tauri::command]
 pub async fn consolidate_principles(
