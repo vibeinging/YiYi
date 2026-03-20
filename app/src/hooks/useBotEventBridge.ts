@@ -1,6 +1,7 @@
 import { listen } from '@tauri-apps/api/event';
 import { useEffect } from 'react';
 import { create } from 'zustand';
+import { startOneBot, stopOneBot } from '../api/bots';
 
 export interface BotMessage {
   id: string;
@@ -69,6 +70,27 @@ export function useBotEventBridge() {
           content: p.content,
           timestamp: Date.now(),
         });
+      }),
+
+      // Auto-start/stop bots triggered by agent tools
+      listen('bot://auto-start', (event) => {
+        if (cancelled) return;
+        const p = event.payload as any;
+        if (p.bot_id) {
+          startOneBot(p.bot_id).catch((e) =>
+            console.error(`Auto-start bot ${p.bot_id} failed:`, e)
+          );
+        }
+      }),
+
+      listen('bot://auto-stop', (event) => {
+        if (cancelled) return;
+        const p = event.payload as any;
+        if (p.bot_id) {
+          stopOneBot(p.bot_id).catch((e) =>
+            console.error(`Auto-stop bot ${p.bot_id} failed:`, e)
+          );
+        }
       }),
     ];
 

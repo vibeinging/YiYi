@@ -372,7 +372,7 @@ async fn start_one_bot_inner(
                             .unwrap_or(&target);
                         let client = crate::engine::bots::http_client();
                         let url = format!("https://discord.com/api/v10/channels/{}/messages", channel_id);
-                        let chunks = crate::engine::bots::formatter::format_discord(&content);
+                        let chunks = crate::engine::bots::formatter::format_discord(&content.text);
                         for chunk in chunks {
                             let body = serde_json::json!({ "content": chunk });
                             client.post(&url)
@@ -414,7 +414,7 @@ async fn start_one_bot_inner(
                     let token = token_c.clone();
                     async move {
                         let ch = crate::engine::bots::telegram::TelegramBot::new(String::new(), token);
-                        ch.send(&target, &content).await
+                        ch.send(&target, &content.text).await
                     }
                 }).await;
 
@@ -458,14 +458,63 @@ async fn start_one_bot_inner(
                             (target.as_str(), None)
                         };
 
-                        if let Some(rest) = conv_target.strip_prefix("guild:") {
-                            let channel_id = rest.rsplit(':').next().unwrap_or(conv_target);
-                            qq_bot.send_guild_message(channel_id, &content, msg_id.as_deref()).await?;
-                        } else if let Some(group_openid) = conv_target.strip_prefix("group:") {
-                            qq_bot.send_group_message(group_openid, &content, msg_id.as_deref()).await?;
-                        } else if let Some(user_openid) = conv_target.strip_prefix("c2c:") {
-                            qq_bot.send_c2c_message(user_openid, &content, msg_id.as_deref()).await?;
+                        // Send text message first (if non-empty)
+                        if !content.text.trim().is_empty() {
+                            if let Some(rest) = conv_target.strip_prefix("guild:") {
+                                let channel_id = rest.rsplit(':').next().unwrap_or(conv_target);
+                                qq_bot.send_guild_message(channel_id, &content.text, msg_id.as_deref()).await?;
+                            } else if let Some(group_openid) = conv_target.strip_prefix("group:") {
+                                qq_bot.send_group_message(group_openid, &content.text, msg_id.as_deref()).await?;
+                            } else if let Some(user_openid) = conv_target.strip_prefix("c2c:") {
+                                qq_bot.send_c2c_message(user_openid, &content.text, msg_id.as_deref()).await?;
+                            }
                         }
+
+                        // Send media attachments
+                        for attachment in &content.media {
+                            let file_type: u8 = match attachment.media_type {
+                                crate::engine::bots::MediaType::Image => 1,
+                                crate::engine::bots::MediaType::Video => 2,
+                                crate::engine::bots::MediaType::Audio => 3,
+                                crate::engine::bots::MediaType::File => 4,
+                            };
+
+                            // For local files, we need a publicly accessible URL.
+                            // If the path is a URL, use it directly; otherwise log a warning.
+                            let media_url = if attachment.path.starts_with("http") {
+                                attachment.path.clone()
+                            } else {
+                                // Local file — QQ API requires a URL, not local path.
+                                // Try to use file:// or skip with warning.
+                                log::warn!(
+                                    "QQ media send: local file '{}' cannot be sent directly (QQ API requires URL). Skipping.",
+                                    attachment.path
+                                );
+                                continue;
+                            };
+
+                            let result = if let Some(rest) = conv_target.strip_prefix("guild:") {
+                                let channel_id = rest.rsplit(':').next().unwrap_or(conv_target);
+                                if file_type == 1 {
+                                    qq_bot.send_guild_image(channel_id, &media_url, msg_id.as_deref()).await
+                                } else {
+                                    // Guild API has limited rich media support
+                                    log::warn!("QQ guild: non-image media not supported yet, skipping");
+                                    Ok(())
+                                }
+                            } else if let Some(group_openid) = conv_target.strip_prefix("group:") {
+                                qq_bot.send_group_media(group_openid, file_type, &media_url, msg_id.as_deref()).await
+                            } else if let Some(user_openid) = conv_target.strip_prefix("c2c:") {
+                                qq_bot.send_c2c_media(user_openid, file_type, &media_url, msg_id.as_deref()).await
+                            } else {
+                                Ok(())
+                            };
+
+                            if let Err(e) = result {
+                                log::error!("QQ media send failed: {}", e);
+                            }
+                        }
+
                         Ok(())
                     }
                 }).await;
@@ -518,7 +567,7 @@ async fn start_one_bot_inner(
 
                         if let Some(url) = webhook_url {
                             crate::engine::bots::dingtalk::DingTalkBot::send_via_webhook(
-                                &url, &content,
+                                &url, &content.text,
                             ).await
                         } else {
                             Err(format!(
@@ -569,15 +618,15 @@ async fn start_one_bot_inner(
                     async move {
                         if let Some(chat_id) = target.strip_prefix("group:") {
                             crate::engine::bots::feishu::FeishuBot::send_message(
-                                &aid, &asec, chat_id, "chat_id", &content,
+                                &aid, &asec, chat_id, "chat_id", &content.text,
                             ).await
                         } else if let Some(open_id) = target.strip_prefix("dm:") {
                             crate::engine::bots::feishu::FeishuBot::send_message(
-                                &aid, &asec, open_id, "open_id", &content,
+                                &aid, &asec, open_id, "open_id", &content.text,
                             ).await
                         } else {
                             crate::engine::bots::feishu::FeishuBot::send_message(
-                                &aid, &asec, &target, "chat_id", &content,
+                                &aid, &asec, &target, "chat_id", &content.text,
                             ).await
                         }
                     }
@@ -756,7 +805,7 @@ pub async fn start_all_bots(
                             async move {
                                 let client = crate::engine::bots::http_client();
                                 // Use markdown format since agent output is typically markdown
-                                let (title, text) = crate::engine::bots::formatter::format_dingtalk(&content);
+                                let (title, text) = crate::engine::bots::formatter::format_dingtalk(&content.text);
                                 let body = serde_json::json!({
                                     "msgtype": "markdown",
                                     "markdown": { "title": title, "text": text }
@@ -774,7 +823,7 @@ pub async fn start_all_bots(
                             let url = url.clone();
                             async move {
                                 let client = crate::engine::bots::http_client();
-                                let body = serde_json::json!({ "msg_type": "text", "content": { "text": content } });
+                                let body = serde_json::json!({ "msg_type": "text", "content": { "text": content.text } });
                                 client.post(&url).json(&body).timeout(std::time::Duration::from_secs(15))
                                     .send().await.map_err(|e| format!("Feishu reply failed: {}", e))?;
                                 Ok(())
@@ -798,7 +847,7 @@ pub async fn start_all_bots(
                             async move {
                                 let user_id = target.rsplit(':').next().unwrap_or(&target);
                                 crate::engine::bots::wecom::send_message(
-                                    &cid, &cs, &aid, user_id, &content,
+                                    &cid, &cs, &aid, user_id, &content.text,
                                 ).await
                             }
                         }).await;

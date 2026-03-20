@@ -32,7 +32,7 @@ pub struct BotManager {
     /// Sender cloned to each bot
     tx: mpsc::Sender<IncomingMessage>,
     /// Callback to send responses back, keyed by bot_id
-    response_handlers: Arc<RwLock<HashMap<String, Box<dyn Fn(String, String) -> futures_util::future::BoxFuture<'static, Result<(), String>> + Send + Sync>>>>,
+    response_handlers: Arc<RwLock<HashMap<String, Box<dyn Fn(String, super::RichContent) -> futures_util::future::BoxFuture<'static, Result<(), String>> + Send + Sync>>>>,
     /// Running flag
     running: Arc<RwLock<bool>>,
     /// Debounce buffer: key = "{bot_id}:{sender_id}", value = buffered messages
@@ -123,7 +123,7 @@ impl BotManager {
     /// Register a response handler for a specific bot_id
     pub async fn register_handler<F, Fut>(&self, bot_id: &str, handler: F)
     where
-        F: Fn(String, String) -> Fut + Send + Sync + 'static,
+        F: Fn(String, super::RichContent) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = Result<(), String>> + Send + 'static,
     {
         let mut handlers = self.response_handlers.write().await;
@@ -365,7 +365,12 @@ impl BotManager {
                                         let hs = handlers.read().await;
                                         if let Some(handler) = hs.get(&msg.bot_id) {
                                             super::rate_limit::acquire(&msg.platform, &msg.bot_id).await;
-                                            handler(msg.conversation_id.clone(), deny_msg).await.ok();
+                                            let deny_target = if msg.platform == "qq" {
+                                                if let Some(mid) = msg.meta["msg_id"].as_str() {
+                                                    format!("{}#msg_id={}", msg.conversation_id, mid)
+                                                } else { msg.conversation_id.clone() }
+                                            } else { msg.conversation_id.clone() };
+                                            handler(deny_target, deny_msg.into()).await.ok();
                                         }
                                         continue;
                                     }
@@ -404,7 +409,7 @@ impl BotManager {
                                 Box::pin(async move {
                                     let handlers = hs.read().await;
                                     if let Some(handler) = handlers.get(&bot_id) {
-                                        handler(target, text).await.ok();
+                                        handler(target, text.into()).await.ok();
                                     }
                                 })
                             }))
@@ -425,14 +430,27 @@ impl BotManager {
                     // Send the final reply with rate limiting + retry
                     let hs = handlers.read().await;
                     if let Some(handler) = hs.get(&msg.bot_id) {
-                        let target = msg.conversation_id.clone();
+                        // Include msg_id in target for QQ passive replies only
+                        // (QQ group/C2C API requires msg_id; other platforms don't use this)
+                        let target = if msg.platform == "qq" {
+                            if let Some(mid) = msg.meta["msg_id"].as_str() {
+                                format!("{}#msg_id={}", msg.conversation_id, mid)
+                            } else {
+                                msg.conversation_id.clone()
+                            }
+                        } else {
+                            msg.conversation_id.clone()
+                        };
 
                         // Rate limit: wait for token before sending
                         super::rate_limit::acquire(&msg.platform, &msg.bot_id).await;
 
+                        // Build rich content: text + any media files referenced in the reply
+                        let rich = super::extract_media_from_text(&reply).await;
+
                         // Retry with exponential backoff (max 3 retries)
                         let send_result = super::retry::with_retry(&msg.bot_id, || {
-                            handler(target.clone(), reply.clone())
+                            handler(target.clone(), rich.clone())
                         }).await;
 
                         if !send_result.success {

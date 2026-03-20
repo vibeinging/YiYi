@@ -3983,6 +3983,12 @@ async fn manage_bot_tool(args: &serde_json::Value) -> String {
                 Some(id) => id,
                 None => return "Error: 'bot_id' is required for start".into(),
             };
+            // Verify bot exists
+            match db.get_bot(bot_id) {
+                Ok(Some(_)) => {}
+                Ok(None) => return format!("Error: bot '{}' not found", bot_id),
+                Err(e) => return format!("Error: {}", e),
+            }
             match APP_HANDLE.get() {
                 Some(app_handle) => {
                     app_handle.emit("bot://auto-start", serde_json::json!({
@@ -3998,6 +4004,12 @@ async fn manage_bot_tool(args: &serde_json::Value) -> String {
                 Some(id) => id,
                 None => return "Error: 'bot_id' is required for stop".into(),
             };
+            // Verify bot exists
+            match db.get_bot(bot_id) {
+                Ok(Some(_)) => {}
+                Ok(None) => return format!("Error: bot '{}' not found", bot_id),
+                Err(e) => return format!("Error: {}", e),
+            }
             match APP_HANDLE.get() {
                 Some(app_handle) => {
                     app_handle.emit("bot://auto-stop", serde_json::json!({

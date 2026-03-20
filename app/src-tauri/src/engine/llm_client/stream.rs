@@ -134,7 +134,7 @@ pub async fn process_anthropic_sse_stream(
                 let data = data.trim();
                 match serde_json::from_str::<serde_json::Value>(data) {
                     Err(e) => {
-                        log::warn!("SSE JSON parse error (event={}): {} — data: {}", current_event_type, e, &data[..data.len().min(200)]);
+                        log::warn!("SSE JSON parse error (event={}): {} — data: {}", current_event_type, e, &data.chars().take(200).collect::<String>());
                     }
                     Ok(json) => match on_event(&current_event_type, &json)? {
                         true => {}

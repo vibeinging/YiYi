@@ -137,6 +137,170 @@ impl IncomingMessage {
     }
 }
 
+/// A response that may contain text and/or media attachments for sending.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RichContent {
+    pub text: String,
+    pub media: Vec<MediaAttachment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MediaAttachment {
+    pub media_type: MediaType,
+    /// Local file path (absolute) or URL
+    pub path: String,
+    /// Original filename for display
+    pub filename: Option<String>,
+    /// MIME type if known
+    pub mime_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaType {
+    Image,
+    File,
+    Audio,
+    Video,
+}
+
+impl From<String> for RichContent {
+    fn from(text: String) -> Self {
+        RichContent { text, media: vec![] }
+    }
+}
+
+impl From<&str> for RichContent {
+    fn from(text: &str) -> Self {
+        RichContent { text: text.to_string(), media: vec![] }
+    }
+}
+
+impl RichContent {
+    pub fn text_only(s: impl Into<String>) -> Self {
+        RichContent { text: s.into(), media: vec![] }
+    }
+    pub fn is_text_only(&self) -> bool {
+        self.media.is_empty()
+    }
+}
+
+/// Known media file extensions grouped by type.
+const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"];
+const AUDIO_EXTS: &[&str] = &["mp3", "wav", "ogg", "opus", "m4a", "aac"];
+const VIDEO_EXTS: &[&str] = &["mp4", "mov", "avi", "mkv", "webm"];
+const DOC_EXTS: &[&str] = &["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "zip", "tar", "gz", "txt", "csv", "json"];
+
+/// Classify a file extension into a MediaType, or None if not a recognized media extension.
+pub fn classify_extension(ext: &str) -> Option<MediaType> {
+    let ext = ext.to_lowercase();
+    let ext = ext.as_str();
+    if IMAGE_EXTS.contains(&ext) { return Some(MediaType::Image); }
+    if AUDIO_EXTS.contains(&ext) { return Some(MediaType::Audio); }
+    if VIDEO_EXTS.contains(&ext) { return Some(MediaType::Video); }
+    if DOC_EXTS.contains(&ext) { return Some(MediaType::File); }
+    None
+}
+
+/// Guess MIME type from file extension.
+pub fn guess_mime(ext: &str) -> Option<String> {
+    Some(match ext.to_lowercase().as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
+        "opus" => "audio/opus",
+        "m4a" => "audio/mp4",
+        "aac" => "audio/aac",
+        "mp4" => "video/mp4",
+        "mov" => "video/quicktime",
+        "avi" => "video/x-msvideo",
+        "mkv" => "video/x-matroska",
+        "webm" => "video/webm",
+        "pdf" => "application/pdf",
+        "zip" => "application/zip",
+        "json" => "application/json",
+        "txt" => "text/plain",
+        "csv" => "text/csv",
+        _ => return None,
+    }.to_string())
+}
+
+/// Characters that delimit the end of a file path in text.
+fn is_path_delimiter(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\r' | ')' | '"' | '\'' | ']' | '>' | '`' | ';' | ',' | '|')
+}
+
+/// Characters that can precede a valid path start.
+fn is_path_prefix(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\r' | '(' | '"' | '\'' | '[' | ':' | '`' | '=' | ',')
+}
+
+/// Scan agent reply text for local file paths that reference media files.
+/// Returns a RichContent with the original text plus any detected media attachments.
+/// Only includes files under the user's home directory or /tmp for security.
+pub async fn extract_media_from_text(text: &str) -> RichContent {
+    let mut content = RichContent { text: text.to_string(), media: vec![] };
+
+    // Build allowed path prefixes for security
+    let home = std::env::var("HOME").unwrap_or_default();
+    let allowed_prefixes: Vec<&str> = if home.is_empty() {
+        vec!["/tmp/"]
+    } else {
+        vec![home.as_str(), "/tmp/"]
+    };
+
+    // Use char_indices for safe UTF-8 iteration
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let mut idx = 0;
+
+    while idx < chars.len() {
+        let (byte_pos, ch) = chars[idx];
+
+        // Look for path start: '/' preceded by a delimiter or start of string
+        if ch == '/' && (idx == 0 || is_path_prefix(chars[idx - 1].1)) {
+            let start_byte = byte_pos;
+            // Advance to end of path
+            let mut end_idx = idx;
+            while end_idx < chars.len() && !is_path_delimiter(chars[end_idx].1) {
+                end_idx += 1;
+            }
+            let end_byte = if end_idx < chars.len() { chars[end_idx].0 } else { text.len() };
+            let path_str = &text[start_byte..end_byte];
+            idx = end_idx;
+
+            // Must have a file extension
+            if let Some(dot_pos) = path_str.rfind('.') {
+                let ext = &path_str[dot_pos + 1..];
+                if let Some(media_type) = classify_extension(ext) {
+                    // Security: only allow files under home or /tmp
+                    let allowed = allowed_prefixes.iter().any(|p| path_str.starts_with(p));
+                    if allowed {
+                        let path = std::path::Path::new(path_str);
+                        if tokio::fs::try_exists(path).await.unwrap_or(false) && !content.media.iter().any(|m| m.path == path_str) {
+                            content.media.push(MediaAttachment {
+                                media_type,
+                                path: path_str.to_string(),
+                                filename: path.file_name().map(|f| f.to_string_lossy().to_string()),
+                                mime_type: guess_mime(ext),
+                            });
+                        }
+                    }
+                }
+            }
+        } else {
+            idx += 1;
+        }
+    }
+
+    content
+}
+
 /// Supported platform types
 pub fn platform_types() -> Vec<(&'static str, &'static str)> {
     vec![

@@ -81,7 +81,7 @@ fn build_body(config: &LLMConfig, messages_value: serde_json::Value, stream: boo
     body
 }
 
-/// Send HTTP request with OpenAI auth headers
+/// Send HTTP request with OpenAI auth headers (with retry for transient errors)
 async fn send_request(
     client: &reqwest::Client,
     url: &str,
@@ -89,27 +89,70 @@ async fn send_request(
     body: &serde_json::Value,
     timeout_secs: u64,
 ) -> Result<reqwest::Response, String> {
-    let mut req = client
-        .post(url)
-        .header("Authorization", format!("Bearer {}", config.api_key))
-        .header("Content-Type", "application/json");
-    if super::needs_coding_agent_ua(url) {
-        req = req.header("User-Agent", super::CODING_AGENT_UA);
-    }
-    let resp = req
-        .json(body)
-        .timeout(std::time::Duration::from_secs(timeout_secs))
-        .send()
-        .await
-        .map_err(|e| format!("LLM request failed: {}", e))?;
+    const MAX_RETRIES: u32 = 3;
+    let mut last_err = String::new();
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        log::error!("LLM API error ({}): {}", status, text);
-        return Err(format!("LLM API error ({}): {}", status, text));
+    for attempt in 0..=MAX_RETRIES {
+        if attempt > 0 {
+            log::warn!("LLM request retry {}/{}", attempt, MAX_RETRIES);
+        }
+
+        let mut req = client
+            .post(url)
+            .header("Authorization", format!("Bearer {}", config.api_key))
+            .header("Content-Type", "application/json");
+        if super::needs_coding_agent_ua(url) {
+            req = req.header("User-Agent", super::CODING_AGENT_UA);
+        }
+
+        match req
+            .json(body)
+            .timeout(std::time::Duration::from_secs(timeout_secs))
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    // Retry on 429 (rate limit) and 5xx (server errors)
+                    if (status.as_u16() == 429 || status.is_server_error()) && attempt < MAX_RETRIES {
+                        let mut delay = std::time::Duration::from_millis(1000 * 2u64.pow(attempt));
+                        // Respect Retry-After header for 429 responses
+                        if status.as_u16() == 429 {
+                            if let Some(retry_after) = resp.headers().get("retry-after") {
+                                if let Ok(secs) = retry_after.to_str().unwrap_or("").parse::<u64>() {
+                                    let ra_delay = std::time::Duration::from_secs(secs);
+                                    if ra_delay > delay { delay = ra_delay; }
+                                }
+                            }
+                        }
+                        let text = resp.text().await.unwrap_or_default();
+                        log::warn!("LLM API error ({}), will retry after {:?}: {}", status, delay, &text.chars().take(200).collect::<String>());
+                        last_err = format!("LLM API error ({}): {}", status, text);
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    let text = resp.text().await.unwrap_or_default();
+                    log::error!("LLM API error ({}): {}", status, text);
+                    return Err(format!("LLM API error ({}): {}", status, text));
+                }
+                return Ok(resp);
+            }
+            Err(e) => {
+                // Network/timeout errors are retryable
+                if attempt < MAX_RETRIES {
+                    let delay = std::time::Duration::from_millis(1000 * 2u64.pow(attempt));
+                    log::warn!("LLM request failed (attempt {}), retry after {:?}: {}", attempt + 1, delay, e);
+                    last_err = format!("LLM request failed: {}", e);
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                return Err(format!("LLM request failed after {} retries: {}", MAX_RETRIES, e));
+            }
+        }
     }
-    Ok(resp)
+
+    Err(last_err)
 }
 
 /// OpenAI-compatible chat completion (non-streaming)
@@ -184,7 +227,7 @@ where
             let json = match serde_json::from_str::<serde_json::Value>(data) {
                 Ok(j) => j,
                 Err(e) => {
-                    log::warn!("OpenAI SSE JSON parse error: {} — data: {}", e, &data[..data.len().min(200)]);
+                    log::warn!("OpenAI SSE JSON parse error: {} — data: {}", e, &data.chars().take(200).collect::<String>());
                     return true; // skip this chunk, continue stream
                 }
             };

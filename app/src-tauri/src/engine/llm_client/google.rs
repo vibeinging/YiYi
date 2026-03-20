@@ -246,23 +246,63 @@ async fn send_request(
     body: &serde_json::Value,
     timeout_secs: u64,
 ) -> Result<reqwest::Response, String> {
-    let resp = client
-        .post(url)
-        .header("Content-Type", "application/json")
-        .header("x-goog-api-key", &config.api_key)
-        .json(body)
-        .timeout(std::time::Duration::from_secs(timeout_secs))
-        .send()
-        .await
-        .map_err(|e| format!("Gemini request failed: {}", e))?;
+    const MAX_RETRIES: u32 = 3;
+    let mut last_err = String::new();
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        log::error!("Gemini API error ({}): {}", status, text);
-        return Err(format!("Gemini API error ({}): {}", status, text));
+    for attempt in 0..=MAX_RETRIES {
+        if attempt > 0 {
+            log::warn!("Gemini request retry {}/{}", attempt, MAX_RETRIES);
+        }
+
+        match client
+            .post(url)
+            .header("Content-Type", "application/json")
+            .header("x-goog-api-key", &config.api_key)
+            .json(body)
+            .timeout(std::time::Duration::from_secs(timeout_secs))
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    if (status.as_u16() == 429 || status.is_server_error()) && attempt < MAX_RETRIES {
+                        let mut delay = std::time::Duration::from_millis(1000 * 2u64.pow(attempt));
+                        // Respect Retry-After header for 429 responses
+                        if status.as_u16() == 429 {
+                            if let Some(retry_after) = resp.headers().get("retry-after") {
+                                if let Ok(secs) = retry_after.to_str().unwrap_or("").parse::<u64>() {
+                                    let ra_delay = std::time::Duration::from_secs(secs);
+                                    if ra_delay > delay { delay = ra_delay; }
+                                }
+                            }
+                        }
+                        let text = resp.text().await.unwrap_or_default();
+                        log::warn!("Gemini API error ({}), will retry after {:?}: {}", status, delay, &text.chars().take(200).collect::<String>());
+                        last_err = format!("Gemini API error ({}): {}", status, text);
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    let text = resp.text().await.unwrap_or_default();
+                    log::error!("Gemini API error ({}): {}", status, text);
+                    return Err(format!("Gemini API error ({}): {}", status, text));
+                }
+                return Ok(resp);
+            }
+            Err(e) => {
+                if attempt < MAX_RETRIES {
+                    let delay = std::time::Duration::from_millis(1000 * 2u64.pow(attempt));
+                    log::warn!("Gemini request failed (attempt {}), retry after {:?}: {}", attempt + 1, delay, e);
+                    last_err = format!("Gemini request failed: {}", e);
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                return Err(format!("Gemini request failed after {} retries: {}", MAX_RETRIES, e));
+            }
+        }
     }
-    Ok(resp)
+
+    Err(last_err)
 }
 
 // ── Public API ──────────────────────────────────────────────────────

@@ -238,7 +238,7 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
       const baseUrl = baseUrlInputs[providerId];
       await configureProvider(providerId, apiKey || undefined, baseUrl || undefined);
       await loadData();
-      setApiKeyInputs(prev => ({ ...prev, [providerId]: '' }));
+      setApiKeyInputs(prev => { const next = { ...prev }; delete next[providerId]; return next; });
     } catch (error) {
       console.error('Failed to save config:', error);
     } finally { setSaving(null); }

@@ -87,6 +87,14 @@ export async function stopBots(): Promise<{ status: string }> {
   return await invoke('bots_stop');
 }
 
+export async function startOneBot(botId: string): Promise<{ status: string; bot_id: string }> {
+  return await invoke('bots_start_one', { botId });
+}
+
+export async function stopOneBot(botId: string): Promise<{ status: string }> {
+  return await invoke('bots_stop_one', { botId });
+}
+
 export async function listBotSessions(): Promise<BotSession[]> {
   return await invoke<BotSession[]>('bots_list_sessions');
 }

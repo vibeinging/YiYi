@@ -14,9 +14,18 @@ pub struct QQBot {
 }
 
 /// Cached access token with expiry
-struct AccessToken {
+struct CachedToken {
     token: String,
     expires_at: std::time::Instant,
+}
+
+static TOKEN_CACHE: std::sync::OnceLock<
+    tokio::sync::RwLock<std::collections::HashMap<String, CachedToken>>,
+> = std::sync::OnceLock::new();
+
+fn token_cache(
+) -> &'static tokio::sync::RwLock<std::collections::HashMap<String, CachedToken>> {
+    TOKEN_CACHE.get_or_init(|| tokio::sync::RwLock::new(std::collections::HashMap::new()))
 }
 
 #[allow(dead_code)]
@@ -96,7 +105,7 @@ impl QQBot {
                 log::info!("QQ Bot connecting to gateway: {}", gateway_url);
 
                 // Track token expiry for refresh during connection
-                let mut cached_token = AccessToken {
+                let mut cached_token = CachedToken {
                     token: access_token,
                     // Token is valid for 7200s, refresh at 6000s to be safe
                     expires_at: std::time::Instant::now() + std::time::Duration::from_secs(6000),
@@ -122,7 +131,7 @@ impl QQBot {
                                 match fetch_access_token(&client, &app_id, &client_secret).await {
                                     Ok(new_token) => {
                                         log::info!("QQ access_token refreshed");
-                                        cached_token = AccessToken {
+                                        cached_token = CachedToken {
                                             token: new_token,
                                             expires_at: std::time::Instant::now() + std::time::Duration::from_secs(6000),
                                         };
@@ -313,7 +322,7 @@ impl QQBot {
             });
         }
 
-        client
+        let resp = client
             .post(&url)
             .header("Authorization", format!("QQBot {}", access_token))
             .json(&body)
@@ -321,6 +330,12 @@ impl QQBot {
             .send()
             .await
             .map_err(|e| format!("QQ guild send failed: {}", e))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("QQ guild send failed ({}): {}", status, body));
+        }
 
         Ok(())
     }
@@ -347,7 +362,7 @@ impl QQBot {
             body["msg_id"] = serde_json::Value::String(id.to_string());
         }
 
-        client
+        let resp = client
             .post(&url)
             .header("Authorization", format!("QQBot {}", access_token))
             .json(&body)
@@ -355,6 +370,12 @@ impl QQBot {
             .send()
             .await
             .map_err(|e| format!("QQ group send failed: {}", e))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("QQ group send failed ({}): {}", status, body));
+        }
 
         Ok(())
     }
@@ -381,7 +402,7 @@ impl QQBot {
             body["msg_id"] = serde_json::Value::String(id.to_string());
         }
 
-        client
+        let resp = client
             .post(&url)
             .header("Authorization", format!("QQBot {}", access_token))
             .json(&body)
@@ -389,6 +410,252 @@ impl QQBot {
             .send()
             .await
             .map_err(|e| format!("QQ c2c send failed: {}", e))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("QQ c2c send failed ({}): {}", status, body));
+        }
+
+        Ok(())
+    }
+
+    /// 发送群聊富媒体消息 (图片/视频/语音/文件)
+    /// file_type: 1=图片, 2=视频, 3=语音, 4=文件
+    pub async fn send_group_media(
+        &self,
+        group_openid: &str,
+        file_type: u8,
+        file_url: &str,
+        msg_id: Option<&str>,
+    ) -> Result<(), String> {
+        let access_token = get_access_token(&self.app_id, &self.client_secret).await?;
+        let client = super::http_client();
+
+        // Step 1: Upload media to get file_info
+        let upload_url = format!(
+            "https://api.sgroup.qq.com/v2/groups/{}/files",
+            group_openid
+        );
+        let mut upload_body = serde_json::json!({
+            "file_type": file_type,
+            "url": file_url,
+            "srv_send_msg": false,
+        });
+
+        let upload_resp = client
+            .post(&upload_url)
+            .header("Authorization", format!("QQBot {}", access_token))
+            .json(&upload_body)
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|e| format!("QQ group media upload failed: {}", e))?;
+
+        if !upload_resp.status().is_success() {
+            let status = upload_resp.status();
+            let body = upload_resp.text().await.unwrap_or_default();
+            // Fallback: try srv_send_msg=true (some QQ API versions send directly)
+            upload_body["srv_send_msg"] = serde_json::json!(true);
+            if let Some(id) = msg_id {
+                upload_body["msg_id"] = serde_json::Value::String(id.to_string());
+            }
+            let retry_resp = client
+                .post(&upload_url)
+                .header("Authorization", format!("QQBot {}", access_token))
+                .json(&upload_body)
+                .timeout(std::time::Duration::from_secs(30))
+                .send()
+                .await
+                .map_err(|e| format!("QQ group media upload retry failed: {}", e))?;
+            if !retry_resp.status().is_success() {
+                return Err(format!("QQ group media upload failed ({}): {}", status, body));
+            }
+            return Ok(());
+        }
+
+        let upload_json: serde_json::Value = upload_resp
+            .json()
+            .await
+            .map_err(|e| format!("QQ group media upload parse failed: {}", e))?;
+
+        let file_info = upload_json.get("file_info")
+            .or_else(|| upload_json.get("file_uuid"))
+            .cloned()
+            .unwrap_or(serde_json::json!(null));
+
+        if file_info.is_null() {
+            return Err(format!("QQ group media upload: no file_info in response: {}", upload_json));
+        }
+
+        // Step 2: Send message with media reference
+        let msg_url = format!(
+            "https://api.sgroup.qq.com/v2/groups/{}/messages",
+            group_openid
+        );
+        let media_key = match file_type {
+            1 => "image",
+            2 => "video",
+            3 => "voice",
+            _ => "file",
+        };
+        // msg_type=7 for rich media
+        let mut msg_body = serde_json::json!({
+            "msg_type": 7,
+            "media": { "file_info": file_info },
+        });
+        if let Some(id) = msg_id {
+            msg_body["msg_id"] = serde_json::Value::String(id.to_string());
+        }
+
+        let msg_resp = client
+            .post(&msg_url)
+            .header("Authorization", format!("QQBot {}", access_token))
+            .json(&msg_body)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await
+            .map_err(|e| format!("QQ group {} send failed: {}", media_key, e))?;
+
+        if !msg_resp.status().is_success() {
+            let status = msg_resp.status();
+            let body = msg_resp.text().await.unwrap_or_default();
+            return Err(format!("QQ group {} send failed ({}): {}", media_key, status, body));
+        }
+
+        log::info!("QQ group media sent: type={}, group={}", file_type, group_openid);
+        Ok(())
+    }
+
+    /// 发送 C2C 富媒体消息
+    pub async fn send_c2c_media(
+        &self,
+        user_openid: &str,
+        file_type: u8,
+        file_url: &str,
+        msg_id: Option<&str>,
+    ) -> Result<(), String> {
+        let access_token = get_access_token(&self.app_id, &self.client_secret).await?;
+        let client = super::http_client();
+
+        let upload_url = format!(
+            "https://api.sgroup.qq.com/v2/users/{}/files",
+            user_openid
+        );
+        let mut upload_body = serde_json::json!({
+            "file_type": file_type,
+            "url": file_url,
+            "srv_send_msg": false,
+        });
+
+        let upload_resp = client
+            .post(&upload_url)
+            .header("Authorization", format!("QQBot {}", access_token))
+            .json(&upload_body)
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|e| format!("QQ c2c media upload failed: {}", e))?;
+
+        if !upload_resp.status().is_success() {
+            let status = upload_resp.status();
+            let body = upload_resp.text().await.unwrap_or_default();
+            upload_body["srv_send_msg"] = serde_json::json!(true);
+            if let Some(id) = msg_id {
+                upload_body["msg_id"] = serde_json::Value::String(id.to_string());
+            }
+            let retry_resp = client
+                .post(&upload_url)
+                .header("Authorization", format!("QQBot {}", access_token))
+                .json(&upload_body)
+                .timeout(std::time::Duration::from_secs(30))
+                .send()
+                .await
+                .map_err(|e| format!("QQ c2c media upload retry failed: {}", e))?;
+            if !retry_resp.status().is_success() {
+                return Err(format!("QQ c2c media upload failed ({}): {}", status, body));
+            }
+            return Ok(());
+        }
+
+        let upload_json: serde_json::Value = upload_resp
+            .json()
+            .await
+            .map_err(|e| format!("QQ c2c media upload parse failed: {}", e))?;
+
+        let file_info = upload_json.get("file_info")
+            .or_else(|| upload_json.get("file_uuid"))
+            .cloned()
+            .unwrap_or(serde_json::json!(null));
+
+        if file_info.is_null() {
+            return Err(format!("QQ c2c media upload: no file_info in response: {}", upload_json));
+        }
+
+        let msg_url = format!(
+            "https://api.sgroup.qq.com/v2/users/{}/messages",
+            user_openid
+        );
+        let mut msg_body = serde_json::json!({
+            "msg_type": 7,
+            "media": { "file_info": file_info },
+        });
+        if let Some(id) = msg_id {
+            msg_body["msg_id"] = serde_json::Value::String(id.to_string());
+        }
+
+        let msg_resp = client
+            .post(&msg_url)
+            .header("Authorization", format!("QQBot {}", access_token))
+            .json(&msg_body)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await
+            .map_err(|e| format!("QQ c2c media send failed: {}", e))?;
+
+        if !msg_resp.status().is_success() {
+            let status = msg_resp.status();
+            let body = msg_resp.text().await.unwrap_or_default();
+            return Err(format!("QQ c2c media send failed ({}): {}", status, body));
+        }
+
+        log::info!("QQ c2c media sent: type={}, user={}", file_type, user_openid);
+        Ok(())
+    }
+
+    /// 发送频道图片消息
+    pub async fn send_guild_image(
+        &self,
+        channel_id: &str,
+        image_url: &str,
+        msg_id: Option<&str>,
+    ) -> Result<(), String> {
+        let access_token = get_access_token(&self.app_id, &self.client_secret).await?;
+        let client = super::http_client();
+        let url = format!(
+            "https://api.sgroup.qq.com/channels/{}/messages",
+            channel_id
+        );
+
+        let mut body = serde_json::json!({ "image": image_url });
+        if let Some(id) = msg_id {
+            body["msg_id"] = serde_json::Value::String(id.to_string());
+        }
+
+        let resp = client
+            .post(&url)
+            .header("Authorization", format!("QQBot {}", access_token))
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await
+            .map_err(|e| format!("QQ guild image send failed: {}", e))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("QQ guild image send failed ({}): {}", status, body));
+        }
 
         Ok(())
     }
@@ -446,6 +713,12 @@ async fn fetch_access_token(
         .await
         .map_err(|e| format!("QQ OAuth request failed: {}", e))?;
 
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("QQ OAuth failed ({}): {}", status, text));
+    }
+
     let json = resp
         .json::<serde_json::Value>()
         .await
@@ -459,10 +732,33 @@ async fn fetch_access_token(
         .ok_or_else(|| format!("QQ OAuth: no access_token in response: {}", json))
 }
 
-/// Convenience wrapper: fetch access_token for send methods.
+/// Convenience wrapper: fetch access_token with caching for send methods.
 async fn get_access_token(app_id: &str, client_secret: &str) -> Result<String, String> {
+    let cache = token_cache();
+    // Check cache
+    {
+        let c = cache.read().await;
+        if let Some(ct) = c.get(app_id) {
+            if std::time::Instant::now() < ct.expires_at {
+                return Ok(ct.token.clone());
+            }
+        }
+    }
+    // Fetch new token
     let client = super::http_client();
-    fetch_access_token(&client, app_id, client_secret).await
+    let token = fetch_access_token(&client, app_id, client_secret).await?;
+    // Cache with 6000s expiry (refresh before 7200s actual expiry)
+    {
+        let mut c = cache.write().await;
+        c.insert(
+            app_id.to_string(),
+            CachedToken {
+                token: token.clone(),
+                expires_at: std::time::Instant::now() + std::time::Duration::from_secs(6000),
+            },
+        );
+    }
+    Ok(token)
 }
 
 /// Strip QQ mention tags like `<@!12345>`, `<@12345>` and `<qqbot-at-everyone/>` from content.
@@ -508,6 +804,63 @@ fn strip_qq_mentions(content: &str) -> String {
     result.trim().to_string()
 }
 
+/// Parse attachments from QQ message payload into ContentPart items.
+fn parse_qq_attachments(d: &serde_json::Value) -> Vec<super::ContentPart> {
+    let mut parts = Vec::new();
+    if let Some(attachments) = d["attachments"].as_array() {
+        for att in attachments {
+            let url = att["url"].as_str().unwrap_or("").to_string();
+            if url.is_empty() { continue; }
+            // Ensure URL has scheme
+            let full_url = if url.starts_with("http://") || url.starts_with("https://") {
+                url
+            } else {
+                format!("https://{}", url)
+            };
+            let content_type = att["content_type"].as_str().unwrap_or("");
+            let filename = att["filename"].as_str().unwrap_or("").to_string();
+
+            // Determine type from content_type first, fallback to filename extension
+            if content_type.starts_with("image/") {
+                parts.push(super::ContentPart::Image { url: full_url, alt: Some(filename) });
+            } else if content_type.starts_with("audio/") {
+                parts.push(super::ContentPart::Audio { url: full_url });
+            } else if content_type.starts_with("video/") {
+                parts.push(super::ContentPart::Video { url: full_url });
+            } else if !content_type.is_empty() {
+                // Known non-media content_type → file
+                parts.push(super::ContentPart::File {
+                    url: full_url,
+                    filename,
+                    mime_type: Some(content_type.to_string()),
+                });
+            } else {
+                // No content_type — fallback to filename extension
+                let ext = filename.rsplit('.').next().unwrap_or("");
+                match super::classify_extension(ext) {
+                    Some(super::MediaType::Image) => {
+                        parts.push(super::ContentPart::Image { url: full_url, alt: Some(filename) });
+                    }
+                    Some(super::MediaType::Audio) => {
+                        parts.push(super::ContentPart::Audio { url: full_url });
+                    }
+                    Some(super::MediaType::Video) => {
+                        parts.push(super::ContentPart::Video { url: full_url });
+                    }
+                    _ => {
+                        parts.push(super::ContentPart::File {
+                            url: full_url,
+                            filename,
+                            mime_type: None,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    parts
+}
+
 /// 处理频道消息
 async fn handle_qq_message(d: &serde_json::Value, bot_id: &str, tx: &mpsc::Sender<IncomingMessage>) {
     let raw_content = d["content"].as_str().unwrap_or("").trim();
@@ -538,7 +891,7 @@ async fn handle_qq_message(d: &serde_json::Value, bot_id: &str, tx: &mpsc::Sende
             "msg_id": msg_id,
             "msg_type": "guild",
         }),
-        content_parts: Vec::new(),
+        content_parts: parse_qq_attachments(d),
     };
 
     tx.send(incoming).await.ok();
@@ -576,7 +929,7 @@ async fn handle_qq_group_message(
             "msg_id": msg_id,
             "msg_type": "group",
         }),
-        content_parts: Vec::new(),
+        content_parts: parse_qq_attachments(d),
     };
 
     tx.send(incoming).await.ok();
@@ -611,7 +964,7 @@ async fn handle_qq_c2c_message(
             "msg_id": msg_id,
             "msg_type": "c2c",
         }),
-        content_parts: Vec::new(),
+        content_parts: parse_qq_attachments(d),
     };
 
     tx.send(incoming).await.ok();
