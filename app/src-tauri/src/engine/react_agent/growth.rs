@@ -120,7 +120,9 @@ Extract memories (JSON array only):"#
                         db.update_memory_tier(&mem_id, "hot", 0.8);
                         // Sync to files immediately for non-meditation users
                         if let Some(working_dir) = crate::engine::tools::get_working_dir() {
-                            crate::engine::tiered_memory::sync_hot_to_files(&db, &working_dir);
+                            if let Err(e) = crate::engine::tiered_memory::sync_hot_to_files(&db, &working_dir) {
+                                log::warn!("Failed to sync hot-tier to files: {}", e);
+                            }
                         }
                     }
                 }
@@ -906,7 +908,9 @@ Consolidated principles:"#,
     }
 
     // Sync HOT-tier to files (updates PRINCIPLES.md and MEMORY.md cache)
-    crate::engine::tiered_memory::sync_hot_to_files(db, working_dir);
+    if let Err(e) = crate::engine::tiered_memory::sync_hot_to_files(db, working_dir) {
+        log::warn!("Failed to sync hot-tier to files: {}", e);
+    }
 
     // Deactivate consumed corrections
     if let Some(conn) = db.get_conn() {
