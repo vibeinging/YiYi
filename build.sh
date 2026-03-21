@@ -17,6 +17,14 @@ PYTHON_INTEL="/usr/local/Cellar/python@3.13/3.13.7/bin/python3.13"
 DYLIB_ARM="/opt/anaconda3/envs/py313/lib/libpython3.13.dylib"
 DYLIB_INTEL="/usr/local/opt/python@3.13/Frameworks/Python.framework/Versions/3.13/lib/libpython3.13.dylib"
 
+# Cleanup Python stdlib to reduce bundle size
+cleanup_stdlib() {
+    echo "Cleaning Python stdlib..."
+    "$SCRIPT_DIR/app/src-tauri/cleanup-stdlib.sh"
+}
+
+cleanup_stdlib
+
 build_target() {
     local arch="$1"
     local target=""

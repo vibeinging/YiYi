@@ -20,6 +20,7 @@ import {
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
+import { open } from '@tauri-apps/plugin-shell';
 
 import { ToolCallPanel, HistorySpawnAgentsPanel, getToolLabel } from '../ToolCallPanel';
 import { TaskCard } from '../TaskCard';
@@ -230,6 +231,23 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
   ref,
 ) {
   const processedMessages = useMemo(() => processMessages(messages), [messages]);
+
+  // Custom markdown components: open links in external browser
+  const markdownComponents = useMemo(() => ({
+    a: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
+      <a
+        {...props}
+        href={href}
+        onClick={(e) => {
+          e.preventDefault();
+          if (href) open(href);
+        }}
+        style={{ cursor: 'pointer' }}
+      >
+        {children}
+      </a>
+    ),
+  }), []);
 
   // Stream state from store
   const streamLoading = useChatStreamStore((s) => s.loading);
@@ -490,7 +508,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                         </div>
                       ) : (
                         <div className="markdown-body">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
                             {msg.content}
                           </ReactMarkdown>
                         </div>
@@ -578,7 +596,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                         background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)',
                         borderBottomLeftRadius: '6px', color: 'var(--color-text)',
                       }}>
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
                         {streamingContent}
                       </ReactMarkdown>
                       <span className="yiyi-working">
@@ -676,7 +694,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                         background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)',
                         borderBottomLeftRadius: '6px', color: 'var(--color-text)',
                       }}>
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
                         {currentTaskStream.streamingContent}
                       </ReactMarkdown>
                       {currentTaskStream.loading && (

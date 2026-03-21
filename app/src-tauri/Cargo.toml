@@ -63,3 +63,8 @@ tauri-plugin-process = "2.3.1"
 cocoa = "0.26"
 window-vibrancy = "0.5"
 mac-notification-sys = "0.6"
+
+[profile.release]
+strip = true
+lto = true
+opt-level = "s"
