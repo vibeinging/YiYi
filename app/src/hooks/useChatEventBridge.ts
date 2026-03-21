@@ -15,6 +15,19 @@ export function useChatEventBridge() {
     const store = useChatStreamStore.getState;
 
     const unlisteners = [
+      // Bot streaming: start/end stream when bot agent processes a message
+      listen<{ session_id: string }>('chat://bot_stream_start', (event) => {
+        if (cancelled) return;
+        if (event.payload.session_id !== store().sessionId) return;
+        store().startStream();
+      }),
+
+      listen<{ session_id: string }>('chat://bot_stream_end', (event) => {
+        if (cancelled) return;
+        if (event.payload.session_id !== store().sessionId) return;
+        store().endStream();
+      }),
+
       listen<{ text: string; session_id: string }>('chat://chunk', (event) => {
         if (cancelled) return;
         if (event.payload.session_id !== store().sessionId) return;

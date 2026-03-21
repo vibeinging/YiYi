@@ -241,13 +241,14 @@ fn is_path_prefix(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\r' | '(' | '"' | '\'' | '[' | ':' | '`' | '=' | ',')
 }
 
-/// Scan agent reply text for local file paths that reference media files.
+/// Scan agent reply text for local file paths and HTTP(S) media URLs.
 /// Returns a RichContent with the original text plus any detected media attachments.
-/// Only includes files under the user's home directory or /tmp for security.
+/// Local files: only includes files under the user's home directory or /tmp for security.
+/// HTTP URLs: includes any URL ending with a recognized media extension.
 pub async fn extract_media_from_text(text: &str) -> RichContent {
     let mut content = RichContent { text: text.to_string(), media: vec![] };
 
-    // Build allowed path prefixes for security
+    // Build allowed path prefixes for security (local files only)
     let home = std::env::var("HOME").unwrap_or_default();
     let allowed_prefixes: Vec<&str> = if home.is_empty() {
         vec!["/tmp/"]
@@ -255,17 +256,43 @@ pub async fn extract_media_from_text(text: &str) -> RichContent {
         vec![home.as_str(), "/tmp/"]
     };
 
-    // Use char_indices for safe UTF-8 iteration
+    // --- 1. Extract Markdown image syntax: ![alt](url) ---
+    static MD_IMG_RE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"!\[[^\]]*\]\(([^)]+)\)").unwrap());
+    for cap in MD_IMG_RE.captures_iter(text) {
+        let url = cap[1].trim();
+        if url.starts_with("http") {
+            try_push_url_media(&mut content, url);
+        }
+    }
+
+    // --- 2. Extract HTTP(S) URLs and local file paths from plain text ---
     let chars: Vec<(usize, char)> = text.char_indices().collect();
     let mut idx = 0;
 
     while idx < chars.len() {
         let (byte_pos, ch) = chars[idx];
 
-        // Look for path start: '/' preceded by a delimiter or start of string
+        // Detect http:// or https:// URLs
+        if ch == 'h' && text[byte_pos..].starts_with("http") {
+            let start_byte = byte_pos;
+            let mut end_idx = idx;
+            while end_idx < chars.len() && !is_url_delimiter(chars[end_idx].1) {
+                end_idx += 1;
+            }
+            let end_byte = if end_idx < chars.len() { chars[end_idx].0 } else { text.len() };
+            let url_str = &text[start_byte..end_byte];
+            idx = end_idx;
+
+            if url_str.starts_with("http://") || url_str.starts_with("https://") {
+                try_push_url_media(&mut content, url_str);
+            }
+            continue;
+        }
+
+        // Detect local file paths: '/' preceded by a delimiter or start of string
         if ch == '/' && (idx == 0 || is_path_prefix(chars[idx - 1].1)) {
             let start_byte = byte_pos;
-            // Advance to end of path
             let mut end_idx = idx;
             while end_idx < chars.len() && !is_path_delimiter(chars[end_idx].1) {
                 end_idx += 1;
@@ -274,11 +301,9 @@ pub async fn extract_media_from_text(text: &str) -> RichContent {
             let path_str = &text[start_byte..end_byte];
             idx = end_idx;
 
-            // Must have a file extension
             if let Some(dot_pos) = path_str.rfind('.') {
                 let ext = &path_str[dot_pos + 1..];
                 if let Some(media_type) = classify_extension(ext) {
-                    // Security: only allow files under home or /tmp
                     let allowed = allowed_prefixes.iter().any(|p| path_str.starts_with(p));
                     if allowed {
                         let path = std::path::Path::new(path_str);
@@ -299,6 +324,48 @@ pub async fn extract_media_from_text(text: &str) -> RichContent {
     }
 
     content
+}
+
+/// Characters that delimit the end of a URL in text.
+fn is_url_delimiter(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\r' | ')' | '"' | '\'' | ']' | '>' | '`' | ';' | '|' | '，' | '。' | '）' | '】')
+}
+
+/// Strip query string and fragment from a URL, returning just the path portion.
+fn strip_url_params(url: &str) -> &str {
+    let s = url.split('?').next().unwrap_or(url);
+    s.split('#').next().unwrap_or(s)
+}
+
+/// Extract the media file extension from a URL, ignoring query params and fragments.
+fn url_media_extension(url: &str) -> Option<&str> {
+    let last_seg = strip_url_params(url).rsplit('/').next()?;
+    let dot_pos = last_seg.rfind('.')?;
+    let ext = &last_seg[dot_pos + 1..];
+    (!ext.is_empty() && ext.len() <= 5).then_some(ext)
+}
+
+/// Extract filename from a URL path.
+fn url_filename(url: &str) -> Option<String> {
+    strip_url_params(url).rsplit('/').next()
+        .filter(|s| !s.is_empty() && s.contains('.'))
+        .map(|s| s.to_string())
+}
+
+/// Try to extract media info from a URL and push to content.media if valid.
+fn try_push_url_media(content: &mut RichContent, url: &str) {
+    if let Some(ext) = url_media_extension(url) {
+        if let Some(media_type) = classify_extension(ext) {
+            if !content.media.iter().any(|m| m.path == url) {
+                content.media.push(MediaAttachment {
+                    media_type,
+                    path: url.to_string(),
+                    filename: url_filename(url),
+                    mime_type: guess_mime(ext),
+                });
+            }
+        }
+    }
 }
 
 /// Supported platform types

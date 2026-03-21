@@ -1,6 +1,6 @@
 use super::llm_client::{chat_completion, chat_completion_stream, LLMConfig, LLMMessage, MessageContent, StreamEvent};
 use super::token_counter::estimate_tokens;
-use super::tools::{builtin_tools_filtered, execute_tool, ToolDefinition};
+use super::tools::{builtin_tools, execute_tool, ToolDefinition};
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
@@ -112,7 +112,7 @@ pub async fn run_react_with_options_persist(
     persist_fn: Option<PersistToolFn>,
 ) -> Result<String, String> {
     let max_iter = max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS);
-    let mut tools = builtin_tools_filtered().await;
+    let mut tools = builtin_tools();
     tools.extend(extra_tools.iter().cloned());
 
     let mut messages: Vec<LLMMessage> = vec![
@@ -326,7 +326,7 @@ where
     F: Fn(AgentStreamEvent) + Send + Clone + 'static,
 {
     let max_iter = max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS);
-    let mut tools = builtin_tools_filtered().await;
+    let mut tools = builtin_tools();
     tools.extend(extra_tools.iter().cloned());
 
     let mut messages: Vec<LLMMessage> = vec![LLMMessage {
@@ -686,7 +686,7 @@ pub async fn build_system_prompt(
     }
 
     // Auto-generate tool list from builtin_tools() and MCP tools
-    let tools = builtin_tools_filtered().await;
+    let tools = builtin_tools();
     let mut tool_lines: Vec<String> = tools
         .iter()
         .map(|t| format!("- {}: {}", t.function.name, t.function.description))

@@ -12,6 +12,7 @@ export interface MessageSource {
   via?: 'bot';
   platform?: string;
   bot_id?: string;
+  bot_name?: string;
   sender_id?: string;
   sender_name?: string;
 }

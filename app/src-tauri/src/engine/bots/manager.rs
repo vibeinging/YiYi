@@ -551,6 +551,24 @@ fn db_messages_to_llm(messages: &[crate::engine::db::ChatMessage]) -> Vec<LLMMes
         .collect()
 }
 
+/// Build common bot reply metadata JSON.
+fn bot_reply_metadata(platform: &str, bot_id: &str, bot_name: &str) -> serde_json::Value {
+    serde_json::json!({
+        "via": "bot",
+        "platform": platform,
+        "bot_id": bot_id,
+        "bot_name": bot_name,
+    })
+}
+
+/// Emit a Tauri event if app_handle is available.
+fn try_emit(app_handle: &Option<tauri::AppHandle>, event: &str, payload: serde_json::Value) {
+    if let Some(ref ah) = app_handle {
+        use tauri::Emitter;
+        ah.emit(event, payload).ok();
+    }
+}
+
 /// Process an incoming message through the ReAct agent with session persistence.
 /// `early_reply` is called once when the agent's first iteration produces text AND
 /// tool calls — the text (agent's natural ack) is sent immediately to the user.
@@ -617,13 +635,16 @@ async fn process_message(
     };
 
     // Save user message to session with bot source metadata
-    let source_metadata = serde_json::json!({
-        "via": "bot",
-        "platform": msg.platform,
-        "bot_id": msg.bot_id,
-        "sender_id": msg.sender_id,
-        "sender_name": msg.sender_name,
-    }).to_string();
+    let bot_name = bot.map(|b| b.name.as_str()).unwrap_or(&msg.platform);
+    let bot_meta = bot_reply_metadata(&msg.platform, &msg.bot_id, bot_name);
+    let source_metadata = {
+        let mut m = bot_meta.clone();
+        if let serde_json::Value::Object(ref mut map) = m {
+            map.insert("sender_id".into(), serde_json::json!(msg.sender_id));
+            map.insert("sender_name".into(), serde_json::json!(msg.sender_name));
+        }
+        m.to_string()
+    };
     state.db.push_message_with_metadata(&session_id, "user", &msg.content, Some(&source_metadata))?;
 
     // Update the last conversation target so agent knows where to send replies
@@ -690,7 +711,14 @@ async fn process_message(
         You are responding as a {} bot to user \"{}\". \
         Just reply naturally to their message. Your response will be sent back to them automatically. \
         Do NOT use send_bot_message, list_bound_bots, or any bot-related tools. \
-        Do NOT explain how the bot system works. Just have a normal conversation.",
+        Do NOT explain how the bot system works. Just have a normal conversation.\n\n\
+        ## Media Capabilities\n\
+        You CAN send images, audio, video, and files in your reply. \
+        To send media, include HTTP(S) URLs pointing to the media files directly in your response text. \
+        For example, include `https://example.com/photo.jpg` and it will be automatically sent as an image. \
+        You can also use Markdown image syntax `![description](url)`. \
+        Local file paths (e.g. screenshots, generated files) will also be sent automatically. \
+        NEVER say you cannot send images or media — you can!",
         msg.platform, sender_display
     ));
 
@@ -732,6 +760,11 @@ async fn process_message(
         msg.content.clone()
     };
 
+    // Notify frontend that bot agent is streaming (so tool calls panel shows)
+    try_emit(&app_handle, "chat://bot_stream_start", serde_json::json!({
+        "session_id": session_id,
+    }));
+
     // Use streaming agent: when first iteration has text + tool_calls,
     // send the text immediately as a natural ack via early_reply callback.
     // We use a tokio::sync::watch channel to safely pass text from the sync
@@ -745,9 +778,12 @@ async fn process_message(
         let early_sent = early_sent.clone();
         let token_buf = token_buf.clone();
         let early_watch_tx = early_watch_tx.clone();
+        let app_for_event = app_handle.clone();
+        let sid_for_event = session_id.clone();
         move |event: react_agent::AgentStreamEvent| {
             match event {
-                react_agent::AgentStreamEvent::ToolStart { .. } => {
+                react_agent::AgentStreamEvent::ToolStart { ref name, ref args_preview } => {
+                    // Early reply: send accumulated text before first tool call
                     if !early_sent.load(std::sync::atomic::Ordering::Relaxed) {
                         let text = token_buf.lock().unwrap().clone();
                         if !text.trim().is_empty() {
@@ -755,11 +791,31 @@ async fn process_message(
                             early_watch_tx.send(text).ok();
                         }
                     }
+                    // Emit tool_status so frontend shows tool calls for bot sessions
+                    try_emit(&app_for_event, "chat://tool_status", serde_json::json!({
+                        "type": "start",
+                        "name": name,
+                        "preview": args_preview,
+                        "session_id": sid_for_event,
+                    }));
                 }
-                react_agent::AgentStreamEvent::Token(token) => {
+                react_agent::AgentStreamEvent::ToolEnd { ref name, ref result_preview } => {
+                    try_emit(&app_for_event, "chat://tool_status", serde_json::json!({
+                        "type": "end",
+                        "name": name,
+                        "preview": result_preview,
+                        "session_id": sid_for_event,
+                    }));
+                }
+                react_agent::AgentStreamEvent::Token(ref token) => {
                     if !early_sent.load(std::sync::atomic::Ordering::Relaxed) {
-                        token_buf.lock().unwrap().push_str(&token);
+                        token_buf.lock().unwrap().push_str(token);
                     }
+                    // Emit streaming tokens so frontend shows live text for bot sessions
+                    try_emit(&app_for_event, "chat://stream_chunk", serde_json::json!({
+                        "text": token,
+                        "session_id": sid_for_event,
+                    }));
                 }
                 _ => {}
             }
@@ -783,11 +839,7 @@ async fn process_message(
             let sid = session_id.clone();
             let app_h = app_handle.clone();
             let bot_id_for_early = msg.bot_id.clone();
-            let reply_meta = serde_json::json!({
-                "via": "bot",
-                "platform": msg.platform,
-                "bot_id": msg.bot_id,
-            }).to_string();
+            let reply_meta = bot_meta.to_string();
             let send_task = tokio::spawn(async move {
                 // Wait for the watch channel to receive early text or be closed
                 if early_watch_rx.changed().await.is_ok() {
@@ -803,14 +855,11 @@ async fn process_message(
                         // Save early reply to DB so it shows in YiYi
                         db_ref.push_message_with_metadata(&sid, "assistant", &text, Some(&reply_meta)).ok();
                         // Notify frontend to refresh messages
-                        if let Some(ref ah) = app_h {
-                            use tauri::Emitter;
-                            ah.emit("bot://early-reply", serde_json::json!({
-                                "bot_id": bot_id_for_early,
-                                "session_id": sid,
-                                "content": text,
-                            })).ok();
-                        }
+                        try_emit(&app_h, "bot://early-reply", serde_json::json!({
+                            "bot_id": bot_id_for_early,
+                            "session_id": sid,
+                            "content": text,
+                        }));
                     }
                 }
             });
@@ -837,11 +886,7 @@ async fn process_message(
     ).await?;
 
     // Save assistant reply to session with bot metadata
-    let bot_reply_meta = serde_json::json!({
-        "via": "bot",
-        "platform": msg.platform,
-        "bot_id": msg.bot_id,
-    }).to_string();
+    let bot_reply_meta = bot_meta.to_string();
     let early = early_saved_text.lock().await.clone();
     let should_save = !reply.is_empty() && reply != "(no response)";
     if should_save {
@@ -852,6 +897,11 @@ async fn process_message(
         }
     }
     // If early text == final reply, skip duplicate save
+
+    // Notify frontend that bot agent streaming is done
+    try_emit(&app_handle, "chat://bot_stream_end", serde_json::json!({
+        "session_id": session_id,
+    }));
 
     Ok((reply, session_id))
 }

@@ -32,6 +32,8 @@ pub struct MessageSource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bot_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub bot_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sender_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sender_name: Option<String>,
@@ -1446,6 +1448,7 @@ pub async fn get_history(
                         via: Some("bot".into()),
                         platform: mv["platform"].as_str().map(|s| s.into()),
                         bot_id: mv["bot_id"].as_str().map(|s| s.into()),
+                        bot_name: mv["bot_name"].as_str().map(|s| s.into()),
                         sender_id: mv["sender_id"].as_str().map(|s| s.into()),
                         sender_name: mv["sender_name"].as_str().map(|s| s.into()),
                     })

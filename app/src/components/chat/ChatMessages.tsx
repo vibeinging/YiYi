@@ -508,8 +508,8 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                           border: '1px solid var(--color-border)',
                         }}>
                           {msg.role === 'user'
-                            ? `${msg.source.sender_name || msg.source.sender_id || ''} via ${msg.source.platform}`
-                            : `via ${msg.source.platform}`}
+                            ? `${msg.source.sender_name || msg.source.sender_id || ''} via ${msg.source.bot_name || msg.source.platform}`
+                            : `via ${msg.source.bot_name || msg.source.platform}`}
                         </span>
                       )}
                     </div>
