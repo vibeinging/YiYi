@@ -811,11 +811,14 @@ async fn process_message(
                     if !early_sent.load(std::sync::atomic::Ordering::Relaxed) {
                         token_buf.lock().unwrap().push_str(token);
                     }
-                    // Emit streaming tokens so frontend shows live text for bot sessions
-                    try_emit(&app_for_event, "chat://stream_chunk", serde_json::json!({
-                        "text": token,
-                        "session_id": sid_for_event,
-                    }));
+                    // Strip internal markers and emit streaming tokens
+                    let clean = crate::engine::tools::strip_stage_markers(token);
+                    if !clean.is_empty() {
+                        try_emit(&app_for_event, "chat://stream_chunk", serde_json::json!({
+                            "text": clean,
+                            "session_id": sid_for_event,
+                        }));
+                    }
                 }
                 _ => {}
             }

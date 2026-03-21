@@ -157,10 +157,14 @@ pub async fn chat_stream_start(
         let on_event = move |evt: react_agent::AgentStreamEvent| {
             match &evt {
                 react_agent::AgentStreamEvent::Token(text) => {
-                    handle.emit("chat://chunk", serde_json::json!({
-                        "text": text,
-                        "session_id": sid_for_event,
-                    })).ok();
+                    // Strip internal markers before sending to frontend
+                    let clean = crate::engine::tools::strip_stage_markers(text);
+                    if !clean.is_empty() {
+                        handle.emit("chat://chunk", serde_json::json!({
+                            "text": clean,
+                            "session_id": sid_for_event,
+                        })).ok();
+                    }
                     if let Ok(mut ss) = ss_for_event.lock() {
                         if let Some(snap) = ss.get_mut(&sid_for_event) {
                             snap.accumulated_text.push_str(text);

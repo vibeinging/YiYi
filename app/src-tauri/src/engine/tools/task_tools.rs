@@ -625,7 +625,7 @@ pub fn spawn_task_execution(
 }
 
 /// Strip `[STAGE_COMPLETE: N]` markers from text so they don't appear in frontend.
-fn strip_stage_markers(text: &str) -> String {
+pub fn strip_stage_markers(text: &str) -> String {
     let mut result = text.to_string();
     while let Some(start) = result.find("[STAGE_COMPLETE:") {
         if let Some(end) = result[start..].find(']') {

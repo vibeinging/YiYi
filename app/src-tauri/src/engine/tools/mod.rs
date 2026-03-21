@@ -743,6 +743,12 @@ pub fn write_progress_json(progress_dir: &std::path::Path, data: &serde_json::Va
     }
 }
 
+/// Strip `[STAGE_COMPLETE: N]` markers from text.
+/// Re-exported for use from `commands/agent/chat.rs`.
+pub fn strip_stage_markers(text: &str) -> String {
+    task_tools::strip_stage_markers(text)
+}
+
 /// Background task that executes a created task via a ReAct Agent.
 /// Re-exported for use from `commands/tasks.rs` and `lib.rs`.
 pub fn spawn_task_execution(
