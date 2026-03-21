@@ -184,6 +184,8 @@ html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  background: #0E0C1A;
+  overscroll-behavior: none;
 }
 
 body {
@@ -195,6 +197,7 @@ body {
   background: #131014;
   min-height: 100vh;
   transition: color var(--transition-normal);
+  overscroll-behavior: none;
 }
 
 body.tauri-vibrancy {
