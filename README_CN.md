@@ -11,11 +11,11 @@
 她不是工具，是伙伴。<br/>
 她能操控你的电脑，记住你的习惯，连接你的世界，并在每一次互动中变得更懂你。
 
-[![GitHub release](https://img.shields.io/github/v/release/HungryFour/YiYi?style=flat-square&color=orange)](https://github.com/HungryFour/YiYi/releases)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue?style=flat-square)](https://github.com/HungryFour/YiYi/releases)
-[![License](https://img.shields.io/github/license/HungryFour/YiYi?style=flat-square)](LICENSE)
+[![GitHub release](https://img.shields.io/github/v/release/vibeinging/YiYi?style=flat-square&color=orange)](https://github.com/vibeinging/YiYi/releases)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue?style=flat-square)](https://github.com/vibeinging/YiYi/releases)
+[![License](https://img.shields.io/github/license/vibeinging/YiYi?style=flat-square)](LICENSE)
 
-**[立即下载](https://github.com/HungryFour/YiYi/releases)**
+**[立即下载](https://github.com/vibeinging/YiYi/releases)**
 
 </div>
 
@@ -89,7 +89,7 @@ YiYi 原生支持 **MCP（Model Context Protocol）**：
 
 **Tauri 2 · Rust · React · TypeScript · SQLite · MCP**
 
-**[下载 YiYi](https://github.com/HungryFour/YiYi/releases)** · [反馈建议](https://github.com/HungryFour/YiYi/issues)
+**[下载 YiYi](https://github.com/vibeinging/YiYi/releases)** · [反馈建议](https://github.com/vibeinging/YiYi/issues)
 
 ---
 

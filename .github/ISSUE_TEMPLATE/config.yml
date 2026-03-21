@@ -5,8 +5,8 @@ blank_issues_enabled: true
 
 contact_links:
   - name: GitHub Discussions
-    url: https://github.com/HungryFour/YiPaw/discussions
-    about: Ask questions, share ideas, or discuss YiPaw here.
+    url: https://github.com/vibeinging/YiYi/discussions
+    about: Ask questions, share ideas, or discuss YiYi here.
   - name: View docs
     url: https://yipaw.agentscope.io/
-    about: YiPaw docs and guides.
+    about: YiYi docs and guides.

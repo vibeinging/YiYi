@@ -4,7 +4,7 @@ version = "0.0.1"
 description = "A Tauri App"
 authors = ["you"]
 license = "Apache-2.0"
-repository = "https://github.com/HungryFour/YiYi"
+repository = "https://github.com/vibeinging/YiYi"
 edition = "2021"
 rust-version = "1.77.2"
 
