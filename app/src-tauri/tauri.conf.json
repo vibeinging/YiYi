@@ -20,6 +20,7 @@
         "resizable": true,
         "fullscreen": false,
         "transparent": true,
+        "visible": false,
         "decorations": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true
@@ -48,6 +49,7 @@
     "createUpdaterArtifacts": true,
     "macOS": {
       "frameworks": ["libs/libpython3.13.dylib"],
+      "signingIdentity": "Developer ID Application: Jian ming Wu (BB5VK42K87)",
       "dmg": {
         "appPosition": { "x": 180, "y": 170 },
         "applicationFolderPosition": { "x": 480, "y": 170 },
@@ -65,7 +67,7 @@
       "endpoints": [
         "https://github.com/HungryFour/YiYi/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIzRTUwNDJFQjYwREJGM0MKUldROHZ3MjJMZ1RscytRWHQrUEtmOWlRMmt3S2FBUTJOUDBkNFA5YWd2bEdmbFc3RU9xcUt2MHYK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJERTY5RkE4QkREQTg4MjUKUldRbGlOcTlxSi9tTFY3Y3RFd1VyR3BCWk16TWJkWlJseVhkNVorU2YyN3ZBalpDb3FJeU5JaGoK"
     }
   }
 }

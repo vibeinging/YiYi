@@ -57,10 +57,24 @@ build_target() {
     mkdir -p "$LIBS_DIR"
     cp "$dylib" "$LIBS_DIR/libpython3.13.dylib"
 
+    # Disable updater signing if no private key
+    local conf="$TAURI_DIR/tauri.conf.json"
+    local updater_disabled=false
+    if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+        echo "  ⚠️ No TAURI_SIGNING_PRIVATE_KEY, disabling updater artifacts"
+        sed -i.bak 's/"createUpdaterArtifacts": true/"createUpdaterArtifacts": false/' "$conf"
+        updater_disabled=true
+    fi
+
     # Build with correct PYO3_PYTHON
     echo "  Running tauri build --target $target..."
     cd "$APP_DIR"
     PYO3_PYTHON="$python" npm run tauri build -- --target "$target"
+
+    # Restore updater config if modified
+    if [ "$updater_disabled" = true ] && [ -f "$conf.bak" ]; then
+        mv "$conf.bak" "$conf"
+    fi
 
     # Post-process: fix rpath in the built binary
     local binary="$TAURI_DIR/target/$target/release/yiyi"
@@ -89,6 +103,41 @@ build_target() {
         otool -L "$app_binary" | grep python
     fi
 
+    # Sign all binaries inside wheels (.so files in .whl zips)
+    echo "  Signing binaries inside wheels..."
+    local wheels_dir="$app_dir/Contents/Resources/wheels"
+    if [ -d "$wheels_dir" ]; then
+        local tmp_whl="/tmp/yiyi_whl_resign"
+        for whl in "$wheels_dir"/*.whl; do
+            [ -f "$whl" ] || continue
+            # Check if whl contains .so files
+            if unzip -l "$whl" 2>/dev/null | grep -qE '\.(so|dylib)$'; then
+                echo "    Signing binaries in $(basename "$whl")..."
+                rm -rf "$tmp_whl"
+                mkdir -p "$tmp_whl"
+                unzip -q "$whl" -d "$tmp_whl"
+                find "$tmp_whl" \( -name "*.so" -o -name "*.dylib" \) -exec \
+                    codesign --force --options runtime --timestamp \
+                    --sign "Developer ID Application: Jian ming Wu (BB5VK42K87)" {} \;
+                # Repack the whl
+                (cd "$tmp_whl" && zip -q -r "$whl" .)
+                rm -rf "$tmp_whl"
+            fi
+        done
+    fi
+
+    # Sign .so and .dylib files inside python-stdlib
+    echo "  Signing python stdlib binaries..."
+    find "$app_dir/Contents/Resources/python-stdlib" \( -name "*.so" -o -name "*.dylib" \) -exec \
+        codesign --force --options runtime --timestamp \
+        --sign "Developer ID Application: Jian ming Wu (BB5VK42K87)" {} \; 2>/dev/null || true
+
+    # Re-sign the app after all fixes
+    echo "  Re-signing app bundle..."
+    codesign --deep --force --options runtime --timestamp \
+        --sign "Developer ID Application: Jian ming Wu (BB5VK42K87)" \
+        "$app_dir" || echo "  ⚠️ Signing failed"
+
     # Re-create DMG with fixed binary
     local dmg_dir="$TAURI_DIR/target/$target/release/bundle/dmg"
     local dmg_name
@@ -100,6 +149,20 @@ build_target() {
     echo "  Re-creating DMG..."
     rm -f "$dmg_dir/$dmg_name"
     hdiutil create -volname "YiYi" -srcfolder "$app_dir" -ov -format UDZO "$dmg_dir/$dmg_name" 2>/dev/null
+
+    # Notarize if credentials are available
+    if [ -n "$APPLE_ID" ] && [ -n "$APPLE_APP_PASSWORD" ]; then
+        echo "  Submitting for notarization..."
+        xcrun notarytool submit "$dmg_dir/$dmg_name" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "BB5VK42K87" \
+            --wait
+        echo "  Stapling notarization ticket..."
+        xcrun stapler staple "$dmg_dir/$dmg_name" 2>/dev/null || true
+    else
+        echo "  ⚠️ Skipping notarization (set APPLE_ID and APPLE_APP_PASSWORD env vars)"
+    fi
 
     echo "  Done! Output:"
     ls -lh "$dmg_dir/$dmg_name"
