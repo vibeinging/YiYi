@@ -8,23 +8,13 @@ import { useTranslation } from 'react-i18next';
 import {
   Bot,
   Plus,
-  Trash2,
-  Edit,
   RefreshCw,
   Send,
-  X,
   Power,
   PowerOff,
   Users,
-  ChevronDown,
-  ChevronRight,
-  MessageSquare,
-  ExternalLink,
-  Sparkles,
 } from 'lucide-react';
-import { open } from '@tauri-apps/plugin-shell';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { Select } from '../components/Select';
 import {
   listBots,
   listPlatforms,
@@ -39,143 +29,16 @@ import {
   type PlatformType,
   type PlatformInfo,
   type BotStatusInfo,
-  type BotConnectionState,
 } from '../api/bots';
 import { PageHeader } from '../components/PageHeader';
 import { SessionsPanel } from './Sessions';
 import { toast, confirm } from '../components/Toast';
-import { BotSetupGuide, hasSetupGuide } from '../components/BotSetupGuide';
+import { PLATFORM_META } from '../components/bots/platformMeta';
+import { BotCard } from '../components/bots/BotCard';
+import { BotFormDialog, emptyDialog, type BotDialog } from '../components/bots/BotFormDialog';
+import { SendMessageModal } from '../components/bots/SendMessageModal';
 
 type BotsTab = 'bots' | 'sessions';
-
-/* Platform metadata */
-interface PlatformMeta {
-  icon: string;
-  color: string;
-  docUrl: string;
-  docLabel: string;
-  configFields: { key: string; label: string; placeholder: string; secret?: boolean }[];
-}
-
-const PLATFORM_META: Record<string, PlatformMeta> = {
-  discord: {
-    icon: '🎮',
-    color: '#5865F2',
-    docUrl: 'https://discord.com/developers/docs/intro',
-    docLabel: 'Discord Developer Docs',
-    configFields: [
-      { key: 'bot_token', label: 'Bot Token', placeholder: 'MTxxxxxxxx.xxxxxx.xxxxxxxx', secret: true },
-    ],
-  },
-  telegram: {
-    icon: '✈️',
-    color: '#26A5E4',
-    docUrl: 'https://core.telegram.org/bots/api',
-    docLabel: 'Telegram Bot API Docs',
-    configFields: [
-      { key: 'bot_token', label: 'Bot Token', placeholder: '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11', secret: true },
-    ],
-  },
-  qq: {
-    icon: '🐧',
-    color: '#12B7F5',
-    docUrl: 'https://bot.q.qq.com/wiki/develop/api-v2/',
-    docLabel: 'QQ Bot Docs',
-    configFields: [
-      { key: 'app_id', label: 'App ID', placeholder: '10xxxxxxx' },
-      { key: 'client_secret', label: 'Client Secret (AppSecret)', placeholder: 'xxxxx', secret: true },
-    ],
-  },
-  dingtalk: {
-    icon: '🔔',
-    color: '#0A6CFF',
-    docUrl: 'https://open.dingtalk.com/document/orgapp/robot-overview',
-    docLabel: 'DingTalk Bot Docs',
-    configFields: [
-      { key: 'client_id', label: 'Client ID (AppKey)', placeholder: 'dingxxxxxxxxx' },
-      { key: 'client_secret', label: 'Client Secret (AppSecret)', placeholder: 'xxxxx', secret: true },
-    ],
-  },
-  feishu: {
-    icon: '🚀',
-    color: '#3370FF',
-    docUrl: 'https://open.feishu.cn/document/client-docs/bot-v3/bot-overview',
-    docLabel: 'Feishu Bot Docs',
-    configFields: [
-      { key: 'app_id', label: 'App ID', placeholder: 'cli_xxxxx' },
-      { key: 'app_secret', label: 'App Secret', placeholder: 'xxxxx', secret: true },
-    ],
-  },
-  wecom: {
-    icon: '🏢',
-    color: '#07C160',
-    docUrl: 'https://developer.work.weixin.qq.com/document/path/90664',
-    docLabel: 'WeCom Docs',
-    configFields: [
-      { key: 'corp_id', label: 'Corp ID', placeholder: 'wwxxxxxxxx' },
-      { key: 'corp_secret', label: 'Corp Secret', placeholder: 'xxxxx', secret: true },
-      { key: 'agent_id', label: 'Agent ID', placeholder: '1000002' },
-    ],
-  },
-  webhook: {
-    icon: '🔗',
-    color: '#6B7280',
-    docUrl: '',
-    docLabel: '',
-    configFields: [
-      { key: 'webhook_url', label: 'Webhook URL', placeholder: 'https://your-server.com/webhook' },
-      { key: 'port', label: 'Listen Port', placeholder: '9090' },
-    ],
-  },
-};
-
-/** Colored dot indicating bot connection status */
-function StatusDot({ state, message }: { state: BotConnectionState; message?: string | null }) {
-  const dotStyle: Record<BotConnectionState, { bg: string; pulse: boolean; label: string }> = {
-    connected:    { bg: 'var(--color-success)',      pulse: true,  label: 'Connected' },
-    connecting:   { bg: 'var(--color-warning, #EAB308)', pulse: false, label: 'Connecting' },
-    reconnecting: { bg: 'var(--color-warning, #EAB308)', pulse: false, label: 'Reconnecting' },
-    error:        { bg: 'var(--color-error)',         pulse: false, label: 'Error' },
-    disconnected: { bg: 'var(--color-text-muted)',    pulse: false, label: 'Disconnected' },
-  };
-  const info = dotStyle[state] || dotStyle.disconnected;
-  const title = message ? `${info.label}: ${message}` : info.label;
-
-  return (
-    <span className="relative inline-flex items-center" title={title}>
-      {info.pulse && (
-        <span
-          className="absolute inline-flex h-full w-full rounded-full opacity-60 animate-ping"
-          style={{ background: info.bg }}
-        />
-      )}
-      <span
-        className="relative inline-block w-2 h-2 rounded-full"
-        style={{ background: info.bg }}
-      />
-    </span>
-  );
-}
-
-interface BotDialog {
-  open: boolean;
-  mode: 'create' | 'edit';
-  id: string;
-  name: string;
-  platform: PlatformType;
-  config: Record<string, string>;
-  enabled: boolean;
-}
-
-const emptyDialog: BotDialog = {
-  open: false,
-  mode: 'create',
-  id: '',
-  name: '',
-  platform: 'discord',
-  config: {},
-  enabled: true,
-};
 
 interface BotsPageProps {
   consumeNotifContext?: () => Record<string, unknown> | null;
@@ -530,159 +393,19 @@ export function BotsPage({ consumeNotifContext }: BotsPageProps) {
               </div>
             ) : (
               <div className="space-y-3">
-                {bots.map((bot) => {
-                  const meta = PLATFORM_META[bot.platform] || PLATFORM_META.webhook;
-                  const isExpanded = expandedBot === bot.id;
-
-                  return (
-                    <div
-                      key={bot.id}
-                      className="rounded-2xl border transition-all"
-                      style={{
-                        background: 'var(--color-bg-elevated)',
-                        borderColor: isExpanded ? meta.color + '40' : 'var(--color-border)',
-                        boxShadow: isExpanded ? `0 0 0 1px ${meta.color}20` : 'none',
-                        opacity: bot.enabled ? 1 : 0.6,
-                      }}
-                    >
-                      {/* Header row */}
-                      <div
-                        className="flex items-center gap-4 px-5 py-4 cursor-pointer select-none"
-                        onClick={() => setExpandedBot(isExpanded ? null : bot.id)}
-                      >
-                        {/* Icon */}
-                        <div
-                          className="w-10 h-10 rounded-xl flex items-center justify-center text-lg shrink-0"
-                          style={{ background: meta.color + '15' }}
-                        >
-                          {meta.icon}
-                        </div>
-
-                        {/* Name + platform */}
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2.5">
-                            <span className="font-semibold text-[15px]" style={{ color: 'var(--color-text)' }}>
-                              {bot.name}
-                            </span>
-                            {/* Connection status dot */}
-                            <StatusDot
-                              state={botStatuses[bot.id]?.state || ('disconnected')}
-                              message={botStatuses[bot.id]?.message}
-                            />
-                            <span
-                              className="text-[11px] px-2 py-0.5 rounded-full font-medium"
-                              style={{
-                                background: bot.enabled ? 'var(--color-success)' + '18' : 'var(--color-text-muted)' + '18',
-                                color: bot.enabled ? 'var(--color-success)' : 'var(--color-text-muted)',
-                              }}
-                            >
-                              {bot.enabled ? t('bots.enabled') : t('bots.disabled')}
-                            </span>
-                          </div>
-                          <div className="text-[12px] mt-0.5 flex items-center gap-2" style={{ color: 'var(--color-text-muted)' }}>
-                            <span>{getPlatformName(bot.platform)}</span>
-                            <span className="opacity-50">·</span>
-                            <span className="font-mono text-[11px]">{bot.id.slice(0, 8)}...</span>
-                          </div>
-                        </div>
-
-                        {/* Actions */}
-                        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                          {/* Toggle */}
-                          <label className="relative inline-flex items-center shrink-0">
-                            <input
-                              type="checkbox"
-                              checked={bot.enabled}
-                              onChange={() => handleToggleEnabled(bot)}
-                              className="sr-only peer"
-                            />
-                            <div
-                              className="w-10 h-[22px] rounded-full transition-colors duration-200 peer-checked:bg-[var(--color-success)] cursor-pointer"
-                              style={{ background: bot.enabled ? undefined : 'var(--color-bg-muted)' }}
-                            >
-                              <div
-                                className="absolute top-[3px] left-[3px] w-4 h-4 bg-white rounded-full shadow-sm transition-transform duration-200"
-                                style={{ transform: bot.enabled ? 'translateX(18px)' : 'translateX(0)' }}
-                              />
-                            </div>
-                          </label>
-
-                          <button
-                            onClick={() => openEditDialog(bot)}
-                            className="p-2 rounded-lg transition-colors"
-                            style={{ color: 'var(--color-text-secondary)' }}
-                            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
-                            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                          >
-                            <Edit size={15} />
-                          </button>
-                          <button
-                            onClick={() => handleDelete(bot)}
-                            className="p-2 rounded-lg transition-colors"
-                            style={{ color: 'var(--color-error)' }}
-                            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-error)' + '10'; }}
-                            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                          >
-                            <Trash2 size={15} />
-                          </button>
-                        </div>
-
-                        {/* Expand arrow */}
-                        <div style={{ color: 'var(--color-text-muted)' }}>
-                          {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                        </div>
-                      </div>
-
-                      {/* Expanded details */}
-                      {isExpanded && (
-                        <div className="px-5 pb-5 pt-0">
-                          <div className="h-px mb-4" style={{ background: 'var(--color-border)' }} />
-
-                          {/* Doc link */}
-                          {meta.docUrl && (
-                            <button
-                              onClick={() => open(meta.docUrl)}
-                              className="inline-flex items-center gap-1.5 text-[13px] font-medium mb-4 transition-opacity hover:opacity-80"
-                              style={{ color: meta.color }}
-                            >
-                              <ExternalLink size={14} />
-                              {meta.docLabel}
-                            </button>
-                          )}
-
-                          {/* Config fields (read-only display) */}
-                          <div className="space-y-2">
-                            {meta.configFields.map((field) => {
-                              const val = (bot.config as any)?.[field.key];
-                              return (
-                                <div key={field.key} className="flex items-center gap-3">
-                                  <span className="text-[12px] font-medium w-28 shrink-0" style={{ color: 'var(--color-text-secondary)' }}>
-                                    {field.label}
-                                  </span>
-                                  <span className="text-[13px] font-mono truncate" style={{ color: val ? 'var(--color-text)' : 'var(--color-text-muted)' }}>
-                                    {val ? (field.secret ? '••••••••' : String(val)) : '(not set)'}
-                                  </span>
-                                </div>
-                              );
-                            })}
-                          </div>
-
-                          {/* Edit button */}
-                          <div className="mt-4 flex justify-end">
-                            <button
-                              onClick={() => openEditDialog(bot)}
-                              className="flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-medium transition-colors text-white"
-                              style={{ background: meta.color }}
-                            >
-                              <Edit size={14} />
-                              {t('common.edit')}
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                {bots.map((bot) => (
+                  <BotCard
+                    key={bot.id}
+                    bot={bot}
+                    isExpanded={expandedBot === bot.id}
+                    onToggleExpand={() => setExpandedBot(expandedBot === bot.id ? null : bot.id)}
+                    onEdit={() => openEditDialog(bot)}
+                    onDelete={() => handleDelete(bot)}
+                    onToggleEnabled={() => handleToggleEnabled(bot)}
+                    status={botStatuses[bot.id]}
+                    getPlatformName={getPlatformName}
+                  />
+                ))}
               </div>
             )}
           </div>
@@ -690,300 +413,27 @@ export function BotsPage({ consumeNotifContext }: BotsPageProps) {
       )}
 
       {/* Create/Edit dialog */}
-      {dialog.open && (() => {
-        const showGuide = dialog.mode === 'create' && hasSetupGuide(dialog.platform);
-        const isZh = t('bots.title') !== 'Bots';
-        return (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div
-            className={`rounded-3xl p-6 w-full shadow-2xl border max-h-[85vh] overflow-y-auto transition-all ${
-              showGuide ? 'max-w-2xl' : 'max-w-md'
-            }`}
-            style={{ background: 'var(--color-bg-elevated)', borderColor: 'var(--color-border)' }}
-          >
-            <div className="flex items-center justify-between mb-5">
-              <h2 className="font-semibold text-[15px]">
-                {dialog.mode === 'create' ? t('bots.createTitle') : t('bots.editTitle')}
-              </h2>
-              <button
-                onClick={() => setDialog({ ...emptyDialog })}
-                className="p-2 rounded-xl transition-colors"
-                style={{ color: 'var(--color-text-secondary)' }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              {/* Name */}
-              <div>
-                <label className="block text-[13px] font-medium mb-2" style={{ color: 'var(--color-text-secondary)' }}>
-                  {t('bots.botName')} *
-                </label>
-                <input
-                  type="text"
-                  value={dialog.name}
-                  onChange={(e) => setDialog({ ...dialog, name: e.target.value })}
-                  placeholder={t('bots.botNamePlaceholder')}
-                  className="w-full rounded-xl border px-4 py-2.5 text-[13px] focus:outline-none focus:ring-2 transition-shadow"
-                  style={{ background: 'var(--color-bg)', borderColor: 'var(--color-border)', color: 'var(--color-text)' }}
-                />
-              </div>
-
-              {/* Platform — card-style selector for create mode */}
-              <div>
-                <label className="block text-[13px] font-medium mb-2" style={{ color: 'var(--color-text-secondary)' }}>
-                  {t('bots.platform')} *
-                </label>
-                {dialog.mode === 'create' ? (
-                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-                    {Object.keys(PLATFORM_META).map((p) => {
-                      const meta = PLATFORM_META[p];
-                      const isActive = dialog.platform === p;
-                      const hasGuide = hasSetupGuide(p);
-                      return (
-                        <button
-                          key={p}
-                          type="button"
-                          onClick={() => setDialog({ ...dialog, platform: p as PlatformType, config: {} })}
-                          className="relative flex flex-col items-center gap-1.5 px-2 py-3 rounded-xl border text-center transition-all"
-                          style={{
-                            borderColor: isActive ? meta.color : 'var(--color-border)',
-                            background: isActive ? meta.color + '08' : 'var(--color-bg)',
-                            boxShadow: isActive ? `0 0 0 1px ${meta.color}40` : 'none',
-                          }}
-                        >
-                          <span className="text-xl leading-none">{meta.icon}</span>
-                          <span
-                            className="text-[11px] font-medium leading-tight"
-                            style={{ color: isActive ? meta.color : 'var(--color-text-secondary)' }}
-                          >
-                            {getPlatformName(p)}
-                          </span>
-                          {hasGuide && (
-                            <span
-                              className="absolute -top-1.5 -right-1.5 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-bold text-white shadow-sm"
-                              style={{ background: 'linear-gradient(135deg, var(--color-primary), #A855F7)' }}
-                            >
-                              <Sparkles size={8} />
-                              AI
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <Select
-                    value={dialog.platform}
-                    onChange={(v) => setDialog({ ...dialog, platform: v as PlatformType, config: {} })}
-                    options={Object.keys(PLATFORM_META).map((p) => ({
-                      value: p,
-                      label: `${PLATFORM_META[p].icon} ${getPlatformName(p)}`,
-                    }))}
-                    fullWidth
-                    disabled
-                  />
-                )}
-              </div>
-
-              {/* Guided setup wizard for supported platforms */}
-              {showGuide ? (
-                <BotSetupGuide
-                  platform={dialog.platform as 'feishu' | 'dingtalk' | 'wecom'}
-                  config={dialog.config}
-                  onConfigChange={(c) => setDialog({ ...dialog, config: c })}
-                  onComplete={handleSave}
-                  lang={isZh ? 'zh' : 'en'}
-                />
-              ) : (
-                <>
-                  {/* Platform doc link */}
-                  {PLATFORM_META[dialog.platform]?.docUrl && (
-                    <div
-                      className="flex items-center gap-3 px-4 py-3 rounded-xl"
-                      style={{ background: PLATFORM_META[dialog.platform].color + '08', border: `1px solid ${PLATFORM_META[dialog.platform].color}20` }}
-                    >
-                      <div
-                        className="w-8 h-8 rounded-lg flex items-center justify-center text-base shrink-0"
-                        style={{ background: PLATFORM_META[dialog.platform].color + '15' }}
-                      >
-                        {PLATFORM_META[dialog.platform].icon}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
-                          {t('bots.platformDocHint')}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => open(PLATFORM_META[dialog.platform].docUrl)}
-                        className="shrink-0 inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-opacity hover:opacity-80 text-white"
-                        style={{ background: PLATFORM_META[dialog.platform].color }}
-                      >
-                        <ExternalLink size={12} />
-                        {t('bots.platformDoc')}
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Platform config fields */}
-                  <div>
-                    <label className="block text-[13px] font-medium mb-2" style={{ color: 'var(--color-text-secondary)' }}>
-                      {t('bots.config')}
-                    </label>
-                    <div className="space-y-3">
-                      {(PLATFORM_META[dialog.platform]?.configFields || []).map((field) => (
-                        <div key={field.key}>
-                          <label className="block text-[12px] mb-1" style={{ color: 'var(--color-text-muted)' }}>
-                            {field.label}
-                          </label>
-                          <input
-                            type={field.secret ? 'password' : 'text'}
-                            value={dialog.config[field.key] || ''}
-                            onChange={(e) => setDialog({
-                              ...dialog,
-                              config: { ...dialog.config, [field.key]: e.target.value },
-                            })}
-                            placeholder={field.placeholder}
-                            className="w-full rounded-xl border px-3.5 py-2.5 text-[13px] font-mono focus:outline-none focus:ring-2 transition-shadow"
-                            style={{ background: 'var(--color-bg)', borderColor: 'var(--color-border)', color: 'var(--color-text)' }}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {/* Enable toggle */}
-              <div className="flex items-center gap-3">
-                <input
-                  type="checkbox"
-                  id="bot-enabled"
-                  checked={dialog.enabled}
-                  onChange={(e) => setDialog({ ...dialog, enabled: e.target.checked })}
-                  className="accent-[var(--color-primary)]"
-                />
-                <label htmlFor="bot-enabled" className="text-[13px]">
-                  {t('bots.enabled')}
-                </label>
-              </div>
-            </div>
-
-            {/* Hide default buttons when guided wizard handles completion */}
-            {!showGuide && (
-              <div className="flex justify-end gap-3 mt-6">
-                <button
-                  onClick={() => setDialog({ ...emptyDialog })}
-                  className="px-4 py-2.5 text-[13px] font-medium rounded-xl transition-colors"
-                  onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                >
-                  {t('common.cancel')}
-                </button>
-                <button
-                  onClick={handleSave}
-                  disabled={saving || !dialog.name.trim()}
-                  className="px-4 py-2.5 text-[13px] font-medium text-white rounded-xl disabled:opacity-50 transition-colors shadow-sm"
-                  style={{ background: 'var(--color-primary)' }}
-                >
-                  {saving ? t('common.saving') : (dialog.mode === 'create' ? t('common.create') : t('common.save'))}
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-        );
-      })()}
+      {dialog.open && (
+        <BotFormDialog
+          dialog={dialog}
+          saving={saving}
+          onDialogChange={setDialog}
+          onClose={() => setDialog({ ...emptyDialog })}
+          onSave={handleSave}
+          getPlatformName={getPlatformName}
+        />
+      )}
 
       {/* Send message modal */}
       {showSendModal && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div
-            className="rounded-3xl p-6 w-full max-w-md shadow-2xl border"
-            style={{ background: 'var(--color-bg-elevated)', borderColor: 'var(--color-border)' }}
-          >
-            <div className="flex items-center justify-between mb-5">
-              <h2 className="font-semibold tracking-tight">{t('bots.sendTitle')}</h2>
-              <button
-                onClick={() => setShowSendModal(false)}
-                className="p-2 rounded-xl transition-colors"
-                style={{ color: 'var(--color-text-secondary)' }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-[13px] font-medium mb-2" style={{ color: 'var(--color-text-secondary)' }}>
-                  {t('bots.selectBot')}
-                </label>
-                <Select
-                  value={sendForm.botId}
-                  onChange={(v) => setSendForm({ ...sendForm, botId: v })}
-                  options={bots.filter(b => b.enabled).map((b) => ({
-                    value: b.id,
-                    label: `${PLATFORM_META[b.platform]?.icon || '🤖'} ${b.name}`,
-                  }))}
-                  fullWidth
-                />
-              </div>
-
-              <div>
-                <label className="block text-[13px] font-medium mb-2" style={{ color: 'var(--color-text-secondary)' }}>
-                  {t('bots.targetId')}
-                </label>
-                <input
-                  type="text"
-                  value={sendForm.target}
-                  onChange={(e) => setSendForm({ ...sendForm, target: e.target.value })}
-                  placeholder={t('bots.targetIdPlaceholder')}
-                  className="w-full rounded-xl border px-4 py-2.5 text-[13px] focus:outline-none focus:ring-2 transition-shadow"
-                  style={{ background: 'var(--color-bg)', borderColor: 'var(--color-border)', color: 'var(--color-text)' }}
-                />
-              </div>
-
-              <div>
-                <label className="block text-[13px] font-medium mb-2" style={{ color: 'var(--color-text-secondary)' }}>
-                  {t('bots.messageContent')}
-                </label>
-                <textarea
-                  value={sendForm.content}
-                  onChange={(e) => setSendForm({ ...sendForm, content: e.target.value })}
-                  placeholder={t('bots.messagePlaceholder')}
-                  rows={4}
-                  className="w-full resize-none rounded-xl border px-4 py-2.5 text-[13px] focus:outline-none focus:ring-2 transition-shadow"
-                  style={{ background: 'var(--color-bg)', borderColor: 'var(--color-border)', color: 'var(--color-text)' }}
-                />
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-3 mt-6">
-              <button
-                onClick={() => setShowSendModal(false)}
-                className="px-4 py-2.5 text-[13px] font-medium rounded-xl transition-colors"
-                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-              >
-                {t('common.cancel')}
-              </button>
-              <button
-                onClick={handleSend}
-                disabled={sending || !sendForm.botId || !sendForm.target.trim() || !sendForm.content.trim()}
-                className="px-4 py-2.5 text-[13px] font-medium text-white rounded-xl disabled:opacity-50 transition-colors shadow-sm"
-                style={{ background: 'var(--color-primary)' }}
-              >
-                {sending ? t('bots.sending') : t('common.send')}
-              </button>
-            </div>
-          </div>
-        </div>
+        <SendMessageModal
+          bots={bots}
+          sendForm={sendForm}
+          sending={sending}
+          onSendFormChange={setSendForm}
+          onClose={() => setShowSendModal(false)}
+          onSend={handleSend}
+        />
       )}
     </div>
   );

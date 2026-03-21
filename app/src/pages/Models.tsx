@@ -5,26 +5,11 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  Check,
-  X,
-  Key,
-  Globe,
   Loader2,
-  ChevronDown,
-  ChevronUp,
-  TestTube,
   Plus,
-  Trash2,
-  ExternalLink,
-  Sparkles,
-  Download,
-  Upload,
   Package,
-  Server,
-  Eye,
-  EyeOff,
+  Upload,
 } from 'lucide-react';
-import { open } from '@tauri-apps/plugin-shell';
 import {
   listProviders,
   configureProvider,
@@ -48,6 +33,12 @@ import {
 } from '../api/models';
 import { PageHeader } from '../components/PageHeader';
 import { toast, confirm } from '../components/Toast';
+import { ActiveModelCard } from '../components/models/ActiveModelCard';
+import { ProviderCard } from '../components/models/ProviderCard';
+import { CustomProviderCard } from '../components/models/CustomProviderCard';
+import { CustomProviderDialog } from '../components/models/CustomProviderDialog';
+import { TemplateImportDialog } from '../components/models/TemplateImportDialog';
+import { JsonImportDialog } from '../components/models/JsonImportDialog';
 
 interface ProviderMeta {
   id: string;
@@ -352,27 +343,12 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
 
         {/* Current active model */}
         {activeLlm && activeLlm.model && (
-          <div
-            className="mb-8 p-5 rounded-2xl cursor-pointer transition-all hover:ring-2 hover:ring-[var(--color-primary)] hover:ring-opacity-30"
-            style={{ background: 'var(--color-bg-elevated)' }}
-            onClick={() => setExpandedProvider(expandedProvider === activeLlm.provider_id ? null : activeLlm.provider_id)}
-          >
-            <p className="text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--color-text-tertiary)' }}>
-              {t('models.currentModel')}
-            </p>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <span className="text-[15px] font-semibold" style={{ color: 'var(--color-text)' }}>{activeLlm.model}</span>
-                <span
-                  className="text-[12px] px-2.5 py-1 rounded-lg font-medium"
-                  style={{ background: 'var(--color-primary-subtle)', color: 'var(--color-primary)' }}
-                >
-                  {providers.find(p => p.id === activeLlm.provider_id)?.name || activeLlm.provider_id}
-                </span>
-              </div>
-              <ChevronDown size={16} style={{ color: 'var(--color-text-muted)' }} />
-            </div>
-          </div>
+          <ActiveModelCard
+            activeLlm={activeLlm}
+            providers={providers}
+            expandedProvider={expandedProvider}
+            setExpandedProvider={setExpandedProvider}
+          />
         )}
 
         {/* Provider Cards */}
@@ -408,715 +384,94 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
           </div>
 
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-            {PROVIDER_LIST.map(meta => {
-              const provider = providers.find(p => p.id === meta.id);
-              const configured = provider?.has_api_key;
-              const isExpanded = expandedProvider === meta.id;
-              const isActive = activeLlm?.provider_id === meta.id;
-              const allModels = provider
-                ? [...provider.models, ...provider.extra_models]
-                : meta.models;
-
-              return (
-                <div
-                  key={meta.id}
-                  className={`rounded-2xl overflow-hidden transition-all ${isExpanded ? 'col-span-2 lg:col-span-3' : ''}`}
-                  style={{ background: 'var(--color-bg-elevated)' }}
-                >
-                  {/* Card Header */}
-                  <div
-                    className="px-4 py-3.5 cursor-pointer select-none"
-                    onClick={() => setExpandedProvider(isExpanded ? null : meta.id)}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-                          style={{ background: meta.color + '15' }}>
-                          <div className="w-2.5 h-2.5 rounded-full" style={{ background: meta.color }} />
-                        </div>
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <h3 className="font-semibold text-[13px] truncate" style={{ color: 'var(--color-text)' }}>
-                              {meta.name}
-                            </h3>
-                            {meta.tag && (
-                              <span className="text-[9px] px-1.5 py-0.5 rounded-md font-bold flex-shrink-0"
-                                style={{ background: (meta.tagColor || meta.color) + '18', color: meta.tagColor || meta.color }}>
-                                {meta.tag}
-                              </span>
-                            )}
-                            {configured && (
-                              <Check size={12} className="flex-shrink-0" style={{ color: 'var(--color-success)' }} />
-                            )}
-                            {isActive && (
-                              <span className="text-[9px] px-1.5 py-0.5 rounded-md font-bold flex-shrink-0"
-                                style={{ background: 'var(--color-primary-subtle)', color: 'var(--color-primary)' }}>
-                                {t('models.active')}
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-[11px] mt-0.5 truncate" style={{ color: 'var(--color-text-muted)' }}>
-                            {meta.desc}
-                          </p>
-                        </div>
-                      </div>
-                      {!isExpanded && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const url = meta.id === 'zhipu' ? ZHIPU_SITES[zhipuSite].signupUrl : meta.signupUrl;
-                            open(url);
-                          }}
-                          className="flex-shrink-0 p-1.5 rounded-lg transition-all"
-                          style={{ color: meta.color }}
-                          onMouseEnter={(e) => { e.currentTarget.style.background = meta.color + '10'; }}
-                          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                          title={meta.signupLabel}
-                        >
-                          <ExternalLink size={14} />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Expanded Content */}
-                  {isExpanded && (
-                    <div className="px-4 pb-4 space-y-4">
-                      {/* 1. API Key & Base URL */}
-                      <div className="p-4 rounded-xl space-y-3" style={{ background: 'var(--color-bg-subtle)' }}>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          <div>
-                            <label className="flex items-center gap-1.5 text-[12px] font-medium mb-1.5"
-                              style={{ color: 'var(--color-text-secondary)' }}>
-                              <Key size={12} /> API Key
-                            </label>
-                            <div className="relative">
-                              <input
-                                type={showApiKey[meta.id] ? 'text' : 'password'}
-                                value={apiKeyInputs[meta.id] ?? (provider?.api_key_saved || '')}
-                                onChange={(e) => setApiKeyInputs(prev => ({ ...prev, [meta.id]: e.target.value }))}
-                                placeholder={configured ? t('models.apiKeyPlaceholder') : `${t('models.apiKey')} (${meta.id.includes('coding') ? 'sk-sp...' : ''})`}
-                                className="w-full rounded-lg px-3 py-2 pr-9 text-[13px] outline-none"
-                                style={{ background: 'var(--color-bg-elevated)', color: 'var(--color-text)' }}
-                              />
-                              {(provider?.api_key_saved || apiKeyInputs[meta.id]) && (
-                                <button
-                                  type="button"
-                                  onClick={() => setShowApiKey(prev => ({ ...prev, [meta.id]: !prev[meta.id] }))}
-                                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-md transition-colors"
-                                  style={{ color: 'var(--color-text-muted)' }}
-                                  onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--color-text-secondary)'; }}
-                                  onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--color-text-muted)'; }}
-                                  title={showApiKey[meta.id] ? 'Hide' : 'Show'}
-                                >
-                                  {showApiKey[meta.id] ? <EyeOff size={14} /> : <Eye size={14} />}
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                          <div>
-                            <label className="flex items-center gap-1.5 text-[12px] font-medium mb-1.5"
-                              style={{ color: 'var(--color-text-secondary)' }}>
-                              <Globe size={12} /> Base URL
-                              {meta.id === 'zhipu' && (
-                                <span className="ml-auto flex gap-1">
-                                  {(['cn', 'intl'] as const).map(site => (
-                                    <button
-                                      key={site}
-                                      onClick={() => {
-                                        setZhipuSite(site);
-                                        setBaseUrlInputs(prev => ({ ...prev, zhipu: ZHIPU_SITES[site].baseUrl }));
-                                      }}
-                                      className="px-2 py-0.5 rounded-md text-[10px] font-medium transition-all"
-                                      style={{
-                                        background: zhipuSite === site ? meta.color + '20' : 'transparent',
-                                        color: zhipuSite === site ? meta.color : 'var(--color-text-muted)',
-                                        border: `1px solid ${zhipuSite === site ? meta.color + '40' : 'transparent'}`,
-                                      }}
-                                    >
-                                      {ZHIPU_SITES[site].label}
-                                    </button>
-                                  ))}
-                                </span>
-                              )}
-                            </label>
-                            <input
-                              type="text"
-                              value={baseUrlInputs[meta.id] ?? (provider?.current_base_url || meta.baseUrl)}
-                              onChange={(e) => setBaseUrlInputs(prev => ({ ...prev, [meta.id]: e.target.value }))}
-                              className="w-full rounded-lg px-3 py-2 text-[13px] outline-none"
-                              style={{ background: 'var(--color-bg-elevated)', color: 'var(--color-text)', fontFamily: 'var(--font-mono)' }}
-                            />
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* 2. Models Grid */}
-                      <div>
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-[12px] font-medium" style={{ color: 'var(--color-text-tertiary)' }}>
-                            {t('models.availableModels')} ({allModels.length})
-                          </span>
-                        </div>
-                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-                          {allModels.map(model => {
-                            const isModelActive = isActive && activeLlm?.model === model.id;
-                            const isSelected = (selectedModel[meta.id] || (isActive ? activeLlm?.model : '')) === model.id;
-                            const isExtra = provider?.extra_models.some(m => m.id === model.id);
-                            return (
-                              <div
-                                key={model.id}
-                                onClick={() => setSelectedModel(prev => ({ ...prev, [meta.id]: model.id }))}
-                                className="flex items-center justify-between p-3 rounded-xl transition-all cursor-pointer"
-                                style={{
-                                  background: isSelected ? meta.color + '15' : 'var(--color-bg-subtle)',
-                                  borderLeft: isModelActive ? `3px solid ${meta.color}` : isSelected ? `3px solid ${meta.color}50` : '3px solid transparent',
-                                }}
-                              >
-                                <div className="flex items-center gap-2 min-w-0">
-                                  <span className="text-[13px] font-medium truncate" style={{ color: 'var(--color-text)' }}>
-                                    {model.name}
-                                  </span>
-                                  {isModelActive && (
-                                    <span className="text-[9px] px-1.5 py-0.5 rounded-md font-bold flex-shrink-0"
-                                      style={{ background: meta.color + '20', color: meta.color }}>
-                                      {t('models.active')}
-                                    </span>
-                                  )}
-                                </div>
-                                {isExtra && (
-                                  <button onClick={(e) => { e.stopPropagation(); handleRemoveModel(meta.id, model.id); }}
-                                    className="p-0.5 rounded transition-colors flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>
-                                    <X size={12} />
-                                  </button>
-                                )}
-                              </div>
-                            );
-                          })}
-                          {/* Custom model input — inline as a grid item */}
-                          <div
-                            className="flex items-center justify-between p-3 rounded-xl transition-all"
-                            style={{
-                              background: customModelInput[meta.id] ? meta.color + '08' : 'var(--color-bg-subtle)',
-                              border: customModelInput[meta.id] ? `1px dashed ${meta.color}40` : '1px dashed var(--color-border, rgba(255,255,255,0.08))',
-                            }}
-                          >
-                            <input
-                              type="text"
-                              value={customModelInput[meta.id] || ''}
-                              onChange={(e) => setCustomModelInput(prev => ({ ...prev, [meta.id]: e.target.value }))}
-                              placeholder={t('models.customModel')}
-                              className="flex-1 bg-transparent text-[13px] font-medium outline-none min-w-0"
-                              style={{ color: 'var(--color-text)', fontFamily: 'var(--font-mono)' }}
-                              onKeyDown={async (e) => {
-                                if (e.key === 'Enter' && customModelInput[meta.id]?.trim()) {
-                                  const modelId = customModelInput[meta.id].trim();
-                                  await handleAddModel(meta.id, modelId, modelId);
-                                  setSelectedModel(prev => ({ ...prev, [meta.id]: modelId }));
-                                  setCustomModelInput(prev => ({ ...prev, [meta.id]: '' }));
-                                }
-                              }}
-                            />
-                            {customModelInput[meta.id]?.trim() && (
-                              <button
-                                onClick={async () => {
-                                  const modelId = customModelInput[meta.id].trim();
-                                  await handleAddModel(meta.id, modelId, modelId);
-                                  setSelectedModel(prev => ({ ...prev, [meta.id]: modelId }));
-                                  setCustomModelInput(prev => ({ ...prev, [meta.id]: '' }));
-                                }}
-                                className="px-2.5 py-1 text-[12px] rounded-lg font-medium transition-all flex-shrink-0 ml-2"
-                                style={{ color: meta.color }}
-                              >
-                                {t('common.add')}
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* 3. Actions: Save / Test / Set Active / Get Key */}
-                      <div className="flex items-center justify-between pt-1">
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => handleTestConnection(meta.id)}
-                            disabled={testing === meta.id}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors ${testing !== meta.id ? 'disabled:opacity-50' : ''}`}
-                            style={{
-                              color: testing === meta.id ? meta.color : 'var(--color-text-secondary)',
-                            }}
-                            onMouseEnter={(e) => { if (testing !== meta.id) e.currentTarget.style.background = 'var(--color-bg-elevated)'; }}
-                            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                          >
-                            {testing === meta.id ? <Loader2 size={13} className="animate-spin" /> : <TestTube size={13} />}
-                            {testing === meta.id ? t('models.testingConnection') : t('models.test')}
-                          </button>
-                          <button
-                            onClick={() => {
-                              const url = meta.id === 'zhipu' ? ZHIPU_SITES[zhipuSite].signupUrl : meta.signupUrl;
-                              open(url);
-                            }}
-                            className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-all"
-                            style={{ color: meta.color }}
-                            onMouseEnter={(e) => { e.currentTarget.style.background = meta.color + '10'; }}
-                            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                          >
-                            <ExternalLink size={12} />
-                            {meta.signupLabel}
-                          </button>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => handleSaveProvider(meta.id)}
-                            disabled={saving === meta.id}
-                            className="px-4 py-1.5 rounded-lg text-[12px] font-medium transition-all disabled:opacity-50"
-                            style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-secondary)' }}
-                          >
-                            {saving === meta.id ? <Loader2 size={13} className="animate-spin" /> : t('models.save')}
-                          </button>
-                          <button
-                            onClick={async () => {
-                              const modelId = selectedModel[meta.id] || (isActive ? activeLlm?.model : allModels[0]?.id);
-                              if (!modelId) { toast.warning(t('models.select')); return; }
-                              await handleSetActiveModel(meta.id, modelId);
-                              toast.success(`${t('models.active')}: ${modelId}`);
-                            }}
-                            className="px-4 py-1.5 rounded-lg text-[12px] font-medium transition-all"
-                            style={{ background: meta.color, color: '#FFFFFF' }}
-                          >
-                            {t('models.setActive')}
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Test result reply */}
-                      {testResults[meta.id] && (
-                        <div
-                          className="p-3 rounded-xl text-[12px] leading-relaxed"
-                          style={{
-                            background: testResults[meta.id].success ? meta.color + '08' : 'rgba(239,68,68,0.08)',
-                            border: `1px solid ${testResults[meta.id].success ? meta.color + '20' : 'rgba(239,68,68,0.2)'}`,
-                            color: 'var(--color-text-secondary)',
-                          }}
-                        >
-                          <div className="flex items-center gap-1.5">
-                            <span style={{ color: testResults[meta.id].success ? meta.color : '#ef4444', fontWeight: 600, fontSize: '11px' }}>
-                              {testResults[meta.id].success ? `OK · ${testResults[meta.id].message}` : 'Failed'}
-                            </span>
-                            {!testResults[meta.id].success && (
-                              <span className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>{testResults[meta.id].message}</span>
-                            )}
-                          </div>
-                          {testResults[meta.id].reply && (
-                            <div
-                              className="mt-2 pt-2 text-[12px] whitespace-pre-wrap"
-                              style={{
-                                borderTop: `1px solid ${meta.color}15`,
-                                color: 'var(--color-text)',
-                                maxHeight: '120px',
-                                overflowY: 'auto',
-                              }}
-                            >
-                              {testResults[meta.id].reply}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+            {PROVIDER_LIST.map(meta => (
+              <ProviderCard
+                key={meta.id}
+                meta={meta}
+                provider={providers.find(p => p.id === meta.id)}
+                activeLlm={activeLlm}
+                expandedProvider={expandedProvider}
+                setExpandedProvider={setExpandedProvider}
+                apiKeyInputs={apiKeyInputs}
+                setApiKeyInputs={setApiKeyInputs}
+                showApiKey={showApiKey}
+                setShowApiKey={setShowApiKey}
+                baseUrlInputs={baseUrlInputs}
+                setBaseUrlInputs={setBaseUrlInputs}
+                customModelInput={customModelInput}
+                setCustomModelInput={setCustomModelInput}
+                selectedModel={selectedModel}
+                setSelectedModel={setSelectedModel}
+                zhipuSite={zhipuSite}
+                setZhipuSite={setZhipuSite}
+                testing={testing}
+                saving={saving}
+                testResults={testResults}
+                onSaveProvider={handleSaveProvider}
+                onTestConnection={handleTestConnection}
+                onSetActiveModel={handleSetActiveModel}
+                onAddModel={handleAddModel}
+                onRemoveModel={handleRemoveModel}
+              />
+            ))}
 
             {/* Custom providers */}
-            {customProviders.map(provider => {
-              const isExpanded = expandedProvider === provider.id;
-              const isActive = activeLlm?.provider_id === provider.id;
-              const allModels = [...provider.models, ...provider.extra_models];
-
-              return (
-                <div
-                  key={provider.id}
-                  className={`rounded-2xl overflow-hidden transition-all ${isExpanded ? 'col-span-2 lg:col-span-3' : ''}`}
-                  style={{ background: 'var(--color-bg-elevated)' }}
-                >
-                  <div
-                    className="px-4 py-3.5 cursor-pointer select-none"
-                    onClick={() => setExpandedProvider(isExpanded ? null : provider.id)}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-                          style={{ background: 'var(--color-bg-subtle)' }}>
-                          <Sparkles size={14} style={{ color: 'var(--color-text-tertiary)' }} />
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-1.5">
-                            <h3 className="font-semibold text-[13px]" style={{ color: 'var(--color-text)' }}>{provider.name}</h3>
-                            <span className="text-[9px] px-1.5 py-0.5 rounded-md font-medium"
-                              style={{ background: 'rgba(103, 232, 249, 0.1)', color: 'var(--color-info)' }}>
-                              {t('models.custom')}
-                            </span>
-                            {provider.has_api_key && <Check size={12} style={{ color: 'var(--color-success)' }} />}
-                          </div>
-                          <p className="text-[11px] mt-0.5 truncate" style={{ color: 'var(--color-text-muted)', fontFamily: 'var(--font-mono)' }}>
-                            {provider.current_base_url}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleDeleteProvider(provider.id); }}
-                          className="w-7 h-7 flex items-center justify-center rounded-lg transition-colors"
-                          style={{ color: 'var(--color-error)' }}
-                          onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(251, 113, 133, 0.1)'; }}
-                          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                        <div className="w-7 h-7 flex items-center justify-center" style={{ color: 'var(--color-text-tertiary)' }}>
-                          {isExpanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {isExpanded && (
-                    <div className="px-4 pb-4 space-y-4">
-                      <div className="p-4 rounded-xl space-y-3" style={{ background: 'var(--color-bg-subtle)' }}>
-                        <div>
-                          <label className="flex items-center gap-1.5 text-[12px] font-medium mb-1.5"
-                            style={{ color: 'var(--color-text-secondary)' }}>
-                            <Key size={12} /> API Key
-                          </label>
-                          <div className="relative">
-                            <input
-                              type={showApiKey[provider.id] ? 'text' : 'password'}
-                              value={apiKeyInputs[provider.id] ?? (provider.api_key_saved || '')}
-                              onChange={(e) => setApiKeyInputs(prev => ({ ...prev, [provider.id]: e.target.value }))}
-                              placeholder={t('models.apiKeyPlaceholder')}
-                              className="w-full rounded-lg px-3 py-2 pr-9 text-[13px] outline-none"
-                              style={{ background: 'var(--color-bg-elevated)', color: 'var(--color-text)' }}
-                            />
-                            {(provider.api_key_saved || apiKeyInputs[provider.id]) && (
-                              <button
-                                type="button"
-                                onClick={() => setShowApiKey(prev => ({ ...prev, [provider.id]: !prev[provider.id] }))}
-                                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-md transition-colors"
-                                style={{ color: 'var(--color-text-muted)' }}
-                                onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--color-text-secondary)'; }}
-                                onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--color-text-muted)'; }}
-                                title={showApiKey[provider.id] ? 'Hide' : 'Show'}
-                              >
-                                {showApiKey[provider.id] ? <EyeOff size={14} /> : <Eye size={14} />}
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                        {allModels.map(model => {
-                          const isModelActive = isActive && activeLlm?.model === model.id;
-                          const isSelected = (selectedModel[provider.id] || (isActive ? activeLlm?.model : '')) === model.id;
-                          return (
-                            <div key={model.id}
-                              onClick={() => setSelectedModel(prev => ({ ...prev, [provider.id]: model.id }))}
-                              className="flex items-center justify-between p-3 rounded-xl transition-all cursor-pointer"
-                              style={{
-                                background: isSelected ? 'var(--color-primary-subtle)' : 'var(--color-bg-subtle)',
-                                borderLeft: isModelActive ? '3px solid var(--color-primary)' : isSelected ? '3px solid var(--color-primary-subtle)' : '3px solid transparent',
-                              }}>
-                              <div className="flex items-center gap-2 min-w-0">
-                                <span className="text-[13px] font-medium truncate" style={{ color: 'var(--color-text)' }}>{model.name}</span>
-                                {isModelActive && (
-                                  <span className="text-[9px] px-1.5 py-0.5 rounded-md font-bold flex-shrink-0"
-                                    style={{ background: 'var(--color-primary-subtle)', color: 'var(--color-primary)' }}>
-                                    {t('models.active')}
-                                  </span>
-                                )}
-                              </div>
-                              <button onClick={(e) => { e.stopPropagation(); handleRemoveModel(provider.id, model.id); }}
-                                className="p-0.5 rounded transition-colors flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>
-                                <X size={12} />
-                              </button>
-                            </div>
-                          );
-                        })}
-                        {/* Custom model input */}
-                        <div
-                          className="flex items-center justify-between p-3 rounded-xl transition-all"
-                          style={{
-                            background: customModelInput[provider.id] ? 'var(--color-primary-subtle)' : 'var(--color-bg-subtle)',
-                            border: customModelInput[provider.id] ? '1px dashed var(--color-primary)' : '1px dashed var(--color-border, rgba(255,255,255,0.08))',
-                          }}
-                        >
-                          <input
-                            type="text"
-                            value={customModelInput[provider.id] || ''}
-                            onChange={(e) => setCustomModelInput(prev => ({ ...prev, [provider.id]: e.target.value }))}
-                            placeholder={t('models.customModel')}
-                            className="flex-1 bg-transparent text-[13px] font-medium outline-none min-w-0"
-                            style={{ color: 'var(--color-text)', fontFamily: 'var(--font-mono)' }}
-                            onKeyDown={async (e) => {
-                              if (e.key === 'Enter' && customModelInput[provider.id]?.trim()) {
-                                const modelId = customModelInput[provider.id].trim();
-                                await handleAddModel(provider.id, modelId, modelId);
-                                setSelectedModel(prev => ({ ...prev, [provider.id]: modelId }));
-                                setCustomModelInput(prev => ({ ...prev, [provider.id]: '' }));
-                              }
-                            }}
-                          />
-                          {customModelInput[provider.id]?.trim() && (
-                            <button
-                              onClick={async () => {
-                                const modelId = customModelInput[provider.id].trim();
-                                await handleAddModel(provider.id, modelId, modelId);
-                                setSelectedModel(prev => ({ ...prev, [provider.id]: modelId }));
-                                setCustomModelInput(prev => ({ ...prev, [provider.id]: '' }));
-                              }}
-                              className="px-2.5 py-1 text-[12px] rounded-lg font-medium transition-all flex-shrink-0 ml-2"
-                              style={{ color: 'var(--color-primary)' }}
-                            >
-                              {t('common.add')}
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                      {/* Actions: Save / Set Active */}
-                      <div className="flex items-center justify-end gap-2 pt-1">
-                        <button onClick={() => handleSaveProvider(provider.id)}
-                          disabled={saving === provider.id}
-                          className="px-4 py-1.5 rounded-lg text-[12px] font-medium disabled:opacity-50"
-                          style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-secondary)' }}>
-                          {saving === provider.id ? <Loader2 size={13} className="animate-spin" /> : t('models.save')}
-                        </button>
-                        <button
-                          onClick={async () => {
-                            const modelId = selectedModel[provider.id] || (isActive ? activeLlm?.model : allModels[0]?.id);
-                            if (!modelId) { toast.warning(t('models.select')); return; }
-                            await handleSetActiveModel(provider.id, modelId);
-                            toast.success(`${t('models.active')}: ${modelId}`);
-                          }}
-                          className="px-4 py-1.5 rounded-lg text-[12px] font-medium transition-all"
-                          style={{ background: 'var(--color-primary)', color: '#FFFFFF' }}>
-                          {t('models.setActive')}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+            {customProviders.map(provider => (
+              <CustomProviderCard
+                key={provider.id}
+                provider={provider}
+                activeLlm={activeLlm}
+                expandedProvider={expandedProvider}
+                setExpandedProvider={setExpandedProvider}
+                apiKeyInputs={apiKeyInputs}
+                setApiKeyInputs={setApiKeyInputs}
+                showApiKey={showApiKey}
+                setShowApiKey={setShowApiKey}
+                customModelInput={customModelInput}
+                setCustomModelInput={setCustomModelInput}
+                selectedModel={selectedModel}
+                setSelectedModel={setSelectedModel}
+                saving={saving}
+                onSaveProvider={handleSaveProvider}
+                onSetActiveModel={handleSetActiveModel}
+                onAddModel={handleAddModel}
+                onRemoveModel={handleRemoveModel}
+                onDeleteProvider={handleDeleteProvider}
+              />
+            ))}
           </div>
         </div>
 
       {/* Create custom provider dialog */}
       {showCustomDialog && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 animate-fade-in">
-          <div className="rounded-2xl p-6 w-full max-w-md animate-scale-in" style={{ background: 'var(--color-bg-elevated)' }}>
-            <div className="flex items-center justify-between mb-5">
-              <h2 className="font-bold text-[16px]" style={{ fontFamily: 'var(--font-display)' }}>{t('models.createTitle')}</h2>
-              <button onClick={() => setShowCustomDialog(false)}
-                className="w-8 h-8 flex items-center justify-center rounded-lg transition-colors"
-                style={{ color: 'var(--color-text-tertiary)' }}>
-                <X size={16} />
-              </button>
-            </div>
-            <div className="space-y-4 mb-5">
-              <div>
-                <label className="block text-[12px] font-medium mb-2" style={{ color: 'var(--color-text-secondary)' }}>{t('models.providerId')}</label>
-                <input type="text" value={customForm.id}
-                  onChange={(e) => setCustomForm({ ...customForm, id: e.target.value })}
-                  placeholder={t('models.providerIdPlaceholder')}
-                  className={inputClass} style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text)', fontFamily: 'var(--font-mono)' }} />
-              </div>
-              <div>
-                <label className="block text-[12px] font-medium mb-2" style={{ color: 'var(--color-text-secondary)' }}>{t('models.providerName')}</label>
-                <input type="text" value={customForm.name}
-                  onChange={(e) => setCustomForm({ ...customForm, name: e.target.value })}
-                  placeholder={t('models.providerNamePlaceholder')}
-                  className={inputClass} style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text)' }} />
-              </div>
-              <div>
-                <label className="flex items-center gap-1.5 text-[12px] font-medium mb-2" style={{ color: 'var(--color-text-secondary)' }}>
-                  <Globe size={13} /> Base URL
-                </label>
-                <input type="text" value={customForm.baseUrl}
-                  onChange={(e) => setCustomForm({ ...customForm, baseUrl: e.target.value })}
-                  placeholder={t('models.baseUrlPlaceholder')}
-                  className={inputClass} style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text)', fontFamily: 'var(--font-mono)' }} />
-              </div>
-              <div>
-                <label className="flex items-center gap-1.5 text-[12px] font-medium mb-2" style={{ color: 'var(--color-text-secondary)' }}>
-                  <Key size={13} /> API Key
-                </label>
-                <input type="password" value={customForm.apiKey}
-                  onChange={(e) => setCustomForm({ ...customForm, apiKey: e.target.value })}
-                  placeholder={t('models.apiKeyPlaceholder')}
-                  className={inputClass} style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text)' }} />
-              </div>
-              <div>
-                <label className="block text-[12px] font-medium mb-2" style={{ color: 'var(--color-text-secondary)' }}>
-                  {t('models.availableModels')} ({customForm.models.length})
-                </label>
-                {customForm.models.length > 0 && (
-                  <div className="space-y-1 mb-3 max-h-36 overflow-y-auto">
-                    {customForm.models.map((m) => (
-                      <div key={m.id} className="flex items-center justify-between px-3 py-2 rounded-lg text-[12px]"
-                        style={{ background: 'var(--color-bg-subtle)' }}>
-                        <span className="font-medium" style={{ color: 'var(--color-text)' }}>{m.name}</span>
-                        <button onClick={() => setCustomForm({ ...customForm, models: customForm.models.filter(x => x.id !== m.id) })}
-                          className="p-1 rounded" style={{ color: 'var(--color-text-muted)' }}>
-                          <X size={12} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <div className="flex gap-2">
-                  <input type="text" value={customForm.newModelId}
-                    onChange={(e) => setCustomForm({ ...customForm, newModelId: e.target.value })}
-                    placeholder={t('models.modelIdPlaceholder')}
-                    className="flex-1 rounded-lg px-3 py-2 text-[12px] outline-none"
-                    style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text)', fontFamily: 'var(--font-mono)' }} />
-                  <input type="text" value={customForm.newModelName}
-                    onChange={(e) => setCustomForm({ ...customForm, newModelName: e.target.value })}
-                    placeholder={t('models.modelNamePlaceholder')}
-                    className="flex-1 rounded-lg px-3 py-2 text-[12px] outline-none"
-                    style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text)' }} />
-                  <button onClick={() => {
-                    if (!customForm.newModelId.trim()) return;
-                    setCustomForm({
-                      ...customForm,
-                      models: [...customForm.models, { id: customForm.newModelId.trim(), name: customForm.newModelName.trim() || customForm.newModelId.trim() }],
-                      newModelId: '', newModelName: '',
-                    });
-                  }}
-                    className="px-3 py-2 rounded-lg text-[12px] font-medium flex-shrink-0"
-                    style={{ background: 'var(--color-primary)', color: '#FFFFFF' }}>
-                    <Plus size={14} />
-                  </button>
-                </div>
-              </div>
-            </div>
-            <div className="flex justify-end">
-              <button onClick={handleCreateCustomProvider}
-                disabled={!customForm.id || !customForm.name}
-                className="px-4 py-2 rounded-lg text-[13px] font-medium disabled:opacity-50"
-                style={{ background: 'var(--color-primary)', color: '#FFFFFF' }}>
-                {t('models.save')}
-              </button>
-            </div>
-          </div>
-        </div>
+        <CustomProviderDialog
+          customForm={customForm}
+          setCustomForm={setCustomForm}
+          onClose={() => setShowCustomDialog(false)}
+          onSubmit={handleCreateCustomProvider}
+          inputClass={inputClass}
+        />
       )}
 
       {/* Template import dialog */}
       {showTemplateDialog && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 animate-fade-in">
-          <div className="rounded-2xl p-6 w-full max-w-lg animate-scale-in" style={{ background: 'var(--color-bg-elevated)' }}>
-            <div className="flex items-center justify-between mb-5">
-              <h2 className="font-bold text-[16px]" style={{ fontFamily: 'var(--font-display)' }}>{t('models.templates')}</h2>
-              <button onClick={() => setShowTemplateDialog(false)}
-                className="w-8 h-8 flex items-center justify-center rounded-lg transition-colors"
-                style={{ color: 'var(--color-text-tertiary)' }}>
-                <X size={16} />
-              </button>
-            </div>
-            <p className="text-[12px] mb-4" style={{ color: 'var(--color-text-secondary)' }}>{t('models.templateDesc')}</p>
-            <div className="space-y-2 max-h-[400px] overflow-y-auto">
-              {templates.map((tpl) => {
-                const alreadyAdded = providers.some(p => p.id === tpl.id);
-                return (
-                  <div key={tpl.id}
-                    className="flex items-center justify-between p-3.5 rounded-xl transition-all"
-                    style={{ background: 'var(--color-bg-subtle)' }}>
-                    <div className="min-w-0 flex-1 mr-3">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-[13px] font-semibold" style={{ color: 'var(--color-text)' }}>{tpl.name}</span>
-                        {tpl.plugin.is_local && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-md font-medium"
-                            style={{ background: 'var(--color-success-subtle, rgba(52,199,89,0.1))', color: 'var(--color-success, #34C759)' }}>
-                            {t('models.localProvider')}
-                          </span>
-                        )}
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-md font-medium"
-                          style={{ background: 'var(--color-primary-subtle)', color: 'var(--color-primary)' }}>
-                          {tpl.plugin.api_compat}
-                        </span>
-                      </div>
-                      <p className="text-[11px] truncate" style={{ color: 'var(--color-text-tertiary)' }}>
-                        {tpl.description}
-                      </p>
-                      <p className="text-[10px] mt-0.5 font-mono" style={{ color: 'var(--color-text-muted)' }}>
-                        {tpl.plugin.default_base_url}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => handleImportTemplate(tpl.id)}
-                      disabled={alreadyAdded || importingTemplate === tpl.id}
-                      className="px-3 py-1.5 rounded-lg text-[12px] font-medium disabled:opacity-50 flex-shrink-0 flex items-center gap-1.5"
-                      style={{ background: alreadyAdded ? 'var(--color-bg-subtle)' : 'var(--color-primary)', color: alreadyAdded ? 'var(--color-text-muted)' : '#FFFFFF' }}>
-                      {importingTemplate === tpl.id ? (
-                        <Loader2 size={13} className="animate-spin" />
-                      ) : alreadyAdded ? (
-                        <><Check size={13} /> {t('models.configured')}</>
-                      ) : (
-                        <><Download size={13} /> {t('models.importProvider')}</>
-                      )}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
+        <TemplateImportDialog
+          templates={templates}
+          providers={providers}
+          importingTemplate={importingTemplate}
+          onClose={() => setShowTemplateDialog(false)}
+          onImport={handleImportTemplate}
+        />
       )}
 
       {/* JSON import dialog */}
       {showJsonImportDialog && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 animate-fade-in">
-          <div className="rounded-2xl p-6 w-full max-w-lg animate-scale-in" style={{ background: 'var(--color-bg-elevated)' }}>
-            <div className="flex items-center justify-between mb-5">
-              <h2 className="font-bold text-[16px]" style={{ fontFamily: 'var(--font-display)' }}>{t('models.fromJson')}</h2>
-              <button onClick={() => { setShowJsonImportDialog(false); setJsonImportText(''); }}
-                className="w-8 h-8 flex items-center justify-center rounded-lg transition-colors"
-                style={{ color: 'var(--color-text-tertiary)' }}>
-                <X size={16} />
-              </button>
-            </div>
-            <p className="text-[12px] mb-3" style={{ color: 'var(--color-text-secondary)' }}>
-              Paste a provider plugin JSON configuration:
-            </p>
-            <textarea
-              value={jsonImportText}
-              onChange={(e) => setJsonImportText(e.target.value)}
-              placeholder={`{
-  "id": "my-provider",
-  "name": "My Provider",
-  "default_base_url": "https://api.example.com/v1",
-  "api_key_env": "MY_API_KEY",
-  "api_compat": "openai",
-  "is_local": false,
-  "models": [
-    { "id": "model-1", "name": "Model 1" }
-  ]
-}`}
-              className="w-full rounded-xl px-3.5 py-3 text-[12px] outline-none font-mono resize-none"
-              style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text)', height: '240px' }}
-            />
-            <div className="flex justify-end mt-4">
-              <button
-                onClick={handleJsonImport}
-                disabled={!jsonImportText.trim()}
-                className="px-4 py-2 rounded-lg text-[13px] font-medium disabled:opacity-50 flex items-center gap-1.5"
-                style={{ background: 'var(--color-primary)', color: '#FFFFFF' }}>
-                <Upload size={14} />
-                {t('models.importProvider')}
-              </button>
-            </div>
-          </div>
-        </div>
+        <JsonImportDialog
+          jsonImportText={jsonImportText}
+          setJsonImportText={setJsonImportText}
+          onClose={() => setShowJsonImportDialog(false)}
+          onImport={handleJsonImport}
+        />
       )}
     </>
   );
