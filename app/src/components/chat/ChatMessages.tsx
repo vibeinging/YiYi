@@ -450,7 +450,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                     <div
                       className="py-2.5 px-4 rounded-2xl text-[14px] leading-relaxed"
                       style={msg.role === 'user' ? {
-                        background: 'var(--color-primary)', color: 'var(--color-bg)', borderBottomRightRadius: '6px',
+                        background: 'var(--color-primary)', color: '#FFFFFF', borderBottomRightRadius: '6px',
                       } : {
                         background: 'var(--color-bg-elevated)', color: 'var(--color-text)',
                         border: '1px solid var(--color-border)', borderBottomLeftRadius: '6px',
