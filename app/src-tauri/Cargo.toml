@@ -55,6 +55,13 @@ libc = "0.2"
 rfd = "0.15"
 lazy_static = "1.4"
 portable-pty = "0.8"
+# MemMe: use local path for dev, switch to git dep for release
+# git = "https://github.com/vibeinging/MemMe"
+memme-core = { path = "../../../MemMe/crates/memme-core", default-features = false, features = ["bundled"] }
+# NOTE: onnx feature disabled due to ort_sys vs duckdb C++ ABI conflict on macOS x86_64.
+# OpenAI embedding enabled for remote API; mock fallback when no key configured.
+memme-embeddings = { path = "../../../MemMe/crates/memme-embeddings", default-features = false, features = ["openai"] }
+memme-llm = { path = "../../../MemMe/crates/memme-llm", default-features = false, features = ["openai"] }
 strip-ansi-escapes = "0.2"
 tauri-plugin-updater = "2.10.0"
 tauri-plugin-process = "2.3.1"

@@ -104,6 +104,7 @@ pub fn run() {
             engine::tools::set_streaming_state(state.streaming_state.clone());
             engine::tools::set_user_workspace(state.user_workspace());
             engine::tools::set_pty_manager(state.pty_manager.clone());
+            engine::tools::set_memme_store(state.memme_store.clone());
 
             // Initialize authorized folders from database
             {
@@ -260,13 +261,13 @@ pub fn run() {
                 start_meditation_timer(app_handle);
             }
 
-            // One-time migration: seed tiered memory from legacy files
+            // One-time migration: seed MemMe from legacy MEMORY.md/PRINCIPLES.md
             {
-                let migration_flag = state.working_dir.join(".tiered_memory_migrated");
+                let migration_flag = state.working_dir.join(".memme_seeded");
                 if !migration_flag.exists() {
-                    crate::engine::tiered_memory::seed_from_files(&state.db, &state.working_dir);
+                    crate::engine::tiered_memory::seed_from_files(&state.working_dir);
                     std::fs::write(&migration_flag, "done").ok();
-                    log::info!("Tiered memory seeded from legacy files");
+                    log::info!("MemMe seeded from legacy files");
                 }
             }
 
@@ -310,6 +311,9 @@ pub fn run() {
             commands::system::get_latest_meditation,
             commands::system::trigger_meditation,
             commands::system::get_meditation_status,
+            commands::system::get_memme_config,
+            commands::system::save_memme_config,
+            commands::system::get_identity_traits,
             commands::system::list_quick_actions,
             commands::system::add_quick_action,
             commands::system::update_quick_action,
@@ -386,6 +390,8 @@ pub fn run() {
             commands::agent::chat::delete_message,
             // Sessions
             commands::agent::session::list_sessions,
+            commands::agent::session::list_chat_sessions,
+            commands::agent::session::search_chat_sessions,
             commands::agent::session::create_session,
             commands::agent::session::ensure_session,
             commands::agent::session::rename_session,

@@ -240,20 +240,26 @@ pub(super) fn resolve_session_id(session_id: &Option<String>) -> String {
         .to_string()
 }
 
-/// Recall relevant memories based on user message and inject them as context.
-/// Returns an augmented message with memory context prepended if any relevant memories found.
-pub(super) fn recall_memories(db: &db::Database, user_message: &str) -> Option<String> {
-    // Skip very short messages (greetings, single words)
+/// Recall relevant memories via MemMe vector search and inject them as context.
+pub(super) fn recall_memories(_db: &db::Database, user_message: &str) -> Option<String> {
     if user_message.trim().len() < 4 {
         return None;
     }
-    let results = db.memory_search(user_message, None, 5).ok()?;
+
+    let store = crate::engine::tools::get_memme_store()?;
+    let options = memme_core::SearchOptions::new(crate::engine::tools::MEMME_USER_ID)
+        .limit(5)
+        .keyword_search(true);
+    let results = store.search(user_message, options).ok()?;
     if results.is_empty() {
         return None;
     }
     let mut context = String::from("[Recalled memories]\n");
     for mem in &results {
-        context.push_str(&format!("- [{}] {}\n", mem.category, mem.content));
+        let cats = mem.categories.as_ref()
+            .map(|c| c.join(", "))
+            .unwrap_or_else(|| "note".into());
+        context.push_str(&format!("- [{}] {}\n", cats, mem.content));
     }
     context.push_str("[/Recalled memories]\n");
     Some(context)

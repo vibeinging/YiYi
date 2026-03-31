@@ -110,17 +110,22 @@ Extract memories (JSON array only):"#
             "note"
         };
         if !mem.content.is_empty() {
-            if let Ok(mem_id) = db.memory_add(&mem.content, cat, session_id) {
-                added += 1;
-
-                // Auto-promote high-value memories to HOT tier if there's room
-                if matches!(cat, "fact" | "preference" | "principle") {
-                    let hot_count = db.get_memories_by_tier("hot", 20).len();
-                    if hot_count < 15 {
-                        db.update_memory_tier(&mem_id, "hot", 0.8);
-                        // Sync to files immediately for non-meditation users
+            // Write to MemMe (single source of truth)
+            if let Some(store) = crate::engine::tools::get_memme_store() {
+                let importance: f32 = match cat {
+                    "fact" | "preference" | "principle" => 0.8,
+                    _ => 0.6,
+                };
+                let mut opts = crate::engine::tools::memory_tools::memme_add_opts(cat, importance);
+                if let Some(sid) = session_id {
+                    opts = opts.session_id(sid.to_string());
+                }
+                if store.add(&mem.content, opts).is_ok() {
+                    added += 1;
+                    // Sync HOT tier to files
+                    if matches!(cat, "fact" | "preference" | "principle") {
                         if let Some(working_dir) = crate::engine::tools::get_working_dir() {
-                            if let Err(e) = crate::engine::tiered_memory::sync_hot_to_files(&db, &working_dir) {
+                            if let Err(e) = crate::engine::tiered_memory::sync_hot_to_files(&working_dir) {
                                 log::warn!("Failed to sync hot-tier to files: {}", e);
                             }
                         }
@@ -272,7 +277,13 @@ JSON only:"#
     if signal_type != SignalType::SilentCompletion {
         if let Some(ref lesson) = parsed.lesson {
             if !lesson.is_empty() {
-                db.memory_add(lesson, "experience", session_id).ok();
+                if let Some(store) = crate::engine::tools::get_memme_store() {
+                    let mut opts = crate::engine::tools::memory_tools::memme_add_opts("experience", 0.7);
+                    if let Some(sid) = session_id {
+                        opts = opts.session_id(sid.to_string());
+                    }
+                    let _ = store.add(lesson, opts);
+                }
             }
         }
     }
@@ -889,30 +900,39 @@ Consolidated principles:"#,
         return Err("LLM returned no valid principles".into());
     }
 
-    // Before adding new consolidated principles, demote old HOT-tier principles to WARM.
-    // Consolidation replaces (not appends), so old principles should give way to new ones.
-    let old_hot_principles = db.get_memories_by_tier("hot", 100);
-    for old in &old_hot_principles {
-        if old.category == "principle" || old.category == "learned_rule" {
-            db.update_memory_tier(&old.id, "warm", old.confidence * 0.5);
+    // Save each principle as a high-importance memory in MemMe
+    let mut saved = 0;
+    if let Some(store) = crate::engine::tools::get_memme_store() {
+        // Demote old principles before adding new consolidated ones
+        if let Ok(existing) = store.list_traces(
+            memme_core::ListOptions::new(crate::engine::tools::MEMME_USER_ID).limit(200),
+        ) {
+            for old in &existing {
+                let cats = old.categories.as_ref().map(|c| c.join(",")).unwrap_or_default();
+                if cats.contains("principle") && old.importance.unwrap_or(0.0) >= 0.7 {
+                    let _ = store.update_importance(&old.id, 0.4); // demote to warm
+                }
+            }
+        }
+
+        for principle in &principles {
+            let opts = crate::engine::tools::memory_tools::memme_add_opts("principle", 0.9);
+            if store.add(principle, opts).is_ok() {
+                saved += 1;
+            }
         }
     }
 
-    // Save each principle as a separate HOT-tier memory entry
-    let mut saved = 0;
-    for principle in &principles {
-        if let Ok(mem_id) = db.memory_add(principle, "principle", None) {
-            db.update_memory_tier(&mem_id, "hot", 0.9);
-            saved += 1;
-        }
+    if saved == 0 {
+        return Err("Failed to save principles to MemMe (store unavailable or all adds failed)".into());
     }
 
     // Sync HOT-tier to files (updates PRINCIPLES.md and MEMORY.md cache)
-    if let Err(e) = crate::engine::tiered_memory::sync_hot_to_files(db, working_dir) {
+    if let Err(e) = crate::engine::tiered_memory::sync_hot_to_files(working_dir) {
         log::warn!("Failed to sync hot-tier to files: {}", e);
     }
 
-    // Deactivate consumed corrections
+    // Only deactivate corrections after principles are successfully saved
     if let Some(conn) = db.get_conn() {
         conn.execute(
             "UPDATE corrections SET active = 0 WHERE active = 1",

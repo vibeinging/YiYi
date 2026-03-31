@@ -786,6 +786,41 @@ pub async fn get_meditation_status(
     }
 }
 
+// ---------------------------------------------------------------------------
+// MemMe Memory Engine Configuration
+// ---------------------------------------------------------------------------
+
+/// Get current MemMe memory engine configuration.
+#[tauri::command]
+pub async fn get_memme_config(
+    state: State<'_, AppState>,
+) -> Result<crate::state::config::MemmeConfig, String> {
+    let config = state.config.read().await;
+    Ok(config.memme.clone())
+}
+
+/// Save MemMe memory engine configuration.
+#[tauri::command]
+pub async fn save_memme_config(
+    state: State<'_, AppState>,
+    config: crate::state::config::MemmeConfig,
+) -> Result<(), String> {
+    let mut cfg = state.config.write().await;
+    cfg.memme = config;
+    cfg.save(&state.working_dir)
+}
+
+/// Get MemMe identity traits (inferred user personality profile).
+#[tauri::command]
+pub async fn get_identity_traits(
+    state: State<'_, AppState>,
+) -> Result<Vec<memme_core::types::identity::IdentityTrait>, String> {
+    let store = crate::engine::tools::get_memme_store()
+        .ok_or("MemMe store not initialized")?;
+    store.list_identity_traits(crate::engine::tools::MEMME_USER_ID)
+        .map_err(|e| format!("Failed to list identity traits: {}", e))
+}
+
 /// Manually trigger principles consolidation.
 #[tauri::command]
 pub async fn consolidate_principles(

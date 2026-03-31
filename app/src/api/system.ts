@@ -182,3 +182,38 @@ export async function updateQuickAction(
 export async function deleteQuickAction(id: string): Promise<void> {
   await invoke('delete_quick_action', { id });
 }
+
+// ---------------------------------------------------------------------------
+// MemMe Memory Engine Configuration
+// ---------------------------------------------------------------------------
+
+export interface MemmeConfig {
+  embedding_provider: string;      // "mock" | "openai"
+  embedding_model: string;         // e.g. "text-embedding-3-small"
+  embedding_api_key: string;       // optional, falls back to active LLM provider
+  embedding_base_url: string;      // optional, defaults to provider default
+  embedding_dims: number;          // 384 | 1536
+  enable_graph: boolean;           // knowledge graph
+  enable_forgetting_curve: boolean; // Ebbinghaus forgetting curve
+  extraction_depth: string;        // "standard" | "thorough"
+}
+
+export interface IdentityTrait {
+  trait_id: string;
+  trait_type: string;  // "Role" | "Belief" | "Value" | "Style" | "Goal"
+  content: string;
+  confidence: number;
+  evidence_ids: string[];
+}
+
+export async function getMemmeConfig(): Promise<MemmeConfig> {
+  return await invoke<MemmeConfig>('get_memme_config');
+}
+
+export async function saveMemmeConfig(config: MemmeConfig): Promise<void> {
+  await invoke('save_memme_config', { config });
+}
+
+export async function getIdentityTraits(): Promise<IdentityTrait[]> {
+  return await invoke<IdentityTrait[]>('get_identity_traits');
+}

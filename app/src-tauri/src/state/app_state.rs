@@ -52,6 +52,8 @@ pub struct AppState {
     pub pty_manager: Arc<crate::engine::pty_manager::PtyManager>,
     /// Guard to prevent concurrent meditation sessions.
     pub meditation_running: Arc<AtomicBool>,
+    /// MemMe vector memory store.
+    pub memme_store: Arc<memme_core::MemoryStore>,
 }
 
 impl AppState {
@@ -76,6 +78,7 @@ impl AppState {
             task_cancellations: self.task_cancellations.clone(),
             pty_manager: self.pty_manager.clone(),
             meditation_running: self.meditation_running.clone(),
+            memme_store: self.memme_store.clone(),
         }
     }
 
@@ -173,7 +176,7 @@ impl AppState {
         db.migrate_providers_from_json(&secret_dir).ok();
         db.migrate_jobs_from_json(&working_dir).ok();
         db.migrate_heartbeat_from_json(&working_dir).ok();
-        db.migrate_memory_from_files(&working_dir).ok();
+        // Memory migration to SQLite removed — memories now live in MemMe (DuckDB).
 
         // Migrate channels from config.json to bots table (one-time)
         migrate_channels_to_bots(&db, &config);
@@ -181,12 +184,80 @@ impl AppState {
         // Load providers from database
         let providers = ProvidersState::load(db.clone());
 
+        // Initialize MemMe vector memory store
+        let memme_db_path = working_dir.join("memme.duckdb").to_string_lossy().to_string();
+        let memme_cfg = &config.memme;
+        let dims = memme_cfg.embedding_dims;
+
+        // Build embedder based on configuration
+        let memme_embedder: std::sync::Arc<dyn memme_embeddings::Embedder> =
+            match memme_cfg.embedding_provider.as_str() {
+                "openai" => {
+                    let api_key = if memme_cfg.embedding_api_key.is_empty() {
+                        // Fall back to first configured provider's API key
+                        providers.providers.values()
+                            .find_map(|s| s.api_key.as_deref())
+                            .unwrap_or("")
+                            .to_string()
+                    } else {
+                        memme_cfg.embedding_api_key.clone()
+                    };
+                    if api_key.is_empty() {
+                        log::warn!("MemMe: OpenAI embedding selected but no API key, falling back to Mock");
+                        std::sync::Arc::new(memme_embeddings::mock::MockEmbedder::default_mini())
+                    } else {
+                        log::info!("MemMe: Using OpenAI embedding (model={}, dims={})", memme_cfg.embedding_model, dims);
+                        let mut emb = memme_embeddings::openai::OpenAiEmbedder::new(&api_key);
+                        emb = emb.with_model(match memme_cfg.embedding_model.as_str() {
+                            "text-embedding-3-large" => memme_embeddings::openai::OpenAiModel::TextEmbedding3Large,
+                            _ => memme_embeddings::openai::OpenAiModel::TextEmbedding3Small,
+                        });
+                        if !memme_cfg.embedding_base_url.is_empty() {
+                            emb = emb.with_base_url(&memme_cfg.embedding_base_url);
+                        }
+                        std::sync::Arc::new(emb)
+                    }
+                }
+                _ => {
+                    log::info!("MemMe: Using Mock embedder (no semantic search)");
+                    std::sync::Arc::new(memme_embeddings::mock::MockEmbedder::default_mini())
+                }
+            };
+
+        let mut memme_config = memme_core::MemoryConfig::new(&memme_db_path, dims);
+        memme_config.enable_graph = memme_cfg.enable_graph;
+        memme_config.enable_forgetting_curve = memme_cfg.enable_forgetting_curve;
+        memme_config.extraction_depth = match memme_cfg.extraction_depth.as_str() {
+            "thorough" => memme_core::config::ExtractionDepth::Thorough,
+            _ => memme_core::config::ExtractionDepth::Standard,
+        };
+        memme_config.custom_categories = Some(vec![
+            ("fact".into(), "Facts and knowledge about the user".into()),
+            ("preference".into(), "User preferences and likes/dislikes".into()),
+            ("experience".into(), "Experiences and events".into()),
+            ("decision".into(), "Decisions made by or for the user".into()),
+            ("note".into(), "General notes".into()),
+            ("principle".into(), "Behavioral principles learned from interactions".into()),
+        ]);
+
+        let memme_store = Arc::new(
+            memme_core::MemoryStore::new(memme_config, memme_embedder)
+                .expect("Failed to initialize MemMe store"),
+        );
+
+        // Configure MemMe LLM from active provider (for compact/meditate/add_smart)
+        if let Some(llm) = build_memme_llm(&providers) {
+            memme_store.set_llm_provider(llm);
+        }
+
+        let providers = Arc::new(RwLock::new(providers));
+
         Self {
             working_dir,
             user_workspace: std::sync::RwLock::new(user_workspace),
             secret_dir,
             config: Arc::new(RwLock::new(config)),
-            providers: Arc::new(RwLock::new(providers)),
+            providers,
             db,
             bot_manager: Arc::new(BotManager::new()),
             mcp_runtime: Arc::new(MCPRuntime::new()),
@@ -196,6 +267,7 @@ impl AppState {
             task_cancellations: Arc::new(std::sync::Mutex::new(HashMap::new())),
             pty_manager: Arc::new(crate::engine::pty_manager::PtyManager::new()),
             meditation_running: Arc::new(AtomicBool::new(false)),
+            memme_store,
         }
     }
 }
@@ -258,4 +330,29 @@ fn migrate_channels_to_bots(db: &Database, config: &Config) {
 
     db.set_config("channels_migrated", "true").ok();
     log::info!("Channel-to-bot migration complete ({} channels)", config.channels.len());
+}
+
+/// Build a MemMe LLM provider from YiYi's active LLM provider configuration.
+fn build_memme_llm(providers: &ProvidersState) -> Option<std::sync::Arc<dyn memme_llm::LlmProvider>> {
+    let slot = providers.active_llm.as_ref()?;
+    let provider_settings = providers.providers.get(&slot.provider_id)?;
+    let api_key = provider_settings.api_key.as_deref().unwrap_or("").to_string();
+    let base_url = provider_settings.base_url.clone().unwrap_or_default();
+
+    if api_key.is_empty() {
+        log::warn!("MemMe LLM: No API key for provider '{}', skipping LLM setup", slot.provider_id);
+        return None;
+    }
+
+    let model = slot.model.clone();
+    let provider_id = slot.provider_id.to_lowercase();
+    let url = if base_url.is_empty() { "https://api.openai.com".to_string() } else { base_url };
+
+    log::info!("MemMe LLM: Using OpenAI-compatible provider '{}' with model '{}'", slot.provider_id, model);
+
+    // All YiYi providers use OpenAI-compatible chat completions API
+    let mut config = memme_llm::openai::OpenAIConfig::new(&api_key);
+    config.base_url = url;
+    config.model = model;
+    Some(std::sync::Arc::new(memme_llm::openai::OpenAIProvider::new(config)))
 }

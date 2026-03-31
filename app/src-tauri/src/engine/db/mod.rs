@@ -21,7 +21,7 @@ pub use messages::ChatMessage;
 pub use providers::{ProviderSettingRow, CustomProviderRow};
 pub use bots::BotRow;
 pub use cronjobs::{ExecutionMode, CronJobRow, CronJobExecutionRow, HeartbeatRow};
-pub use memory::MemoryRow;
+// Memories now live in MemMe (DuckDB). SQLite memories table kept for schema compat only.
 pub use workspace::{AuthorizedFolderRow, SensitivePathRow};
 pub use users::{UnifiedUserRow, UserIdentityRow};
 pub use tasks::TaskInfo;

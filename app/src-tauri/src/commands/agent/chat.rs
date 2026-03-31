@@ -15,6 +15,49 @@ use super::{
     Attachment, ChatMessage, MessageSource, SpawnAgentResult, ToolCallInfo,
 };
 
+// --- MemMe pipeline helper (shared by streaming & non-streaming paths) ---
+
+/// Feed a user↔assistant turn into MemMe's Session pipeline in a background thread.
+fn feed_to_memme(session_id: String, user_msg: String, assistant_msg: String) {
+    let store = match crate::engine::tools::get_memme_store() {
+        Some(s) => s,
+        None => return,
+    };
+    tokio::task::spawn_blocking(move || {
+        let messages = vec![
+            memme_core::types::ChatMessage {
+                role: "user".into(),
+                content: user_msg,
+                image_url: None,
+                image_type: None,
+                timestamp: None,
+            },
+            memme_core::types::ChatMessage {
+                role: "assistant".into(),
+                content: assistant_msg,
+                image_url: None,
+                image_type: None,
+                timestamp: None,
+            },
+        ];
+        match store.append_events(&session_id, &messages, crate::engine::tools::MEMME_USER_ID, None) {
+            Ok(result) => {
+                log::debug!(
+                    "MemMe: appended {} events to session {} ({} unprocessed)",
+                    result.events_appended, result.session_id, result.total_unprocessed,
+                );
+                if result.compact_needed {
+                    match store.compact(&result.session_id) {
+                        Ok(cr) => log::debug!("MemMe: compacted session {} -> episode {}", cr.session_id, cr.episode_id),
+                        Err(e) => log::warn!("MemMe compact failed: {}", e),
+                    }
+                }
+            }
+            Err(e) => log::warn!("MemMe append_events failed: {}", e),
+        }
+    });
+}
+
 // --- Chat commands ---
 
 #[tauri::command]
@@ -57,22 +100,8 @@ pub async fn chat(
         state.db.push_message(&sid, "assistant", &reply)?;
     }
 
-    // Auto-extract memories in background
-    {
-        let config_clone = ctx.config.clone();
-        let msg_clone = ctx.augmented_message.clone();
-        let reply_clone = reply.clone();
-        let sid_clone = sid.clone();
-        tokio::spawn(async move {
-            react_agent::extract_memories_from_conversation(
-                &config_clone,
-                &msg_clone,
-                &reply_clone,
-                Some(&sid_clone),
-            )
-            .await;
-        });
-    }
+    // Feed conversation into MemMe Session pipeline
+    feed_to_memme(sid.clone(), ctx.augmented_message.clone(), reply.clone());
 
     // Set session title from user's first message
     if ctx.is_first_message {
@@ -392,22 +421,9 @@ pub async fn chat_stream_start(
                                 }),
                             );
 
-                            // Auto-extract memories in background
-                            {
-                                let config_bg = ctx.config.clone();
-                                let msg_bg = ctx.augmented_message.clone();
-                                let reply_bg = last_reply.clone();
-                                let sid_bg = sid_clone.clone();
-                                tokio::spawn(async move {
-                                    react_agent::extract_memories_from_conversation(
-                                        &config_bg,
-                                        &msg_bg,
-                                        &reply_bg,
-                                        Some(&sid_bg),
-                                    )
-                                    .await;
-                                });
-                            }
+                            // Feed conversation into MemMe Session pipeline
+                            // Feed conversation into MemMe Session pipeline
+                            feed_to_memme(sid_clone.clone(), ctx.augmented_message.clone(), last_reply.clone());
 
                             // Growth System: detect implicit negative feedback in user message
                             // Safety: only trigger on short messages that START with correction keywords

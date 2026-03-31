@@ -1,6 +1,13 @@
+# Fix: Anaconda's arm64-only libc++ shadows the system x86_64 one.
+# Force SDK lib path first so the linker finds the correct libc++.
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-L/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib"]
+
 [env]
-# Python for PyO3 linking
-# Override with PYO3_PYTHON env var per target architecture
+# DuckDB bundled requires macOS 10.15+ for C++ ABI compatibility
+MACOSX_DEPLOYMENT_TARGET = "10.15"
+# Python for PyO3 linking — must match Rust target architecture.
+# Intel x86_64: use Homebrew Python (not Anaconda which is arm64)
+PYO3_PYTHON = "/usr/local/Cellar/python@3.13/3.13.7/bin/python3.13"
 # ARM:   PYO3_PYTHON=/opt/anaconda3/envs/py313/bin/python3.13
-# Intel: PYO3_PYTHON=/usr/local/Cellar/python@3.13/3.13.7/bin/python3.13
 # Use build.sh to handle this automatically

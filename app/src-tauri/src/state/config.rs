@@ -17,6 +17,9 @@ pub struct Config {
     pub skill_server: SkillServerConfig,
     #[serde(default)]
     pub meditation: MeditationConfig,
+    /// MemMe memory engine configuration (embedding, graph, forgetting curve).
+    #[serde(default)]
+    pub memme: MemmeConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -169,6 +172,55 @@ impl Default for MeditationConfig {
             enabled: true,
             start_time: "23:00".to_string(),
             notify_on_complete: true,
+        }
+    }
+}
+
+/// MemMe memory engine configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemmeConfig {
+    /// Embedding provider: "mock" (default) | "openai"
+    #[serde(default = "memme_default_provider")]
+    pub embedding_provider: String,
+    /// Embedding model name (e.g. "text-embedding-3-small")
+    #[serde(default = "memme_default_model")]
+    pub embedding_model: String,
+    /// API key for embedding provider. Empty = use active LLM provider's key.
+    #[serde(default)]
+    pub embedding_api_key: String,
+    /// Base URL override for embedding API. Empty = use provider default.
+    #[serde(default)]
+    pub embedding_base_url: String,
+    /// Embedding vector dimensions. Must match model output.
+    #[serde(default = "memme_default_dims")]
+    pub embedding_dims: usize,
+    /// Enable MemMe knowledge graph (entity extraction + relations).
+    #[serde(default = "default_true")]
+    pub enable_graph: bool,
+    /// Enable Ebbinghaus forgetting curve decay.
+    #[serde(default = "default_true")]
+    pub enable_forgetting_curve: bool,
+    /// Fact extraction depth: "standard" | "thorough".
+    #[serde(default = "memme_default_depth")]
+    pub extraction_depth: String,
+}
+
+fn memme_default_provider() -> String { "mock".to_string() }
+fn memme_default_model() -> String { "text-embedding-3-small".to_string() }
+fn memme_default_dims() -> usize { 384 }
+fn memme_default_depth() -> String { "standard".to_string() }
+
+impl Default for MemmeConfig {
+    fn default() -> Self {
+        Self {
+            embedding_provider: memme_default_provider(),
+            embedding_model: memme_default_model(),
+            embedding_api_key: String::new(),
+            embedding_base_url: String::new(),
+            embedding_dims: memme_default_dims(),
+            enable_graph: true,
+            enable_forgetting_curve: true,
+            extraction_depth: memme_default_depth(),
         }
     }
 }

@@ -3,12 +3,13 @@ mod file_tools;
 mod web_tools;
 mod browser_tools;
 mod system_tools;
-mod memory_tools;
+pub(crate) mod memory_tools;
 mod cron_tools;
 mod bot_tools;
 mod skill_tools;
 pub(crate) mod claude_code;
 mod task_tools;
+mod canvas_tools;
 mod spawn_tools;
 
 // Imports used by this module and sub-modules via `super::`
@@ -50,6 +51,12 @@ static PROVIDERS: std::sync::OnceLock<Arc<tokio::sync::RwLock<crate::state::prov
 
 /// Global streaming state for snapshot updates from spawn agents.
 static STREAMING_STATE: std::sync::OnceLock<Arc<std::sync::Mutex<std::collections::HashMap<String, crate::state::app_state::StreamingSnapshot>>>> = std::sync::OnceLock::new();
+
+/// Global MemMe memory store for vector-based memory operations.
+static MEMME_STORE: std::sync::OnceLock<Arc<memme_core::MemoryStore>> = std::sync::OnceLock::new();
+
+/// Shared MemMe user ID constant. All memory operations use this as the user scope.
+pub(crate) const MEMME_USER_ID: &str = "yiyi_default_user";
 
 // Per-task session ID for tools that need session context (e.g. send_bot_message).
 // Uses task_local so concurrent agent runs track depth independently.
@@ -102,6 +109,11 @@ static SENSITIVE_PATTERNS: std::sync::OnceLock<Mutex<Vec<SensitivePattern>>> =
 /// Get database reference or return error string.
 fn require_db() -> Result<&'static Arc<super::db::Database>, String> {
     DATABASE.get().ok_or_else(|| "Error: database not available".to_string())
+}
+
+/// Get MemMe memory store or return error string.
+fn require_memme() -> Result<&'static Arc<memme_core::MemoryStore>, String> {
+    MEMME_STORE.get().ok_or_else(|| "Error: MemMe memory store not available".to_string())
 }
 
 /// Get working directory or return error string.
@@ -404,6 +416,15 @@ pub fn set_user_workspace(dir: std::path::PathBuf) {
 
 pub fn set_pty_manager(mgr: Arc<crate::engine::pty_manager::PtyManager>) {
     PTY_MANAGER.set(mgr).ok();
+}
+
+pub fn set_memme_store(store: Arc<memme_core::MemoryStore>) {
+    MEMME_STORE.set(store).ok();
+}
+
+/// Get the MemMe store for use outside the tools module (growth, meditation, helpers).
+pub fn get_memme_store() -> Option<&'static Arc<memme_core::MemoryStore>> {
+    MEMME_STORE.get()
 }
 
 /// Get the effective working directory: task-local > global USER_WORKSPACE.
@@ -779,6 +800,7 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
     tools.extend(skill_tools::definitions());
     tools.extend(claude_code::definitions());
     tools.extend(task_tools::definitions());
+    tools.extend(canvas_tools::definitions());
     tools.extend(spawn_tools::definitions());
     tools
 }
@@ -953,6 +975,7 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         "claude_code" => claude_code::claude_code_tool(&args).await,
         "send_file_to_user" => system_tools::send_file_to_user_tool(&args).await,
         "create_task" => task_tools::create_task_tool(&args).await,
+        "render_canvas" => canvas_tools::render_canvas_tool(&args).await,
         "spawn_agents" => spawn_tools::spawn_agents_tool(args.clone()).await,
         "create_workspace_dir" => task_tools::create_workspace_dir_tool(&args).await,
         "report_progress" => task_tools::report_progress_tool(&args).await,

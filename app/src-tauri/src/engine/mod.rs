@@ -1,4 +1,5 @@
 pub mod bots;
+pub mod canvas;
 pub mod db;
 pub mod config_watcher;
 pub mod meditation;

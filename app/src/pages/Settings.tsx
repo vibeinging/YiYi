@@ -33,7 +33,7 @@ import { LanguageSwitcher } from '../components/LanguageSwitcher';
 import { PageHeader } from '../components/PageHeader';
 import { ModelsPage } from './Models';
 import { EnvironmentsPage } from './Environments';
-import { getUserWorkspace, setUserWorkspace } from '../api/system';
+import { getUserWorkspace, setUserWorkspace, getMemmeConfig, saveMemmeConfig, type MemmeConfig } from '../api/system';
 import {
   listAuthorizedFolders,
   addAuthorizedFolder,
@@ -235,6 +235,16 @@ export function SettingsPage() {
   } | null>(null);
   const [meditationTriggering, setMeditationTriggering] = useState(false);
 
+  // MemMe memory engine state
+  const [memmeConfig, setMemmeConfig] = useState<MemmeConfig | null>(null);
+
+  const saveMemmeConfigFull = async (config: MemmeConfig | null) => {
+    if (!config) return;
+    try {
+      await saveMemmeConfig(config);
+    } catch (e) { console.error('Failed to save MemMe config:', e); }
+  };
+
   // Workspace authorization state
   const [folders, setFolders] = useState<AuthorizedFolder[]>([]);
   const [foldersLoading, setFoldersLoading] = useState(false);
@@ -260,6 +270,11 @@ export function SettingsPage() {
     // Load latest meditation session
     invoke('get_latest_meditation').then((session: any) => {
       if (session) setMeditationLast(session);
+    }).catch(() => {});
+
+    // Load MemMe config
+    getMemmeConfig().then((config) => {
+      if (config) setMemmeConfig(config);
     }).catch(() => {});
   }, []);
 
@@ -635,6 +650,124 @@ export function SettingsPage() {
                   )}
                   {meditationTriggering ? t('settings.meditationRunning') : t('settings.meditationTrigger')}
                 </button>
+              </div>
+            </div>
+
+            {/* Memory Engine */}
+            <div className="p-5 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
+              <div className="mb-4">
+                <h2 className="font-semibold text-[14px] mb-1">{t('settings.memoryTitle', '记忆引擎')}</h2>
+                <p className="text-[12px] text-[var(--color-text-muted)]">
+                  {t('settings.memoryDesc', '配置 MemMe 记忆引擎的 Embedding、知识图谱和遗忘曲线参数')}
+                </p>
+              </div>
+              <div className="space-y-3">
+                {/* Embedding Provider */}
+                <div className="flex items-center justify-between">
+                  <div className="text-[13px] font-medium">Embedding 提供商</div>
+                  <select
+                    value={memmeConfig?.embedding_provider ?? 'mock'}
+                    onChange={async (e) => {
+                      const next = { ...memmeConfig!, embedding_provider: e.target.value };
+                      setMemmeConfig(next);
+                      await saveMemmeConfigFull(next);
+                    }}
+                    className="text-[13px] px-2.5 py-1.5 rounded-lg"
+                    style={{ background: 'var(--color-bg-muted)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+                  >
+                    <option value="mock">Mock（默认，无语义搜索）</option>
+                    <option value="openai">OpenAI</option>
+                  </select>
+                </div>
+                {/* API Key (OpenAI only) */}
+                {memmeConfig?.embedding_provider === 'openai' && (
+                  <div className="flex items-center justify-between">
+                    <div className="text-[13px] font-medium">Embedding API Key</div>
+                    <input
+                      type="password"
+                      placeholder="留空则使用当前 LLM Provider 的 Key"
+                      value={memmeConfig?.embedding_api_key ?? ''}
+                      onChange={(e) => {
+                        const next = { ...memmeConfig!, embedding_api_key: e.target.value };
+                        setMemmeConfig(next);
+                      }}
+                      onBlur={async () => {
+                        if (memmeConfig) await saveMemmeConfigFull(memmeConfig);
+                      }}
+                      className="text-[13px] px-2.5 py-1.5 rounded-lg w-[200px]"
+                      style={{ background: 'var(--color-bg-muted)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+                    />
+                  </div>
+                )}
+                {/* Embedding Model */}
+                {memmeConfig?.embedding_provider !== 'mock' && (
+                  <div className="flex items-center justify-between">
+                    <div className="text-[13px] font-medium">Embedding 模型</div>
+                    <select
+                      value={memmeConfig?.embedding_model ?? 'text-embedding-3-small'}
+                      onChange={async (e) => {
+                        const dims = e.target.value.includes('large') ? 3072 : 1536;
+                        const next = { ...memmeConfig!, embedding_model: e.target.value, embedding_dims: dims };
+                        setMemmeConfig(next);
+                        await saveMemmeConfigFull(next);
+                      }}
+                      className="text-[13px] px-2.5 py-1.5 rounded-lg"
+                      style={{ background: 'var(--color-bg-muted)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+                    >
+                      <option value="text-embedding-3-small">text-embedding-3-small (1536d)</option>
+                      <option value="text-embedding-3-large">text-embedding-3-large (3072d)</option>
+                    </select>
+                  </div>
+                )}
+                {/* Knowledge Graph */}
+                <div className="flex items-center justify-between">
+                  <div className="text-[13px] font-medium">知识图谱</div>
+                  <button
+                    onClick={async () => {
+                      const next = { ...memmeConfig!, enable_graph: !memmeConfig?.enable_graph };
+                      setMemmeConfig(next);
+                      await saveMemmeConfigFull(next);
+                    }}
+                    className="relative w-[40px] h-[22px] rounded-full transition-colors"
+                    style={{ background: memmeConfig?.enable_graph ? 'var(--color-success)' : 'var(--color-bg-muted)' }}
+                  >
+                    <div className="absolute top-[2px] w-[18px] h-[18px] rounded-full bg-white shadow transition-transform"
+                      style={{ transform: memmeConfig?.enable_graph ? 'translateX(18px)' : 'translateX(2px)' }} />
+                  </button>
+                </div>
+                {/* Forgetting Curve */}
+                <div className="flex items-center justify-between">
+                  <div className="text-[13px] font-medium">遗忘曲线衰减</div>
+                  <button
+                    onClick={async () => {
+                      const next = { ...memmeConfig!, enable_forgetting_curve: !memmeConfig?.enable_forgetting_curve };
+                      setMemmeConfig(next);
+                      await saveMemmeConfigFull(next);
+                    }}
+                    className="relative w-[40px] h-[22px] rounded-full transition-colors"
+                    style={{ background: memmeConfig?.enable_forgetting_curve ? 'var(--color-success)' : 'var(--color-bg-muted)' }}
+                  >
+                    <div className="absolute top-[2px] w-[18px] h-[18px] rounded-full bg-white shadow transition-transform"
+                      style={{ transform: memmeConfig?.enable_forgetting_curve ? 'translateX(18px)' : 'translateX(2px)' }} />
+                  </button>
+                </div>
+                {/* Extraction Depth */}
+                <div className="flex items-center justify-between">
+                  <div className="text-[13px] font-medium">提取深度</div>
+                  <select
+                    value={memmeConfig?.extraction_depth ?? 'standard'}
+                    onChange={async (e) => {
+                      const next = { ...memmeConfig!, extraction_depth: e.target.value };
+                      setMemmeConfig(next);
+                      await saveMemmeConfigFull(next);
+                    }}
+                    className="text-[13px] px-2.5 py-1.5 rounded-lg"
+                    style={{ background: 'var(--color-bg-muted)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+                  >
+                    <option value="standard">标准</option>
+                    <option value="thorough">深入</option>
+                  </select>
+                </div>
               </div>
             </div>
 

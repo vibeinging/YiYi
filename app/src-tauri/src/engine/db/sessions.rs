@@ -69,6 +69,75 @@ impl super::Database {
         Ok(sessions)
     }
 
+    /// List sessions by source with pagination (offset + limit)
+    pub fn list_sessions_by_source_paged(
+        &self,
+        source: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<ChatSession>, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, created_at, updated_at, source, source_meta \
+                 FROM sessions WHERE source = ?1 \
+                 ORDER BY updated_at DESC LIMIT ?2 OFFSET ?3",
+            )
+            .map_err(|e| format!("Query error: {}", e))?;
+
+        let sessions = stmt
+            .query_map(params![source, limit, offset], |row| {
+                Ok(ChatSession {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    created_at: row.get(2)?,
+                    updated_at: row.get(3)?,
+                    source: row.get::<_, String>(4).unwrap_or_else(|_| "chat".into()),
+                    source_meta: row.get(5)?,
+                })
+            })
+            .map_err(|e| format!("Query error: {}", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(sessions)
+    }
+
+    /// Search sessions by name (LIKE match) filtered by source
+    pub fn search_sessions(
+        &self,
+        source: &str,
+        query: &str,
+        limit: i64,
+    ) -> Result<Vec<ChatSession>, String> {
+        let conn = self.conn.lock().unwrap();
+        let pattern = format!("%{}%", query);
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, created_at, updated_at, source, source_meta \
+                 FROM sessions WHERE source = ?1 AND name LIKE ?2 \
+                 ORDER BY updated_at DESC LIMIT ?3",
+            )
+            .map_err(|e| format!("Query error: {}", e))?;
+
+        let sessions = stmt
+            .query_map(params![source, pattern, limit], |row| {
+                Ok(ChatSession {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    created_at: row.get(2)?,
+                    updated_at: row.get(3)?,
+                    source: row.get::<_, String>(4).unwrap_or_else(|_| "chat".into()),
+                    source_meta: row.get(5)?,
+                })
+            })
+            .map_err(|e| format!("Query error: {}", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(sessions)
+    }
+
     pub fn create_session(&self, name: &str) -> Result<ChatSession, String> {
         let id = uuid::Uuid::new_v4().to_string();
         let now = super::now_ts();

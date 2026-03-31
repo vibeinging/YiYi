@@ -544,7 +544,40 @@ pub async fn write_memory_file(
     if !path.starts_with(&memory_dir) {
         return Err("Path traversal not allowed".into());
     }
-    tokio::fs::write(&path, content)
+    tokio::fs::write(&path, &content)
         .await
-        .map_err(|e| format!("Failed to write: {}", e))
+        .map_err(|e| format!("Failed to write: {}", e))?;
+
+    // Sync edited memory file content to MemMe so vector search stays current.
+    // Parse each "- " line as a separate memory entry.
+    if md_name == "MEMORY.md" || md_name == "PRINCIPLES.md" {
+        if let Some(store) = crate::engine::tools::get_memme_store() {
+            let category = if md_name == "PRINCIPLES.md" { "principle" } else { "fact" };
+            for line in content.lines() {
+                let trimmed = line.trim()
+                    .trim_start_matches("- ")
+                    .trim_start_matches("* ")
+                    .trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    continue;
+                }
+                // Strip category prefix like [偏好], [事实] etc.
+                let clean = trimmed
+                    .trim_start_matches("[偏好] ").trim_start_matches("[preference] ")
+                    .trim_start_matches("[事实] ").trim_start_matches("[fact] ")
+                    .trim_start_matches("[决定] ").trim_start_matches("[decision] ")
+                    .trim_start_matches("[经验] ").trim_start_matches("[experience] ")
+                    .trim_start_matches("[备注] ").trim_start_matches("[note] ")
+                    .trim();
+                if !clean.is_empty() {
+                    let opts = memme_core::AddOptions::new(crate::engine::tools::MEMME_USER_ID)
+                        .categories(vec![category.to_string()])
+                        .importance(if category == "principle" { 0.9 } else { 0.7 });
+                    let _ = store.add(clean, opts);
+                }
+            }
+        }
+    }
+
+    Ok(())
 }

@@ -377,12 +377,12 @@ When setting up bots, open the developer console:
         tool_list = tool_list,
     ));
 
-    // Load HOT-tier context from DB (unified principles + long-term memory)
-    if let Some(db) = crate::engine::tools::get_database() {
-        let hot_context = crate::engine::tiered_memory::load_hot_context(&db, 2500);
+    // Load HOT-tier context from MemMe (high-importance memories)
+    {
+        let hot_context = crate::engine::tiered_memory::load_hot_context(2500);
         if !hot_context.is_empty() {
             prompt.push_str(&hot_context);
-        } else {
+        } else if let Some(db) = crate::engine::tools::get_database() {
             // Fallback: if no HOT-tier memories yet, inject high-confidence corrections directly
             let corrections = db.get_high_confidence_corrections(5, 0.60);
             if !corrections.is_empty() {
@@ -432,6 +432,22 @@ When setting up bots, open the developer console:
             }
             if code_entries.len() > 10 {
                 prompt.push_str(&format!("  ...and {} more. Use search_my_code to find them.\n", code_entries.len() - 10));
+            }
+        }
+    }
+
+    // Identity traits from MemMe (high-level user profile: role, values, preferences)
+    {
+        if let Some(store) = crate::engine::tools::get_memme_store() {
+            if let Ok(traits) = store.list_identity_traits(crate::engine::tools::MEMME_USER_ID) {
+                if !traits.is_empty() {
+                    prompt.push_str("\n\n## Identity Insights (learned about you over time)\n");
+                    for t in traits.iter().take(8) {
+                        let safe_content = sanitize_prompt_field(&t.content, 120);
+                        prompt.push_str(&format!("- [{}] {} (confidence: {:.0}%)\n",
+                            t.trait_type.as_str(), safe_content, t.confidence * 100.0));
+                    }
+                }
             }
         }
     }
