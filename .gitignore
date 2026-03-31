@@ -81,6 +81,9 @@ electron/resources/
 electron/dist/
 electron/node_modules/
 
+# Research docs (local only)
+docs/research/
+
 # vibe coding
 .claude
 openspec
