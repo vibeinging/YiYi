@@ -58,6 +58,14 @@ export async function listSessions(): Promise<ChatSession[]> {
   return await invoke('list_sessions');
 }
 
+export async function listChatSessions(limit?: number, offset?: number): Promise<ChatSession[]> {
+  return await invoke('list_chat_sessions', { limit, offset });
+}
+
+export async function searchChatSessions(query: string, limit?: number): Promise<ChatSession[]> {
+  return await invoke('search_chat_sessions', { query, limit });
+}
+
 export async function createSession(name: string): Promise<ChatSession> {
   return await invoke('create_session', { name });
 }

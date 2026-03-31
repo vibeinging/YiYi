@@ -12,12 +12,10 @@ import {
   onChatComplete,
   onChatError,
   listSessions,
-  createSession,
   ensureSession,
   getHistory,
   clearHistory,
   type ChatMessage,
-  type ChatSession as ApiChatSession,
   type Attachment,
 } from '../api/agent';
 import {
@@ -36,6 +34,7 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { useChatStreamStore } from '../stores/chatStreamStore';
 import { useTaskSidebarStore } from '../stores/taskSidebarStore';
+import { useSessionStore } from '../stores/sessionStore';
 import { useDragRegion } from '../hooks/useDragRegion';
 import { toast } from '../components/Toast';
 
@@ -45,12 +44,6 @@ import { ChatMessages, type ChatMessagesHandle } from '../components/chat/ChatMe
 import { ChatInput, type ChatInputHandle } from '../components/chat/ChatInput';
 
 import logoImg from '../assets/yiyi-logo.png';
-
-/* ------------------------------------------------------------------ */
-/*  Constants                                                          */
-/* ------------------------------------------------------------------ */
-
-const MAIN_SESSION_ID = 'main';
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -69,20 +62,20 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   const { t } = useTranslation();
   const drag = useDragRegion();
 
+  // --- Session store ---
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const openTabIds = useSessionStore((s) => s.openTabIds);
+  const chatSessions = useSessionStore((s) => s.chatSessions);
+  const initialized = useSessionStore((s) => s.initialized);
+
   // --- Core state ---
-  const [sessions, setSessions] = useState<ApiChatSession[]>([]);
-  const [currentSessionId, setCurrentSessionId] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [openTabs, setOpenTabs] = useState<OpenTab[]>([
-    { id: MAIN_SESSION_ID, name: '', isMain: true },
-  ]);
   // Tabs that are newly added (for entrance animation)
   const [highlightTabs, setHighlightTabs] = useState<Map<string, 'new' | 'complete' | 'fail'>>(new Map());
 
   // --- Refs ---
-  const currentSessionIdRef = useRef(currentSessionId);
-  currentSessionIdRef.current = currentSessionId;
-  const sessionsLoadedRef = useRef(false);
+  const activeSessionIdRef = useRef(activeSessionId);
+  activeSessionIdRef.current = activeSessionId;
   const messagesRef = useRef<ChatMessagesHandle>(null);
   const inputRef = useRef<ChatInputHandle>(null);
 
@@ -127,10 +120,10 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   };
 
   const handleBindBot = async (botId: string) => {
-    if (!currentSessionId) return;
+    if (!activeSessionId) return;
     try {
-      const prevSession = await sessionBindBot(currentSessionId, botId);
-      await loadBoundBots(currentSessionId);
+      const prevSession = await sessionBindBot(activeSessionId, botId);
+      await loadBoundBots(activeSessionId);
       if (prevSession) {
         setReboundNotice(t('chat.bots.rebound'));
         setTimeout(() => setReboundNotice(''), 3000);
@@ -141,10 +134,10 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   };
 
   const handleUnbindBot = async (botId: string) => {
-    if (!currentSessionId) return;
+    if (!activeSessionId) return;
     try {
-      await sessionUnbindBot(currentSessionId, botId);
-      await loadBoundBots(currentSessionId);
+      await sessionUnbindBot(activeSessionId, botId);
+      await loadBoundBots(activeSessionId);
     } catch (error) {
       console.error('Failed to unbind bot:', error);
     }
@@ -192,62 +185,53 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
       const sessionName = isCron ? `[Cron] ${displayName}` : displayName;
       await ensureSession(targetSessionId, sessionName, isCron ? 'cronjob' : 'chat', isCron ? jobId : undefined);
 
-      setOpenTabs(prev => {
-        if (prev.some(t => t.id === targetSessionId)) return prev;
-        return [...prev, { id: targetSessionId, name: displayName, isMain: false }];
-      });
-
+      // Add to session store tabs and switch
+      useSessionStore.getState().switchToSession(targetSessionId);
       useChatStreamStore.getState().focusTask(targetSessionId, displayName, targetSessionId);
-      setCurrentSessionId(targetSessionId);
     } catch (err) {
       console.error('Failed to navigate to session:', err);
     }
   }, []);
 
   const handleCloseTab = useCallback((tabId: string) => {
-    if (tabId === MAIN_SESSION_ID) return;
-    setOpenTabs(prev => prev.filter(t => t.id !== tabId));
-    if (currentSessionId === tabId) {
+    const { openTabIds } = useSessionStore.getState();
+    // If it's a task/cron tab, unfocus
+    const sidebarTasks = useTaskSidebarStore.getState().tasks;
+    const isTask = sidebarTasks.some(t => t.sessionId === tabId) || tabId.startsWith('cron:');
+    if (isTask) {
       useChatStreamStore.getState().unfocusTask();
-      setCurrentSessionId(MAIN_SESSION_ID);
     }
-    toast.info('关闭标签不会删除任务，可从侧边栏再次打开');
-  }, [currentSessionId]);
+    useSessionStore.getState().closeTab(tabId);
+    toast.info('关闭标签不会删除对话，可从侧边栏再次打开');
+  }, []);
 
   const handleSelectTab = useCallback((tabId: string) => {
-    if (tabId === MAIN_SESSION_ID) {
+    const sidebarTasks = useTaskSidebarStore.getState().tasks;
+    const isTask = sidebarTasks.some(t => t.sessionId === tabId) || tabId.startsWith('cron:');
+    if (!isTask) {
       useChatStreamStore.getState().unfocusTask();
     }
-    setCurrentSessionId(tabId);
+    useSessionStore.getState().switchToSession(tabId);
   }, []);
 
-  const handleUnfocus = useCallback(() => {
+  const handleGoToRecentChat = useCallback(() => {
     useChatStreamStore.getState().unfocusTask();
-    setCurrentSessionId(MAIN_SESSION_ID);
+    const { chatSessions, activeSessionId, switchToSession, createNewChat } = useSessionStore.getState();
+    if (chatSessions.length > 0) {
+      // Switch to the most recent chat session
+      switchToSession(chatSessions[0].id);
+    } else {
+      createNewChat();
+    }
   }, []);
 
-  // --- Session loading ---
-  const loadSessions = async (): Promise<string> => {
-    try {
-      await ensureSession(MAIN_SESSION_ID, t('chat.defaultSession'), 'chat');
-      const list = await listSessions();
-      setSessions(list);
-      setCurrentSessionId(MAIN_SESSION_ID);
-      currentSessionIdRef.current = MAIN_SESSION_ID;
-      return MAIN_SESSION_ID;
-    } catch (error) {
-      console.error('Failed to load sessions:', error);
-      return '';
-    }
-  };
-
+  // --- Session initialization ---
   useEffect(() => {
     (async () => {
-      await loadSessions();
-      sessionsLoadedRef.current = true;
+      await useSessionStore.getState().initialize();
       const ctx = consumeNotifContext?.();
       if (ctx?.page === 'chat' && ctx?.session_id) {
-        setCurrentSessionId(ctx.session_id as string);
+        useSessionStore.getState().switchToSession(ctx.session_id as string);
         return;
       }
       const pending = useTaskSidebarStore.getState().consumePendingSession();
@@ -256,24 +240,21 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   }, []);
 
   useEffect(() => {
-    if (!pendingSessionId || !sessionsLoadedRef.current) return;
+    if (!pendingSessionId || !initialized) return;
     useTaskSidebarStore.getState().consumePendingSession();
     navigateToSession(pendingSessionId);
-  }, [pendingSessionId, navigateToSession]);
+  }, [pendingSessionId, navigateToSession, initialized]);
 
   // --- Add tab without switching (task created in background) ---
   const pendingNewTab = useTaskSidebarStore((s) => s.pendingNewTab);
   useEffect(() => {
-    if (!pendingNewTab || !sessionsLoadedRef.current) return;
+    if (!pendingNewTab || !initialized) return;
     const tab = useTaskSidebarStore.getState().consumePendingNewTab();
     if (!tab) return;
     // Ensure session exists
     ensureSession(tab.id, tab.name, 'chat').catch(() => {});
     // Add tab without switching
-    setOpenTabs(prev => {
-      if (prev.some(t => t.id === tab.id)) return prev;
-      return [...prev, { id: tab.id, name: tab.name, isMain: false }];
-    });
+    useSessionStore.getState().addTab(tab.id);
     // Highlight the new tab
     setHighlightTabs(prev => {
       const next = new Map(prev);
@@ -288,7 +269,7 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
         return next;
       });
     }, 3000);
-  }, [pendingNewTab]);
+  }, [pendingNewTab, initialized]);
 
   // --- Tab notification (task complete/fail) ---
   const pendingTabNotify = useTaskSidebarStore((s) => s.pendingTabNotify);
@@ -322,12 +303,12 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   };
 
   useEffect(() => {
-    if (!currentSessionId) return;
-    useChatStreamStore.getState().setSessionId(currentSessionId);
-    loadMessages(currentSessionId);
-    loadBoundBots(currentSessionId);
+    if (!activeSessionId) return;
+    useChatStreamStore.getState().setSessionId(activeSessionId);
+    loadMessages(activeSessionId);
+    loadBoundBots(activeSessionId);
 
-    invoke('chat_stream_state', { sessionId: currentSessionId })
+    invoke('chat_stream_state', { sessionId: activeSessionId })
       .then((snapshot: any) => {
         if (snapshot && snapshot.is_active) {
           useChatStreamStore.getState().recoverFromSnapshot(snapshot);
@@ -336,59 +317,53 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
         }
       })
       .catch(() => { useChatStreamStore.getState().resetStream(); });
-  }, [currentSessionId]);
+  }, [activeSessionId]);
 
   // Refresh on bot activity
   useEffect(() => {
-    if (!currentSessionId) return;
+    if (!activeSessionId) return;
     const unlistenResponse = listen<{ session_id: string }>('bot://response', (event) => {
-      if (event.payload.session_id === currentSessionId) loadMessages(currentSessionId);
+      if (event.payload.session_id === activeSessionId) loadMessages(activeSessionId);
     });
     const unlistenMessage = listen<{ bot_id: string }>('bot://message', (event) => {
       if (boundBots.some(b => b.id === event.payload.bot_id)) {
-        setTimeout(() => loadMessages(currentSessionId), 500);
+        setTimeout(() => loadMessages(activeSessionId), 500);
       }
     });
     const unlistenEarlyReply = listen<{ session_id: string }>('bot://early-reply', (event) => {
-      if (event.payload.session_id === currentSessionId) loadMessages(currentSessionId);
+      if (event.payload.session_id === activeSessionId) loadMessages(activeSessionId);
     });
     return () => {
       unlistenResponse.then(fn => fn());
       unlistenMessage.then(fn => fn());
       unlistenEarlyReply.then(fn => fn());
     };
-  }, [currentSessionId, boundBots]);
+  }, [activeSessionId, boundBots]);
 
   // Tray new session
   const handleNewSession = async () => {
-    try {
-      const session = await createSession(`${t('chat.newSession')} ${sessions.length}`);
-      setSessions(prev => [...prev, session]);
-      setCurrentSessionId(session.id);
-    } catch (error) {
-      console.error('Failed to create session:', error);
-    }
+    await useSessionStore.getState().createNewChat();
   };
 
   useEffect(() => {
     const unlisten = listen('tray://new-session', () => handleNewSession());
     return () => { unlisten.then(fn => fn()); };
-  }, [sessions]);
+  }, []);
 
-  // Sidebar "聊天" click → switch to main session
+  // Sidebar "聊天" click → switch to most recent chat session
   useEffect(() => {
-    const handler = () => handleUnfocus();
+    const handler = () => handleGoToRecentChat();
     window.addEventListener('chat:go-main', handler);
     return () => window.removeEventListener('chat:go-main', handler);
-  }, [handleUnfocus]);
+  }, [handleGoToRecentChat]);
 
   // Spawn complete
   useEffect(() => {
     const unlisten = listen<{ session_id: string }>('chat://spawn_complete', (event) => {
-      if (event.payload.session_id === currentSessionId) loadMessages(currentSessionId);
+      if (event.payload.session_id === activeSessionId) loadMessages(activeSessionId);
     });
     return () => { unlisten.then(fn => fn()); };
-  }, [currentSessionId]);
+  }, [activeSessionId]);
 
   // --- Streaming chat ---
   const streamLoading = useChatStreamStore((s) => s.loading);
@@ -448,10 +423,10 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     }]);
 
     try {
-      await runStreamingChat(userMessage, currentSessionId, userAttachments);
-      await loadMessages(currentSessionId);
-      const list = await listSessions();
-      setSessions(list);
+      await runStreamingChat(userMessage, activeSessionId, userAttachments);
+      await loadMessages(activeSessionId);
+      // Refresh session list to pick up auto-generated title
+      await useSessionStore.getState().refreshSessions();
     } catch (error) {
       console.error('Failed to send message:', error);
       setMessages(prev => [...prev, {
@@ -466,16 +441,26 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     }
   };
 
+  // Canvas action handler: injects user interaction as a chat message
+  const handleCanvasAction = useCallback(
+    (_canvasId: string, componentId: string, action: string, value?: unknown) => {
+      const valueStr = value !== undefined ? JSON.stringify(value) : '';
+      const prompt = `[Canvas Action] ${componentId}: ${action}${valueStr ? ' — ' + valueStr : ''}`;
+      sendQuickPrompt(prompt);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeSessionId, loading],
+  );
+
   const sendQuickPrompt = async (prompt: string) => {
     if (loading) return;
     useChatStreamStore.getState().startStream();
     setMessages(prev => [...prev, { role: 'user' as const, content: prompt, timestamp: Date.now() }]);
     try {
-      await runStreamingChat(prompt, currentSessionId);
+      await runStreamingChat(prompt, activeSessionId);
       useChatStreamStore.getState().clearStreamState();
-      await loadMessages(currentSessionId);
-      const list = await listSessions();
-      setSessions(list);
+      await loadMessages(activeSessionId);
+      await useSessionStore.getState().refreshSessions();
     } catch (error) {
       console.error('Failed to send quick prompt:', error);
       useChatStreamStore.getState().clearStreamState();
@@ -499,7 +484,7 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
 
     switch (cmd.name) {
       case 'clear':
-        await clearHistory(currentSessionId);
+        await clearHistory(activeSessionId);
         setMessages((prev) => [...prev, { role: 'context_reset' as any, content: '', timestamp: Date.now() }]);
         break;
       case 'skills': {
@@ -536,11 +521,8 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
         }
         break;
       }
-      case 'back':
-        handleUnfocus();
-        break;
     }
-  }, [currentSessionId, navigateToSession, handleUnfocus, t]);
+  }, [activeSessionId, navigateToSession, handleGoToRecentChat, t]);
 
   // --- Render user content with @mention pills ---
   const renderUserContent = useCallback((text: string) => {
@@ -560,7 +542,7 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
           if (!charAfter || /[\s,，.。!！?？)）\]】]/.test(charAfter)) {
             parts.push(
               <span key={`mention-${key++}`} style={{
-                background: 'rgba(255,255,255,0.2)', color: '#FFFFFF',
+                background: 'rgba(255,255,255,0.2)', color: 'var(--color-bg)',
                 padding: '1px 6px', borderRadius: '6px', fontWeight: 600, fontSize: '13px', whiteSpace: 'nowrap',
               }}>@{name}</span>,
             );
@@ -610,27 +592,49 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     return () => clearInterval(interval);
   }, []);
 
-  const isCronSession = currentSessionId.startsWith('cron:');
-  const cronJobId = isCronSession ? currentSessionId.slice(5) : '';
+  const isCronSession = activeSessionId.startsWith('cron:');
+  const cronJobId = isCronSession ? activeSessionId.slice(5) : '';
   const sidebarTasks = useTaskSidebarStore((s) => s.tasks);
   const isTaskSession = useMemo(
-    () => currentSessionId !== MAIN_SESSION_ID && sidebarTasks.some(t => t.sessionId === currentSessionId),
-    [sidebarTasks, currentSessionId],
+    () => sidebarTasks.some(t => t.sessionId === activeSessionId),
+    [sidebarTasks, activeSessionId],
   );
-  const isMainSession = currentSessionId === MAIN_SESSION_ID;
-  const showWelcome = isMainSession && messages.length === 0 && !loading;
+  // Determine if current session is a chat session (not task/cron)
+  const isChatSession = !isTaskSession && !isCronSession;
+  const showWelcome = isChatSession && messages.length === 0 && !loading;
+
+  // Build OpenTab[] from openTabIds
+  const openTabs: OpenTab[] = useMemo(() => {
+    const sessionMap = new Map(chatSessions.map(s => [s.id, s]));
+    const taskMap = new Map(sidebarTasks.map(t => [t.sessionId, t]));
+    return openTabIds.map(id => {
+      const session = sessionMap.get(id);
+      if (session) return { id, name: session.name };
+      const task = taskMap.get(id);
+      if (task) return { id, name: task.title };
+      if (id.startsWith('cron:')) {
+        const jobId = id.slice(5);
+        const job = cronJobs.find(j => j.id === jobId);
+        return { id, name: job?.name || jobId };
+      }
+      return { id, name: id };
+    });
+  }, [openTabIds, chatSessions, sidebarTasks, cronJobs]);
+
+  const handleNewChat = useCallback(() => {
+    useSessionStore.getState().createNewChat();
+  }, []);
 
   // --- Render ---
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden">
       <ChatTabBar
         tabs={openTabs}
-        currentTabId={currentSessionId}
-        aiName={aiName}
-        healthStatus={healthStatus}
+        currentTabId={activeSessionId}
         highlightTabs={highlightTabs}
         onSelectTab={handleSelectTab}
         onCloseTab={handleCloseTab}
+        onNewChat={handleNewChat}
       />
 
       {/* Bot binding bar */}
@@ -654,7 +658,7 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
 
           {showBotPopover && (
             <div className="absolute left-0 top-full mt-1 rounded-xl shadow-lg z-50 overflow-hidden"
-              style={{ background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)', minWidth: '260px' }}>
+              style={{ background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)', minWidth: 'min(260px, 80vw)' }}>
               {boundBots.length > 0 && (
                 <div className="p-2">
                   <div className="text-[11px] font-medium px-2 py-1" style={{ color: 'var(--color-text-muted)' }}>{t('chat.bots.bound')}</div>
@@ -719,7 +723,7 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
         <ChatMessages
           ref={messagesRef}
           messages={messages}
-          currentSessionId={currentSessionId}
+          currentSessionId={activeSessionId}
           isTaskSession={isTaskSession}
           isCronSession={isCronSession}
           cronJobId={cronJobId}
@@ -728,8 +732,9 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
           allBots={allBots}
           loading={loading}
           onOpenLightbox={openLightbox}
-          onUnfocus={handleUnfocus}
+          onUnfocus={handleGoToRecentChat}
           onSendPrompt={sendQuickPrompt}
+          onCanvasAction={handleCanvasAction}
           renderUserContent={renderUserContent}
         />
       )}
@@ -769,9 +774,14 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
       {/* Lightbox */}
       {lightboxSrc && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center"
-          style={{ background: 'rgba(0,0,0,0.85)' }} onClick={() => setLightboxSrc(null)}>
+          style={{ background: 'rgba(0,0,0,0.85)' }}
+            role="dialog"
+            aria-label="Image preview"
+            onClick={() => setLightboxSrc(null)}>
           <button className="absolute top-4 right-4 w-10 h-10 flex items-center justify-center rounded-full transition-colors"
-            style={{ background: 'rgba(255,255,255,0.15)', color: '#fff' }} onClick={() => setLightboxSrc(null)}>
+            style={{ background: 'rgba(255,255,255,0.15)', color: 'var(--color-bg)' }}
+              aria-label="Close image preview"
+              onClick={() => setLightboxSrc(null)}>
             <X size={20} />
           </button>
           <img src={lightboxSrc} className="max-w-[90vw] max-h-[90vh] rounded-lg shadow-2xl"

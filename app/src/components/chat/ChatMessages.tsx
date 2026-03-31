@@ -26,6 +26,8 @@ import { ToolCallPanel, HistorySpawnAgentsPanel, getToolLabel } from '../ToolCal
 import { TaskCard } from '../TaskCard';
 import { LongTaskProgressPanel, RoundDivider } from '../LongTaskPanel';
 import { SpawnAgentPanel } from '../SpawnAgentPanel';
+import { CanvasRenderer } from '../canvas/CanvasRenderer';
+import type { CanvasActionHandler } from '../../api/canvas';
 import { CronJobSessionView } from '../CronJobSessionView';
 import { useChatStreamStore } from '../../stores/chatStreamStore';
 import { useTaskSidebarStore } from '../../stores/taskSidebarStore';
@@ -206,6 +208,8 @@ interface ChatMessagesProps {
   onSendPrompt: (prompt: string) => void;
   /** render @mention pills in user messages */
   renderUserContent: (text: string) => React.ReactNode;
+  /** callback when user interacts with a canvas component (button click / form submit) */
+  onCanvasAction?: CanvasActionHandler;
 }
 
 export interface ChatMessagesHandle {
@@ -226,6 +230,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
     onOpenLightbox,
     onUnfocus,
     onSendPrompt,
+    onCanvasAction,
     renderUserContent,
   },
   ref,
@@ -261,6 +266,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
   const streamError = useChatStreamStore((s) => s.errorMessage);
   const longTask = useChatStreamStore((s) => s.longTask);
   const taskStreams = useChatStreamStore((s) => s.taskStreams);
+  const canvases = useChatStreamStore((s) => s.canvases);
 
   // Task-specific streaming
   const sidebarTasks = useTaskSidebarStore((s) => s.tasks);
@@ -376,7 +382,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
       )}
 
       {/* Messages area */}
-      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto" style={{ background: 'var(--color-bg)' }}>
+      <div ref={scrollContainerRef} role="log" aria-live="polite" aria-label="Chat messages" className="flex-1 overflow-y-auto" style={{ background: 'var(--color-bg)' }}>
         {messages.length === 0 && !loading && !(isTaskSession && currentTaskStream?.loading) ? (
           (isTaskSession || isCronSession) ? (
             <div className="h-full flex flex-col items-center justify-center px-6">
@@ -427,7 +433,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                     )}
                     {ptySessions && ptySessions.length > 0 && ptySessions.map((pty) => (
                       <div key={pty.sessionId} className="rounded-xl overflow-hidden" style={{
-                        height: '300px', border: '1px solid var(--color-border)', background: '#1a1a2e',
+                        height: '300px', border: '1px solid var(--color-border)', background: 'var(--color-bg)',
                       }}>
                         <Suspense fallback={<div className="p-4 text-xs" style={{ color: 'var(--color-text-muted)' }}>Loading terminal...</div>}>
                           <PtyTerminal sessionId={pty.sessionId} />
@@ -444,7 +450,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                     <div
                       className="py-2.5 px-4 rounded-2xl text-[14px] leading-relaxed"
                       style={msg.role === 'user' ? {
-                        background: 'var(--color-primary)', color: '#FFFFFF', borderBottomRightRadius: '6px',
+                        background: 'var(--color-primary)', color: 'var(--color-bg)', borderBottomRightRadius: '6px',
                       } : {
                         background: 'var(--color-bg-elevated)', color: 'var(--color-text)',
                         border: '1px solid var(--color-border)', borderBottomLeftRadius: '6px',
@@ -465,7 +471,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                                   <div
                                     key={i}
                                     className="relative group/att rounded-lg overflow-hidden cursor-pointer"
-                                    style={images.length === 1 ? { maxWidth: '320px' } : { aspectRatio: '1', maxHeight: '160px' }}
+                                    style={images.length === 1 ? { maxWidth: 'min(320px, 60vw)' } : { aspectRatio: '1', maxHeight: '160px' }}
                                     onClick={() => onOpenLightbox(att)}
                                   >
                                     <img
@@ -492,7 +498,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                                       color: msg.role === 'user' ? 'rgba(255,255,255,0.9)' : 'var(--color-text-secondary)',
                                     }}>
                                     <FileText size={14} className="shrink-0" />
-                                    <span className="truncate" style={{ maxWidth: '180px' }}>{att.name || 'file'}</span>
+                                    <span className="truncate" style={{ maxWidth: 'min(180px, 40vw)' }}>{att.name || 'file'}</span>
                                   </div>
                                 ))}
                               </div>
@@ -577,7 +583,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                         {taskCards.map((tid) => <TaskCard key={tid} taskId={tid} />)}
                         {streamPtySessions.map((pty) => (
                           <div key={pty.sessionId} className="rounded-xl overflow-hidden" style={{
-                            height: '300px', border: '1px solid var(--color-border)', background: '#1a1a2e',
+                            height: '300px', border: '1px solid var(--color-border)', background: 'var(--color-bg)',
                           }}>
                             <Suspense fallback={<div className="p-4 text-xs" style={{ color: 'var(--color-text-muted)' }}>Loading terminal...</div>}>
                               <PtyTerminal sessionId={pty.sessionId} />
@@ -646,6 +652,21 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
 
             {spawnAgents.length > 0 && (
               <SpawnAgentPanel agents={spawnAgents} collapsedAgents={collapsedAgents} onToggleCollapse={toggleCollapseAgent} />
+            )}
+
+            {/* Live Canvas: render structured UI components from Agent */}
+            {canvases.length > 0 && (
+              <div style={{ maxWidth: '80%' }}>
+                {canvases.map((c) => (
+                  <CanvasRenderer
+                    key={c.canvas_id}
+                    canvasId={c.canvas_id}
+                    title={c.title}
+                    components={c.components}
+                    onAction={onCanvasAction}
+                  />
+                ))}
+              </div>
             )}
 
             {/* Task-specific streaming: tool calls + content from taskStreams */}

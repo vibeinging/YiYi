@@ -576,3 +576,34 @@ select {
   max-width: 100%;
   border-radius: 8px;
 }
+
+/* ═══ Responsive Adaptations ═══ */
+
+/* Narrow windows (tablet-like): tighten spacing, reduce padding */
+@media (max-width: 860px) {
+  :root {
+    --sidebar-width: 56px !important;
+  }
+
+  .chat-input-wrapper {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+
+  .canvas-container {
+    max-width: 95% !important;
+  }
+}
+
+/* Very narrow windows: maximize content area */
+@media (max-width: 640px) {
+  .chat-input-wrapper {
+    padding-left: 8px !important;
+    padding-right: 8px !important;
+  }
+
+  .chat-input-actions button[aria-label] {
+    width: 36px;
+    height: 36px;
+  }
+}

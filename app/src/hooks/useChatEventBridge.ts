@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { useChatStreamStore, type StopReason } from '../stores/chatStreamStore';
+import type { CanvasEvent } from '../api/canvas';
 
 /**
  * App-level hook that bridges Tauri streaming events to the Zustand store.
@@ -179,6 +180,13 @@ export function useChatEventBridge() {
           }
         },
       ),
+
+      // Canvas events (Live Canvas / A2UI)
+      listen<CanvasEvent>('chat://canvas', (event) => {
+        if (cancelled) return;
+        if (event.payload.session_id !== store().sessionId) return;
+        store().addCanvas(event.payload);
+      }),
     ];
 
     return () => {

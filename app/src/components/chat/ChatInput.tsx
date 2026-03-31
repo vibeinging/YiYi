@@ -321,7 +321,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const handleDragOver = (e: React.DragEvent) => e.preventDefault();
 
   return (
-    <div className="shrink-0 px-6 py-4" style={{ background: 'var(--color-bg)', borderTop: '1px solid var(--color-border)' }}>
+    <div className="shrink-0 px-3 sm:px-6 py-4" style={{ background: 'var(--color-bg)', borderTop: '1px solid var(--color-border)' }}>
       <form onSubmit={(e) => { e.preventDefault(); handleSend(); }} className="w-full">
         <div
           className="relative rounded-2xl transition-all"
@@ -393,7 +393,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                   )}
                   <button type="button" onClick={() => removeImage(i)}
                     className="absolute top-0 right-0 w-5 h-5 flex items-center justify-center rounded-bl-md opacity-0 group-hover/img:opacity-100 transition-opacity"
-                    style={{ background: 'rgba(0,0,0,0.6)', color: '#fff' }}>
+                    style={{ background: 'rgba(0,0,0,0.6)', color: 'var(--color-bg)' }}>
                     <X size={12} />
                   </button>
                 </div>
@@ -420,6 +420,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             <input ref={fileInputRef} type="file" multiple className="hidden"
               onChange={(e) => { if (e.target.files) addAttachments(e.target.files); e.target.value = ''; }} />
             <button type="button" onClick={() => fileInputRef.current?.click()}
+              aria-label={t('chat.addFile', 'Add file')}
               disabled={loading || pendingImages.length >= MAX_ATTACHMENTS}
               className="w-9 h-9 flex items-center justify-center rounded-xl shrink-0 transition-all disabled:opacity-30"
               style={{ color: 'var(--color-text-muted)' }}
@@ -429,7 +430,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               <Paperclip size={18} />
             </button>
 
-            <button type="button" onClick={async () => {
+            <button type="button" aria-label={t('chat.addFolder', 'Choose folder')} onClick={async () => {
                 try {
                   const path = await invoke<string | null>('pick_folder');
                   if (path) inputRef.current?.insertText(path);
@@ -444,7 +445,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               <FolderOpen size={18} />
             </button>
 
-            <button type="button" onClick={() => setShowQuickActions((v) => !v)}
+            <button type="button" aria-label={t('chat.quick.title', 'Quick actions')} onClick={() => setShowQuickActions((v) => !v)}
               disabled={loading}
               className="w-9 h-9 flex items-center justify-center rounded-xl shrink-0 transition-all disabled:opacity-30"
               style={{ color: showQuickActions ? 'var(--color-primary)' : 'var(--color-text-muted)' }}
@@ -468,7 +469,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             {loading ? (
               <button type="button" onClick={onStop}
                 className="w-9 h-9 flex items-center justify-center rounded-xl shrink-0 transition-all"
-                style={{ background: 'var(--color-error)', color: '#FFFFFF' }}
+                style={{ background: 'var(--color-error)', color: 'var(--color-bg)' }}
                 title={t('chat.stop', '停止')}>
                 <Square size={14} fill="currentColor" />
               </button>

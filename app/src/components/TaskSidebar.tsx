@@ -13,13 +13,16 @@ import {
   Settings, Puzzle, Bot, Zap, FolderOpen, Sprout,
   Pin, PinOff, Trash2, RefreshCw, MessageCircle,
   ChevronDown, ListTodo, PanelLeftClose, PanelLeft, Grid3X3,
+  Plus, Pencil, MessageSquare, Search, X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useTaskSidebarStore } from '../stores/taskSidebarStore';
+import { useSessionStore } from '../stores/sessionStore';
 import { cancelTask, pauseTask, type TaskInfo } from '../api/tasks';
 import { deleteCronJob, pauseCronJob, resumeCronJob } from '../api/cronjobs';
 import { TASK_STATUS_CONFIG, timeAgo } from '../utils/taskStatus';
 import type { Page } from '../App';
+import type { ChatSession } from '../api/agent';
 
 interface TaskSidebarProps {
   currentPage: Page;
@@ -137,6 +140,105 @@ function CronJobContextMenu({ x, y, job, onClose }: {
         );
       })}
     </div>
+  );
+}
+
+// --- Session Context Menu ---
+function SessionContextMenu({ x, y, session, onClose }: {
+  x: number; y: number;
+  session: ChatSession;
+  onClose: () => void;
+}) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const { deleteSession, renameSession } = useSessionStore();
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [onClose]);
+
+  const handleRename = () => {
+    const newName = window.prompt('重命名对话', session.name);
+    if (newName && newName.trim()) {
+      renameSession(session.id, newName.trim());
+    }
+    onClose();
+  };
+
+  const items = [
+    { icon: Pencil, label: '重命名', danger: false, action: handleRename },
+    { icon: Trash2, label: '删除', danger: true, action: () => { deleteSession(session.id); onClose(); } },
+  ];
+
+  return (
+    <div
+      ref={menuRef}
+      className="fixed z-[100] min-w-[150px] rounded-xl py-1.5 animate-scale-in"
+      style={{
+        left: x, top: y,
+        background: 'var(--color-bg-elevated)',
+        boxShadow: '0 8px 32px rgba(0,0,0,0.28), 0 0 0 0.5px rgba(255,255,255,0.08)',
+        backdropFilter: 'blur(40px)',
+      }}
+    >
+      {items.map((item, i) => {
+        const Icon = item.icon;
+        return (
+          <button
+            key={i}
+            onClick={item.action}
+            className="w-full flex items-center gap-2.5 px-3.5 py-[7px] text-[12.5px] transition-colors text-left"
+            style={{ color: item.danger ? 'var(--color-error)' : 'var(--color-text)' }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = item.danger ? 'rgba(255,69,58,0.08)' : 'var(--color-bg-muted)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+          >
+            <Icon size={14} style={{ opacity: 0.7 }} />
+            {item.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// --- Session Card ---
+function SidebarSessionCard({ session, isActive, onPageChange }: {
+  session: ChatSession;
+  isActive: boolean;
+  onPageChange: (page: Page) => void;
+}) {
+  const { switchToSession } = useSessionStore();
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+
+  return (
+    <>
+      <div
+        onClick={() => { switchToSession(session.id); onPageChange('chat'); }}
+        onContextMenu={(e) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY }); }}
+        className="group rounded-[10px] cursor-pointer transition-all duration-150 px-2.5 py-[9px] mx-1"
+        style={{ background: isActive ? 'var(--sidebar-active)' : 'transparent' }}
+        onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
+        onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = isActive ? 'var(--sidebar-active)' : 'transparent'; }}
+      >
+        <div className="flex items-center gap-2.5">
+          <div className="shrink-0 w-4 h-4 flex items-center justify-center">
+            <MessageSquare size={12} style={{ color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)', opacity: isActive ? 1 : 0.6 }} />
+          </div>
+          <span className="flex-1 truncate text-[12.5px] font-medium" style={{ color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)' }}>
+            {session.name || 'New Chat'}
+          </span>
+          <span className="shrink-0 text-[10px] tabular-nums opacity-0 group-hover:opacity-100 transition-opacity" style={{ color: 'var(--sidebar-text)' }}>
+            {timeAgo(session.updated_at)}
+          </span>
+        </div>
+      </div>
+      {contextMenu && (
+        <SessionContextMenu x={contextMenu.x} y={contextMenu.y} session={session} onClose={() => setContextMenu(null)} />
+      )}
+    </>
   );
 }
 
@@ -456,6 +558,17 @@ export const TaskSidebar = memo(function TaskSidebar({
 
   const isMorePage = moreNavItems.some(n => n.id === currentPage);
 
+  const chatSessions = useSessionStore((s) => s.chatSessions);
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const createNewChat = useSessionStore((s) => s.createNewChat);
+  const hasMore = useSessionStore((s) => s.hasMore);
+  const loadingMore = useSessionStore((s) => s.loadingMore);
+  const loadMoreSessions = useSessionStore((s) => s.loadMoreSessions);
+  const searchQuery = useSessionStore((s) => s.searchQuery);
+  const searchResults = useSessionStore((s) => s.searchResults);
+  const searchSessionsFn = useSessionStore((s) => s.searchSessions);
+  const clearSearch = useSessionStore((s) => s.clearSearch);
+
   // ─── Collapsed ───
   if (sidebarCollapsed) {
     const activeCount = activeTasks.length + pinnedTasks.filter(t => t.status === 'running' || t.status === 'paused' || t.status === 'pending').length;
@@ -470,6 +583,18 @@ export const TaskSidebar = memo(function TaskSidebar({
       >
         {/* Drag region (traffic lights space on macOS) */}
         <div className="h-10 shrink-0 flex items-center justify-center app-drag-region" onMouseDown={onDragMouseDown} />
+
+        {/* New chat button */}
+        <button
+          onClick={() => { createNewChat(); onPageChange('chat'); }}
+          className="mt-1 w-9 h-9 flex items-center justify-center rounded-xl transition-colors"
+          style={{ color: 'var(--sidebar-text)' }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+          title="新对话"
+        >
+          <Plus size={16} />
+        </button>
 
         {/* Active task count */}
         {activeCount > 0 && (
@@ -527,7 +652,36 @@ export const TaskSidebar = memo(function TaskSidebar({
   }
 
   // ─── Expanded ───
-  const isEmpty = tasks.length === 0 && cronJobs.length === 0;
+  const hasNoTasks = tasks.length === 0 && cronJobs.length === 0;
+
+  // Session list: show search results or paginated list
+  const displaySessions = searchResults ?? chatSessions;
+  const isSearching = searchResults !== null;
+
+  // Debounced search
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleSearchChange = useCallback((value: string) => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    if (!value.trim()) {
+      clearSearch();
+      return;
+    }
+    searchTimerRef.current = setTimeout(() => searchSessionsFn(value), 200);
+  }, [searchSessionsFn, clearSearch]);
+
+  // Refs
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => { if (entries[0].isIntersecting && !isSearching) loadMoreSessions(); },
+      { rootMargin: '100px' },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [loadMoreSessions, isSearching]);
 
   return (
     <aside
@@ -541,19 +695,95 @@ export const TaskSidebar = memo(function TaskSidebar({
       {/* ── Drag region (traffic lights space on macOS) ── */}
       <div className="h-10 shrink-0 app-drag-region" onMouseDown={onDragMouseDown} />
 
-      {/* ── Task List ── */}
+      {/* ── New Chat + Search ── */}
+      <div className="shrink-0 px-2 pb-1 space-y-1">
+        <button
+          onClick={() => { createNewChat(); onPageChange('chat'); }}
+          className="w-full flex items-center gap-2 px-3 py-[7px] rounded-[10px] transition-colors text-[12.5px] font-medium"
+          style={{ color: 'var(--sidebar-text-active)' }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+        >
+          <Plus size={14} style={{ opacity: 0.7 }} />
+          新对话
+        </button>
+
+        {/* Search input */}
+        <div className="relative">
+          <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'var(--sidebar-text)', opacity: 0.4 }} />
+          <input
+            ref={searchInputRef}
+            type="text"
+            placeholder="搜索对话..."
+            defaultValue={searchQuery}
+            onChange={(e) => handleSearchChange(e.target.value)}
+            className="w-full pl-7 pr-7 py-[5px] rounded-lg text-[11.5px] outline-none transition-colors"
+            style={{
+              background: 'rgba(255,255,255,0.04)',
+              border: '1px solid rgba(255,255,255,0.06)',
+              color: 'var(--sidebar-text-active)',
+            }}
+            onFocus={(e) => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.12)'; }}
+            onBlur={(e) => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)'; }}
+          />
+          {isSearching && (
+            <button
+              onClick={() => {
+                clearSearch();
+                if (searchInputRef.current) searchInputRef.current.value = '';
+              }}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded transition-colors"
+              style={{ color: 'var(--sidebar-text)', opacity: 0.5 }}
+              onMouseEnter={(e) => { (e.currentTarget.style as any).opacity = '1'; }}
+              onMouseLeave={(e) => { (e.currentTarget.style as any).opacity = '0.5'; }}
+            >
+              <X size={11} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* ── Content List ── */}
       <div className="flex-1 overflow-y-auto py-0.5" style={{ scrollbarWidth: 'thin' }}>
-        {isEmpty ? (
+        {/* Chat sessions */}
+        {displaySessions.length > 0 && (
+          <div className="mb-1">
+            <SectionLabel>{isSearching ? `搜索结果 (${displaySessions.length})` : '对话'}</SectionLabel>
+            {displaySessions.map((session) => (
+              <SidebarSessionCard
+                key={session.id}
+                session={session}
+                isActive={activeSessionId === session.id && currentPage === 'chat'}
+                onPageChange={onPageChange}
+              />
+            ))}
+            {/* Infinite scroll sentinel — only in non-search mode */}
+            {!isSearching && hasMore && (
+              <div ref={sentinelRef} className="flex items-center justify-center py-2">
+                {loadingMore && (
+                  <span className="text-[10px]" style={{ color: 'var(--sidebar-text)', opacity: 0.4 }}>
+                    加载中...
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {isSearching && displaySessions.length === 0 ? (
+          <div className="px-4 py-6 text-center">
+            <p className="text-[11px]" style={{ color: 'var(--sidebar-text)', opacity: 0.4 }}>
+              没有找到匹配的对话
+            </p>
+          </div>
+        ) : hasNoTasks && chatSessions.length === 0 && !isSearching ? (
           /* Empty state */
           <div className="flex flex-col items-center justify-center h-full px-6 text-center">
             <div className="w-10 h-10 rounded-2xl flex items-center justify-center mb-3" style={{ background: 'rgba(255,255,255,0.04)' }}>
-              <ListTodo size={20} style={{ color: 'var(--sidebar-text)', opacity: 0.4 }} />
+              <MessageSquare size={20} style={{ color: 'var(--sidebar-text)', opacity: 0.4 }} />
             </div>
             <p className="text-[12px] font-medium leading-relaxed" style={{ color: 'var(--sidebar-text)', opacity: 0.4 }}>
-              还没有任务
-            </p>
-            <p className="text-[11px] mt-1 leading-relaxed" style={{ color: 'var(--sidebar-text)', opacity: 0.25 }}>
-              对话中的复杂请求会自动出现在这里
+              点击上方按钮开始新对话
             </p>
           </div>
         ) : (

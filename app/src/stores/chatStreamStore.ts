@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { CanvasEvent } from '../api/canvas';
 
 export type LongTaskStatus = 'idle' | 'running' | 'paused' | 'completed' | 'stopped';
 
@@ -68,6 +69,9 @@ interface ChatStreamState {
   longTask: LongTaskState;
   focusedTask: FocusedTask | null;
 
+  // Canvas state
+  canvases: CanvasEvent[];
+
   // Actions
   setSessionId: (id: string) => void;
   startStream: () => void;
@@ -79,6 +83,10 @@ interface ChatStreamState {
   endStreamWithError: (error: string) => void;
   resetStream: () => void;
   clearStreamState: () => void;
+
+  // Canvas actions
+  addCanvas: (event: CanvasEvent) => void;
+  clearCanvases: () => void;
 
   // Claude Code streaming actions
   claudeCodeStart: (workingDir: string) => void;
@@ -152,6 +160,7 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
   errorMessage: null,
   longTask: { ...INITIAL_LONG_TASK },
   focusedTask: null,
+  canvases: [],
   setSessionId: (id) => set({ sessionId: id }),
 
   startStream: () => set({
@@ -214,7 +223,15 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
     streamingThinking: '',
     activeTools: [],
     claudeCode: null,
+    canvases: [],
   }),
+
+  // Canvas actions
+  addCanvas: (event) => set((state) => ({
+    canvases: [...state.canvases, event],
+  })),
+
+  clearCanvases: () => set({ canvases: [] }),
 
   // Claude Code streaming actions
   claudeCodeStart: (workingDir) => set({

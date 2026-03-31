@@ -48,6 +48,20 @@ function MainApp() {
   const { appliedTheme } = useTheme();
   const drag = useDragRegion();
 
+  // Auto-collapse sidebar on narrow windows
+  const toggleSidebar = useTaskSidebarStore((s) => s.toggleSidebar);
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 860px)');
+    const handleChange = (e: MediaQueryListEvent | MediaQueryList) => {
+      if (e.matches) {
+        useTaskSidebarStore.getState().toggleSidebar(true);
+      }
+    };
+    handleChange(query);
+    query.addEventListener('change', handleChange);
+    return () => query.removeEventListener('change', handleChange);
+  }, []);
+
   // Bridge Tauri streaming events to Zustand store (app-level, runs once)
   useChatEventBridge();
   useTaskEventBridge();
@@ -59,7 +73,6 @@ function MainApp() {
 
   // Auto-expand sidebar when tasks appear
   const taskCount = useTaskSidebarStore((s) => s.tasks.length);
-  const toggleSidebar = useTaskSidebarStore((s) => s.toggleSidebar);
   const prevTaskCountRef = useRef(taskCount);
   useEffect(() => {
     if (prevTaskCountRef.current === 0 && taskCount > 0 && sidebarCollapsed) {
@@ -227,7 +240,7 @@ function MainApp() {
         onPageChange={(page) => {
           setCurrentPage(page);
           if (page === 'chat') {
-            // Signal Chat.tsx to switch to main session
+            // Signal Chat.tsx to switch to most recent chat session
             window.dispatchEvent(new CustomEvent('chat:go-main'));
           }
         }}
