@@ -2,9 +2,11 @@ mod compaction;
 mod core;
 mod growth;
 mod prompt;
+pub mod verification;
 
 // Re-export all public items to maintain the same external API.
-pub use core::{run_react, run_react_with_options, run_react_with_options_persist, run_react_with_options_stream};
+pub use core::{run_react, run_react_with_options, run_react_with_options_persist, run_react_with_options_stream, run_subagent_stream};
+pub(crate) use compaction::load_memme_context;
 pub use growth::{
     build_capability_profile, build_growth_timeline, consolidate_corrections_to_principles,
     detect_skill_opportunity, generate_growth_report,
@@ -78,8 +80,52 @@ pub enum AgentStreamEvent {
     Thinking(String),
     ToolStart { name: String, args_preview: String },
     ToolEnd { name: String, result_preview: String },
+    /// Context overflow detected — UI should reset streamed content before retry.
+    ContextOverflowRetry,
     Complete,
     Error,
+}
+
+// ---------------------------------------------------------------------------
+// Sub-Agent context isolation (inspired by Claude Code's createSubagentContext)
+// ---------------------------------------------------------------------------
+
+/// Tool access policy for sub-agents. Controls which tools a sub-agent can use.
+#[derive(Debug, Clone)]
+pub enum ToolFilter {
+    /// All tools allowed (default for general-purpose agents).
+    All,
+    /// Only the named tools are allowed (whitelist).
+    Allow(Vec<String>),
+    /// All tools except the named ones (blacklist — for read-only agents, etc.).
+    Deny(Vec<String>),
+}
+
+impl ToolFilter {
+    /// Read-only preset: deny all write/destructive tools.
+    pub fn read_only() -> Self {
+        ToolFilter::Deny(vec![
+            "edit_file".into(), "write_file".into(), "delete_file".into(),
+            "create_directory".into(), "execute_shell".into(),
+            "run_python".into(), "run_python_script".into(),
+            "manage_cronjob".into(), "manage_skill".into(),
+            "manage_bot".into(), "send_bot_message".into(),
+            "create_task".into(), "pip_install".into(),
+        ])
+    }
+
+    /// Apply filter to a tool list, returning only the allowed tools.
+    pub fn apply(&self, tools: &[crate::engine::tools::ToolDefinition]) -> Vec<crate::engine::tools::ToolDefinition> {
+        match self {
+            ToolFilter::All => tools.to_vec(),
+            ToolFilter::Allow(names) => tools.iter()
+                .filter(|t| names.iter().any(|n| n == &t.function.name))
+                .cloned().collect(),
+            ToolFilter::Deny(names) => tools.iter()
+                .filter(|t| !names.iter().any(|n| n == &t.function.name))
+                .cloned().collect(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

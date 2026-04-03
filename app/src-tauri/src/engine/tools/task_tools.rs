@@ -543,14 +543,14 @@ pub fn spawn_task_execution(
                 super::react_agent::run_react_with_options_stream(
                     &llm_config, &system_prompt, &user_message, &mcp_extra,
                     &task_history, None, Some(&working_dir), on_event,
-                    Some(cancel.as_ref()), persist_fn,
+                    Some(cancel.as_ref()), persist_fn, None,
                 )
             )).await
         } else {
             super::react_agent::run_react_with_options_stream(
                 &llm_config, &system_prompt, &user_message, &mcp_extra,
                 &task_history, None, Some(&working_dir), on_event,
-                None, persist_fn,
+                None, persist_fn, None,
             ).await
         };
 

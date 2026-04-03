@@ -144,13 +144,14 @@ function CronJobContextMenu({ x, y, job, onClose }: {
 }
 
 // --- Session Context Menu ---
-function SessionContextMenu({ x, y, session, onClose }: {
+function SessionContextMenu({ x, y, session, onClose, onStartRename }: {
   x: number; y: number;
   session: ChatSession;
   onClose: () => void;
+  onStartRename: () => void;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
-  const { deleteSession, renameSession } = useSessionStore();
+  const { deleteSession } = useSessionStore();
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -161,11 +162,8 @@ function SessionContextMenu({ x, y, session, onClose }: {
   }, [onClose]);
 
   const handleRename = () => {
-    const newName = window.prompt('重命名对话', session.name);
-    if (newName && newName.trim()) {
-      renameSession(session.id, newName.trim());
-    }
     onClose();
+    onStartRename();
   };
 
   const items = [
@@ -210,13 +208,30 @@ function SidebarSessionCard({ session, isActive, onPageChange }: {
   isActive: boolean;
   onPageChange: (page: Page) => void;
 }) {
-  const { switchToSession } = useSessionStore();
+  const { switchToSession, renameSession } = useSessionStore();
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState('');
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
+  const startRename = () => {
+    setRenameValue(session.name || '');
+    setIsRenaming(true);
+    setTimeout(() => renameInputRef.current?.select(), 0);
+  };
+
+  const commitRename = () => {
+    const trimmed = renameValue.trim();
+    if (trimmed && trimmed !== session.name) {
+      renameSession(session.id, trimmed);
+    }
+    setIsRenaming(false);
+  };
 
   return (
     <>
       <div
-        onClick={() => { switchToSession(session.id); onPageChange('chat'); }}
+        onClick={() => { if (!isRenaming) { switchToSession(session.id); onPageChange('chat'); } }}
         onContextMenu={(e) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY }); }}
         className="group rounded-[10px] cursor-pointer transition-all duration-150 px-2.5 py-[9px] mx-1"
         style={{ background: isActive ? 'var(--sidebar-active)' : 'transparent' }}
@@ -227,16 +242,36 @@ function SidebarSessionCard({ session, isActive, onPageChange }: {
           <div className="shrink-0 w-4 h-4 flex items-center justify-center">
             <MessageSquare size={12} style={{ color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)', opacity: isActive ? 1 : 0.6 }} />
           </div>
-          <span className="flex-1 truncate text-[12.5px] font-medium" style={{ color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)' }}>
-            {session.name || 'New Chat'}
-          </span>
+          {isRenaming ? (
+            <input
+              ref={renameInputRef}
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onBlur={commitRename}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commitRename();
+                if (e.key === 'Escape') setIsRenaming(false);
+              }}
+              onClick={(e) => e.stopPropagation()}
+              className="flex-1 text-[12.5px] font-medium bg-transparent border-none outline-none rounded px-0.5"
+              style={{
+                color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)',
+                boxShadow: '0 0 0 1px var(--color-border)',
+              }}
+              autoFocus
+            />
+          ) : (
+            <span className="flex-1 truncate text-[12.5px] font-medium" style={{ color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)' }}>
+              {session.name || 'New Chat'}
+            </span>
+          )}
           <span className="shrink-0 text-[10px] tabular-nums opacity-0 group-hover:opacity-100 transition-opacity" style={{ color: 'var(--sidebar-text)' }}>
             {timeAgo(session.updated_at)}
           </span>
         </div>
       </div>
       {contextMenu && (
-        <SessionContextMenu x={contextMenu.x} y={contextMenu.y} session={session} onClose={() => setContextMenu(null)} />
+        <SessionContextMenu x={contextMenu.x} y={contextMenu.y} session={session} onClose={() => setContextMenu(null)} onStartRename={startRename} />
       )}
     </>
   );
@@ -621,7 +656,10 @@ export const TaskSidebar = memo(function TaskSidebar({
             return (
               <button
                 key={item.id}
-                onClick={() => onPageChange(item.id)}
+                onClick={() => {
+                  onPageChange(item.id);
+                  if (item.id === 'chat') window.dispatchEvent(new CustomEvent('chat:go-main'));
+                }}
                 className="w-9 h-9 flex items-center justify-center rounded-xl transition-all"
                 style={{
                   background: isActive ? 'var(--sidebar-active)' : 'transparent',
@@ -859,7 +897,10 @@ export const TaskSidebar = memo(function TaskSidebar({
             return (
               <button
                 key={item.id}
-                onClick={() => onPageChange(item.id)}
+                onClick={() => {
+                  onPageChange(item.id);
+                  if (item.id === 'chat') window.dispatchEvent(new CustomEvent('chat:go-main'));
+                }}
                 className="flex-1 flex flex-col items-center gap-[3px] py-1.5 rounded-lg transition-all"
                 style={{
                   color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)',

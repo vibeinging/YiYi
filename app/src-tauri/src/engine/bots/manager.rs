@@ -870,7 +870,7 @@ async fn process_message(
             let result = react_agent::run_react_with_options_stream(
                 &config, &system_prompt, &enriched_message, &extra_tools,
                 &llm_history, max_iter, Some(&state.working_dir),
-                on_event, None, None,
+                on_event, None, None, None,
             ).await;
 
             // Graceful shutdown: drop the watch sender so send_task sees channel closed,

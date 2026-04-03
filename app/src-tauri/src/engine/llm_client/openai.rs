@@ -1,6 +1,7 @@
 use crate::engine::tools::{FunctionCall, ToolCall, ToolDefinition};
 
-use super::stream::process_sse_stream;
+use super::retry::send_with_retry;
+use super::stream::{process_sse_stream, StreamError};
 use super::types::*;
 
 fn apply_native_tools(
@@ -81,7 +82,7 @@ fn build_body(config: &LLMConfig, messages_value: serde_json::Value, stream: boo
     body
 }
 
-/// Send HTTP request with OpenAI auth headers (with retry for transient errors)
+/// Send HTTP request with OpenAI auth headers (with shared retry engine)
 async fn send_request(
     client: &reqwest::Client,
     url: &str,
@@ -89,70 +90,30 @@ async fn send_request(
     body: &serde_json::Value,
     timeout_secs: u64,
 ) -> Result<reqwest::Response, String> {
-    const MAX_RETRIES: u32 = 3;
-    let mut last_err = String::new();
+    let url = url.to_string();
+    let api_key = config.api_key.clone();
+    let body = body.clone();
+    let needs_ua = super::needs_coding_agent_ua(&url);
+    let client = client.clone();
 
-    for attempt in 0..=MAX_RETRIES {
-        if attempt > 0 {
-            log::warn!("LLM request retry {}/{}", attempt, MAX_RETRIES);
-        }
-
-        let mut req = client
-            .post(url)
-            .header("Authorization", format!("Bearer {}", config.api_key))
-            .header("Content-Type", "application/json");
-        if super::needs_coding_agent_ua(url) {
-            req = req.header("User-Agent", super::CODING_AGENT_UA);
-        }
-
-        match req
-            .json(body)
-            .timeout(std::time::Duration::from_secs(timeout_secs))
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                if !resp.status().is_success() {
-                    let status = resp.status();
-                    // Retry on 429 (rate limit) and 5xx (server errors)
-                    if (status.as_u16() == 429 || status.is_server_error()) && attempt < MAX_RETRIES {
-                        let mut delay = std::time::Duration::from_millis(1000 * 2u64.pow(attempt));
-                        // Respect Retry-After header for 429 responses
-                        if status.as_u16() == 429 {
-                            if let Some(retry_after) = resp.headers().get("retry-after") {
-                                if let Ok(secs) = retry_after.to_str().unwrap_or("").parse::<u64>() {
-                                    let ra_delay = std::time::Duration::from_secs(secs);
-                                    if ra_delay > delay { delay = ra_delay; }
-                                }
-                            }
-                        }
-                        let text = resp.text().await.unwrap_or_default();
-                        log::warn!("LLM API error ({}), will retry after {:?}: {}", status, delay, &text.chars().take(200).collect::<String>());
-                        last_err = format!("LLM API error ({}): {}", status, text);
-                        tokio::time::sleep(delay).await;
-                        continue;
-                    }
-                    let text = resp.text().await.unwrap_or_default();
-                    log::error!("LLM API error ({}): {}", status, text);
-                    return Err(format!("LLM API error ({}): {}", status, text));
-                }
-                return Ok(resp);
+    let outcome = send_with_retry(
+        "LLM",
+        || {
+            let mut req = client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", api_key))
+                .header("Content-Type", "application/json");
+            if needs_ua {
+                req = req.header("User-Agent", super::CODING_AGENT_UA);
             }
-            Err(e) => {
-                // Network/timeout errors are retryable
-                if attempt < MAX_RETRIES {
-                    let delay = std::time::Duration::from_millis(1000 * 2u64.pow(attempt));
-                    log::warn!("LLM request failed (attempt {}), retry after {:?}: {}", attempt + 1, delay, e);
-                    last_err = format!("LLM request failed: {}", e);
-                    tokio::time::sleep(delay).await;
-                    continue;
-                }
-                return Err(format!("LLM request failed after {} retries: {}", MAX_RETRIES, e));
-            }
-        }
-    }
+            req.json(&body)
+        },
+        std::time::Duration::from_secs(timeout_secs),
+    )
+    .await
+    .map_err(|(msg, _cat)| msg)?;
 
-    Err(last_err)
+    Ok(outcome.response)
 }
 
 /// OpenAI-compatible chat completion (non-streaming)
@@ -187,7 +148,8 @@ pub async fn chat_completion(
     })
 }
 
-/// OpenAI-compatible streaming chat completion
+/// OpenAI-compatible streaming chat completion — with automatic fallback to
+/// non-streaming when the SSE stream dies (idle timeout, connection reset).
 pub async fn chat_completion_stream<F>(
     config: &LLMConfig,
     messages: &[LLMMessage],
@@ -203,7 +165,7 @@ where
     let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
 
     let messages_value = prepare_messages(config, messages);
-    let mut body = build_body(config, messages_value, true);
+    let mut body = build_body(config, messages_value.clone(), true);
     apply_native_tools(&mut body, tools, native_tools);
 
     log::info!(
@@ -213,6 +175,41 @@ where
 
     let resp = send_request(client, &url, config, &body, 300).await?;
 
+    // --- Try streaming first ---
+    match try_stream_openai(resp, cancelled, &on_event).await {
+        Ok(response) => Ok(response),
+        Err(StreamError::Cancelled) => Err("cancelled".to_string()),
+        Err(e) if e.is_fallback_eligible() => {
+            // Stream died — fall back to non-streaming
+            log::warn!("OpenAI stream failed ({}), falling back to non-streaming", e);
+            on_event(StreamEvent::Fallback);
+
+            let mut ns_body = build_body(config, messages_value, false);
+            apply_native_tools(&mut ns_body, tools, native_tools);
+            let ns_resp = send_request(client, &url, config, &ns_body, 120).await?;
+            let json: serde_json::Value = ns_resp.json().await.map_err(|e| e.to_string())?;
+
+            let choice = &json["choices"][0];
+            let msg = &choice["message"];
+            let content_text = msg["content"].as_str().unwrap_or("").to_string();
+            let tool_calls = parse_tool_calls(&msg["tool_calls"]);
+            let response = build_stream_response(content_text, tool_calls);
+            emit_fallback_content(&response, &on_event);
+            Ok(response)
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Attempt to consume an OpenAI SSE stream, returning the assembled response.
+async fn try_stream_openai<F>(
+    resp: reqwest::Response,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
+    on_event: &F,
+) -> Result<LLMResponse, StreamError>
+where
+    F: Fn(StreamEvent) + Send + 'static,
+{
     let mut full_content = String::new();
     let mut finish_reason = "stop".to_string();
     let mut tool_call_acc: std::collections::BTreeMap<u32, (String, String, String)> =
@@ -228,11 +225,10 @@ where
                 Ok(j) => j,
                 Err(e) => {
                     log::warn!("OpenAI SSE JSON parse error: {} — data: {}", e, &data.chars().take(200).collect::<String>());
-                    return true; // skip this chunk, continue stream
+                    return true;
                 }
             };
             {
-                // Check for mid-stream error
                 if let Some(err) = json.get("error") {
                     let msg = err["message"].as_str().unwrap_or("Unknown stream error");
                     log::error!("OpenAI mid-stream error: {}", msg);
@@ -244,7 +240,6 @@ where
                     *fr = f.to_string();
                 }
                 let delta = &choice["delta"];
-                // DeepSeek R1 / reasoning models: reasoning_content is chain-of-thought thinking
                 if let Some(reasoning) = delta["reasoning_content"].as_str() {
                     if !reasoning.is_empty() {
                         on_event(StreamEvent::ReasoningDelta(reasoning.to_string()));
@@ -256,7 +251,6 @@ where
                         on_event(StreamEvent::ContentDelta(text.to_string()));
                     }
                 }
-                // Accumulate tool calls by index
                 if let Some(tc_array) = delta["tool_calls"].as_array() {
                     for tc in tc_array {
                         let index = tc["index"].as_u64().unwrap_or(0) as u32;
@@ -290,8 +284,6 @@ where
             tool_call_acc
                 .into_values()
                 .map(|(id, name, arguments)| {
-                    // Validate that accumulated arguments are valid JSON;
-                    // some providers return malformed fragments during streaming.
                     let safe_arguments = if serde_json::from_str::<serde_json::Value>(&arguments).is_ok() {
                         arguments
                     } else if let Some(repaired) = crate::engine::tools::repair_json(&arguments) {
@@ -320,10 +312,7 @@ where
     };
 
     if full_content.is_empty() && !has_tool_calls {
-        log::warn!(
-            "LLM stream completed with no content and no tool calls (model: {}, finish_reason: {})",
-            config.model, finish_reason
-        );
+        log::warn!("LLM stream completed with no content and no tool calls (finish_reason: {})", finish_reason);
     }
 
     Ok(build_stream_response(full_content, tool_calls))

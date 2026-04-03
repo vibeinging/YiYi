@@ -11,6 +11,7 @@
 mod anthropic;
 mod google;
 mod openai;
+pub mod retry;
 mod stream;
 mod types;
 

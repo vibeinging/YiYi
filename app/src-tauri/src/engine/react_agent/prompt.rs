@@ -1,6 +1,5 @@
 use super::growth::detect_skill_opportunity;
 use super::BOOTSTRAP_COMPLETED;
-use crate::engine::tools::builtin_tools;
 
 // ---------------------------------------------------------------------------
 // Template seeding with multi-language support
@@ -160,43 +159,29 @@ pub async fn build_system_prompt(
         }
     }
 
-    // Auto-generate tool list from builtin_tools() and MCP tools
-    let tools = builtin_tools();
-    let mut tool_lines: Vec<String> = tools
-        .iter()
-        .map(|t| format!("- {}: {}", t.function.name, t.function.description))
-        .collect();
-
-    // Append MCP tools in unified format
-    if let Some(mcp) = mcp_tools {
-        if !mcp.is_empty() {
-            tool_lines.push("\n### MCP Server Tools (external)".to_string());
-            for t in mcp {
-                let server_hint = if t.server_key.is_empty() {
-                    String::new()
-                } else {
-                    format!(" [server: {}]", t.server_key)
-                };
-                tool_lines.push(format!(
-                    "- {}: {}{}",
-                    t.name, t.description, server_hint
+    // Note any unavailable MCP servers (tool definitions are passed via API `tools` parameter,
+    // so we only inject strategic guidance and MCP status into the prompt)
+    let mcp_status = {
+        let mut lines = String::new();
+        if let Some(mcp) = mcp_tools {
+            if !mcp.is_empty() {
+                lines.push_str(&format!(
+                    "\nYou also have {} MCP server tool(s) available. They are prefixed with server names.",
+                    mcp.len()
                 ));
             }
         }
-    }
-
-    // Note any unavailable MCP servers
-    if let Some(unavail) = unavailable_servers {
-        if !unavail.is_empty() {
-            tool_lines.push(format!(
-                "\nNote: The following MCP servers are currently unavailable: {}. \
-                Their tools cannot be used until they reconnect.",
-                unavail.join(", ")
-            ));
+        if let Some(unavail) = unavailable_servers {
+            if !unavail.is_empty() {
+                lines.push_str(&format!(
+                    "\nNote: The following MCP servers are currently unavailable: {}. \
+                    Their tools cannot be used until they reconnect.",
+                    unavail.join(", ")
+                ));
+            }
         }
-    }
-
-    let tool_list = tool_lines.join("\n");
+        lines
+    };
 
     // Workspace & authorized folders information
     let output_dir = user_workspace
@@ -259,21 +244,22 @@ Files outside authorized folders are blocked. If the user asks you to access a p
 tell them to add the folder in Settings > Workspace.
 Sensitive files (.env, .ssh, .pem, credentials) are always blocked for security.
 
-## Tools
-You have access to these tools:
-{tool_list}
-
-IMPORTANT: For simple document reading, prefer built-in tools (read_pdf, read_docx, \
-read_spreadsheet). For advanced operations (PDF forms, PPTX creation, complex Excel), \
-use run_python or run_python_script with the appropriate libraries.
+## Tool Usage Strategy
+Tool definitions are provided via the API tools parameter. Here is how to choose between them:
+{mcp_status}
 {claude_code_guidance}
-When using tools:
+### Priority rules:
+- **File reading**: For simple document reading, prefer built-in tools (read_pdf, read_docx, read_spreadsheet). \
+For advanced operations (PDF forms, PPTX creation, complex Excel), use run_python or run_python_script.
+- **File deletion**: ALWAYS use delete_file instead of shell 'rm' commands. This ensures permission checks.
+- **Complex coding**: If `claude_code` is available, prefer it for multi-file changes, architecture analysis, large refactors.
+- **Simple edits**: Use built-in tools (read_file, edit_file) for single-file reads or small modifications.
+
+### General principles:
 - Think step by step about what you need to do
 - Use the appropriate tool for each step
 - Summarize the results for the user
 - If a tool fails, try an alternative approach
-- ALWAYS use delete_file instead of shell 'rm' commands to delete files or directories. \
-This ensures proper permission checks and prevents accidental deletion of important files.
 
 ## 后台任务 (IMPORTANT)
 任何需要**创建文件**或**设置定时任务**的请求，都必须使用 `create_task` 创建后台任务。\
@@ -328,6 +314,15 @@ Users can bind external platform bots (Discord, Telegram, QQ, Feishu, DingTalk, 
 - Bot information is stored in the database, NEVER in config files — do NOT read config files to find bot info
 - If the user mentions a bot name or asks to send a message to an external platform, use these tools
 
+## CLI 工具 (CLI Providers)
+CLI Provider 是 YiYi 内置的外部命令行工具管理系统。用户可以在「设置 > CLI 工具」中注册外部 CLI 工具（如飞书 lark-cli、钉钉 CLI 等），\
+配置安装命令、认证命令和凭证（app_id、app_secret 等）。
+- 每个 Provider 包含：标识 key、可执行文件名 binary、安装命令、认证命令、凭证、启用状态
+- YiYi 会自动检测 binary 是否已安装在系统 PATH 中
+- 用户配置好凭证后，你可以通过 `execute_shell` 直接调用这些 CLI 工具
+- 如果用户问「CLI Provider 是什么」或类似问题，要从 YiYi 自身功能的角度解释，而不是外部平台的概念
+- 目前内置了飞书 CLI (lark-cli) 的默认配置模板
+
 ## Web Search (web_search tool)
 Use `web_search` for quick information lookup. It searches DuckDuckGo and returns results instantly — no browser needed.
 - Prefer `web_search` over `browser_use` for simple searches
@@ -374,7 +369,7 @@ When setting up bots, open the developer console:
 ",
         output_dir = output_dir,
         authorized_info = authorized_info,
-        tool_list = tool_list,
+        mcp_status = mcp_status,
     ));
 
     // Load HOT-tier context from MemMe (high-importance memories)
@@ -477,4 +472,26 @@ When setting up bots, open the developer console:
     }
 
     prompt
+}
+
+// ---------------------------------------------------------------------------
+// Critical system reminder — re-injected every iteration of the ReAct loop
+// to prevent long conversations from drifting past safety/behavior boundaries.
+// Inspired by Claude Code's `criticalSystemReminder` mechanism.
+// ---------------------------------------------------------------------------
+
+/// Build a concise critical reminder to be injected as a system message
+/// before each LLM call in the ReAct loop. This prevents the model from
+/// "forgetting" key constraints during long multi-turn tool-use sessions.
+///
+/// Only injected after iteration 0 (the initial system prompt already covers these).
+pub fn critical_system_reminder() -> &'static str {
+    r#"[System Reminder]
+- File deletion: ALWAYS use delete_file tool, NEVER shell rm commands.
+- Sensitive files (.env, .ssh, credentials): ALWAYS blocked. Do not attempt to read, write, or expose them.
+- If a tool fails, try an alternative approach instead of repeating the same call.
+- Show tangible results to the user — NEVER just say "done".
+- Use create_task for any file-creating work, not inline in the main conversation.
+- Do NOT execute destructive operations (drop tables, rm -rf, format disk) without explicit user confirmation.
+- Respect authorized folder boundaries. Files outside them are blocked."#
 }

@@ -120,6 +120,8 @@ pub struct LLMResponse {
 pub enum StreamEvent {
     ContentDelta(String),
     ReasoningDelta(String),
+    /// Stream died; falling back to non-streaming request.
+    Fallback,
     Done,
 }
 
@@ -211,6 +213,19 @@ pub fn content_to_gemini_parts(content: &MessageContent) -> Vec<serde_json::Valu
             })
             .collect(),
     }
+}
+
+/// Emit fallback response content as stream events (used when falling back from
+/// streaming to non-streaming — emits the full response as a single delta).
+pub fn emit_fallback_content<F: Fn(StreamEvent)>(response: &LLMResponse, on_event: &F) {
+    if let Some(ref c) = response.message.content {
+        if let Some(text) = c.as_text() {
+            if !text.is_empty() {
+                on_event(StreamEvent::ContentDelta(text.to_string()));
+            }
+        }
+    }
+    on_event(StreamEvent::Done);
 }
 
 /// Build an LLMResponse from accumulated streaming state

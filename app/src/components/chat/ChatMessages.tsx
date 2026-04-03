@@ -25,6 +25,7 @@ import { open } from '@tauri-apps/plugin-shell';
 import { ToolCallPanel, HistorySpawnAgentsPanel, getToolLabel } from '../ToolCallPanel';
 import { TaskCard } from '../TaskCard';
 import { LongTaskProgressPanel, RoundDivider } from '../LongTaskPanel';
+import { RetryStatusBar } from './RetryStatusBar';
 import { SpawnAgentPanel } from '../SpawnAgentPanel';
 import { CanvasRenderer } from '../canvas/CanvasRenderer';
 import type { CanvasActionHandler } from '../../api/canvas';
@@ -622,6 +623,9 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                 </div>
               </div>
             )}
+
+            {/* Retry Status */}
+            {streamLoading && <RetryStatusBar />}
 
             {/* Error */}
             {streamError && !streamLoading && (

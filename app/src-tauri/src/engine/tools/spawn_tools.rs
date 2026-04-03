@@ -16,6 +16,9 @@ struct AgentSpec {
     task: String,
     #[serde(default)]
     skills: Vec<String>,
+    /// If true, this agent is read-only (no write tools). Defaults to false.
+    #[serde(default)]
+    read_only: bool,
 }
 
 /// Spawn agents tool definitions.
@@ -201,6 +204,14 @@ fn spawn_agents_background(
 
             async move {
                 let agent_name = spec.name.clone();
+                let tool_filter = if spec.read_only {
+                    super::react_agent::ToolFilter::read_only()
+                } else {
+                    super::react_agent::ToolFilter::All
+                };
+
+                // Apply tool filter to MCP extra tools
+                let mcp_extra = tool_filter.apply(&mcp_extra);
 
                 // Filter skill index if agent specifies specific skills
                 let filtered_index: Vec<crate::commands::agent::SkillIndexEntry> = if spec.skills.is_empty() {
@@ -294,14 +305,15 @@ fn spawn_agents_background(
                             }
                             super::react_agent::AgentStreamEvent::Complete
                             | super::react_agent::AgentStreamEvent::Error
-                            | super::react_agent::AgentStreamEvent::Thinking(_) => {}
+                            | super::react_agent::AgentStreamEvent::Thinking(_)
+                            | super::react_agent::AgentStreamEvent::ContextOverflowRetry => {}
                         }
                     };
                     DELEGATION_DEPTH.scope(depth, Box::pin(
                         super::react_agent::run_react_with_options_stream(
                             &config, &system_prompt, &spec.task, &mcp_extra,
                             &[], None, Some(&wd), on_event,
-                            cancelled_for_agent.as_ref().map(|c| c.as_ref()), None,
+                            cancelled_for_agent.as_ref().map(|c| c.as_ref()), None, None,
                         )
                     )).await
                 } else {

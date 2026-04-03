@@ -106,6 +106,9 @@ pub fn run() {
             engine::tools::set_pty_manager(state.pty_manager.clone());
             engine::tools::set_memme_store(state.memme_store.clone());
 
+            // Initialize the unified task registry
+            engine::task_registry::init_global_registry();
+
             // Initialize authorized folders from database
             {
                 let db_arc = &state.db;
@@ -311,6 +314,7 @@ pub fn run() {
             commands::system::get_latest_meditation,
             commands::system::trigger_meditation,
             commands::system::get_meditation_status,
+            commands::system::get_meditation_summary,
             commands::system::get_memme_config,
             commands::system::save_memme_config,
             commands::system::get_identity_traits,
@@ -474,9 +478,30 @@ pub fn run() {
             commands::pty::pty_resize,
             commands::pty::pty_close,
             commands::pty::pty_list,
+            // CLI Providers
+            commands::cli::list_cli_providers,
+            commands::cli::save_cli_provider_config,
+            commands::cli::check_cli_provider,
+            commands::cli::install_cli_provider,
+            commands::cli::delete_cli_provider,
+            // Buddy Companion
+            commands::buddy::get_buddy_config,
+            commands::buddy::save_buddy_config,
+            commands::buddy::hatch_buddy,
+            commands::buddy::buddy_observe,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Reopen { .. } = event {
+                // macOS: clicking Dock icon should show the main window
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    window.show().ok();
+                    window.unminimize().ok();
+                    window.set_focus().ok();
+                }
+            }
+        });
 }
 
 /// Spawn a background loop that checks every 60 seconds if it's time to run meditation.

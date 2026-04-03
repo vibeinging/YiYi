@@ -264,6 +264,18 @@ pub async fn chat_stream_start(
                         }
                     }
                 }
+                react_agent::AgentStreamEvent::ContextOverflowRetry => {
+                    // Reset accumulated text so the retry doesn't produce duplicate content
+                    handle.emit("chat://stream_reset", serde_json::json!({
+                        "session_id": sid_for_event,
+                        "reason": "context_overflow",
+                    })).ok();
+                    if let Ok(mut ss) = ss_for_event.lock() {
+                        if let Some(snap) = ss.get_mut(&sid_for_event) {
+                            snap.accumulated_text.clear();
+                        }
+                    }
+                }
                 react_agent::AgentStreamEvent::Complete
                 | react_agent::AgentStreamEvent::Error => {}
             }
@@ -340,6 +352,7 @@ pub async fn chat_stream_start(
                     on_event.clone(),
                     Some(&cancelled),
                     persist_fn,
+                    None,
                 )
                 .await
                 {
@@ -421,7 +434,45 @@ pub async fn chat_stream_start(
                                 }),
                             );
 
-                            // Feed conversation into MemMe Session pipeline
+                            // Verification Agent: auto-verify multi-round tasks (round >= 3)
+                            // Runs in background so it doesn't block the main completion flow.
+                            if round >= 3 {
+                                let verify_config = ctx.config.clone();
+                                let verify_task_desc = ctx.augmented_message.clone();
+                                let verify_output = last_reply.clone();
+                                let verify_handle = app_handle.clone();
+                                let verify_sid = sid_clone.clone();
+                                let verify_wd = ctx.working_dir.clone();
+                                tokio::spawn(async move {
+                                    log::info!("Verification Agent starting for session {}", verify_sid);
+                                    let on_event = {
+                                        let h = verify_handle.clone();
+                                        let sid = verify_sid.clone();
+                                        move |evt: react_agent::AgentStreamEvent| {
+                                            if let react_agent::AgentStreamEvent::Token(text) = &evt {
+                                                h.emit("chat://verification_chunk", serde_json::json!({
+                                                    "text": text, "session_id": sid,
+                                                })).ok();
+                                            }
+                                        }
+                                    };
+                                    match react_agent::verification::verify_task(
+                                        &verify_config, &verify_task_desc, &verify_output,
+                                        &[], Some(verify_wd.as_path()), on_event, None,
+                                    ).await {
+                                        Ok(report) => {
+                                            log::info!("Verification complete: {}", &report.chars().take(200).collect::<String>());
+                                            verify_handle.emit("chat://verification_complete", serde_json::json!({
+                                                "report": report, "session_id": verify_sid,
+                                            })).ok();
+                                        }
+                                        Err(e) => {
+                                            log::warn!("Verification Agent failed: {}", e);
+                                        }
+                                    }
+                                });
+                            }
+
                             // Feed conversation into MemMe Session pipeline
                             feed_to_memme(sid_clone.clone(), ctx.augmented_message.clone(), last_reply.clone());
 

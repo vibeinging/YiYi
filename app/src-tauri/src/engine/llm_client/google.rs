@@ -3,7 +3,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::engine::tools::{FunctionCall, ToolCall, ToolDefinition};
 
-use super::stream::process_sse_stream;
+use super::retry::send_with_retry;
+use super::stream::{process_sse_stream, StreamError};
 use super::types::*;
 
 /// Global counter for generating unique tool call IDs across turns
@@ -246,63 +247,26 @@ async fn send_request(
     body: &serde_json::Value,
     timeout_secs: u64,
 ) -> Result<reqwest::Response, String> {
-    const MAX_RETRIES: u32 = 3;
-    let mut last_err = String::new();
+    let url = url.to_string();
+    let api_key = config.api_key.clone();
+    let body = body.clone();
+    let client = client.clone();
 
-    for attempt in 0..=MAX_RETRIES {
-        if attempt > 0 {
-            log::warn!("Gemini request retry {}/{}", attempt, MAX_RETRIES);
-        }
+    let outcome = send_with_retry(
+        "Gemini",
+        || {
+            client
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .header("x-goog-api-key", &api_key)
+                .json(&body)
+        },
+        std::time::Duration::from_secs(timeout_secs),
+    )
+    .await
+    .map_err(|(msg, _cat)| msg)?;
 
-        match client
-            .post(url)
-            .header("Content-Type", "application/json")
-            .header("x-goog-api-key", &config.api_key)
-            .json(body)
-            .timeout(std::time::Duration::from_secs(timeout_secs))
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                if !resp.status().is_success() {
-                    let status = resp.status();
-                    if (status.as_u16() == 429 || status.is_server_error()) && attempt < MAX_RETRIES {
-                        let mut delay = std::time::Duration::from_millis(1000 * 2u64.pow(attempt));
-                        // Respect Retry-After header for 429 responses
-                        if status.as_u16() == 429 {
-                            if let Some(retry_after) = resp.headers().get("retry-after") {
-                                if let Ok(secs) = retry_after.to_str().unwrap_or("").parse::<u64>() {
-                                    let ra_delay = std::time::Duration::from_secs(secs);
-                                    if ra_delay > delay { delay = ra_delay; }
-                                }
-                            }
-                        }
-                        let text = resp.text().await.unwrap_or_default();
-                        log::warn!("Gemini API error ({}), will retry after {:?}: {}", status, delay, &text.chars().take(200).collect::<String>());
-                        last_err = format!("Gemini API error ({}): {}", status, text);
-                        tokio::time::sleep(delay).await;
-                        continue;
-                    }
-                    let text = resp.text().await.unwrap_or_default();
-                    log::error!("Gemini API error ({}): {}", status, text);
-                    return Err(format!("Gemini API error ({}): {}", status, text));
-                }
-                return Ok(resp);
-            }
-            Err(e) => {
-                if attempt < MAX_RETRIES {
-                    let delay = std::time::Duration::from_millis(1000 * 2u64.pow(attempt));
-                    log::warn!("Gemini request failed (attempt {}), retry after {:?}: {}", attempt + 1, delay, e);
-                    last_err = format!("Gemini request failed: {}", e);
-                    tokio::time::sleep(delay).await;
-                    continue;
-                }
-                return Err(format!("Gemini request failed after {} retries: {}", MAX_RETRIES, e));
-            }
-        }
-    }
-
-    Err(last_err)
+    Ok(outcome.response)
 }
 
 // ── Public API ──────────────────────────────────────────────────────
@@ -352,6 +316,39 @@ where
 
     let resp = send_request(client, &url, config, &body, 300).await?;
 
+    // --- Try streaming first ---
+    match try_stream_gemini(resp, cancelled, &on_event).await {
+        Ok(response) => Ok(response),
+        Err(StreamError::Cancelled) => Err("cancelled".to_string()),
+        Err(e) if e.is_fallback_eligible() => {
+            // Stream died — fall back to non-streaming
+            log::warn!("Gemini stream failed ({}), falling back to non-streaming", e);
+            on_event(StreamEvent::Fallback);
+
+            let ns_url = format!(
+                "{}/models/{}:generateContent",
+                config.base_url.trim_end_matches('/'),
+                config.model,
+            );
+            let ns_resp = send_request(client, &ns_url, config, &body, 120).await?;
+            let json: serde_json::Value = ns_resp.json().await.map_err(|e| e.to_string())?;
+            let response = parse_gemini_response(&json)?;
+            emit_fallback_content(&response, &on_event);
+            Ok(response)
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Attempt to consume a Gemini SSE stream, returning the assembled response.
+async fn try_stream_gemini<F>(
+    resp: reqwest::Response,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
+    on_event: &F,
+) -> Result<LLMResponse, StreamError>
+where
+    F: Fn(StreamEvent) + Send + 'static,
+{
     let mut full_content = String::new();
     let mut finish_reason = "stop".to_string();
     let mut tool_calls: Vec<ToolCall> = Vec::new();
@@ -369,7 +366,7 @@ where
                         "SAFETY" => {
                             log::error!("Gemini safety filter triggered during streaming");
                             *fr = "safety".to_string();
-                            return false; // stop stream, will be reported as error below
+                            return false;
                         }
                         "STOP" => *fr = "stop".to_string(),
                         other => *fr = other.to_lowercase(),
@@ -401,18 +398,14 @@ where
         .await?;
     }
 
-    // Check for safety filter before emitting Done
     if finish_reason == "safety" {
-        return Err("Gemini blocked by safety filter during streaming".to_string());
+        return Err(StreamError::Normal("Gemini blocked by safety filter during streaming".to_string()));
     }
 
     on_event(StreamEvent::Done);
 
     if full_content.is_empty() && tool_calls.is_empty() {
-        log::warn!(
-            "Gemini stream completed with no content and no tool calls (model: {})",
-            config.model
-        );
+        log::warn!("Gemini stream completed with no content and no tool calls");
     }
 
     let tool_calls_opt = if tool_calls.is_empty() {
@@ -420,8 +413,5 @@ where
     } else {
         Some(tool_calls)
     };
-    Ok(build_stream_response(
-        full_content,
-        tool_calls_opt,
-    ))
+    Ok(build_stream_response(full_content, tool_calls_opt))
 }

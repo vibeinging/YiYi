@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { useChatStreamStore, type StopReason } from '../stores/chatStreamStore';
+import { useChatStreamStore, type StopReason, type RetryErrorType } from '../stores/chatStreamStore';
 import type { CanvasEvent } from '../api/canvas';
 
 /**
@@ -65,6 +65,33 @@ export function useChatEventBridge() {
         if (cancelled) return;
         if (event.payload.session_id !== store().sessionId) return;
         store().endStreamWithError(event.payload.text);
+      }),
+
+      // Stream reset (context overflow recovery — clear partial content before retry)
+      listen<{ session_id: string; reason: string }>('chat://stream_reset', (event) => {
+        if (cancelled) return;
+        if (event.payload.session_id !== store().sessionId) return;
+        store().resetStreamContent();
+      }),
+
+      // Retry status events (not session-scoped — they come from the HTTP layer)
+      listen<{ attempt: number; max_retries: number; delay_ms: number; error_category: { type: string }; provider: string }>(
+        'chat://retry',
+        (event) => {
+          if (cancelled) return;
+          store().setRetryStatus({
+            attempt: event.payload.attempt,
+            max_retries: event.payload.max_retries,
+            delay_ms: event.payload.delay_ms,
+            error_type: (event.payload.error_category?.type || 'transient') as RetryErrorType,
+            provider: event.payload.provider,
+          });
+        },
+      ),
+
+      listen('chat://retry-resolved', () => {
+        if (cancelled) return;
+        store().setRetryStatus(null);
       }),
 
       // Spawn agent events

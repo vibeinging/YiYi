@@ -1,7 +1,7 @@
 use super::COMPACT_THRESHOLD;
-use super::COMPACT_SUMMARY_FILE;
 use crate::engine::llm_client::{chat_completion, LLMConfig, LLMMessage, MessageContent};
 use crate::engine::token_counter::estimate_tokens;
+use crate::engine::tools::{get_current_session_id, get_memme_store};
 
 // ---------------------------------------------------------------------------
 // Message sanitization — fix broken tool message sequences
@@ -78,26 +78,20 @@ pub(super) fn sanitize_messages(messages: &mut Vec<LLMMessage>) {
     }
 
     // Phase 4: Ensure tool messages immediately follow their parent assistant.
-    // Some API providers (DashScope/Qwen) require strict ordering:
-    // assistant(tool_calls) must be immediately followed by its tool results.
-    // Re-arrange by collecting tool messages and re-inserting after their parent assistant.
     let mut relocated = 0usize;
     let mut i = 0;
     while i < messages.len() {
         if messages[i].role == "tool" {
             let tool_call_id = match messages[i].tool_call_id.as_deref() {
                 Some(id) if !id.is_empty() => id.to_string(),
-                _ => { i += 1; continue; } // skip tool messages without valid ID
+                _ => { i += 1; continue; }
             };
-            // Find the parent assistant
             let parent_idx = messages[..i].iter().rposition(|m| {
                 m.role == "assistant"
                     && m.tool_calls.as_ref()
                         .map_or(false, |calls| calls.iter().any(|c| c.id == tool_call_id))
             });
             if let Some(pidx) = parent_idx {
-                // Check if this tool message is already in the correct position
-                // (immediately after parent assistant and any sibling tool messages)
                 let mut expected_pos = pidx + 1;
                 while expected_pos < messages.len()
                     && expected_pos < i
@@ -106,7 +100,6 @@ pub(super) fn sanitize_messages(messages: &mut Vec<LLMMessage>) {
                     expected_pos += 1;
                 }
                 if expected_pos != i {
-                    // Need to relocate: remove from current position, insert after parent's tool block
                     let tool_msg = messages.remove(i);
                     let mut insert_at = pidx + 1;
                     while insert_at < messages.len() && messages[insert_at].role == "tool" {
@@ -114,7 +107,7 @@ pub(super) fn sanitize_messages(messages: &mut Vec<LLMMessage>) {
                     }
                     messages.insert(insert_at, tool_msg);
                     relocated += 1;
-                    continue; // don't increment i since we removed an element
+                    continue;
                 }
             }
         }
@@ -126,7 +119,7 @@ pub(super) fn sanitize_messages(messages: &mut Vec<LLMMessage>) {
 }
 
 // ---------------------------------------------------------------------------
-// Context compaction
+// Token estimation
 // ---------------------------------------------------------------------------
 
 /// Estimate total token count of all messages.
@@ -146,24 +139,14 @@ fn total_message_tokens(messages: &[LLMMessage]) -> usize {
         .sum()
 }
 
-/// Compact messages when context exceeds threshold.
-pub(super) async fn compact_messages_if_needed(
-    messages: &mut Vec<LLMMessage>,
-    config: &LLMConfig,
-    working_dir: Option<&std::path::Path>,
-) {
-    let total = total_message_tokens(messages);
-    if total < COMPACT_THRESHOLD || messages.len() < 6 {
-        return;
-    }
+// ---------------------------------------------------------------------------
+// Head / middle / tail split logic (shared)
+// ---------------------------------------------------------------------------
 
-    log::info!(
-        "Context compaction triggered: ~{} tokens, {} messages",
-        total,
-        messages.len()
-    );
-
-    // Find where the "head" (system messages) ends
+/// Returns (keep_start, mid_end) indices for compaction split.
+/// - keep_start: end of system messages (preserved)
+/// - mid_end: start of tail (preserved, last min_keep messages)
+fn find_compaction_split(messages: &[LLMMessage]) -> Option<(usize, usize)> {
     let keep_start = messages.iter()
         .position(|m| m.role != "system")
         .unwrap_or(1);
@@ -171,14 +154,120 @@ pub(super) async fn compact_messages_if_needed(
     let min_keep = 4;
     let mut mid_end = messages.len().saturating_sub(min_keep);
     if mid_end <= keep_start {
-        return;
+        return None;
     }
     while mid_end > keep_start && messages[mid_end].role == "tool" {
         mid_end -= 1;
     }
     if mid_end <= keep_start {
-        return;
+        return None;
     }
+    Some((keep_start, mid_end))
+}
+
+// ---------------------------------------------------------------------------
+// Shared SessionContext → String formatting
+// ---------------------------------------------------------------------------
+
+/// Format a MemMe SessionContext into a human-readable summary string.
+fn format_session_context(ctx: &memme_core::types::SessionContext) -> Option<String> {
+    if ctx.events.is_empty() && ctx.episode_summary.is_none() {
+        return None;
+    }
+
+    let mut parts = Vec::new();
+    if let Some(ref ep_summary) = ctx.episode_summary {
+        parts.push(ep_summary.clone());
+    }
+    for event in &ctx.events {
+        let content = event.purified_content.as_ref()
+            .unwrap_or(&event.content);
+        let content_preview: String = content.chars().take(200).collect();
+        parts.push(format!("- [{}] {}", event.event_type.as_str(), content_preview));
+    }
+    Some(parts.join("\n"))
+}
+
+// ---------------------------------------------------------------------------
+// Shared MemMe context retrieval helper
+// ---------------------------------------------------------------------------
+
+/// Fetch SessionContext from MemMe via spawn_blocking, returning the formatted
+/// summary string. Returns None on any error (logged as warning).
+async fn fetch_memme_context(session_id: &str, token_budget: usize) -> Option<String> {
+    let store = get_memme_store()?;
+
+    let context = tokio::task::spawn_blocking({
+        let store = store.clone();
+        let sid = session_id.to_string();
+        move || {
+            store.get_session_context(
+                &sid,
+                memme_core::types::GetSessionContextOptions::new()
+                    .token_budget(token_budget)
+                    .include_summary(true)
+                    .include_all(),
+            )
+        }
+    }).await;
+
+    match context {
+        Ok(Ok(ctx)) => format_session_context(&ctx),
+        Ok(Err(e)) => {
+            log::warn!("MemMe get_session_context failed: {}", e);
+            None
+        }
+        Err(e) => {
+            log::warn!("MemMe get_session_context task panicked: {}", e);
+            None
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MemMe-backed summary generation
+// ---------------------------------------------------------------------------
+
+/// Generate context summary via MemMe's compact + get_session_context pipeline.
+async fn generate_memme_summary(session_id: &str) -> Option<String> {
+    let store = get_memme_store()?;
+
+    // Compact any unprocessed events (no-op if none pending)
+    let compact_result = tokio::task::spawn_blocking({
+        let store = store.clone();
+        let sid = session_id.to_string();
+        move || store.compact(&sid)
+    }).await;
+
+    match compact_result {
+        Ok(Ok(cr)) => {
+            log::debug!(
+                "MemMe compaction: session {} -> episode {} ({} events processed)",
+                cr.session_id, cr.episode_id, cr.events_processed
+            );
+        }
+        Ok(Err(e)) => {
+            log::warn!("MemMe compact failed: {}", e);
+        }
+        Err(e) => {
+            log::warn!("MemMe compact task panicked: {}", e);
+        }
+    }
+
+    fetch_memme_context(session_id, 2000).await
+}
+
+// ---------------------------------------------------------------------------
+// Legacy preview-based summary generation (fallback)
+// ---------------------------------------------------------------------------
+
+/// Generate summary from message previews, optionally using LLM for long sequences.
+async fn generate_preview_summary(messages: &[LLMMessage], config: &LLMConfig) -> String {
+    let (keep_start, mid_end) = match find_compaction_split(messages) {
+        Some(split) => split,
+        None => return String::new(),
+    };
+
     let middle: Vec<&LLMMessage> = messages[keep_start..mid_end].iter().collect();
 
     let mut summary_parts: Vec<String> = Vec::new();
@@ -213,7 +302,7 @@ pub(super) async fn compact_messages_if_needed(
         }
     }
 
-    let summary = if summary_parts.len() > 10 {
+    if summary_parts.len() > 10 {
         let summary_request = format!(
             "Summarize these previous interactions concisely (max 500 chars):\n{}",
             summary_parts.join("\n")
@@ -234,14 +323,36 @@ pub(super) async fn compact_messages_if_needed(
         }
     } else {
         summary_parts.join("\n")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Apply compaction — replace middle messages with summary
+// ---------------------------------------------------------------------------
+
+/// Apply compaction: system head + summary message + raw tail.
+async fn apply_compaction(
+    messages: &mut Vec<LLMMessage>,
+    summary: &str,
+    working_dir: Option<&std::path::Path>,
+    original_total: usize,
+) {
+    if summary.is_empty() {
+        return;
+    }
+
+    let (keep_start, mid_end) = match find_compaction_split(messages) {
+        Some(split) => split,
+        None => return,
     };
+
+    let middle_count = mid_end - keep_start;
 
     let summary_msg = LLMMessage {
         role: "system".into(),
         content: Some(MessageContent::text(format!(
             "[Previous context compacted — {} messages summarized]\n{}",
-            middle.len(),
-            summary
+            middle_count, summary
         ))),
         tool_calls: None,
         tool_call_id: None,
@@ -257,18 +368,14 @@ pub(super) async fn compact_messages_if_needed(
         "Compacted: {} → {} messages, ~{} → ~{} tokens",
         messages.len(),
         new_messages.len(),
-        total,
+        original_total,
         new_total
     );
 
     *messages = new_messages;
 
+    // Persist to memory/compacted/ for audit
     if let Some(dir) = working_dir {
-        let summary_path = dir.join(COMPACT_SUMMARY_FILE);
-        tokio::fs::write(&summary_path, &summary).await.ok();
-        log::info!("Persisted compact summary to {}", summary_path.display());
-
-        // Also write to memory/compacted/
         let compacted_dir = dir.join("memory").join("compacted");
         tokio::fs::create_dir_all(&compacted_dir).await.ok();
         let date = chrono::Local::now().format("%Y-%m-%d").to_string();
@@ -288,4 +395,68 @@ pub(super) async fn compact_messages_if_needed(
             f.write_all(entry.as_bytes()).await.ok();
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Context compaction entry point
+// ---------------------------------------------------------------------------
+
+/// Compact messages when context exceeds threshold.
+/// Uses MemMe for summary generation when available, falls back to preview-based summary.
+pub(super) async fn compact_messages_if_needed(
+    messages: &mut Vec<LLMMessage>,
+    config: &LLMConfig,
+    working_dir: Option<&std::path::Path>,
+) {
+    let total = total_message_tokens(messages);
+    if total < COMPACT_THRESHOLD || messages.len() < 6 {
+        return;
+    }
+    log::info!("Context compaction triggered: ~{} tokens, {} messages", total, messages.len());
+    do_compact(messages, config, working_dir, total).await;
+}
+
+/// Force compaction regardless of token count — used for context overflow recovery.
+pub(super) async fn force_compact_messages(
+    messages: &mut Vec<LLMMessage>,
+    config: &LLMConfig,
+    working_dir: Option<&std::path::Path>,
+) {
+    if messages.len() < 4 {
+        log::warn!("Cannot force-compact: too few messages ({})", messages.len());
+        return;
+    }
+    let total = total_message_tokens(messages);
+    log::info!("Force compaction (context overflow recovery): ~{} tokens, {} messages", total, messages.len());
+    do_compact(messages, config, working_dir, total).await;
+}
+
+async fn do_compact(
+    messages: &mut Vec<LLMMessage>,
+    config: &LLMConfig,
+    working_dir: Option<&std::path::Path>,
+    total: usize,
+) {
+    let session_id = get_current_session_id();
+    let summary = if !session_id.is_empty() {
+        match generate_memme_summary(&session_id).await {
+            Some(s) => s,
+            None => generate_preview_summary(messages, config).await,
+        }
+    } else {
+        generate_preview_summary(messages, config).await
+    };
+    apply_compaction(messages, &summary, working_dir, total).await;
+}
+
+// ---------------------------------------------------------------------------
+// Initial context loading from MemMe
+// ---------------------------------------------------------------------------
+
+/// Load session context summary from MemMe for initial context injection.
+pub(crate) async fn load_memme_context(session_id: &str) -> Option<String> {
+    if session_id.is_empty() {
+        return None;
+    }
+    fetch_memme_context(session_id, 3000).await
 }

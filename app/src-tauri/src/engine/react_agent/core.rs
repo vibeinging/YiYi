@@ -1,7 +1,55 @@
-use super::compaction::{compact_messages_if_needed, sanitize_messages};
-use super::{AgentStreamEvent, PersistToolFn, ToolPersistEvent, DEFAULT_MAX_ITERATIONS, COMPACT_SUMMARY_FILE};
+use super::compaction::{compact_messages_if_needed, force_compact_messages, sanitize_messages};
+use super::prompt::critical_system_reminder;
+use super::{AgentStreamEvent, PersistToolFn, ToolPersistEvent, DEFAULT_MAX_ITERATIONS};
 use crate::engine::llm_client::{chat_completion, chat_completion_stream, LLMConfig, LLMMessage, MessageContent, StreamEvent};
-use crate::engine::tools::{builtin_tools, execute_tool, ToolDefinition};
+use crate::engine::llm_client::retry::parse_context_overflow;
+use crate::engine::tools::{builtin_tools, execute_tool, get_current_session_id, ToolDefinition};
+
+/// Check if an LLM error is a context overflow that we can recover from
+/// by force-compacting the conversation history.
+fn is_context_overflow_error(err: &str) -> bool {
+    parse_context_overflow(err).is_some()
+        || err.contains("context length")
+        || err.contains("prompt is too long")
+        || err.contains("maximum context")
+}
+
+/// Inject MemMe context as a system message if available.
+async fn inject_memme_context(messages: &mut Vec<LLMMessage>) {
+    let session_id = get_current_session_id();
+    if let Some(summary) = super::compaction::load_memme_context(&session_id).await {
+        messages.push(LLMMessage {
+            role: "system".into(),
+            content: Some(MessageContent::text(format!(
+                "<previous-summary>\n{}\n</previous-summary>\n\
+                The above is a summary of previous conversation. \
+                Use it as context to maintain continuity.",
+                summary.trim()
+            ))),
+            tool_calls: None,
+            tool_call_id: None,
+        });
+    }
+}
+
+/// Inject the critical system reminder as a system message.
+/// Replaces any previous reminder to avoid unbounded growth.
+fn inject_critical_reminder(messages: &mut Vec<LLMMessage>) {
+    const REMINDER_MARKER: &str = "[System Reminder]";
+    // Remove any previous critical reminder to prevent accumulation
+    messages.retain(|m| {
+        !(m.role == "system"
+            && m.content
+                .as_ref()
+                .map_or(false, |c| c.as_text().map_or(false, |t| t.starts_with(REMINDER_MARKER))))
+    });
+    messages.push(LLMMessage {
+        role: "system".into(),
+        content: Some(MessageContent::text(critical_system_reminder())),
+        tool_calls: None,
+        tool_call_id: None,
+    });
+}
 
 /// Run a ReAct agent loop (single-turn, no history).
 /// Used by channels, scheduler, heartbeat, cronjobs.
@@ -52,25 +100,8 @@ pub async fn run_react_with_options_persist(
         },
     ];
 
-    // Load persisted compact summary as system message
-    if let Some(dir) = working_dir {
-        let summary_path = dir.join(COMPACT_SUMMARY_FILE);
-        if let Ok(summary) = tokio::fs::read_to_string(&summary_path).await {
-            if !summary.trim().is_empty() {
-                messages.push(LLMMessage {
-                    role: "system".into(),
-                    content: Some(MessageContent::text(format!(
-                        "<previous-summary>\n{}\n</previous-summary>\n\
-                        The above is a summary of previous conversation. \
-                        Use it as context to maintain continuity.",
-                        summary.trim()
-                    ))),
-                    tool_calls: None,
-                    tool_call_id: None,
-                });
-            }
-        }
-    }
+    // Load context summary from MemMe for continuity
+    inject_memme_context(&mut messages).await;
 
     // Insert conversation history between system prompt and current user message
     if !history.is_empty() {
@@ -96,7 +127,21 @@ pub async fn run_react_with_options_persist(
     for iteration in 0..max_iter {
         log::info!("ReAct iteration {}/{}", iteration + 1, max_iter);
 
-        let response = chat_completion(config, &messages, &tools).await?;
+        // Re-inject critical constraints every iteration after the first to prevent
+        // the model from drifting past safety boundaries in long tool-use sessions.
+        if iteration > 0 {
+            inject_critical_reminder(&mut messages);
+        }
+
+        let response = match chat_completion(config, &messages, &tools).await {
+            Ok(r) => r,
+            Err(e) if is_context_overflow_error(&e) => {
+                log::warn!("Context overflow detected, force-compacting and retrying: {}", &e[..e.len().min(200)]);
+                force_compact_messages(&mut messages, config, working_dir).await;
+                chat_completion(config, &messages, &tools).await?
+            }
+            Err(e) => return Err(e),
+        };
 
         // Add assistant message to history
         messages.push(response.message.clone());
@@ -228,6 +273,9 @@ pub async fn run_react_with_options_persist(
 
 /// Streaming version of run_react_with_options.
 /// Calls `on_event` for each stream event (tokens, tool status, completion).
+///
+/// When `tools_override` is `Some`, it replaces the default builtin + extra tool set.
+/// This is used by `run_subagent_stream` to inject a pre-filtered tool list.
 pub async fn run_react_with_options_stream<F>(
     config: &LLMConfig,
     system_prompt: &str,
@@ -239,13 +287,19 @@ pub async fn run_react_with_options_stream<F>(
     on_event: F,
     cancelled: Option<&std::sync::atomic::AtomicBool>,
     persist_fn: Option<PersistToolFn>,
+    tools_override: Option<Vec<ToolDefinition>>,
 ) -> Result<String, String>
 where
     F: Fn(AgentStreamEvent) + Send + Clone + 'static,
 {
     let max_iter = max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS);
-    let mut tools = builtin_tools();
-    tools.extend(extra_tools.iter().cloned());
+    let tools = if let Some(ovr) = tools_override {
+        ovr
+    } else {
+        let mut t = builtin_tools();
+        t.extend(extra_tools.iter().cloned());
+        t
+    };
 
     let mut messages: Vec<LLMMessage> = vec![LLMMessage {
         role: "system".into(),
@@ -254,25 +308,8 @@ where
         tool_call_id: None,
     }];
 
-    // Load persisted compact summary
-    if let Some(dir) = working_dir {
-        let summary_path = dir.join(COMPACT_SUMMARY_FILE);
-        if let Ok(summary) = tokio::fs::read_to_string(&summary_path).await {
-            if !summary.trim().is_empty() {
-                messages.push(LLMMessage {
-                    role: "system".into(),
-                    content: Some(MessageContent::text(format!(
-                        "<previous-summary>\n{}\n</previous-summary>\n\
-                        The above is a summary of previous conversation. \
-                        Use it as context to maintain continuity.",
-                        summary.trim()
-                    ))),
-                    tool_calls: None,
-                    tool_call_id: None,
-                });
-            }
-        }
-    }
+    // Load context summary from MemMe for continuity
+    inject_memme_context(&mut messages).await;
 
     if !history.is_empty() {
         messages.extend(history.iter().cloned());
@@ -294,20 +331,42 @@ where
     for iteration in 0..max_iter {
         log::info!("ReAct stream iteration {}/{}", iteration + 1, max_iter);
 
-        let cb = on_event.clone();
+        if iteration > 0 {
+            inject_critical_reminder(&mut messages);
+        }
+
         // Check cancellation before each LLM call
         if cancelled.map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
             return Err("cancelled".to_string());
         }
 
-        let response = chat_completion_stream(config, &messages, &tools, move |evt| {
-            match evt {
-                StreamEvent::ContentDelta(text) => cb(AgentStreamEvent::Token(text)),
-                StreamEvent::ReasoningDelta(text) => cb(AgentStreamEvent::Thinking(text)),
-                _ => {}
+        let response = match chat_completion_stream(config, &messages, &tools, {
+            let cb = on_event.clone();
+            move |evt| {
+                match evt {
+                    StreamEvent::ContentDelta(text) => cb(AgentStreamEvent::Token(text)),
+                    StreamEvent::ReasoningDelta(text) => cb(AgentStreamEvent::Thinking(text)),
+                    _ => {}
+                }
             }
-        }, cancelled)
-        .await?;
+        }, cancelled).await {
+            Ok(r) => r,
+            Err(e) if is_context_overflow_error(&e) => {
+                log::warn!("Context overflow in stream, force-compacting and retrying: {}", &e[..e.len().min(200)]);
+                // Reset UI streaming state to avoid duplicate content from the partial first attempt
+                on_event(AgentStreamEvent::ContextOverflowRetry);
+                force_compact_messages(&mut messages, config, working_dir).await;
+                let cb2 = on_event.clone();
+                chat_completion_stream(config, &messages, &tools, move |evt| {
+                    match evt {
+                        StreamEvent::ContentDelta(text) => cb2(AgentStreamEvent::Token(text)),
+                        StreamEvent::ReasoningDelta(text) => cb2(AgentStreamEvent::Thinking(text)),
+                        _ => {}
+                    }
+                }, cancelled).await?
+            }
+            Err(e) => return Err(e),
+        };
 
         messages.push(response.message.clone());
 
@@ -443,4 +502,38 @@ where
     let err = format!("Agent reached maximum iterations ({})", max_iter);
     on_event(AgentStreamEvent::Error);
     Err(err)
+}
+
+// ---------------------------------------------------------------------------
+// Sub-agent runner with tool filtering (context isolation)
+// ---------------------------------------------------------------------------
+
+/// Run a sub-agent with tool access control via `ToolFilter`.
+/// This is the primary API for spawning isolated sub-agents.
+///
+/// - **Isolated**: conversation history (fresh), tool set (filtered), iteration limit
+/// - **Shared (penetrating)**: AppHandle, Database, MCP runtime, StreamingState
+pub async fn run_subagent_stream<F>(
+    config: &LLMConfig,
+    system_prompt: &str,
+    user_message: &str,
+    extra_tools: &[ToolDefinition],
+    tool_filter: &super::ToolFilter,
+    max_iterations: Option<usize>,
+    working_dir: Option<&std::path::Path>,
+    on_event: F,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<String, String>
+where
+    F: Fn(AgentStreamEvent) + Send + Clone + 'static,
+{
+    let mut tools = builtin_tools();
+    tools.extend(extra_tools.iter().cloned());
+    let filtered = tool_filter.apply(&tools);
+
+    run_react_with_options_stream(
+        config, system_prompt, user_message, &[], &[],
+        max_iterations, working_dir, on_event, cancelled, None,
+        Some(filtered),
+    ).await
 }

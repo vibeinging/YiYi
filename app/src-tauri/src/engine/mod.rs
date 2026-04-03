@@ -14,5 +14,6 @@ pub mod scheduler;
 pub mod skills_hub;
 pub mod tiered_memory;
 pub mod token_counter;
+pub mod task_registry;
 pub mod tools;
 pub mod pty_manager;

@@ -1,6 +1,7 @@
 use crate::engine::tools::{FunctionCall, ToolCall, ToolDefinition};
 
-use super::stream::process_anthropic_sse_stream;
+use super::retry::send_with_retry;
+use super::stream::{process_anthropic_sse_stream, StreamError};
 use super::types::*;
 
 // ── Message conversion ──────────────────────────────────────────────
@@ -24,7 +25,6 @@ fn messages_to_anthropic(messages: &[LLMMessage]) -> (Option<String>, Vec<serde_
 
     for msg in messages {
         if msg.role == "system" {
-            // Concatenate multiple system messages (persona + compaction summary)
             let text = msg
                 .content
                 .as_ref()
@@ -40,7 +40,6 @@ fn messages_to_anthropic(messages: &[LLMMessage]) -> (Option<String>, Vec<serde_
         }
 
         if msg.role == "tool" {
-            // Convert content using Anthropic format (supports multimodal)
             let content = msg
                 .content
                 .as_ref()
@@ -57,7 +56,6 @@ fn messages_to_anthropic(messages: &[LLMMessage]) -> (Option<String>, Vec<serde_
             continue;
         }
 
-        // Non-tool message: flush any buffered tool_results first
         flush_tool_results(&mut tool_result_buffer, &mut anthropic_msgs);
 
         if msg.role == "assistant" {
@@ -87,7 +85,6 @@ fn messages_to_anthropic(messages: &[LLMMessage]) -> (Option<String>, Vec<serde_
             }
         }
 
-        // Regular message (supports multimodal content)
         let content = msg
             .content
             .as_ref()
@@ -210,69 +207,31 @@ async fn send_request(
     body: &serde_json::Value,
     timeout_secs: u64,
 ) -> Result<reqwest::Response, String> {
-    const MAX_RETRIES: u32 = 3;
-    let mut last_err = String::new();
+    let url = url.to_string();
+    let api_key = config.api_key.clone();
+    let body = body.clone();
+    let needs_ua = super::needs_coding_agent_ua(&url);
+    let client = client.clone();
 
-    for attempt in 0..=MAX_RETRIES {
-        if attempt > 0 {
-            log::warn!("Anthropic request retry {}/{}", attempt, MAX_RETRIES);
-        }
-
-        let mut req = client
-            .post(url)
-            .header("x-api-key", &config.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("Content-Type", "application/json");
-        if super::needs_coding_agent_ua(url) {
-            req = req.header("User-Agent", super::CODING_AGENT_UA);
-        }
-
-        match req
-            .json(body)
-            .timeout(std::time::Duration::from_secs(timeout_secs))
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                if !resp.status().is_success() {
-                    let status = resp.status();
-                    if (status.as_u16() == 429 || status.is_server_error()) && attempt < MAX_RETRIES {
-                        let mut delay = std::time::Duration::from_millis(1000 * 2u64.pow(attempt));
-                        // Respect Retry-After header for 429 responses
-                        if status.as_u16() == 429 {
-                            if let Some(retry_after) = resp.headers().get("retry-after") {
-                                if let Ok(secs) = retry_after.to_str().unwrap_or("").parse::<u64>() {
-                                    let ra_delay = std::time::Duration::from_secs(secs);
-                                    if ra_delay > delay { delay = ra_delay; }
-                                }
-                            }
-                        }
-                        let text = resp.text().await.unwrap_or_default();
-                        log::warn!("Anthropic API error ({}), will retry after {:?}: {}", status, delay, &text.chars().take(200).collect::<String>());
-                        last_err = format!("Anthropic API error ({}): {}", status, text);
-                        tokio::time::sleep(delay).await;
-                        continue;
-                    }
-                    let text = resp.text().await.unwrap_or_default();
-                    log::error!("Anthropic API error ({}): {}", status, text);
-                    return Err(format!("Anthropic API error ({}): {}", status, text));
-                }
-                return Ok(resp);
+    let outcome = send_with_retry(
+        "Anthropic",
+        || {
+            let mut req = client
+                .post(&url)
+                .header("x-api-key", &api_key)
+                .header("anthropic-version", "2023-06-01")
+                .header("Content-Type", "application/json");
+            if needs_ua {
+                req = req.header("User-Agent", super::CODING_AGENT_UA);
             }
-            Err(e) => {
-                if attempt < MAX_RETRIES {
-                    let delay = std::time::Duration::from_millis(1000 * 2u64.pow(attempt));
-                    log::warn!("Anthropic request failed (attempt {}), retry after {:?}: {}", attempt + 1, delay, e);
-                    last_err = format!("Anthropic request failed: {}", e);
-                    tokio::time::sleep(delay).await;
-                    continue;
-                }
-                return Err(format!("Anthropic request failed after {} retries: {}", MAX_RETRIES, e));
-            }
-        }
-    }
+            req.json(&body)
+        },
+        std::time::Duration::from_secs(timeout_secs),
+    )
+    .await
+    .map_err(|(msg, _cat)| msg)?;
 
-    Err(last_err)
+    Ok(outcome.response)
 }
 
 // ── Public API ──────────────────────────────────────────────────────
@@ -312,6 +271,35 @@ where
 
     let resp = send_request(client, &url, config, &body, 300).await?;
 
+    // --- Try streaming first ---
+    match try_stream_anthropic(resp, cancelled, &on_event).await {
+        Ok(response) => Ok(response),
+        Err(StreamError::Cancelled) => Err("cancelled".to_string()),
+        Err(e) if e.is_fallback_eligible() => {
+            // Stream died — fall back to non-streaming
+            log::warn!("Anthropic stream failed ({}), falling back to non-streaming", e);
+            on_event(StreamEvent::Fallback);
+
+            let ns_body = build_request_body(config, messages, tools, false);
+            let ns_resp = send_request(client, &url, config, &ns_body, 120).await?;
+            let json: serde_json::Value = ns_resp.json().await.map_err(|e| e.to_string())?;
+            let response = parse_anthropic_response(&json)?;
+            emit_fallback_content(&response, &on_event);
+            Ok(response)
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Attempt to consume an Anthropic SSE stream, returning the assembled response.
+async fn try_stream_anthropic<F>(
+    resp: reqwest::Response,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
+    on_event: &F,
+) -> Result<LLMResponse, StreamError>
+where
+    F: Fn(StreamEvent) + Send + 'static,
+{
     let mut full_content = String::new();
     let mut finish_reason = "stop".to_string();
     let mut tool_calls: Vec<ToolCall> = Vec::new();
@@ -384,7 +372,7 @@ where
                     log::error!("Anthropic stream error event: {}", err_msg);
                     return Err(format!("Anthropic stream error: {}", err_msg));
                 }
-                _ => {} // message_start, message_stop, ping — ignored
+                _ => {}
             }
             Ok(true)
         })
@@ -396,7 +384,7 @@ where
     if full_content.is_empty() && tool_calls.is_empty() {
         log::warn!(
             "Anthropic stream completed with no content and no tool calls (model: {})",
-            config.model
+            "anthropic"
         );
     }
 
@@ -405,8 +393,5 @@ where
     } else {
         Some(tool_calls)
     };
-    Ok(build_stream_response(
-        full_content,
-        tool_calls_opt,
-    ))
+    Ok(build_stream_response(full_content, tool_calls_opt))
 }

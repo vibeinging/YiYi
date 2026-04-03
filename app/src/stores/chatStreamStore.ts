@@ -5,6 +5,16 @@ export type LongTaskStatus = 'idle' | 'running' | 'paused' | 'completed' | 'stop
 
 export type StopReason = 'task_complete' | 'max_rounds' | 'budget_exhausted' | 'user_cancelled' | 'error';
 
+export type RetryErrorType = 'transient' | 'rate_limited' | 'context_overflow' | 'auth_error' | 'client_error';
+
+export interface RetryStatus {
+  attempt: number;
+  max_retries: number;
+  delay_ms: number;
+  error_type: RetryErrorType;
+  provider: string;
+}
+
 export interface LongTaskState {
   enabled: boolean;
   status: LongTaskStatus;
@@ -66,6 +76,7 @@ interface ChatStreamState {
   sessionId: string;
   claudeCode: ClaudeCodeState | null;
   errorMessage: string | null;
+  retryStatus: RetryStatus | null;
   longTask: LongTaskState;
   focusedTask: FocusedTask | null;
 
@@ -81,6 +92,8 @@ interface ChatStreamState {
   toolEnd: (name: string, preview: string) => void;
   endStream: () => void;
   endStreamWithError: (error: string) => void;
+  setRetryStatus: (status: RetryStatus | null) => void;
+  resetStreamContent: () => void;
   resetStream: () => void;
   clearStreamState: () => void;
 
@@ -158,6 +171,7 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
   sessionId: '',
   claudeCode: null,
   errorMessage: null,
+  retryStatus: null,
   longTask: { ...INITIAL_LONG_TASK },
   focusedTask: null,
   canvases: [],
@@ -173,6 +187,7 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
     toolIdCounter: 0,
     claudeCode: null,
     errorMessage: null,
+    retryStatus: null,
   }),
 
   appendChunk: (text) => set((state) => ({
@@ -205,7 +220,11 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
 
   endStream: () => set({ loading: false, claudeCode: null }),
 
-  endStreamWithError: (error) => set({ loading: false, claudeCode: null, errorMessage: error }),
+  endStreamWithError: (error) => set({ loading: false, claudeCode: null, errorMessage: error, retryStatus: null }),
+
+  setRetryStatus: (status) => set({ retryStatus: status }),
+
+  resetStreamContent: () => set({ streamingContent: '', streamingThinking: '' }),
 
   resetStream: () => set({
     loading: false,
