@@ -280,6 +280,7 @@ function SidebarSessionCard({ session, isActive, onPageChange }: {
 // --- Task Card ---
 function SidebarTaskCard({ task }: { task: TaskInfo }) {
   const navigateToSession = useTaskSidebarStore((s) => s.navigateToSession);
+  const isNewlyCreated = useTaskSidebarStore((s) => s.newlyCreatedTaskIds.has(task.id));
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const isRunning = task.status === 'running';
   const cfg = TASK_STATUS_CONFIG[task.status] || TASK_STATUS_CONFIG.pending;
@@ -301,10 +302,10 @@ function SidebarTaskCard({ task }: { task: TaskInfo }) {
       <div
         onClick={() => navigateToSession(task.sessionId)}
         onContextMenu={handleContextMenu}
-        className="group relative rounded-[10px] cursor-pointer transition-all duration-150 px-2.5 py-[9px] mx-1"
+        className={`group relative rounded-[10px] cursor-pointer transition-all duration-150 px-2.5 py-[9px] mx-1${isNewlyCreated ? ' task-birth-glow' : ''}`}
         style={{ background: 'transparent' }}
         onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
-        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+        onMouseLeave={(e) => { if (!isNewlyCreated) e.currentTarget.style.background = 'transparent'; }}
       >
         {/* Status accent bar */}
         {(isRunning || task.status === 'paused') && (

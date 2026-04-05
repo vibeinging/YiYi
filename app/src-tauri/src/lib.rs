@@ -351,6 +351,7 @@ pub fn run() {
             commands::workspace::get_workspace_path,
             commands::workspace::list_authorized_folders,
             commands::workspace::add_authorized_folder,
+            commands::workspace::respond_permission_request,
             commands::workspace::update_authorized_folder,
             commands::workspace::remove_authorized_folder,
             commands::workspace::list_sensitive_patterns,

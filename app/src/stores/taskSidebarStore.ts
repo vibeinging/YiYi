@@ -27,6 +27,8 @@ interface TaskSidebarState {
   pendingNewTab: { id: string; name: string } | null;
   // Tab notification (flash on complete/fail)
   pendingTabNotify: { id: string; type: 'complete' | 'fail' } | null;
+  // IDs of tasks that were just created (for birth animation)
+  newlyCreatedTaskIds: Set<string>;
 
   // Actions
   loadTasks: () => Promise<void>;
@@ -46,6 +48,8 @@ interface TaskSidebarState {
   pinTask: (taskId: string) => Promise<void>;
   unpinTask: (taskId: string) => Promise<void>;
   deleteTask: (taskId: string) => Promise<void>;
+  markNewTask: (taskId: string) => void;
+  clearNewTask: (taskId: string) => void;
 }
 
 // Sort by lastActivityAt descending (grouping/pinned handled by component)
@@ -65,6 +69,7 @@ export const useTaskSidebarStore = create<TaskSidebarState>((set, get) => ({
   pendingSessionId: null,
   pendingNewTab: null,
   pendingTabNotify: null,
+  newlyCreatedTaskIds: new Set(),
 
   loadTasks: async () => {
     try {
@@ -199,4 +204,16 @@ export const useTaskSidebarStore = create<TaskSidebarState>((set, get) => ({
       console.error('Failed to delete task:', err);
     }
   },
+
+  markNewTask: (taskId) => set((state) => {
+    const next = new Set(state.newlyCreatedTaskIds);
+    next.add(taskId);
+    return { newlyCreatedTaskIds: next };
+  }),
+
+  clearNewTask: (taskId) => set((state) => {
+    const next = new Set(state.newlyCreatedTaskIds);
+    next.delete(taskId);
+    return { newlyCreatedTaskIds: next };
+  }),
 }));

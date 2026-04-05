@@ -33,10 +33,12 @@ export function useTaskEventBridge() {
         if (taskId) {
           store().addOrRefreshTask(taskId);
           sidebar().addOrRefreshTask(taskId);
+          // Breathing animation for 3 seconds
+          sidebar().markNewTask(taskId);
+          setTimeout(() => sidebar().clearNewTask(taskId), 3000);
           if (p.source === 'tool') {
             streamStore().taskStreamStart(taskId);
           }
-          // Add tab without switching — user stays in main session
           if (p.source === 'tool' || p.source === 'background') {
             const sessionId = p.session_id || p.sessionId;
             const title = p.title || p.task_title || '任务';

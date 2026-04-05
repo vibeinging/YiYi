@@ -1,5 +1,7 @@
 use std::process::Stdio;
 use super::python_bridge;
+use super::shell_security::{self, CommandClass, SecurityVerdict};
+use super::permission_gate;
 
 /// System tool definitions.
 pub(super) fn definitions() -> Vec<super::ToolDefinition> {
@@ -231,41 +233,6 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
     ]
 }
 
-/// Check if a shell command matches dangerous patterns.
-/// Normalizes whitespace for loose matching to catch variations like `rm  -rf  /`.
-fn check_dangerous_command(command: &str) -> Result<(), String> {
-    // Normalize: trim, lowercase, collapse whitespace
-    let normalized: String = command
-        .trim()
-        .to_lowercase()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    let dangerous: &[(&str, &str)] = &[
-        ("rm -rf /", "rm -rf /"),
-        ("rm -rf /*", "rm -rf /*"),
-        ("rm -r -f /", "rm -rf /"),
-        ("rm -rf ~", "rm -rf ~"),
-        ("rm -r -f ~", "rm -rf ~"),
-        ("mkfs.", "mkfs (format disk)"),
-        ("dd if=/dev/zero of=/dev/", "dd write to device"),
-        (":(){ :|:& };:", "fork bomb"),
-        ("> /dev/sd", "write to raw device"),
-        ("chmod -r 777 /", "chmod 777 /"),
-    ];
-
-    for (pattern, label) in dangerous {
-        if normalized.contains(pattern) {
-            return Err(format!(
-                "Blocked: command matches dangerous pattern ({}). This operation could cause irreversible damage.",
-                label
-            ));
-        }
-    }
-    Ok(())
-}
-
 pub(super) async fn execute_shell_tool(args: &serde_json::Value) -> String {
     let command = args["command"].as_str().unwrap_or("");
     let cwd = args["cwd"].as_str();
@@ -275,11 +242,61 @@ pub(super) async fn execute_shell_tool(args: &serde_json::Value) -> String {
         return "Error: command is required".into();
     }
 
-    // Block obviously dangerous commands
-    if let Err(e) = check_dangerous_command(command) {
-        return format!("Error: {}", e);
+    // --- Phase 1: Analyze command (classification + security + path extraction) ---
+    let analysis = shell_security::analyze_command(command);
+
+    // Truncate command for display in permission dialog (prevent giant popups)
+    let display_cmd: String = if command.len() > 200 {
+        format!("{}…", &command[..200])
+    } else {
+        command.to_string()
+    };
+
+    // Block dangerous commands — ask user via permission gate
+    if let SecurityVerdict::Block { reason } = &analysis.security_verdict {
+        let req = permission_gate::PermissionRequest {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            permission_type: "shell_block".into(),
+            path: display_cmd.clone(),
+            parent_folder: String::new(),
+            reason: reason.clone(),
+            risk_level: "high".into(),
+        };
+        if !permission_gate::request_permission(req).await {
+            return format!("Error: Blocked — {}", reason);
+        }
     }
 
+    // Warn-level suspicious commands — ask user via permission gate
+    if let SecurityVerdict::Warn { message } = &analysis.security_verdict {
+        let req = permission_gate::PermissionRequest {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            permission_type: "shell_warn".into(),
+            path: display_cmd.clone(),
+            parent_folder: String::new(),
+            reason: message.clone(),
+            risk_level: "medium".into(),
+        };
+        if !permission_gate::request_permission(req).await {
+            return format!("Error: Denied — {}", message);
+        }
+    }
+
+    // For non-read-only commands, validate extracted paths against authorized folders
+    if !matches!(analysis.classification, CommandClass::ReadOnly) {
+        if let Err(e) = shell_security::check_command_paths(&analysis).await {
+            return format!("Error: {}", e);
+        }
+    }
+
+    // Validate cwd if provided
+    if let Some(dir) = cwd {
+        if let Err(e) = super::access_check(dir, false).await {
+            return format!("Error: working directory access denied — {}", e);
+        }
+    }
+
+    // --- Phase 2: Execute ---
     let effective_cwd = match cwd {
         Some(dir) => Some(dir.to_string()),
         None => Some(super::get_effective_workspace().to_string_lossy().to_string()),
@@ -306,29 +323,28 @@ pub(super) async fn execute_shell_tool(args: &serde_json::Value) -> String {
         Err(e) => return format!("Failed to execute: {}", e),
     };
 
-    // Read stdout/stderr from pipes before waiting
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
 
     let stdout_handle = tokio::spawn(async move {
-        let mut buf = String::new();
         if let Some(mut pipe) = stdout_pipe {
             use tokio::io::AsyncReadExt;
             let mut bytes = Vec::new();
             pipe.read_to_end(&mut bytes).await.ok();
-            buf = String::from_utf8_lossy(&bytes).to_string();
+            String::from_utf8_lossy(&bytes).to_string()
+        } else {
+            String::new()
         }
-        buf
     });
     let stderr_handle = tokio::spawn(async move {
-        let mut buf = String::new();
         if let Some(mut pipe) = stderr_pipe {
             use tokio::io::AsyncReadExt;
             let mut bytes = Vec::new();
             pipe.read_to_end(&mut bytes).await.ok();
-            buf = String::from_utf8_lossy(&bytes).to_string();
+            String::from_utf8_lossy(&bytes).to_string()
+        } else {
+            String::new()
         }
-        buf
     });
 
     let wait_result = tokio::time::timeout(
@@ -337,22 +353,13 @@ pub(super) async fn execute_shell_tool(args: &serde_json::Value) -> String {
     )
     .await;
 
+    // --- Phase 3: Enhanced output ---
     match wait_result {
         Ok(Ok(status)) => {
             let stdout = stdout_handle.await.unwrap_or_default();
             let stderr = stderr_handle.await.unwrap_or_default();
             let code = status.code().unwrap_or(-1);
-
-            if code == 0 {
-                if stdout.is_empty() {
-                    "(completed with no output)".into()
-                } else {
-                    super::truncate_output(&stdout, 8000)
-                }
-            } else {
-                let combined = format!("Exit code: {}\nstdout: {}\nstderr: {}", code, stdout, stderr);
-                super::truncate_output(&combined, 8000)
-            }
+            shell_security::enhance_output(&analysis, &stdout, &stderr, code)
         }
         Ok(Err(e)) => format!("Failed to execute: {}", e),
         Err(_) => {

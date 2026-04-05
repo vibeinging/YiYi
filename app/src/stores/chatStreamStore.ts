@@ -64,6 +64,16 @@ export interface FocusedTask {
   sessionId: string;
 }
 
+export interface PermissionRequestState {
+  requestId: string;
+  permissionType: string;
+  path: string;
+  parentFolder: string;
+  reason: string;
+  riskLevel: string;
+  status: 'pending' | 'approved' | 'denied';
+}
+
 interface ChatStreamState {
   // State
   loading: boolean;
@@ -79,6 +89,7 @@ interface ChatStreamState {
   retryStatus: RetryStatus | null;
   longTask: LongTaskState;
   focusedTask: FocusedTask | null;
+  activePermission: PermissionRequestState | null;
 
   // Canvas state
   canvases: CanvasEvent[];
@@ -135,6 +146,10 @@ interface ChatStreamState {
   taskStreamEnd: (taskId: string) => void;
   taskStreamRemove: (taskId: string) => void;
 
+  // Permission gate actions
+  showPermission: (req: PermissionRequestState) => void;
+  resolvePermission: (status: 'approved' | 'denied') => void;
+
   // Focus task actions
   focusTask: (taskId: string, taskName: string, sessionId: string) => void;
   unfocusTask: () => void;
@@ -174,6 +189,7 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
   retryStatus: null,
   longTask: { ...INITIAL_LONG_TASK },
   focusedTask: null,
+  activePermission: null,
   canvases: [],
   setSessionId: (id) => set({ sessionId: id }),
 
@@ -188,6 +204,7 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
     claudeCode: null,
     errorMessage: null,
     retryStatus: null,
+    activePermission: null,
   }),
 
   appendChunk: (text) => set((state) => ({
@@ -218,7 +235,7 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
     return { activeTools: tools };
   }),
 
-  endStream: () => set({ loading: false, claudeCode: null }),
+  endStream: () => set({ loading: false, claudeCode: null, activePermission: null }),
 
   endStreamWithError: (error) => set({ loading: false, claudeCode: null, errorMessage: error, retryStatus: null }),
 
@@ -477,6 +494,14 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
     next.delete(taskId);
     return { taskStreams: next };
   }),
+
+  // Permission gate actions
+  showPermission: (req) => set({ activePermission: req }),
+  resolvePermission: (status) => set((state) => ({
+    activePermission: state.activePermission
+      ? { ...state.activePermission, status }
+      : null,
+  })),
 
   // Focus task actions
   focusTask: (taskId, taskName, sessionId) => set({

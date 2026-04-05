@@ -54,6 +54,27 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
             }),
         ),
         super::tool_def(
+            "query_tasks",
+            "查询后台任务列表和状态。可按状态过滤（running/completed/failed/pending 等）。用于回答用户关于任务进度的问题，如「刚才那个任务怎么样了」「统计发票的任务结束了吗」。",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "description": "Filter by status: 'running', 'completed', 'failed', 'pending', 'paused', 'cancelled'. Omit to list all."
+                    },
+                    "keyword": {
+                        "type": "string",
+                        "description": "Search keyword to match against task title/description. Omit to list all."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max number of tasks to return. Default 10."
+                    }
+                }
+            }),
+        ),
+        super::tool_def(
             "request_continuation",
             "Signal that the current task is not yet complete and requires another round to finish. \
             Call this when you have completed a meaningful sub-step but more work remains. \
@@ -672,4 +693,72 @@ fn fail_task_with_status(task_id: &str, session_id: &str, error_message: &str, s
             "error": error_message,
         })).ok();
     }
+}
+
+/// Query tasks by status and/or keyword.
+pub(super) async fn query_tasks_tool(args: &serde_json::Value) -> String {
+    let status = args["status"].as_str();
+    let keyword = args["keyword"].as_str().unwrap_or("");
+    let limit = args["limit"].as_u64().unwrap_or(10) as usize;
+
+    let db = match super::require_db() {
+        Ok(db) => db,
+        Err(e) => return format!("Error: {}", e),
+    };
+
+    let tasks = match db.list_tasks(None, status) {
+        Ok(tasks) => tasks,
+        Err(e) => return format!("Error querying tasks: {}", e),
+    };
+
+    // Filter by keyword if provided
+    let filtered: Vec<_> = if keyword.is_empty() {
+        tasks.into_iter().take(limit).collect()
+    } else {
+        let kw = keyword.to_lowercase();
+        tasks.into_iter()
+            .filter(|t| {
+                t.title.to_lowercase().contains(&kw)
+                    || t.description.as_deref().unwrap_or("").to_lowercase().contains(&kw)
+            })
+            .take(limit)
+            .collect()
+    };
+
+    if filtered.is_empty() {
+        return if let Some(s) = status {
+            format!("No tasks found with status '{}'.", s)
+        } else if !keyword.is_empty() {
+            format!("No tasks matching '{}'.", keyword)
+        } else {
+            "No tasks found.".into()
+        };
+    }
+
+    // Format results
+    let mut result = format!("Found {} task(s):\n\n", filtered.len());
+    for t in &filtered {
+        let elapsed = if t.status == "running" {
+            let secs = chrono::Utc::now().timestamp() - t.created_at;
+            format!(", running for {}m", secs / 60)
+        } else {
+            String::new()
+        };
+        result.push_str(&format!(
+            "- **{}** [{}{}]\n  ID: {}\n  {}\n",
+            t.title,
+            t.status,
+            elapsed,
+            t.id,
+            t.description.as_deref().unwrap_or("").chars().take(100).collect::<String>(),
+        ));
+        if let Some(ref err) = t.error_message {
+            result.push_str(&format!("  Error: {}\n", err.chars().take(200).collect::<String>()));
+        }
+        if t.progress > 0.0 {
+            result.push_str(&format!("  Progress: {:.0}%\n", t.progress * 100.0));
+        }
+        result.push('\n');
+    }
+    result
 }

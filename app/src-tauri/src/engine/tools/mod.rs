@@ -11,6 +11,8 @@ pub(crate) mod claude_code;
 mod task_tools;
 mod canvas_tools;
 mod spawn_tools;
+pub(crate) mod shell_security;
+pub(crate) mod permission_gate;
 
 // Imports used by this module and sub-modules via `super::`
 pub(self) use super::doc_tools;
@@ -222,6 +224,17 @@ pub async fn access_check(raw_path: &str, needs_write: bool) -> Result<(), Strin
 
     let canonical = resolve_path(raw_path);
 
+    // 0. Always allow standard system paths that tools commonly use
+    static ALWAYS_ALLOW: &[&str] = &[
+        "/dev/null", "/dev/zero", "/dev/urandom", "/dev/random",
+        "/dev/stdin", "/dev/stdout", "/dev/stderr",
+        "/tmp", "/private/tmp",
+    ];
+    let canonical_str = canonical.to_string_lossy();
+    if ALWAYS_ALLOW.iter().any(|p| canonical_str.as_ref() == *p || canonical.starts_with(p)) {
+        return Ok(());
+    }
+
     // 1. Always allow internal working directory (~/.yiyi)
     if let Some(wd) = WORKING_DIR.get() {
         let wd_canonical = wd.canonicalize().unwrap_or_else(|_| wd.clone());
@@ -230,12 +243,24 @@ pub async fn access_check(raw_path: &str, needs_write: bool) -> Result<(), Strin
         }
     }
 
-    // 2. Check sensitive path blocklist FIRST
+    // 2. Check sensitive path blocklist — ask user via permission gate
     if is_sensitive_path(&canonical).await {
-        return Err(format!(
-            "Access denied: '{}' matches a sensitive file pattern. This file is protected even within authorized folders. You can adjust sensitive path rules in Settings > Workspace.",
+        let reason = format!(
+            "Access denied: '{}' matches a sensitive file pattern. This file is protected even within authorized folders.",
             raw_path
-        ));
+        );
+        let req = permission_gate::PermissionRequest {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            permission_type: "sensitive_path".into(),
+            path: raw_path.to_string(),
+            parent_folder: String::new(),
+            reason: reason.clone(),
+            risk_level: "high".into(),
+        };
+        if permission_gate::request_permission(req).await {
+            return Ok(()); // One-time pass, not persisted
+        }
+        return Err(reason);
     }
 
     // 3. Check authorized folders
@@ -245,22 +270,47 @@ pub async fn access_check(raw_path: &str, needs_write: bool) -> Result<(), Strin
             let fc = folder.path.canonicalize().unwrap_or_else(|_| folder.path.clone());
             if canonical.starts_with(&fc) {
                 if needs_write && folder.permission == FolderPermission::ReadOnly {
-                    return Err(format!(
-                        "Access denied: '{}' is in read-only folder '{}'. Change folder permissions in Settings > Workspace to allow writes.",
-                        raw_path,
-                        folder.path.display()
-                    ));
+                    let reason = format!(
+                        "Access denied: '{}' is in read-only folder '{}'. Need write permission.",
+                        raw_path, folder.path.display()
+                    );
+                    let req = permission_gate::PermissionRequest {
+                        request_id: uuid::Uuid::new_v4().to_string(),
+                        permission_type: "folder_write".into(),
+                        path: raw_path.to_string(),
+                        parent_folder: folder.path.display().to_string(),
+                        reason: reason.clone(),
+                        risk_level: "low".into(),
+                    };
+                    if permission_gate::request_permission(req).await {
+                        return Ok(()); // Upgrade handled by frontend via respond command
+                    }
+                    return Err(reason);
                 }
                 return Ok(());
             }
         }
     }
 
-    // 4. Not in any authorized folder
-    Err(format!(
-        "Access denied: '{}' is outside all authorized folders. Add the parent folder in Settings > Workspace to grant access.",
+    // 4. Not in any authorized folder — ask user to authorize
+    let parent_folder = permission_gate::extract_parent_folder(&canonical);
+    let parent_str = parent_folder.display().to_string();
+    let reason = format!(
+        "Access denied: '{}' is outside all authorized folders.",
         raw_path
-    ))
+    );
+    let req = permission_gate::PermissionRequest {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        permission_type: "folder_access".into(),
+        path: raw_path.to_string(),
+        parent_folder: parent_str,
+        reason: reason.clone(),
+        risk_level: "low".into(),
+    };
+    if permission_gate::request_permission(req).await {
+        return Ok(()); // Folder addition handled by frontend via respond command
+    }
+    Err(reason)
 }
 
 /// Check if a path matches any enabled sensitive pattern.
@@ -330,7 +380,7 @@ where
 }
 
 /// Get the current task-local session ID. Returns empty string if not set.
-fn get_current_session_id() -> String {
+pub fn get_current_session_id() -> String {
     TASK_SESSION_ID.try_with(|s| s.clone()).unwrap_or_default()
 }
 
@@ -584,7 +634,7 @@ fn tool_def(name: &str, desc: &str, params: serde_json::Value) -> ToolDefinition
 // Helpers used by sub-modules
 // ============================================================================
 
-fn truncate_output(s: &str, max_chars: usize) -> String {
+pub(super) fn truncate_output(s: &str, max_chars: usize) -> String {
     let char_count = s.chars().count();
     if char_count <= max_chars {
         return s.to_string();
@@ -979,6 +1029,7 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         "spawn_agents" => spawn_tools::spawn_agents_tool(args.clone()).await,
         "create_workspace_dir" => task_tools::create_workspace_dir_tool(&args).await,
         "report_progress" => task_tools::report_progress_tool(&args).await,
+        "query_tasks" => task_tools::query_tasks_tool(&args).await,
         "pty_spawn_interactive" => system_tools::pty_spawn_interactive_tool(&args).await,
         "pty_send_input" => system_tools::pty_send_input_tool(&args).await,
         "pty_read_output" => system_tools::pty_read_output_tool(&args).await,

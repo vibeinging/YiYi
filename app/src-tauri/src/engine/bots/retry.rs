@@ -190,6 +190,7 @@ pub fn emit_send_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
 
     #[tokio::test]

@@ -4,6 +4,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo, lazy, Suspense, forwardRef, useImperativeHandle } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   User,
   Loader2,
@@ -27,6 +28,7 @@ import { TaskCard } from '../TaskCard';
 import { LongTaskProgressPanel, RoundDivider } from '../LongTaskPanel';
 import { RetryStatusBar } from './RetryStatusBar';
 import { SpawnAgentPanel } from '../SpawnAgentPanel';
+import { PermissionCard } from './PermissionCard';
 import { CanvasRenderer } from '../canvas/CanvasRenderer';
 import type { CanvasActionHandler } from '../../api/canvas';
 import { CronJobSessionView } from '../CronJobSessionView';
@@ -236,6 +238,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
   },
   ref,
 ) {
+  const { t } = useTranslation();
   const processedMessages = useMemo(() => processMessages(messages), [messages]);
 
   // Custom markdown components: open links in external browser
@@ -265,6 +268,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
   const collapsedAgents = useChatStreamStore((s) => s.collapsedAgents);
   const toggleCollapseAgent = useChatStreamStore((s) => s.toggleCollapseAgent);
   const streamError = useChatStreamStore((s) => s.errorMessage);
+  const activePermission = useChatStreamStore((s) => s.activePermission);
   const longTask = useChatStreamStore((s) => s.longTask);
   const taskStreams = useChatStreamStore((s) => s.taskStreams);
   const canvases = useChatStreamStore((s) => s.canvases);
@@ -581,6 +585,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                     return (
                       <>
                         {(filteredTools.length > 0 || claudeCode) && <ToolCallPanel tools={filteredTools} />}
+                        {activePermission && <PermissionCard request={activePermission} />}
                         {taskCards.map((tid) => <TaskCard key={tid} taskId={tid} />)}
                         {streamPtySessions.map((pty) => (
                           <div key={pty.sessionId} className="rounded-xl overflow-hidden" style={{
@@ -606,18 +611,23 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                       <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
                         {streamingContent}
                       </ReactMarkdown>
-                      <span className="yiyi-working">
-                        <img src={logoFaceRight} alt="" width={28} height={28} />
-                        <span className="yiyi-dots"><span /><span /><span /></span>
-                      </span>
+                      <span className="yiyi-cursor" />
                     </div>
                   ) : (
-                    <div className="py-2.5 px-4 rounded-2xl inline-flex items-center"
+                    <div className="py-3 px-4 rounded-2xl"
                       style={{
                         background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)',
-                        borderBottomLeftRadius: '6px',
+                        borderBottomLeftRadius: '6px', minWidth: '200px',
                       }}>
-                      <span className="yiyi-dots"><span /><span /><span /></span>
+                      <div className="yiyi-skeleton-label">
+                        <img src={logoFaceRight} alt="" width={18} height={18} />
+                        <span>{t('chat.thinking')}</span>
+                      </div>
+                      <div className="yiyi-skeleton">
+                        <div className="yiyi-skeleton-line" />
+                        <div className="yiyi-skeleton-line" />
+                        <div className="yiyi-skeleton-line" />
+                      </div>
                     </div>
                   )}
                 </div>
@@ -722,20 +732,18 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                       <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
                         {currentTaskStream.streamingContent}
                       </ReactMarkdown>
-                      {currentTaskStream.loading && (
-                        <span className="yiyi-working">
-                          <img src={logoFaceRight} alt="" width={28} height={28} />
-                          <span className="yiyi-dots"><span /><span /><span /></span>
-                        </span>
-                      )}
+                      {currentTaskStream.loading && <span className="yiyi-cursor" />}
                     </div>
                   ) : currentTaskStream.loading && currentTaskStream.activeTools.length === 0 ? (
-                    <div className="py-2.5 px-4 rounded-2xl inline-flex items-center"
+                    <div className="py-3 px-4 rounded-2xl"
                       style={{
                         background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)',
-                        borderBottomLeftRadius: '6px',
+                        borderBottomLeftRadius: '6px', minWidth: '160px',
                       }}>
-                      <span className="yiyi-dots"><span /><span /><span /></span>
+                      <div className="yiyi-skeleton">
+                        <div className="yiyi-skeleton-line" />
+                        <div className="yiyi-skeleton-line" />
+                      </div>
                     </div>
                   ) : null}
                 </div>

@@ -296,14 +296,14 @@ pub async fn list_authorized_folders(
     Ok(state.db.list_authorized_folders())
 }
 
-#[tauri::command]
-pub async fn add_authorized_folder(
-    state: State<'_, AppState>,
-    path: String,
+/// Shared helper: create and persist a new authorized folder, refresh in-memory cache.
+async fn upsert_and_refresh_folder(
+    db: &crate::engine::db::Database,
+    path: &str,
     label: Option<String>,
-    permission: Option<String>,
+    permission: &str,
 ) -> Result<AuthorizedFolderRow, String> {
-    let p = std::path::Path::new(&path);
+    let p = std::path::Path::new(path);
     if !p.is_absolute() {
         return Err("Path must be absolute".into());
     }
@@ -313,15 +313,63 @@ pub async fn add_authorized_folder(
         id: uuid::Uuid::new_v4().to_string(),
         path: p.canonicalize().unwrap_or(p.to_path_buf()).to_string_lossy().to_string(),
         label,
-        permission: permission.unwrap_or_else(|| "read_write".into()),
+        permission: permission.into(),
         is_default: false,
         created_at: now,
         updated_at: now,
     };
-    state.db.upsert_authorized_folder(&folder)?;
-    let all = state.db.list_authorized_folders();
+    db.upsert_authorized_folder(&folder)?;
+    let all = db.list_authorized_folders();
     crate::engine::tools::refresh_authorized_folders(all).await;
     Ok(folder)
+}
+
+#[tauri::command]
+pub async fn add_authorized_folder(
+    state: State<'_, AppState>,
+    path: String,
+    label: Option<String>,
+    permission: Option<String>,
+) -> Result<AuthorizedFolderRow, String> {
+    upsert_and_refresh_folder(
+        &state.db,
+        &path,
+        label,
+        &permission.unwrap_or_else(|| "read_write".into()),
+    ).await
+}
+
+#[tauri::command]
+pub async fn respond_permission_request(
+    state: State<'_, AppState>,
+    request_id: String,
+    approved: bool,
+    add_folder: Option<String>,
+    upgrade_permission: Option<String>,
+) -> Result<(), String> {
+    if approved {
+        if let Some(folder_path) = add_folder {
+            upsert_and_refresh_folder(&state.db, &folder_path, None, "read_write").await.ok();
+        }
+
+        if let Some(folder_path) = upgrade_permission {
+            let folders = state.db.list_authorized_folders();
+            let canonical = std::path::Path::new(&folder_path)
+                .canonicalize()
+                .unwrap_or_else(|_| std::path::PathBuf::from(&folder_path));
+            let canonical_str = canonical.to_string_lossy().to_string();
+            if let Some(mut existing) = folders.into_iter().find(|f| f.path == folder_path || f.path == canonical_str) {
+                existing.permission = "read_write".into();
+                existing.updated_at = chrono::Utc::now().timestamp();
+                state.db.upsert_authorized_folder(&existing).ok();
+                let all = state.db.list_authorized_folders();
+                crate::engine::tools::refresh_authorized_folders(all).await;
+            }
+        }
+    }
+
+    crate::engine::tools::permission_gate::respond(&request_id, approved).await;
+    Ok(())
 }
 
 #[tauri::command]

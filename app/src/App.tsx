@@ -23,6 +23,7 @@ import { ClaudeCodeDialog } from './components/ClaudeCodeDialog';
 import { useChatEventBridge } from './hooks/useChatEventBridge';
 import { useTaskEventBridge } from './hooks/useTaskEventBridge';
 import { useBotEventBridge } from './hooks/useBotEventBridge';
+import { usePermissionBridge } from './hooks/usePermissionBridge';
 import { TaskSidebar } from './components/TaskSidebar';
 import { TaskDetailOverlay } from './components/TaskDetailOverlay';
 import { useTaskSidebarStore } from './stores/taskSidebarStore';
@@ -66,6 +67,7 @@ function MainApp() {
   useChatEventBridge();
   useTaskEventBridge();
   useBotEventBridge();
+  usePermissionBridge();
 
   // Task sidebar store
   const sidebarCollapsed = useTaskSidebarStore((s) => s.sidebarCollapsed);
@@ -239,10 +241,6 @@ function MainApp() {
         currentPage={currentPage}
         onPageChange={(page) => {
           setCurrentPage(page);
-          if (page === 'chat') {
-            // Signal Chat.tsx to switch to most recent chat session
-            window.dispatchEvent(new CustomEvent('chat:go-main'));
-          }
         }}
         onNavigateToSession={(sessionId) => {
           useTaskSidebarStore.getState().navigateToSession(sessionId);

@@ -119,40 +119,91 @@
   --sidebar-border: transparent;
 }
 
-/* ─── YiYi working indicator ─── */
-@keyframes yiyi-bounce {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-3px); }
+/* ─── YiYi Loading States ─── */
+
+/* Phase 1: Waiting skeleton — shimmer wave across placeholder */
+.yiyi-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0;
 }
+.yiyi-skeleton-line {
+  height: 10px;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    var(--color-bg-subtle) 25%,
+    var(--color-bg-muted) 50%,
+    var(--color-bg-subtle) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.8s ease-in-out infinite;
+}
+.yiyi-skeleton-line:nth-child(1) { width: 75%; }
+.yiyi-skeleton-line:nth-child(2) { width: 55%; animation-delay: 0.15s; }
+.yiyi-skeleton-line:nth-child(3) { width: 40%; animation-delay: 0.3s; }
+
+.yiyi-skeleton-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin-bottom: 2px;
+}
+@keyframes gentle-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+.yiyi-skeleton-label img {
+  animation: gentle-pulse 2s ease-in-out infinite;
+}
+
+/* Phase 2: Streaming cursor — blinking bar at end of text */
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+.yiyi-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--color-primary);
+  border-radius: 1px;
+  animation: cursor-blink 1s step-end infinite;
+}
+
+/* Legacy compat: keep .yiyi-working and .yiyi-dots working for ThinkingBlock */
 .yiyi-working {
   display: flex;
   align-items: end;
   gap: 1px;
   margin-top: 8px;
-  animation: yiyi-bounce 1s ease-in-out infinite;
+}
+.yiyi-working .yiyi-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 4px;
 }
 @keyframes dot-fade {
   0%, 100% { opacity: 0.2; }
   50% { opacity: 1; }
 }
-.yiyi-working .yiyi-dots {
-  display: inline-flex;
-  align-items: end;
-  gap: 2px;
-  margin-left: 1px;
-  margin-bottom: 4px;
-}
 .yiyi-working .yiyi-dots span {
-  width: 3px;
-  height: 3px;
+  width: 4px;
+  height: 4px;
   border-radius: 50%;
-  background: var(--color-text-tertiary);
+  background: var(--color-text-muted);
   animation: dot-fade 1.2s ease-in-out infinite;
 }
 .yiyi-working .yiyi-dots span:nth-child(2) { animation-delay: 0.2s; }
 .yiyi-working .yiyi-dots span:nth-child(3) { animation-delay: 0.4s; }
 
-/* Loading dots: YiYi thinking */
+/* YiYi thinking indicator */
 @keyframes yiyi-thinking {
   0%   { transform: scale(1) rotate(0deg); }
   25%  { transform: scale(1.05) rotate(-3deg); }
@@ -170,6 +221,16 @@
 @keyframes pulse-dot {
   0%, 100% { opacity: 0.4; transform: scale(1); }
   50% { opacity: 1; transform: scale(1.3); }
+}
+
+/* ─── Task Birth Glow ─── */
+@keyframes task-birth {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  50% { box-shadow: 0 0 10px 2px color-mix(in srgb, var(--color-primary) 30%, transparent); }
+}
+.task-birth-glow {
+  animation: task-birth 1.5s ease-in-out 2;
+  background: color-mix(in srgb, var(--color-primary) 8%, transparent) !important;
 }
 
 /* ─── Reset ─── */
@@ -335,6 +396,15 @@ select {
 
 .animate-slide-in-right {
   animation: slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes inputBreathe {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  50% { box-shadow: 0 0 0 2px var(--color-primary); }
+}
+
+.animate-input-shake {
+  animation: inputBreathe 0.8s ease-in-out;
 }
 
 @keyframes slideInRight {
@@ -575,6 +645,65 @@ select {
 .markdown-body img {
   max-width: 100%;
   border-radius: 8px;
+}
+
+/* ═══ Buddy Companion Animations ═══ */
+
+@keyframes buddy-breathe {
+  0%, 100% { transform: scale(1) translateY(0); }
+  50% { transform: scale(1.06) translateY(-2px); }
+}
+
+@keyframes buddy-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+@keyframes buddy-fidget {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-6deg); }
+  75% { transform: rotate(6deg); }
+}
+
+@keyframes buddy-heart-float {
+  0% { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-50px) scale(0.5); }
+}
+
+@keyframes buddy-hatch-wobble {
+  0%, 100% { transform: rotate(0deg); }
+  15% { transform: rotate(-12deg); }
+  30% { transform: rotate(14deg); }
+  45% { transform: rotate(-10deg); }
+  60% { transform: rotate(8deg); }
+  75% { transform: rotate(-4deg); }
+}
+
+@keyframes buddy-reveal {
+  0% { transform: scale(0); opacity: 0; }
+  50% { transform: scale(1.3); opacity: 1; }
+  80% { transform: scale(0.95); }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes buddy-bubble-in {
+  0% { opacity: 0; transform: translateY(8px) scale(0.9); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes buddy-bubble-out {
+  0% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(0.9); }
+}
+
+@keyframes buddy-sparkle {
+  0%, 100% { opacity: 0; transform: scale(0); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes buddy-egg-crack {
+  0% { clip-path: inset(0 0 0 0); }
+  100% { clip-path: inset(0 0 100% 0); }
 }
 
 /* ═══ Responsive Adaptations ═══ */
