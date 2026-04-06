@@ -99,19 +99,45 @@ export async function listBotSessions(): Promise<BotSession[]> {
   return await invoke<BotSession[]>('bots_list_sessions');
 }
 
-// === Session-Bot Binding ===
+// === Bot Conversations ===
 
-/** Bind a bot to a session. Returns the previous session ID if the bot was moved. */
-export async function sessionBindBot(sessionId: string, botId: string): Promise<string | null> {
-  return await invoke<string | null>('session_bind_bot', { sessionId, botId });
+export type TriggerMode = 'mention' | 'all' | 'keyword' | 'muted';
+
+export interface BotConversationInfo {
+  id: string;
+  bot_id: string;
+  bot_name: string;
+  external_id: string;
+  platform: string;
+  display_name: string | null;
+  session_id: string;
+  linked_session_id: string | null;
+  trigger_mode: TriggerMode;
+  last_message_at: number | null;
+  message_count: number;
+  created_at: number;
 }
 
-export async function sessionUnbindBot(sessionId: string, botId: string): Promise<void> {
-  return await invoke('session_unbind_bot', { sessionId, botId });
+export async function listBotConversations(botId?: string): Promise<BotConversationInfo[]> {
+  return await invoke<BotConversationInfo[]>('bot_conversations_list', { botId: botId ?? null });
 }
 
-export async function sessionListBots(sessionId: string): Promise<BotInfo[]> {
-  return await invoke<BotInfo[]>('session_list_bots', { sessionId });
+export async function updateBotConversationTrigger(
+  conversationId: string,
+  triggerMode: TriggerMode,
+): Promise<void> {
+  return await invoke('bot_conversation_update_trigger', { conversationId, triggerMode });
+}
+
+export async function linkBotConversation(
+  conversationId: string,
+  linkedSessionId: string | null,
+): Promise<void> {
+  return await invoke('bot_conversation_link', { conversationId, linkedSessionId });
+}
+
+export async function deleteBotConversation(conversationId: string): Promise<void> {
+  return await invoke('bot_conversation_delete', { conversationId });
 }
 
 // === Bot Connection Status ===

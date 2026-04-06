@@ -128,7 +128,7 @@ async fn run_phases(
             info!(
                 "MemMe meditate complete: {} memories created, {} decayed, {} traits inferred",
                 record.memories_created, record.memories_decayed,
-                record.identity_traits_created + record.identity_traits_updated,
+                record.entities_created + record.relations_created,
             );
             memories_updated = (record.memories_created + record.memories_updated) as i32;
             memories_archived = record.memories_decayed as i32;
@@ -145,20 +145,29 @@ async fn run_phases(
 
     check_cancel(cancel)?;
 
-    // ── Phase B: Consolidate corrections (YiYi-specific) ──
+    // ── Phase B: Learn from corrections (delegated to MemMe) ──
     let mut principles_changed: i32 = 0;
     if corrections_count > 0 {
-        match react_agent::consolidate_corrections_to_principles(config, db, working_dir).await {
-            Ok(summary) if summary != "No active corrections to consolidate."
-                                    && summary != "No high-confidence corrections to consolidate." => {
-                principles_changed = 1;
-                info!("Phase B: Corrections consolidated to principles");
-            }
-            Ok(_) => {
-                info!("Phase B: No corrections to consolidate");
+        match learn_from_corrections_via_memme(&ctx.corrections) {
+            Ok(result) => {
+                principles_changed = result.memories_created as i32;
+                info!(
+                    "Phase B: MemMe learned {} principles, {} traits from {} corrections",
+                    result.memories_created, result.traits_updated, corrections_count
+                );
             }
             Err(e) => {
-                log::warn!("Phase B: Corrections consolidation skipped: {}", e);
+                log::warn!("Phase B: MemMe learn_from_feedback failed: {}", e);
+                // Fallback to legacy consolidation
+                match react_agent::consolidate_corrections_to_principles(config, db, working_dir).await {
+                    Ok(summary) if summary != "No active corrections to consolidate."
+                                            && summary != "No high-confidence corrections to consolidate." => {
+                        principles_changed = 1;
+                        info!("Phase B (fallback): Corrections consolidated to principles");
+                    }
+                    Ok(_) => {}
+                    Err(e2) => log::warn!("Phase B (fallback): {}", e2),
+                }
             }
         }
         check_cancel(cancel)?;
@@ -168,10 +177,22 @@ async fn run_phases(
     let (growth_synthesis, tomorrow_intentions) = phase_growth(config, db, &ctx).await?;
     check_cancel(cancel)?;
 
-    // ── Phase D: Journal (YiYi-specific) ──
+    // ── Phase D: Journal (MemMe reflect + YiYi journal) ──
+    let memme_reflection = match run_memme_reflect() {
+        Ok(result) => {
+            info!("MemMe reflect: {} themes, {} memories considered", result.themes.len(), result.memories_considered);
+            Some(result)
+        }
+        Err(e) => {
+            log::warn!("MemMe reflect failed (continuing): {}", e);
+            None
+        }
+    };
+
     let journal = phase_journal(
         config, working_dir, &ctx,
         &growth_synthesis, principles_changed, memories_updated,
+        memme_reflection.as_ref(),
     )
     .await?;
 
@@ -192,6 +213,41 @@ async fn run_phases(
 // ---------------------------------------------------------------------------
 // MemMe meditate() wrapper
 // ---------------------------------------------------------------------------
+
+/// Call MemMe's reflect() to generate a reflection from recent memories.
+fn run_memme_reflect() -> Result<memme_core::ReflectResult, String> {
+    let store = crate::engine::tools::get_memme_store()
+        .ok_or_else(|| "MemMe store not initialized".to_string())?;
+
+    let user_id = crate::engine::tools::MEMME_USER_ID.to_string();
+    let opts = memme_core::ReflectOptions::new(user_id);
+
+    store.reflect(opts)
+        .map_err(|e| format!("MemMe reflect error: {}", e))
+}
+
+/// Call MemMe's learn_from_feedback() to consolidate corrections into principles.
+fn learn_from_corrections_via_memme(
+    corrections: &[(String, Option<String>, String, String, i64)],
+) -> Result<memme_core::LearnFromFeedbackResult, String> {
+    let store = crate::engine::tools::get_memme_store()
+        .ok_or_else(|| "MemMe store not initialized".to_string())?;
+
+    let user_id = crate::engine::tools::MEMME_USER_ID.to_string();
+    let feedback: Vec<memme_core::FeedbackItem> = corrections
+        .iter()
+        .map(|(trigger, wrong, correct, _source, _ts)| memme_core::FeedbackItem {
+            trigger: trigger.clone(),
+            wrong_behavior: wrong.clone(),
+            correct_behavior: correct.clone(),
+        })
+        .collect();
+
+    let opts = memme_core::LearnFromFeedbackOptions::new(user_id, feedback);
+
+    store.learn_from_feedback(opts)
+        .map_err(|e| format!("MemMe learn_from_feedback error: {}", e))
+}
 
 /// Call MemMe's native meditate() pipeline synchronously.
 fn run_memme_meditate() -> Result<memme_core::types::MeditationRecord, String> {
@@ -340,6 +396,7 @@ async fn phase_journal(
     growth_synthesis: &str,
     principles_changed: i32,
     memories_updated: i32,
+    memme_reflection: Option<&memme_core::ReflectResult>,
 ) -> Result<String, String> {
     // Build conversation summary
     let mut conversation_summary = String::new();
@@ -404,6 +461,21 @@ async fn phase_journal(
         None => String::new(),
     };
 
+    // MemMe reflection section
+    let reflection_section = match memme_reflection {
+        Some(r) => {
+            let mut s = format!("Memory reflection:\n{}\n", r.reflection);
+            if !r.themes.is_empty() {
+                s.push_str(&format!("Key themes: {}\n", r.themes.join(", ")));
+            }
+            if !r.focus_suggestions.is_empty() {
+                s.push_str(&format!("Suggested focus: {}\n", r.focus_suggestions.join(", ")));
+            }
+            s
+        }
+        None => String::new(),
+    };
+
     let prompt = format!(
         "You are YiYi, an AI assistant writing your meditation journal.\n\n\
          Today's conversations ({session_count} sessions):\n{conversation_summary}\n\n\
@@ -412,6 +484,7 @@ async fn phase_journal(
          {memory_section}\n\n\
          {growth_section}\n\n\
          {identity_section}\n\n\
+         {reflection_section}\n\n\
          Write a meditation journal (in the user's language, Chinese if unsure) covering:\n\
          1. Day review — what was accomplished\n\
          2. Error reflection — if corrections were received, what patterns emerge?\n\

@@ -86,114 +86,201 @@ impl super::Database {
         Ok(())
     }
 
-    // === Session-Bot Bindings ===
+    // === Bot Conversations ===
+    // Each (bot_id, external_id) pair = one conversation with its own session.
 
-    /// Bind a bot to a session. A bot can only be bound to one session at a time —
-    /// any existing binding for this bot is removed first.
-    /// Returns the previous session_id if the bot was re-bound, None if fresh bind.
-    pub fn bind_bot_to_session(&self, session_id: &str, bot_id: &str) -> Result<Option<String>, String> {
-        let now = super::now_ts();
+    /// Find or create a conversation for a (bot_id, external_id) pair.
+    /// Auto-creates a session for the conversation if it doesn't exist.
+    pub fn upsert_conversation(
+        &self,
+        bot_id: &str,
+        external_id: &str,
+        platform: &str,
+        display_name: Option<&str>,
+    ) -> Result<BotConversationRow, String> {
         let conn = self.conn.lock().unwrap();
+        let now = super::now_ts();
 
-        // Check for existing binding
-        let prev_session: Option<String> = conn
+        // Try to find existing
+        let existing: Option<BotConversationRow> = conn
             .query_row(
-                "SELECT session_id FROM session_bots WHERE bot_id = ?1",
-                params![bot_id],
-                |row| row.get(0),
+                "SELECT id, bot_id, external_id, platform, display_name, session_id, \
+                 linked_session_id, trigger_mode, last_message_at, message_count, created_at \
+                 FROM bot_conversations WHERE bot_id = ?1 AND external_id = ?2",
+                params![bot_id, external_id],
+                |row| Ok(Self::row_to_conversation(row)),
             )
             .ok();
 
-        // Remove any existing binding for this bot (enforce one-bot-one-session)
-        conn.execute(
-            "DELETE FROM session_bots WHERE bot_id = ?1",
-            params![bot_id],
-        )
-        .map_err(|e| format!("Failed to unbind bot: {}", e))?;
+        if let Some(mut conv) = existing {
+            // Update display_name if provided and different
+            if let Some(name) = display_name {
+                if conv.display_name.as_deref() != Some(name) {
+                    conn.execute(
+                        "UPDATE bot_conversations SET display_name = ?1 WHERE id = ?2",
+                        params![name, conv.id],
+                    ).ok();
+                    conv.display_name = Some(name.to_string());
+                }
+            }
+            return Ok(conv);
+        }
+
+        // Create new conversation with auto-generated session
+        let conv_id = uuid::Uuid::new_v4().to_string();
+        let session_id = format!("bot:{}:{}", bot_id, external_id);
 
         conn.execute(
-            "INSERT INTO session_bots (session_id, bot_id, bound_at) VALUES (?1, ?2, ?3)",
-            params![session_id, bot_id, now],
-        )
-        .map_err(|e| format!("Failed to bind bot to session: {}", e))?;
+            "INSERT INTO bot_conversations \
+             (id, bot_id, external_id, platform, display_name, session_id, trigger_mode, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'mention', ?7)",
+            params![conv_id, bot_id, external_id, platform, display_name, session_id, now],
+        ).map_err(|e| format!("Failed to create conversation: {}", e))?;
 
-        // Return previous session only if it was different
-        Ok(prev_session.filter(|s| s != session_id))
+        Ok(BotConversationRow {
+            id: conv_id,
+            bot_id: bot_id.to_string(),
+            external_id: external_id.to_string(),
+            platform: platform.to_string(),
+            display_name: display_name.map(String::from),
+            session_id,
+            linked_session_id: None,
+            trigger_mode: "mention".to_string(),
+            last_message_at: None,
+            message_count: 0,
+            created_at: now,
+        })
     }
 
-    /// Update the last conversation target for a bound bot (e.g. "c2c:xxx", "group:xxx").
-    pub fn update_bot_last_conversation(&self, bot_id: &str, conversation_id: &str) -> Result<(), String> {
+    /// List conversations, optionally filtered by bot_id.
+    pub fn list_conversations(&self, bot_id: Option<&str>) -> Result<Vec<BotConversationRow>, String> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "UPDATE session_bots SET last_conversation_id = ?1 WHERE bot_id = ?2",
-            params![conversation_id, bot_id],
-        )
-        .map_err(|e| format!("Failed to update last_conversation_id: {}", e))?;
-        Ok(())
-    }
-
-    pub fn unbind_bot_from_session(&self, session_id: &str, bot_id: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "DELETE FROM session_bots WHERE session_id = ?1 AND bot_id = ?2",
-            params![session_id, bot_id],
-        )
-        .map_err(|e| format!("Failed to unbind bot from session: {}", e))?;
-        Ok(())
-    }
-
-    pub fn list_session_bots(&self, session_id: &str) -> Result<Vec<BotRow>, String> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn
-            .prepare(
-                "SELECT b.id, b.name, b.platform, b.enabled, b.config_json, b.persona, b.access_json, b.created_at, b.updated_at
-                 FROM bots b INNER JOIN session_bots sb ON b.id = sb.bot_id
-                 WHERE sb.session_id = ?1
-                 ORDER BY sb.bound_at"
-            )
-            .map_err(|e| format!("Query error: {}", e))?;
-        let rows = stmt
-            .query_map(params![session_id], |row| {
-                Ok(BotRow {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    platform: row.get(2)?,
-                    enabled: row.get(3)?,
-                    config_json: row.get(4)?,
-                    persona: row.get(5)?,
-                    access_json: row.get(6)?,
-                    created_at: row.get(7)?,
-                    updated_at: row.get(8)?,
-                })
-            })
-            .map_err(|e| format!("Query error: {}", e))?
-            .filter_map(|r| r.ok())
-            .collect();
+        let sql = if bot_id.is_some() {
+            "SELECT id, bot_id, external_id, platform, display_name, session_id, \
+             linked_session_id, trigger_mode, last_message_at, message_count, created_at \
+             FROM bot_conversations WHERE bot_id = ?1 ORDER BY last_message_at DESC NULLS LAST"
+        } else {
+            "SELECT id, bot_id, external_id, platform, display_name, session_id, \
+             linked_session_id, trigger_mode, last_message_at, message_count, created_at \
+             FROM bot_conversations ORDER BY last_message_at DESC NULLS LAST"
+        };
+        let mut stmt = conn.prepare(sql).map_err(|e| format!("Query error: {}", e))?;
+        let rows: Vec<BotConversationRow> = if let Some(bid) = bot_id {
+            stmt.query_map(params![bid], |row| Ok(Self::row_to_conversation(row)))
+                .map_err(|e| format!("Query error: {}", e))?
+                .filter_map(|r| r.ok())
+                .collect()
+        } else {
+            stmt.query_map([], |row| Ok(Self::row_to_conversation(row)))
+                .map_err(|e| format!("Query error: {}", e))?
+                .filter_map(|r| r.ok())
+                .collect()
+        };
         Ok(rows)
     }
 
-    /// Get the last conversation_id for a bot binding.
-    pub fn get_bot_last_conversation(&self, bot_id: &str) -> Option<String> {
-        let conn = self.conn.lock().unwrap();
-        conn.query_row(
-            "SELECT last_conversation_id FROM session_bots WHERE bot_id = ?1 AND last_conversation_id IS NOT NULL",
-            params![bot_id],
-            |row| row.get::<_, String>(0),
-        ).ok()
-    }
-
-    /// Find the session a bot is bound to (if any). Returns the first binding found.
-    pub fn get_session_for_bot(&self, bot_id: &str) -> Result<Option<String>, String> {
+    /// Get a conversation by its (bot_id, external_id) pair.
+    pub fn get_conversation_by_external(&self, bot_id: &str, external_id: &str) -> Result<Option<BotConversationRow>, String> {
         let conn = self.conn.lock().unwrap();
         let result = conn.query_row(
-            "SELECT session_id FROM session_bots WHERE bot_id = ?1 ORDER BY bound_at LIMIT 1",
-            params![bot_id],
-            |row| row.get::<_, String>(0),
+            "SELECT id, bot_id, external_id, platform, display_name, session_id, \
+             linked_session_id, trigger_mode, last_message_at, message_count, created_at \
+             FROM bot_conversations WHERE bot_id = ?1 AND external_id = ?2",
+            params![bot_id, external_id],
+            |row| Ok(Self::row_to_conversation(row)),
         );
         match result {
-            Ok(id) => Ok(Some(id)),
+            Ok(row) => Ok(Some(row)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(format!("Query error: {}", e)),
         }
     }
+
+    /// Get a conversation by its primary ID.
+    pub fn get_conversation(&self, id: &str) -> Result<Option<BotConversationRow>, String> {
+        let conn = self.conn.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT id, bot_id, external_id, platform, display_name, session_id, \
+             linked_session_id, trigger_mode, last_message_at, message_count, created_at \
+             FROM bot_conversations WHERE id = ?1",
+            params![id],
+            |row| Ok(Self::row_to_conversation(row)),
+        );
+        match result {
+            Ok(row) => Ok(Some(row)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(format!("Query error: {}", e)),
+        }
+    }
+
+    /// Update the trigger mode for a conversation.
+    pub fn update_conversation_trigger(&self, id: &str, trigger_mode: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE bot_conversations SET trigger_mode = ?1 WHERE id = ?2",
+            params![trigger_mode, id],
+        ).map_err(|e| format!("Failed to update trigger mode: {}", e))?;
+        Ok(())
+    }
+
+    /// Link (or unlink) a conversation to a main chat session.
+    pub fn link_conversation(&self, id: &str, linked_session_id: Option<&str>) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE bot_conversations SET linked_session_id = ?1 WHERE id = ?2",
+            params![linked_session_id, id],
+        ).map_err(|e| format!("Failed to link conversation: {}", e))?;
+        Ok(())
+    }
+
+    /// Delete a conversation record.
+    pub fn delete_conversation(&self, id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM bot_conversations WHERE id = ?1", params![id])
+            .map_err(|e| format!("Failed to delete conversation: {}", e))?;
+        Ok(())
+    }
+
+    /// Update activity timestamp and increment message count.
+    pub fn update_conversation_activity(&self, bot_id: &str, external_id: &str) -> Result<(), String> {
+        let now = super::now_ts();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE bot_conversations SET last_message_at = ?1, message_count = message_count + 1 \
+             WHERE bot_id = ?2 AND external_id = ?3",
+            params![now, bot_id, external_id],
+        ).map_err(|e| format!("Failed to update conversation activity: {}", e))?;
+        Ok(())
+    }
+
+    fn row_to_conversation(row: &rusqlite::Row) -> BotConversationRow {
+        BotConversationRow {
+            id: row.get(0).unwrap_or_default(),
+            bot_id: row.get(1).unwrap_or_default(),
+            external_id: row.get(2).unwrap_or_default(),
+            platform: row.get(3).unwrap_or_default(),
+            display_name: row.get(4).ok(),
+            session_id: row.get(5).unwrap_or_default(),
+            linked_session_id: row.get(6).ok(),
+            trigger_mode: row.get(7).unwrap_or_else(|_| "mention".to_string()),
+            last_message_at: row.get(8).ok(),
+            message_count: row.get(9).unwrap_or(0),
+            created_at: row.get(10).unwrap_or(0),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BotConversationRow {
+    pub id: String,
+    pub bot_id: String,
+    pub external_id: String,
+    pub platform: String,
+    pub display_name: Option<String>,
+    pub session_id: String,
+    pub linked_session_id: Option<String>,
+    pub trigger_mode: String,
+    pub last_message_at: Option<i64>,
+    pub message_count: i64,
+    pub created_at: i64,
 }

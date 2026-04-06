@@ -1011,37 +1011,77 @@ pub async fn bots_test_connection(
     }
 }
 
-// === Session-Bot Binding Commands ===
+// === Bot Conversation Commands ===
 
-#[tauri::command]
-pub async fn session_bind_bot(
-    state: State<'_, AppState>,
-    session_id: String,
-    bot_id: String,
-) -> Result<Option<String>, String> {
-    // Verify bot exists
-    state.db.get_bot(&bot_id)?
-        .ok_or_else(|| format!("Bot '{}' not found", bot_id))?;
-    // Returns previous session_id if the bot was moved from another session
-    state.db.bind_bot_to_session(&session_id, &bot_id)
+#[derive(serde::Serialize)]
+pub struct BotConversationInfo {
+    pub id: String,
+    pub bot_id: String,
+    pub bot_name: String,
+    pub external_id: String,
+    pub platform: String,
+    pub display_name: Option<String>,
+    pub session_id: String,
+    pub linked_session_id: Option<String>,
+    pub trigger_mode: String,
+    pub last_message_at: Option<i64>,
+    pub message_count: i64,
+    pub created_at: i64,
 }
 
 #[tauri::command]
-pub async fn session_unbind_bot(
+pub async fn bot_conversations_list(
     state: State<'_, AppState>,
-    session_id: String,
-    bot_id: String,
+    bot_id: Option<String>,
+) -> Result<Vec<BotConversationInfo>, String> {
+    let convs = state.db.list_conversations(bot_id.as_deref())?;
+    let bots = state.db.list_bots().unwrap_or_default();
+    let bot_name = |id: &str| -> String {
+        bots.iter().find(|b| b.id == id).map(|b| b.name.clone()).unwrap_or_else(|| id.to_string())
+    };
+    Ok(convs.into_iter().map(|c| BotConversationInfo {
+        bot_name: bot_name(&c.bot_id),
+        id: c.id,
+        bot_id: c.bot_id,
+        external_id: c.external_id,
+        platform: c.platform,
+        display_name: c.display_name,
+        session_id: c.session_id,
+        linked_session_id: c.linked_session_id,
+        trigger_mode: c.trigger_mode,
+        last_message_at: c.last_message_at,
+        message_count: c.message_count,
+        created_at: c.created_at,
+    }).collect())
+}
+
+#[tauri::command]
+pub async fn bot_conversation_update_trigger(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    trigger_mode: String,
 ) -> Result<(), String> {
-    state.db.unbind_bot_from_session(&session_id, &bot_id)
+    if !matches!(trigger_mode.as_str(), "mention" | "all" | "keyword" | "muted") {
+        return Err(format!("Invalid trigger_mode: '{}'. Must be mention/all/keyword/muted.", trigger_mode));
+    }
+    state.db.update_conversation_trigger(&conversation_id, &trigger_mode)
 }
 
 #[tauri::command]
-pub async fn session_list_bots(
+pub async fn bot_conversation_link(
     state: State<'_, AppState>,
-    session_id: String,
-) -> Result<Vec<BotInfo>, String> {
-    let rows = state.db.list_session_bots(&session_id)?;
-    Ok(rows.into_iter().map(BotInfo::from).collect())
+    conversation_id: String,
+    linked_session_id: Option<String>,
+) -> Result<(), String> {
+    state.db.link_conversation(&conversation_id, linked_session_id.as_deref())
+}
+
+#[tauri::command]
+pub async fn bot_conversation_delete(
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> Result<(), String> {
+    state.db.delete_conversation(&conversation_id)
 }
 
 // === Bot Status Commands ===

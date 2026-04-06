@@ -14,7 +14,6 @@ import { MentionInput, type MentionInputHandle, type MentionTag } from '../Menti
 import { SlashCommandPicker, filterCommands, SLASH_COMMANDS, type SlashCommand } from '../SlashCommandPicker';
 import { listAllTasksBrief } from '../../api/tasks';
 import type { Attachment } from '../../api/agent';
-import type { BotInfo } from '../../api/bots';
 import type { WorkspaceFile } from '../../api/workspace';
 
 /* ------------------------------------------------------------------ */
@@ -30,22 +29,20 @@ interface TaskSuggestion {
 
 interface ChatInputProps {
   loading: boolean;
-  allBots: BotInfo[];
   workspaceFiles: WorkspaceFile[];
   onSend: (plainText: string, mentions: MentionTag[], attachments: Attachment[]) => void;
   onStop: () => void;
   onSelectCommand: (cmd: SlashCommand, args?: string) => void;
   onSelectTask: (task: TaskSuggestion) => void;
-  onMentionBotSelect: (bot: BotInfo) => void;
   onFileSelect: (file: WorkspaceFile) => void;
   onFetchWorkspaceFiles: () => void;
-  onRefreshBots: () => void;
 }
 
 export interface ChatInputHandle {
   focus: () => void;
   insertText: (text: string) => void;
   clear: () => void;
+  shake: () => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -67,16 +64,13 @@ const isImageMime = (mime: string) => mime.startsWith('image/');
 export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput(
   {
     loading,
-    allBots,
     workspaceFiles,
     onSend,
     onStop,
     onSelectCommand,
     onSelectTask,
-    onMentionBotSelect,
     onFileSelect,
     onFetchWorkspaceFiles,
-    onRefreshBots,
   },
   ref,
 ) {
@@ -86,6 +80,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
   const [message, setMessage] = useState('');
   const [pendingImages, setPendingImages] = useState<Attachment[]>([]);
+  const [shaking, setShaking] = useState(false);
 
   // Pickers
   const [showQuickActions, setShowQuickActions] = useState(false);
@@ -108,6 +103,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     focus: () => inputRef.current?.focus(),
     insertText: (text: string) => inputRef.current?.insertText(text),
     clear: () => { inputRef.current?.clear(); setMessage(''); setPendingImages([]); },
+    shake: () => {
+      setShaking(true);
+      setTimeout(() => setShaking(false), 800);
+    },
   }));
 
   // --- Attachment handling ---
@@ -203,8 +202,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     setFilePickerQuery(query);
     setFilePickerIndex(0);
     if (workspaceFiles.length === 0) onFetchWorkspaceFiles();
-    if (allBots.length === 0) onRefreshBots();
-  }, [workspaceFiles.length, allBots.length, onFetchWorkspaceFiles, onRefreshBots]);
+  }, [workspaceFiles.length, onFetchWorkspaceFiles]);
 
   const handleMentionDismiss = useCallback(() => setShowFilePicker(false), []);
 
@@ -283,16 +281,15 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       if (e.key === 'Escape') { e.preventDefault(); setShowTaskPicker(false); return; }
     }
     if (showFilePicker) {
-      const items = buildMentionList(allBots, workspaceFiles, filePickerQuery);
+      const items = buildMentionList([], workspaceFiles, filePickerQuery);
       const maxIdx = items.length - 1;
       if (e.key === 'ArrowDown') { e.preventDefault(); setFilePickerIndex(prev => Math.min(prev + 1, maxIdx)); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); setFilePickerIndex(prev => Math.max(prev - 1, 0)); return; }
       if (e.key === 'Enter' || e.key === 'Tab') {
         e.preventDefault();
         const selected = items[filePickerIndex];
-        if (selected) {
-          if (selected.type === 'bot') onMentionBotSelect(selected.bot);
-          else onFileSelect(selected.file);
+        if (selected && selected.type === 'file') {
+          onFileSelect(selected.file);
         }
         return;
       }
@@ -324,7 +321,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     <div className="shrink-0 px-3 sm:px-6 py-4" style={{ background: 'var(--color-bg)', borderTop: '1px solid var(--color-border)' }}>
       <form onSubmit={(e) => { e.preventDefault(); handleSend(); }} className="w-full">
         <div
-          className="relative rounded-2xl transition-all"
+          className={`relative rounded-2xl transition-all${shaking ? ' animate-input-shake' : ''}`}
           style={{ background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)' }}
           onDrop={handleDrop}
           onDragOver={handleDragOver}
@@ -370,11 +367,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
           {showFilePicker && !showCommandPicker && (
             <MentionPicker
-              bots={allBots}
+              bots={[]}
               files={workspaceFiles}
               query={filePickerQuery}
               selectedIndex={filePickerIndex}
-              onSelectBot={onMentionBotSelect}
+              onSelectBot={() => {}}
               onSelectFile={onFileSelect}
             />
           )}

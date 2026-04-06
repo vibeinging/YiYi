@@ -582,60 +582,54 @@ async fn process_message(
     // Use global LLM config for all bot messages
     let config = crate::commands::agent::resolve_llm_config(state).await?;
 
-    // Check if this bot is bound to an existing session
-    let bound_session = state.db.get_session_for_bot(&msg.bot_id).unwrap_or(None);
+    // --- Conversation-based routing ---
+    // Find or create a conversation record for this (bot_id, external_id) pair.
+    let conv = state.db.upsert_conversation(
+        &msg.bot_id,
+        &msg.conversation_id,
+        &msg.platform,
+        msg.meta.get("group_name").and_then(|v| v.as_str()),
+    )?;
 
-    // Check if sender has a unified user identity for cross-platform session continuity
-    let unified_user_id = state.db.get_unified_user_by_identity(
-        &msg.platform, &msg.sender_id, &msg.bot_id
-    ).unwrap_or(None);
-
-    let session_id = if let Some(ref uid) = unified_user_id {
-        // Cross-platform shared session: use unified user session
-        let sid = format!("unified:{}", uid);
-        let user = state.db.get_unified_user(uid).ok().flatten();
-        let session_name = format!(
-            "Unified - {}",
-            user.as_ref().and_then(|u| u.display_name.as_deref()).unwrap_or(uid.as_str())
-        );
-        let source_meta = serde_json::json!({
-            "unified_user_id": uid,
-            "bot_id": msg.bot_id,
-            "platform": msg.platform,
-            "conversation_id": msg.conversation_id,
-            "sender_id": msg.sender_id,
-        }).to_string();
-        state.db.ensure_session(&sid, &session_name, "unified", Some(&source_meta))?;
-        log::info!(
-            "Unified user {} (via {}:{}), using shared session {}",
-            uid, msg.platform, msg.sender_id, sid
-        );
-        sid
-    } else if let Some(ref sid) = bound_session {
-        // Route to the bound session instead of creating a separate bot session
-        log::info!("Bot {} is bound to session {}, routing message there", msg.bot_id, sid);
-        sid.clone()
-    } else {
-        // Default: create/use a bot-specific session
-        let sid = msg.session_id();
-        let session_name = format!(
-            "{} - {}",
-            bot.map(|b| b.name.as_str()).unwrap_or(&msg.platform),
-            msg.sender_name.as_deref().unwrap_or(&msg.sender_id)
-        );
-        let source_meta = serde_json::json!({
-            "bot_id": msg.bot_id,
-            "platform": msg.platform,
-            "conversation_id": msg.conversation_id,
-            "sender_id": msg.sender_id,
-        }).to_string();
-
-        state.db.ensure_session(&sid, &session_name, "bot", Some(&source_meta))?;
-        sid
-    };
-
-    // Save user message to session with bot source metadata
+    // Check trigger mode — decide whether to respond
     let bot_name = bot.map(|b| b.name.as_str()).unwrap_or(&msg.platform);
+    match conv.trigger_mode.as_str() {
+        "muted" => {
+            state.db.update_conversation_activity(&msg.bot_id, &msg.conversation_id).ok();
+            return Ok(("".into(), conv.session_id));
+        }
+        "mention" => {
+            let bot_at = format!("@{}", bot_name);
+            let is_mentioned = msg.content.contains(&bot_at)
+                || msg.meta.get("mentioned").and_then(|v| v.as_bool()).unwrap_or(false);
+            if !is_mentioned {
+                state.db.update_conversation_activity(&msg.bot_id, &msg.conversation_id).ok();
+                return Ok(("".into(), conv.session_id));
+            }
+        }
+        _ => {} // "all" → always respond
+    }
+
+    // Determine effective session: linked session takes priority, else conversation's own
+    let session_id = conv.linked_session_id.as_deref()
+        .unwrap_or(&conv.session_id)
+        .to_string();
+
+    // Ensure session exists
+    let session_name = format!(
+        "{} · {}",
+        bot_name,
+        conv.display_name.as_deref().unwrap_or(&msg.conversation_id)
+    );
+    let source_meta = serde_json::json!({
+        "bot_id": msg.bot_id,
+        "platform": msg.platform,
+        "conversation_id": msg.conversation_id,
+        "sender_id": msg.sender_id,
+    }).to_string();
+    state.db.ensure_session(&session_id, &session_name, "bot", Some(&source_meta))?;
+
+    // Save user message to session
     let bot_meta = bot_reply_metadata(&msg.platform, &msg.bot_id, bot_name);
     let source_metadata = {
         let mut m = bot_meta.clone();
@@ -647,8 +641,8 @@ async fn process_message(
     };
     state.db.push_message_with_metadata(&session_id, "user", &msg.content, Some(&source_metadata))?;
 
-    // Update the last conversation target so agent knows where to send replies
-    state.db.update_bot_last_conversation(&msg.bot_id, &msg.conversation_id).ok();
+    // Update conversation activity
+    state.db.update_conversation_activity(&msg.bot_id, &msg.conversation_id).ok();
 
     // Load conversation history
     let history_messages = state.db.get_recent_messages(&session_id, BOT_HISTORY_LIMIT).unwrap_or_default();
@@ -710,7 +704,7 @@ async fn process_message(
         "\n\n## Current Context\n\
         You are responding as a {} bot to user \"{}\". \
         Just reply naturally to their message. Your response will be sent back to them automatically. \
-        Do NOT use send_bot_message, list_bound_bots, or any bot-related tools. \
+        Do NOT use send_bot_message, list_bot_conversations, or any bot-related tools. \
         Do NOT explain how the bot system works. Just have a normal conversation.\n\n\
         ## Media Capabilities\n\
         You CAN send images, audio, video, and files in your reply. \

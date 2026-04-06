@@ -31,14 +31,14 @@ import {
   type BotStatusInfo,
 } from '../api/bots';
 import { PageHeader } from '../components/PageHeader';
-import { SessionsPanel } from './Sessions';
+import { BotConversationsPanel } from '../components/bots/BotConversationsPanel';
 import { toast, confirm } from '../components/Toast';
 import { PLATFORM_META } from '../components/bots/platformMeta';
 import { BotCard } from '../components/bots/BotCard';
 import { BotFormDialog, emptyDialog, type BotDialog } from '../components/bots/BotFormDialog';
 import { SendMessageModal } from '../components/bots/SendMessageModal';
 
-type BotsTab = 'bots' | 'sessions';
+type BotsTab = 'bots' | 'conversations';
 
 interface BotsPageProps {
   consumeNotifContext?: () => Record<string, unknown> | null;
@@ -304,7 +304,7 @@ export function BotsPage({ consumeNotifContext }: BotsPageProps) {
         <div className="flex gap-1 mb-6 p-1 rounded-xl bg-[var(--color-bg-subtle)] w-fit">
           {([
             { id: 'bots' as BotsTab, labelKey: 'bots.tabBots', icon: Bot },
-            { id: 'sessions' as BotsTab, labelKey: 'bots.tabSessions', icon: Users },
+            { id: 'conversations' as BotsTab, labelKey: 'bots.tabConversations', icon: Users },
           ]).map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -329,10 +329,10 @@ export function BotsPage({ consumeNotifContext }: BotsPageProps) {
         </div>
       </div>
 
-      {/* Sessions tab */}
-      {activeTab === 'sessions' && (
+      {/* Conversations tab */}
+      {activeTab === 'conversations' && (
         <div className="flex-1 min-h-0">
-          <SessionsPanel />
+          <BotConversationsPanel />
         </div>
       )}
 

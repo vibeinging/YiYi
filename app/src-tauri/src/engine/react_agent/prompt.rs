@@ -307,12 +307,12 @@ Choose the right tool based on timing:
 IMPORTANT: Do NOT use cron for one-time tasks. For reminders > 30 min away, prefer add_calendar_event.
 
 ## Bots & External Messaging
-Users can bind external platform bots (Discord, Telegram, QQ, Feishu, DingTalk, etc.) to chat sessions.
-- To check which bots are bound: call the `list_bound_bots` tool
-- To send a message through a bot: call the `send_bot_message` tool
-- To create/manage bots: call the `manage_bot` tool
-- Bot information is stored in the database, NEVER in config files — do NOT read config files to find bot info
-- If the user mentions a bot name or asks to send a message to an external platform, use these tools
+Users have platform bots (QQ, Feishu, Discord, Telegram, DingTalk, etc.) that auto-create conversations per group/channel.
+- To see active conversations: call `list_bot_conversations`
+- To send a message to a group/channel: call `send_bot_message` with the conversation_id
+- To create/manage bots: call `manage_bot`
+- Each group/channel has its own isolated conversation context — messages from different groups never mix
+- Bot information is stored in the database, NEVER in config files
 
 ## CLI 工具 (CLI Providers)
 CLI Provider 是 YiYi 内置的外部命令行工具管理系统。用户可以在「设置 > CLI 工具」中注册外部 CLI 工具（如飞书 lark-cli、钉钉 CLI 等），\

@@ -1,6 +1,7 @@
 /**
  * sessionStore — Centralized chat session state management.
  * Supports pagination (lazy loading) and search.
+ * Tab bar removed — all navigation via sidebar.
  */
 
 import { create } from 'zustand';
@@ -14,13 +15,11 @@ import {
 } from '../api/agent';
 
 const STORAGE_KEY = 'yiyi_last_active_session';
-const TABS_STORAGE_KEY = 'yiyi_open_tabs';
 const PAGE_SIZE = 30;
 
 interface SessionState {
   chatSessions: ChatSession[];
   activeSessionId: string;
-  openTabIds: string[];
   initialized: boolean;
 
   // Pagination
@@ -38,35 +37,23 @@ interface SessionState {
   clearSearch: () => void;
   createNewChat: () => Promise<string>;
   switchToSession: (id: string) => void;
-  closeTab: (id: string) => Promise<void>;
   deleteSession: (id: string) => Promise<void>;
   renameSession: (id: string, name: string) => Promise<void>;
   refreshSessions: () => Promise<void>;
   initialize: () => Promise<void>;
 
-  // Tab management for task/cron sessions (non-chat tabs)
-  addTab: (id: string) => void;
-  hasTab: (id: string) => boolean;
-
   // Internal
-  _persistTabs: () => void;
   _persistActive: () => void;
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
   chatSessions: [],
   activeSessionId: '',
-  openTabIds: [],
   initialized: false,
   hasMore: true,
   loadingMore: false,
   searchQuery: '',
   searchResults: null,
-
-  _persistTabs: () => {
-    const { openTabIds } = get();
-    try { localStorage.setItem(TABS_STORAGE_KEY, JSON.stringify(openTabIds)); } catch {}
-  },
 
   _persistActive: () => {
     const { activeSessionId } = get();
@@ -107,7 +94,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     try {
       const results = await searchChatSessions(query.trim(), 20);
-      // Only update if query hasn't changed since request started
       if (get().searchQuery === query) {
         set({ searchResults: results });
       }
@@ -128,35 +114,20 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     await state.loadChatSessions();
     const { chatSessions } = get();
 
-    // Restore tabs from localStorage
-    let restoredTabs: string[] = [];
-    try {
-      const raw = localStorage.getItem(TABS_STORAGE_KEY);
-      if (raw) restoredTabs = JSON.parse(raw);
-    } catch {}
-
     // Restore last active session
     let lastActive = '';
     try {
       lastActive = localStorage.getItem(STORAGE_KEY) || '';
     } catch {}
 
-    // Validate restored tabs — only keep those that exist in loaded sessions
-    // Note: task/cron tabs won't be in chatSessions, so we keep them unconditionally
     const sessionIds = new Set(chatSessions.map(s => s.id));
-    const validTabs = restoredTabs.filter(id =>
-      sessionIds.has(id) || id.startsWith('task:') || id.startsWith('cron:'),
-    );
 
     // If last active session still exists, use it
-    if (lastActive && (sessionIds.has(lastActive) || lastActive.startsWith('task:') || lastActive.startsWith('cron:'))) {
-      if (!validTabs.includes(lastActive)) validTabs.push(lastActive);
-      set({ activeSessionId: lastActive, openTabIds: validTabs, initialized: true });
+    if (lastActive && sessionIds.has(lastActive)) {
+      set({ activeSessionId: lastActive, initialized: true });
     } else if (chatSessions.length > 0) {
       // Use most recent session
-      const mostRecent = chatSessions[0].id;
-      if (!validTabs.includes(mostRecent)) validTabs.push(mostRecent);
-      set({ activeSessionId: mostRecent, openTabIds: validTabs, initialized: true });
+      set({ activeSessionId: chatSessions[0].id, initialized: true });
     } else {
       // No sessions exist — create one
       await get().createNewChat();
@@ -165,20 +136,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
 
     get()._persistActive();
-    get()._persistTabs();
   },
 
   createNewChat: async () => {
     try {
       const session = await createSession('New Chat');
-      const { openTabIds } = get();
       set({
         chatSessions: [session, ...get().chatSessions],
         activeSessionId: session.id,
-        openTabIds: [...openTabIds, session.id],
       });
       get()._persistActive();
-      get()._persistTabs();
       return session.id;
     } catch (err) {
       console.error('Failed to create new chat:', err);
@@ -187,56 +154,30 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   switchToSession: (id: string) => {
-    const { openTabIds } = get();
-    const newTabs = openTabIds.includes(id) ? openTabIds : [...openTabIds, id];
-    set({ activeSessionId: id, openTabIds: newTabs });
+    set({ activeSessionId: id });
     get()._persistActive();
-    get()._persistTabs();
-  },
-
-  closeTab: async (id: string) => {
-    const { openTabIds, activeSessionId } = get();
-    const newTabs = openTabIds.filter(t => t !== id);
-
-    if (newTabs.length === 0) {
-      // Last tab closed — create new session
-      await get().createNewChat();
-      return;
-    }
-
-    if (activeSessionId === id) {
-      // Switch to adjacent tab
-      const idx = openTabIds.indexOf(id);
-      const nextIdx = Math.min(idx, newTabs.length - 1);
-      set({ openTabIds: newTabs, activeSessionId: newTabs[nextIdx] });
-    } else {
-      set({ openTabIds: newTabs });
-    }
-    get()._persistActive();
-    get()._persistTabs();
   },
 
   deleteSession: async (id: string) => {
     try {
       await apiDeleteSession(id);
-      const { chatSessions, openTabIds, activeSessionId } = get();
+      const { chatSessions, activeSessionId } = get();
       const newSessions = chatSessions.filter(s => s.id !== id);
-      const newTabs = openTabIds.filter(t => t !== id);
 
       if (activeSessionId === id) {
-        if (newTabs.length === 0) {
-          set({ chatSessions: newSessions, openTabIds: [], activeSessionId: '' });
-          await get().createNewChat();
+        if (newSessions.length > 0) {
+          // Switch to most recent remaining session
+          set({ chatSessions: newSessions, activeSessionId: newSessions[0].id });
         } else {
-          const idx = openTabIds.indexOf(id);
-          const nextIdx = Math.min(idx, newTabs.length - 1);
-          set({ chatSessions: newSessions, openTabIds: newTabs, activeSessionId: newTabs[nextIdx] });
+          // No sessions left — create a new one
+          set({ chatSessions: [], activeSessionId: '' });
+          await get().createNewChat();
+          return;
         }
       } else {
-        set({ chatSessions: newSessions, openTabIds: newTabs });
+        set({ chatSessions: newSessions });
       }
       get()._persistActive();
-      get()._persistTabs();
     } catch (err) {
       console.error('Failed to delete session:', err);
     }
@@ -247,7 +188,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       await apiRenameSession(id, name);
       set({
         chatSessions: get().chatSessions.map(s =>
-          s.id === id ? { ...s, name } : s,
+          s.id === id ? { ...s, name } : s
         ),
       });
     } catch (err) {
@@ -257,17 +198,5 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   refreshSessions: async () => {
     await get().loadChatSessions();
-  },
-
-  addTab: (id: string) => {
-    const { openTabIds } = get();
-    if (!openTabIds.includes(id)) {
-      set({ openTabIds: [...openTabIds, id] });
-      get()._persistTabs();
-    }
-  },
-
-  hasTab: (id: string) => {
-    return get().openTabIds.includes(id);
   },
 }));

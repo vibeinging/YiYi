@@ -786,6 +786,36 @@ pub async fn get_meditation_status(
     }
 }
 
+/// Get a summary of the latest completed meditation session.
+#[tauri::command]
+pub async fn get_meditation_summary(
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    match state.db.get_latest_completed_meditation_session() {
+        Some(session) => {
+            let mut parts = vec![];
+            if session.memories_updated > 0 {
+                parts.push(format!("整理了 {} 条记忆", session.memories_updated));
+            }
+            if session.memories_archived > 0 {
+                parts.push(format!("归档了 {} 条旧记忆", session.memories_archived));
+            }
+            if session.principles_changed > 0 {
+                parts.push(format!("更新了 {} 条行为准则", session.principles_changed));
+            }
+            if session.sessions_reviewed > 0 {
+                parts.push(format!("回顾了 {} 段对话", session.sessions_reviewed));
+            }
+            if parts.is_empty() {
+                Ok(Some("没有新的变化~".to_string()))
+            } else {
+                Ok(Some(parts.join("，")))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // MemMe Memory Engine Configuration
 // ---------------------------------------------------------------------------

@@ -18,13 +18,6 @@ import {
   type ChatMessage,
   type Attachment,
 } from '../api/agent';
-import {
-  listBots,
-  sessionListBots,
-  sessionBindBot,
-  sessionUnbindBot,
-  type BotInfo,
-} from '../api/bots';
 import { listWorkspaceFiles, loadWorkspaceFile, getWorkspacePath, type WorkspaceFile } from '../api/workspace';
 import { listSkills } from '../api/skills';
 import { type MentionTag } from '../components/MentionInput';
@@ -38,10 +31,11 @@ import { useSessionStore } from '../stores/sessionStore';
 import { useDragRegion } from '../hooks/useDragRegion';
 import { toast } from '../components/Toast';
 
-import { ChatTabBar, type OpenTab } from '../components/chat/ChatTabBar';
 import { ChatWelcome } from '../components/chat/ChatWelcome';
 import { ChatMessages, type ChatMessagesHandle } from '../components/chat/ChatMessages';
 import { ChatInput, type ChatInputHandle } from '../components/chat/ChatInput';
+import { BuddySprite } from '../components/buddy';
+import { useBuddyStore } from '../stores/buddyStore';
 
 import logoImg from '../assets/yiyi-logo.png';
 
@@ -64,14 +58,11 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
 
   // --- Session store ---
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
-  const openTabIds = useSessionStore((s) => s.openTabIds);
   const chatSessions = useSessionStore((s) => s.chatSessions);
   const initialized = useSessionStore((s) => s.initialized);
 
   // --- Core state ---
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  // Tabs that are newly added (for entrance animation)
-  const [highlightTabs, setHighlightTabs] = useState<Map<string, 'new' | 'complete' | 'fail'>>(new Map());
 
   // --- Refs ---
   const activeSessionIdRef = useRef(activeSessionId);
@@ -84,7 +75,11 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   const refreshAiName = () => {
     loadWorkspaceFile('SOUL.md').then((content) => {
       const match = content.match(/^---\s*\nname:\s*(.+)\s*\n/m);
-      if (match?.[1]) setAiName(match[1].trim());
+      if (match?.[1]) {
+        const name = match[1].trim();
+        setAiName(name);
+        useBuddyStore.getState().setAiName(name);
+      }
     }).catch(() => {});
   };
 
@@ -98,60 +93,6 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     });
     return () => { unlisten.then(fn => fn()); };
   }, []);
-
-  // --- Bot state ---
-  const [boundBots, setBoundBots] = useState<BotInfo[]>([]);
-  const [allBots, setAllBots] = useState<BotInfo[]>([]);
-  const [showBotPopover, setShowBotPopover] = useState(false);
-  const [reboundNotice, setReboundNotice] = useState('');
-  const botPopoverRef = useRef<HTMLDivElement>(null);
-
-  const refreshAllBots = useCallback(() => {
-    listBots().then(setAllBots).catch(() => setAllBots([]));
-  }, []);
-
-  useEffect(() => { refreshAllBots(); }, []);
-
-  const loadBoundBots = async (sessionId: string) => {
-    try {
-      const bots = await sessionListBots(sessionId);
-      setBoundBots(bots);
-    } catch { setBoundBots([]); }
-  };
-
-  const handleBindBot = async (botId: string) => {
-    if (!activeSessionId) return;
-    try {
-      const prevSession = await sessionBindBot(activeSessionId, botId);
-      await loadBoundBots(activeSessionId);
-      if (prevSession) {
-        setReboundNotice(t('chat.bots.rebound'));
-        setTimeout(() => setReboundNotice(''), 3000);
-      }
-    } catch (error) {
-      console.error('Failed to bind bot:', error);
-    }
-  };
-
-  const handleUnbindBot = async (botId: string) => {
-    if (!activeSessionId) return;
-    try {
-      await sessionUnbindBot(activeSessionId, botId);
-      await loadBoundBots(activeSessionId);
-    } catch (error) {
-      console.error('Failed to unbind bot:', error);
-    }
-  };
-
-  useEffect(() => {
-    const handleClick = (e: MouseEvent) => {
-      if (botPopoverRef.current && !botPopoverRef.current.contains(e.target as Node)) {
-        setShowBotPopover(false);
-      }
-    };
-    if (showBotPopover) document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, [showBotPopover]);
 
   // --- Workspace files ---
   const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceFile[]>([]);
@@ -193,27 +134,6 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     }
   }, []);
 
-  const handleCloseTab = useCallback((tabId: string) => {
-    const { openTabIds } = useSessionStore.getState();
-    // If it's a task/cron tab, unfocus
-    const sidebarTasks = useTaskSidebarStore.getState().tasks;
-    const isTask = sidebarTasks.some(t => t.sessionId === tabId) || tabId.startsWith('cron:');
-    if (isTask) {
-      useChatStreamStore.getState().unfocusTask();
-    }
-    useSessionStore.getState().closeTab(tabId);
-    toast.info('关闭标签不会删除对话，可从侧边栏再次打开');
-  }, []);
-
-  const handleSelectTab = useCallback((tabId: string) => {
-    const sidebarTasks = useTaskSidebarStore.getState().tasks;
-    const isTask = sidebarTasks.some(t => t.sessionId === tabId) || tabId.startsWith('cron:');
-    if (!isTask) {
-      useChatStreamStore.getState().unfocusTask();
-    }
-    useSessionStore.getState().switchToSession(tabId);
-  }, []);
-
   const handleGoToRecentChat = useCallback(() => {
     useChatStreamStore.getState().unfocusTask();
     const { chatSessions, activeSessionId, switchToSession, createNewChat } = useSessionStore.getState();
@@ -245,52 +165,6 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     navigateToSession(pendingSessionId);
   }, [pendingSessionId, navigateToSession, initialized]);
 
-  // --- Add tab without switching (task created in background) ---
-  const pendingNewTab = useTaskSidebarStore((s) => s.pendingNewTab);
-  useEffect(() => {
-    if (!pendingNewTab || !initialized) return;
-    const tab = useTaskSidebarStore.getState().consumePendingNewTab();
-    if (!tab) return;
-    // Ensure session exists
-    ensureSession(tab.id, tab.name, 'chat').catch(() => {});
-    // Add tab without switching
-    useSessionStore.getState().addTab(tab.id);
-    // Highlight the new tab
-    setHighlightTabs(prev => {
-      const next = new Map(prev);
-      next.set(tab.id, 'new');
-      return next;
-    });
-    // Clear highlight after animation
-    setTimeout(() => {
-      setHighlightTabs(prev => {
-        const next = new Map(prev);
-        next.delete(tab.id);
-        return next;
-      });
-    }, 3000);
-  }, [pendingNewTab, initialized]);
-
-  // --- Tab notification (task complete/fail) ---
-  const pendingTabNotify = useTaskSidebarStore((s) => s.pendingTabNotify);
-  useEffect(() => {
-    if (!pendingTabNotify) return;
-    const n = useTaskSidebarStore.getState().consumeTabNotify();
-    if (!n) return;
-    setHighlightTabs(prev => {
-      const next = new Map(prev);
-      next.set(n.id, n.type);
-      return next;
-    });
-    setTimeout(() => {
-      setHighlightTabs(prev => {
-        const next = new Map(prev);
-        next.delete(n.id);
-        return next;
-      });
-    }, 4000);
-  }, [pendingTabNotify]);
-
   // --- Message loading ---
   const loadMessages = async (sessionId: string) => {
     try {
@@ -306,7 +180,6 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     if (!activeSessionId) return;
     useChatStreamStore.getState().setSessionId(activeSessionId);
     loadMessages(activeSessionId);
-    loadBoundBots(activeSessionId);
 
     invoke('chat_stream_state', { sessionId: activeSessionId })
       .then((snapshot: any) => {
@@ -318,27 +191,6 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
       })
       .catch(() => { useChatStreamStore.getState().resetStream(); });
   }, [activeSessionId]);
-
-  // Refresh on bot activity
-  useEffect(() => {
-    if (!activeSessionId) return;
-    const unlistenResponse = listen<{ session_id: string }>('bot://response', (event) => {
-      if (event.payload.session_id === activeSessionId) loadMessages(activeSessionId);
-    });
-    const unlistenMessage = listen<{ bot_id: string }>('bot://message', (event) => {
-      if (boundBots.some(b => b.id === event.payload.bot_id)) {
-        setTimeout(() => loadMessages(activeSessionId), 500);
-      }
-    });
-    const unlistenEarlyReply = listen<{ session_id: string }>('bot://early-reply', (event) => {
-      if (event.payload.session_id === activeSessionId) loadMessages(activeSessionId);
-    });
-    return () => {
-      unlistenResponse.then(fn => fn());
-      unlistenMessage.then(fn => fn());
-      unlistenEarlyReply.then(fn => fn());
-    };
-  }, [activeSessionId, boundBots]);
 
   // Tray new session
   const handleNewSession = async () => {
@@ -410,7 +262,6 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
 
     // Bind @mentioned bots
     const botMentions = mentions.filter(m => m.type === 'bot');
-    for (const bm of botMentions) await handleBindBot(bm.id);
 
     const userAttachments = attachments.length > 0 ? attachments : undefined;
     useChatStreamStore.getState().startStream();
@@ -427,6 +278,10 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
       await loadMessages(activeSessionId);
       // Refresh session list to pick up auto-generated title
       await useSessionStore.getState().refreshSessions();
+      // Trigger buddy observer (non-blocking)
+      const recentMsgs = messages.slice(-5).map(m => `${m.role}: ${m.content.slice(0, 200)}`);
+      recentMsgs.push(`user: ${userMessage.slice(0, 200)}`);
+      useBuddyStore.getState().triggerObserve(recentMsgs).catch(() => {});
     } catch (error) {
       console.error('Failed to send message:', error);
       setMessages(prev => [...prev, {
@@ -469,6 +324,16 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
       useChatStreamStore.getState().endStream();
     }
   };
+
+  /** Fill prompt into input box (instead of sending directly) so user can review/add attachments */
+  const fillQuickPrompt = useCallback((prompt: string) => {
+    inputRef.current?.clear();
+    setTimeout(() => {
+      inputRef.current?.insertText(prompt);
+      inputRef.current?.focus();
+      inputRef.current?.shake();
+    }, 0);
+  }, []);
 
   const handleStop = useCallback(() => {
     chatStreamStop();
@@ -526,36 +391,9 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
 
   // --- Render user content with @mention pills ---
   const renderUserContent = useCallback((text: string) => {
-    const knownNames = new Set([...boundBots.map(b => b.name), ...allBots.map(b => b.name)]);
-    const parts: React.ReactNode[] = [];
-    let remaining = text;
-    let key = 0;
-    while (remaining.length > 0) {
-      const atIdx = remaining.indexOf('@');
-      if (atIdx === -1) { parts.push(remaining); break; }
-      if (atIdx > 0) parts.push(remaining.slice(0, atIdx));
-      const afterAt = remaining.slice(atIdx + 1);
-      let matched = false;
-      for (const name of knownNames) {
-        if (afterAt.startsWith(name)) {
-          const charAfter = afterAt[name.length];
-          if (!charAfter || /[\s,，.。!！?？)）\]】]/.test(charAfter)) {
-            parts.push(
-              <span key={`mention-${key++}`} style={{
-                background: 'rgba(255,255,255,0.2)', color: 'var(--color-bg)',
-                padding: '1px 6px', borderRadius: '6px', fontWeight: 600, fontSize: '13px', whiteSpace: 'nowrap',
-              }}>@{name}</span>,
-            );
-            remaining = afterAt.slice(name.length);
-            matched = true;
-            break;
-          }
-        }
-      }
-      if (!matched) { parts.push('@'); remaining = afterAt; }
-    }
+    const parts: React.ReactNode[] = [text];
     return <>{parts}</>;
-  }, [boundBots, allBots]);
+  }, []);
 
   // --- Lightbox ---
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
@@ -570,19 +408,32 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     setLightboxSrc(`data:${att.mimeType};base64,${att.data}`);
   }, []);
 
-  // --- Derived state ---
   // --- Meditation status ---
   const [meditationStatus, setMeditationStatus] = useState<'idle' | 'running' | 'completed' | null>(null);
 
   useEffect(() => {
+    let prevStatus: string | null = null;
     const checkMeditation = () => {
       invoke('get_meditation_status').then((status: any) => {
         if (status && (status === 'running' || status === 'completed')) {
           setMeditationStatus(status);
-          if (status === 'completed') {
-            setTimeout(() => setMeditationStatus(null), 5000);
+          // Show buddy bubble on status change
+          if (status !== prevStatus) {
+            const { showBubble } = useBuddyStore.getState();
+            if (status === 'running') {
+              showBubble('我去整理一下记忆~');
+            } else if (status === 'completed') {
+              invoke<string | null>('get_meditation_summary').then((summary) => {
+                showBubble(summary ? `整理好啦！${summary} ✨` : '记忆整理好啦！✨');
+              }).catch(() => {
+                showBubble('记忆整理好啦！✨');
+              });
+              setTimeout(() => setMeditationStatus(null), 5000);
+            }
           }
+          prevStatus = status;
         } else {
+          prevStatus = null;
           setMeditationStatus(null);
         }
       }).catch(() => {});
@@ -603,121 +454,20 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   const isChatSession = !isTaskSession && !isCronSession;
   const showWelcome = isChatSession && messages.length === 0 && !loading;
 
-  // Build OpenTab[] from openTabIds
-  const openTabs: OpenTab[] = useMemo(() => {
-    const sessionMap = new Map(chatSessions.map(s => [s.id, s]));
-    const taskMap = new Map(sidebarTasks.map(t => [t.sessionId, t]));
-    return openTabIds.map(id => {
-      const session = sessionMap.get(id);
-      if (session) return { id, name: session.name };
-      const task = taskMap.get(id);
-      if (task) return { id, name: task.title };
-      if (id.startsWith('cron:')) {
-        const jobId = id.slice(5);
-        const job = cronJobs.find(j => j.id === jobId);
-        return { id, name: job?.name || jobId };
-      }
-      return { id, name: id };
-    });
-  }, [openTabIds, chatSessions, sidebarTasks, cronJobs]);
-
-  const handleNewChat = useCallback(() => {
-    useSessionStore.getState().createNewChat();
-  }, []);
-
   // --- Render ---
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden">
-      <ChatTabBar
-        tabs={openTabs}
-        currentTabId={activeSessionId}
-        highlightTabs={highlightTabs}
-        onSelectTab={handleSelectTab}
-        onCloseTab={handleCloseTab}
-        onNewChat={handleNewChat}
-      />
-
-      {/* Bot binding bar */}
+      {/* Drag region — replaces the tab bar */}
       <div
-        className="shrink-0 flex items-center gap-2 px-4 py-1.5"
-        style={{ background: 'var(--color-bg)', borderBottom: '1px solid var(--color-border)', minHeight: '32px' }}
-      >
-        <div className="relative" ref={botPopoverRef}>
-          <button
-            onClick={() => { if (!showBotPopover) refreshAllBots(); setShowBotPopover(!showBotPopover); }}
-            className="flex items-center gap-1.5 px-2 py-1 rounded-md transition-colors text-[12px]"
-            style={{
-              color: boundBots.length > 0 ? 'var(--color-primary)' : 'var(--color-text-tertiary)',
-              background: showBotPopover ? 'var(--color-bg-elevated)' : 'transparent',
-            }}
-            onMouseEnter={(e) => { if (!showBotPopover) e.currentTarget.style.background = 'var(--color-bg-elevated)'; }}
-            onMouseLeave={(e) => { if (!showBotPopover) e.currentTarget.style.background = 'transparent'; }}
-          >
-            <span>{boundBots.length > 0 ? `${t('chat.bots.bound')} (${boundBots.length})` : t('chat.bots.bind')}</span>
-          </button>
-
-          {showBotPopover && (
-            <div className="absolute left-0 top-full mt-1 rounded-xl shadow-lg z-50 overflow-hidden"
-              style={{ background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)', minWidth: 'min(260px, 80vw)' }}>
-              {boundBots.length > 0 && (
-                <div className="p-2">
-                  <div className="text-[11px] font-medium px-2 py-1" style={{ color: 'var(--color-text-muted)' }}>{t('chat.bots.bound')}</div>
-                  {boundBots.map((bot) => (
-                    <div key={bot.id} className="flex items-center justify-between px-2 py-1.5 rounded-lg"
-                      style={{ background: 'var(--color-primary-subtle)' }}>
-                      <span className="text-[13px] font-medium" style={{ color: 'var(--color-text)' }}>{bot.name}</span>
-                      <button onClick={() => handleUnbindBot(bot.id)}
-                        className="text-[11px] px-2 py-0.5 rounded transition-colors"
-                        style={{ color: 'var(--color-text-muted)' }}>
-                        解绑
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {(() => {
-                const boundIds = new Set(boundBots.map(b => b.id));
-                const available = allBots.filter(b => !boundIds.has(b.id) && b.enabled);
-                return available.length > 0 ? (
-                  <div className="p-2" style={{ borderTop: boundBots.length > 0 ? '1px solid var(--color-border)' : 'none' }}>
-                    {available.map((bot) => (
-                      <button key={bot.id} onClick={() => handleBindBot(bot.id)}
-                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg transition-colors text-left text-[13px]"
-                        style={{ color: 'var(--color-text)' }}
-                        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
-                        {bot.name}
-                        <span className="text-[11px] px-1.5 py-0.5 rounded" style={{ background: 'var(--color-bg-muted)', color: 'var(--color-text-muted)' }}>
-                          {bot.platform}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                ) : null;
-              })()}
-              <div className="px-3 py-2 text-[11px]" style={{ color: 'var(--color-text-tertiary)', borderTop: '1px solid var(--color-border)' }}>
-                {t('chat.bots.bindHint')}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {boundBots.map((bot) => (
-          <span key={bot.id} className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px]"
-            style={{ background: 'var(--color-primary-subtle)', color: 'var(--color-primary)' }}>
-            {bot.name}
-          </span>
-        ))}
-
-        {reboundNotice && (
-          <span className="text-[11px] ml-auto" style={{ color: 'var(--color-warning, #f59e0b)' }}>{reboundNotice}</span>
-        )}
-      </div>
+        data-tauri-drag-region
+        className="shrink-0 app-drag-region"
+        style={{ background: 'var(--color-bg)', height: '38px' }}
+      />
 
       {/* Messages or Welcome */}
       {showWelcome ? (
         <div className="flex-1 overflow-y-auto" style={{ background: 'var(--color-bg)' }}>
-          <ChatWelcome aiName={aiName} onSendPrompt={sendQuickPrompt} />
+          <ChatWelcome aiName={aiName} onSendPrompt={fillQuickPrompt} />
         </div>
       ) : (
         <ChatMessages
@@ -728,8 +478,6 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
           isCronSession={isCronSession}
           cronJobId={cronJobId}
           aiName={aiName}
-          boundBots={boundBots}
-          allBots={allBots}
           loading={loading}
           onOpenLightbox={openLightbox}
           onUnfocus={handleGoToRecentChat}
@@ -739,37 +487,22 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
         />
       )}
 
-      {/* Meditation status indicator */}
-      {meditationStatus === 'running' && (
-        <div className="flex items-center gap-2 px-4 py-2 text-[13px] rounded-xl mx-4 mb-2"
-          style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-muted)' }}>
-          <span className="animate-pulse">&#x1F9D8;</span>
-          <span>{t('settings.meditationRunning')}</span>
-        </div>
-      )}
-      {meditationStatus === 'completed' && (
-        <div className="flex items-center gap-2 px-4 py-2 text-[13px] rounded-xl mx-4 mb-2"
-          style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-success)' }}>
-          <span>&#x2728;</span>
-          <span>{t('settings.meditationComplete')}</span>
-        </div>
-      )}
 
       {/* Input */}
       <ChatInput
         ref={inputRef}
         loading={loading}
-        allBots={allBots}
         workspaceFiles={workspaceFiles}
         onSend={handleSend}
         onStop={handleStop}
         onSelectCommand={executeCommand}
         onSelectTask={(task) => navigateToSession(task.sessionId)}
-        onMentionBotSelect={(bot) => handleBindBot(bot.id)}
         onFileSelect={() => {}}
         onFetchWorkspaceFiles={fetchWorkspaceFiles}
-        onRefreshBots={refreshAllBots}
       />
+
+      {/* Buddy Companion */}
+      <BuddySprite />
 
       {/* Lightbox */}
       {lightboxSrc && (

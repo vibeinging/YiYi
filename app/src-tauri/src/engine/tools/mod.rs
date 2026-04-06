@@ -1006,7 +1006,7 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         }
         "manage_cronjob" => cron_tools::manage_cronjob_tool(&args).await,
         "manage_quick_action" => skill_tools::manage_quick_action_tool(&args).await,
-        "list_bound_bots" => bot_tools::list_bound_bots_tool().await,
+        "list_bot_conversations" => bot_tools::list_bot_conversations_tool(&args).await,
         "manage_skill" => skill_tools::manage_skill_tool(&args).await,
         "activate_skills" => skill_tools::activate_skills_tool(&args).await,
         "register_code" => skill_tools::register_code_tool(&args).await,

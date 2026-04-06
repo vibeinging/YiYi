@@ -16,6 +16,7 @@ import {
 import { toast, confirm } from '../components/Toast';
 import { getHistory, clearHistory, type ChatMessage } from '../api/agent';
 import { listBotSessions, type BotSession } from '../api/bots';
+import { formatRelativeTime } from '../utils/time';
 
 export function SessionsPanel() {
   const { t } = useTranslation();
@@ -75,17 +76,6 @@ export function SessionsPanel() {
         return next;
       });
     }
-  };
-
-  const formatTime = (timestamp?: number): string => {
-    if (!timestamp) return '-';
-    const now = Date.now();
-    const diff = now - timestamp;
-    if (diff < 60 * 1000) return 'Just now';
-    if (diff < 60 * 60 * 1000) return `${Math.floor(diff / (60 * 1000))}m ago`;
-    if (diff < 24 * 60 * 60 * 1000) return `${Math.floor(diff / (60 * 60 * 1000))}h ago`;
-    if (diff < 7 * 24 * 60 * 60 * 1000) return `${Math.floor(diff / (24 * 60 * 60 * 1000))}d ago`;
-    return new Date(timestamp).toLocaleDateString();
   };
 
   const filteredSessions = sessions.filter(session => {
@@ -182,7 +172,7 @@ export function SessionsPanel() {
                         {session.name}
                       </span>
                       <span className="text-[11px] flex-shrink-0 ml-2" style={{ color: 'var(--color-text-muted)' }}>
-                        {formatTime(session.updated_at)}
+                        {formatRelativeTime(session.updated_at)}
                       </span>
                     </div>
                     <div className="flex items-center gap-2 mt-1">

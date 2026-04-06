@@ -36,7 +36,7 @@ import { useChatStreamStore } from '../../stores/chatStreamStore';
 import { useTaskSidebarStore } from '../../stores/taskSidebarStore';
 import { cancelTask, pauseTask, openTaskFolder } from '../../api/tasks';
 import type { ChatMessage, Attachment } from '../../api/agent';
-import type { BotInfo } from '../../api/bots';
+
 import type { SpawnAgent, TaskStreamState } from '../../stores/chatStreamStore';
 import logoFaceRight from '../../assets/yiyi-logo-face-right.png';
 
@@ -203,8 +203,6 @@ interface ChatMessagesProps {
   isCronSession: boolean;
   cronJobId: string;
   aiName: string;
-  boundBots: BotInfo[];
-  allBots: BotInfo[];
   loading: boolean;
   onOpenLightbox: (att: Attachment) => void;
   onUnfocus: () => void;
@@ -227,8 +225,6 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
     isCronSession,
     cronJobId,
     aiName,
-    boundBots,
-    allBots,
     loading,
     onOpenLightbox,
     onUnfocus,

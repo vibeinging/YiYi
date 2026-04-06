@@ -13,3 +13,5 @@ pub mod mcp;
 pub mod unified_users;
 pub mod tasks;
 pub mod pty;
+pub mod cli;
+pub mod buddy;

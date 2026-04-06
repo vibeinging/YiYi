@@ -20,6 +20,12 @@ pub struct Config {
     /// MemMe memory engine configuration (embedding, graph, forgetting curve).
     #[serde(default)]
     pub memme: MemmeConfig,
+    /// External CLI tool providers (e.g. Feishu CLI, DingTalk CLI).
+    #[serde(default)]
+    pub cli_providers: HashMap<String, CliProviderConfig>,
+    /// Buddy companion configuration.
+    #[serde(default)]
+    pub buddy: BuddyConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -221,6 +227,85 @@ impl Default for MemmeConfig {
             enable_graph: true,
             enable_forgetting_curve: true,
             extraction_depth: memme_default_depth(),
+        }
+    }
+}
+
+/// Configuration for an external CLI tool provider.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CliProviderConfig {
+    /// Whether this CLI provider is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Binary name (e.g. "lark-cli").
+    #[serde(default)]
+    pub binary: String,
+    /// Install command (e.g. "npm install -g @larksuite/cli").
+    #[serde(default)]
+    pub install_command: String,
+    /// Authentication command suffix (e.g. "auth login --recommend").
+    #[serde(default)]
+    pub auth_command: String,
+    /// Command to check installation (e.g. "--version").
+    #[serde(default)]
+    pub check_command: String,
+    /// Credential key-value pairs (app_id, app_secret, etc.).
+    #[serde(default)]
+    pub credentials: HashMap<String, String>,
+    /// Authentication status: "unknown" | "authenticated" | "not_authenticated".
+    #[serde(default)]
+    pub auth_status: String,
+}
+
+impl Default for CliProviderConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            binary: String::new(),
+            install_command: String::new(),
+            auth_command: String::new(),
+            check_command: String::new(),
+            credentials: HashMap::new(),
+            auth_status: "unknown".to_string(),
+        }
+    }
+}
+
+/// Buddy companion soul & preferences.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BuddyConfig {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub personality: String,
+    /// Unix timestamp (ms) when the buddy was hatched. 0 = not hatched yet.
+    #[serde(default)]
+    pub hatched_at: i64,
+    #[serde(default)]
+    pub muted: bool,
+    /// Stable user identifier for deterministic generation. Auto-generated on first access.
+    #[serde(default)]
+    pub buddy_user_id: String,
+    /// Growth deltas for each stat, accumulated from usage patterns.
+    /// Keys: ENERGY, WARMTH, MISCHIEF, WIT, SASS
+    #[serde(default)]
+    pub stats_delta: HashMap<String, i32>,
+    /// Total interaction count (used for growth rate scaling).
+    #[serde(default)]
+    pub interaction_count: u32,
+}
+
+impl CliProviderConfig {
+    /// Default configuration for Feishu CLI.
+    pub fn feishu_default() -> Self {
+        Self {
+            enabled: false,
+            binary: "lark-cli".to_string(),
+            install_command: "npm install -g @larksuite/cli".to_string(),
+            auth_command: "auth login --recommend".to_string(),
+            check_command: "--version".to_string(),
+            credentials: HashMap::new(),
+            auth_status: "unknown".to_string(),
         }
     }
 }

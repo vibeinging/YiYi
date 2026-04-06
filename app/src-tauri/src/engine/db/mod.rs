@@ -19,7 +19,7 @@ mod quick_actions;
 pub use sessions::ChatSession;
 pub use messages::ChatMessage;
 pub use providers::{ProviderSettingRow, CustomProviderRow};
-pub use bots::BotRow;
+pub use bots::{BotRow, BotConversationRow};
 pub use cronjobs::{ExecutionMode, CronJobRow, CronJobExecutionRow, HeartbeatRow};
 // Memories now live in MemMe (DuckDB). SQLite memories table kept for schema compat only.
 pub use workspace::{AuthorizedFolderRow, SensitivePathRow};
@@ -163,16 +163,24 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_heartbeat_ts ON heartbeat_history(timestamp);
 
-            -- Session-bot bindings (bidirectional channel)
-            CREATE TABLE IF NOT EXISTS session_bots (
-                session_id TEXT NOT NULL,
+            -- Bot conversations: each (bot, group/channel) pair has its own session
+            CREATE TABLE IF NOT EXISTS bot_conversations (
+                id TEXT PRIMARY KEY,
                 bot_id TEXT NOT NULL,
-                bound_at INTEGER NOT NULL,
-                PRIMARY KEY (session_id, bot_id),
-                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+                external_id TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                display_name TEXT,
+                session_id TEXT NOT NULL,
+                linked_session_id TEXT,
+                trigger_mode TEXT NOT NULL DEFAULT 'mention',
+                last_message_at INTEGER,
+                message_count INTEGER DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                UNIQUE(bot_id, external_id),
                 FOREIGN KEY (bot_id) REFERENCES bots(id) ON DELETE CASCADE
             );
-            CREATE INDEX IF NOT EXISTS idx_session_bots_bot ON session_bots(bot_id);
+            CREATE INDEX IF NOT EXISTS idx_bot_conv_bot ON bot_conversations(bot_id);
+            CREATE INDEX IF NOT EXISTS idx_bot_conv_last ON bot_conversations(last_message_at);
 
             -- Sandbox allowed paths
             CREATE TABLE IF NOT EXISTS sandbox_paths (
@@ -456,16 +464,8 @@ impl Database {
             log::info!("Migrated sessions table: added source, source_meta columns");
         }
 
-        // Add last_conversation_id to session_bots table
-        let has_last_conv: bool = conn
-            .prepare("SELECT last_conversation_id FROM session_bots LIMIT 0")
-            .is_ok();
-        if !has_last_conv {
-            conn.execute_batch(
-                "ALTER TABLE session_bots ADD COLUMN last_conversation_id TEXT DEFAULT NULL;"
-            ).map_err(|e| format!("Migration error (session_bots): {}", e))?;
-            log::info!("Migrated session_bots table: added last_conversation_id column");
-        }
+        // Drop legacy session_bots table (replaced by bot_conversations)
+        conn.execute_batch("DROP TABLE IF EXISTS session_bots;").ok();
 
         // Add execution_mode to cronjobs table
         let has_execution_mode: bool = conn
