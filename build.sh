@@ -118,7 +118,7 @@ build_target() {
                 unzip -q "$whl" -d "$tmp_whl"
                 find "$tmp_whl" \( -name "*.so" -o -name "*.dylib" \) -exec \
                     codesign --force --options runtime --timestamp \
-                    --sign "Developer ID Application: Jian ming Wu (BB5VK42K87)" {} \;
+                    --sign "${APPLE_SIGNING_IDENTITY:?Set APPLE_SIGNING_IDENTITY env var}" {} \;
                 # Repack the whl
                 (cd "$tmp_whl" && zip -q -r "$whl" .)
                 rm -rf "$tmp_whl"
@@ -130,12 +130,12 @@ build_target() {
     echo "  Signing python stdlib binaries..."
     find "$app_dir/Contents/Resources/python-stdlib" \( -name "*.so" -o -name "*.dylib" \) -exec \
         codesign --force --options runtime --timestamp \
-        --sign "Developer ID Application: Jian ming Wu (BB5VK42K87)" {} \; 2>/dev/null || true
+        --sign "${APPLE_SIGNING_IDENTITY:?Set APPLE_SIGNING_IDENTITY env var}" {} \; 2>/dev/null || true
 
     # Re-sign the app after all fixes
     echo "  Re-signing app bundle..."
     codesign --deep --force --options runtime --timestamp \
-        --sign "Developer ID Application: Jian ming Wu (BB5VK42K87)" \
+        --sign "${APPLE_SIGNING_IDENTITY:?Set APPLE_SIGNING_IDENTITY env var}" \
         "$app_dir" || echo "  ⚠️ Signing failed"
 
     # Re-create DMG with fixed binary
@@ -156,7 +156,7 @@ build_target() {
         xcrun notarytool submit "$dmg_dir/$dmg_name" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_PASSWORD" \
-            --team-id "BB5VK42K87" \
+            --team-id "${APPLE_TEAM_ID:?Set APPLE_TEAM_ID env var}" \
             --wait
         echo "  Stapling notarization ticket..."
         xcrun stapler staple "$dmg_dir/$dmg_name" 2>/dev/null || true

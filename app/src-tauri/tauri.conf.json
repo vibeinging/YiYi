@@ -49,7 +49,7 @@
     "createUpdaterArtifacts": true,
     "macOS": {
       "frameworks": ["libs/libpython3.13.dylib"],
-      "signingIdentity": "Developer ID Application: Jian ming Wu (BB5VK42K87)",
+      "signingIdentity": "-",
       "dmg": {
         "appPosition": { "x": 180, "y": 170 },
         "applicationFolderPosition": { "x": 480, "y": 170 },

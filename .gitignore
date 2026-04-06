@@ -81,8 +81,22 @@ electron/resources/
 electron/dist/
 electron/node_modules/
 
-# Research docs (local only)
+# Internal docs (local only)
 docs/research/
+docs/analysis/
+docs/design/
+docs/specs/
+docs/plans/
+docs/reports/
+
+# Binary / generated reports
+*.pptx
+
+# Security: certificates & keys
+*.pem
+*.key
+*.p12
+*.pfx
 
 # vibe coding
 .claude

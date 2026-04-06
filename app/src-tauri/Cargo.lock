@@ -3219,7 +3219,9 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
 name = "memme-core"
-version = "0.1.0"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0435b04f3a0082732a606c8a5b20f357886075cf0da3bd1cc16bffa654e510e"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -3236,7 +3238,9 @@ dependencies = [
 
 [[package]]
 name = "memme-embeddings"
-version = "0.1.0"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29fdcab406a8616dd7ec7d69bc9cdeb998b581a84bb4b3d2e71c7ba239bc344f"
 dependencies = [
  "anyhow",
  "reqwest 0.12.28",
@@ -3249,9 +3253,12 @@ dependencies = [
 
 [[package]]
 name = "memme-llm"
-version = "0.1.0"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "464f844b85b7ea0e4c496037189e7c3f786d879a216babd3fb48a3662b7d2088"
 dependencies = [
  "anyhow",
+ "once_cell",
  "regex-lite",
  "reqwest 0.12.28",
  "serde",
