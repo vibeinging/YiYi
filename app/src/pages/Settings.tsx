@@ -681,48 +681,84 @@ export function SettingsPage() {
                     style={{ background: 'var(--color-bg-muted)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
                   >
                     <option value="mock">Mock（默认，无语义搜索）</option>
-                    <option value="openai">OpenAI</option>
+                    <option value="openai">OpenAI 兼容（支持 OpenAI / Ollama / 智谱 / 硅基流动等）</option>
                   </select>
                 </div>
-                {/* API Key (OpenAI only) */}
                 {memmeConfig?.embedding_provider === 'openai' && (
-                  <div className="flex items-center justify-between">
-                    <div className="text-[13px] font-medium">Embedding API Key</div>
-                    <input
-                      type="password"
-                      placeholder="留空则使用当前 LLM Provider 的 Key"
-                      value={memmeConfig?.embedding_api_key ?? ''}
-                      onChange={(e) => {
-                        const next = { ...memmeConfig!, embedding_api_key: e.target.value };
-                        setMemmeConfig(next);
-                      }}
-                      onBlur={async () => {
-                        if (memmeConfig) await saveMemmeConfigFull(memmeConfig);
-                      }}
-                      className="text-[13px] px-2.5 py-1.5 rounded-lg w-[200px]"
-                      style={{ background: 'var(--color-bg-muted)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
-                    />
-                  </div>
-                )}
-                {/* Embedding Model */}
-                {memmeConfig?.embedding_provider !== 'mock' && (
-                  <div className="flex items-center justify-between">
-                    <div className="text-[13px] font-medium">Embedding 模型</div>
-                    <select
-                      value={memmeConfig?.embedding_model ?? 'text-embedding-3-small'}
-                      onChange={async (e) => {
-                        const dims = e.target.value.includes('large') ? 3072 : 1536;
-                        const next = { ...memmeConfig!, embedding_model: e.target.value, embedding_dims: dims };
-                        setMemmeConfig(next);
-                        await saveMemmeConfigFull(next);
-                      }}
-                      className="text-[13px] px-2.5 py-1.5 rounded-lg"
-                      style={{ background: 'var(--color-bg-muted)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
-                    >
-                      <option value="text-embedding-3-small">text-embedding-3-small (1536d)</option>
-                      <option value="text-embedding-3-large">text-embedding-3-large (3072d)</option>
-                    </select>
-                  </div>
+                  <>
+                    {/* Base URL */}
+                    <div className="flex items-center justify-between">
+                      <div className="text-[13px] font-medium">Embedding API 地址</div>
+                      <input
+                        type="text"
+                        placeholder="留空默认 https://api.openai.com/v1"
+                        value={memmeConfig?.embedding_base_url ?? ''}
+                        onChange={(e) => {
+                          const next = { ...memmeConfig!, embedding_base_url: e.target.value };
+                          setMemmeConfig(next);
+                        }}
+                        onBlur={async () => {
+                          if (memmeConfig) await saveMemmeConfigFull(memmeConfig);
+                        }}
+                        className="text-[13px] px-2.5 py-1.5 rounded-lg w-[240px]"
+                        style={{ background: 'var(--color-bg-muted)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+                      />
+                    </div>
+                    {/* API Key */}
+                    <div className="flex items-center justify-between">
+                      <div className="text-[13px] font-medium">Embedding API Key</div>
+                      <input
+                        type="password"
+                        placeholder="留空则使用当前 LLM Provider 的 Key"
+                        value={memmeConfig?.embedding_api_key ?? ''}
+                        onChange={(e) => {
+                          const next = { ...memmeConfig!, embedding_api_key: e.target.value };
+                          setMemmeConfig(next);
+                        }}
+                        onBlur={async () => {
+                          if (memmeConfig) await saveMemmeConfigFull(memmeConfig);
+                        }}
+                        className="text-[13px] px-2.5 py-1.5 rounded-lg w-[240px]"
+                        style={{ background: 'var(--color-bg-muted)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+                      />
+                    </div>
+                    {/* Embedding Model */}
+                    <div className="flex items-center justify-between">
+                      <div className="text-[13px] font-medium">Embedding 模型</div>
+                      <input
+                        type="text"
+                        placeholder="text-embedding-3-small"
+                        value={memmeConfig?.embedding_model ?? 'text-embedding-3-small'}
+                        onChange={(e) => {
+                          const next = { ...memmeConfig!, embedding_model: e.target.value };
+                          setMemmeConfig(next);
+                        }}
+                        onBlur={async () => {
+                          if (memmeConfig) await saveMemmeConfigFull(memmeConfig);
+                        }}
+                        className="text-[13px] px-2.5 py-1.5 rounded-lg w-[240px]"
+                        style={{ background: 'var(--color-bg-muted)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+                      />
+                    </div>
+                    {/* Embedding Dimensions */}
+                    <div className="flex items-center justify-between">
+                      <div className="text-[13px] font-medium">向量维度</div>
+                      <input
+                        type="number"
+                        value={memmeConfig?.embedding_dims ?? 1536}
+                        onChange={(e) => {
+                          const dims = parseInt(e.target.value) || 1536;
+                          const next = { ...memmeConfig!, embedding_dims: dims };
+                          setMemmeConfig(next);
+                        }}
+                        onBlur={async () => {
+                          if (memmeConfig) await saveMemmeConfigFull(memmeConfig);
+                        }}
+                        className="text-[13px] px-2.5 py-1.5 rounded-lg w-[100px]"
+                        style={{ background: 'var(--color-bg-muted)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+                      />
+                    </div>
+                  </>
                 )}
                 {/* Knowledge Graph */}
                 <div className="flex items-center justify-between">

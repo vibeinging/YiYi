@@ -17,3 +17,5 @@ pub mod token_counter;
 pub mod task_registry;
 pub mod tools;
 pub mod pty_manager;
+pub mod voice;
+pub mod agents;

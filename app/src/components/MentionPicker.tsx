@@ -1,12 +1,13 @@
 /**
- * MentionPicker — unified @-mention dropdown for bots + workspace files
- * Bots appear at the top, files below.
+ * MentionPicker — unified @-mention dropdown for agents + bots + workspace files
+ * Agents appear first, then bots, then files.
  */
 
 import { useRef, useEffect } from 'react';
 import { Bot, FileText, Folder, FileCode, Image as ImageIcon } from 'lucide-react';
 import type { WorkspaceFile } from '../api/workspace';
 import type { BotInfo } from '../api/bots';
+import type { AgentSummary } from '../api/agents';
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp']);
 const CODE_EXTS = new Set([
@@ -30,18 +31,30 @@ function formatSize(bytes: number) {
 
 /** A flattened mention item used for keyboard navigation indexing */
 export type MentionItem =
+  | { type: 'agent'; agent: AgentSummary }
   | { type: 'bot'; bot: BotInfo }
   | { type: 'file'; file: WorkspaceFile };
 
+const MAX_AGENTS = 5;
 const MAX_BOTS = 5;
 const MAX_FILES = 8;
 
 /** Build the filtered + flattened list used for display and keyboard nav */
-export function buildMentionList(bots: BotInfo[], files: WorkspaceFile[], query: string): MentionItem[] {
+export function buildMentionList(bots: BotInfo[], files: WorkspaceFile[], query: string, agents?: AgentSummary[]): MentionItem[] {
   const q = query.toLowerCase();
   const items: MentionItem[] = [];
 
-  // Bots first
+  // Agents first
+  if (agents) {
+    const filteredAgents = agents
+      .filter(a => !q || a.name.toLowerCase().includes(q) || a.description.toLowerCase().includes(q))
+      .slice(0, MAX_AGENTS);
+    for (const agent of filteredAgents) {
+      items.push({ type: 'agent', agent });
+    }
+  }
+
+  // Then bots
   const filteredBots = bots
     .filter(b => b.enabled)
     .filter(b => !q || b.name.toLowerCase().includes(q) || b.platform.toLowerCase().includes(q))
@@ -68,12 +81,14 @@ interface MentionPickerProps {
   selectedIndex: number;
   onSelectBot: (bot: BotInfo) => void;
   onSelectFile: (file: WorkspaceFile) => void;
+  agents?: AgentSummary[];
+  onSelectAgent?: (agent: AgentSummary) => void;
 }
 
-export function MentionPicker({ bots, files, query, selectedIndex, onSelectBot, onSelectFile }: MentionPickerProps) {
+export function MentionPicker({ bots, files, query, selectedIndex, onSelectBot, onSelectFile, agents, onSelectAgent }: MentionPickerProps) {
   const activeRef = useRef<HTMLDivElement>(null);
 
-  const items = buildMentionList(bots, files, query);
+  const items = buildMentionList(bots, files, query, agents);
 
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: 'nearest' });
@@ -97,8 +112,11 @@ export function MentionPicker({ bots, files, query, selectedIndex, onSelectBot, 
   }
 
   // Determine section boundaries for labels
+  const hasAgents = items.some(i => i.type === 'agent');
   const hasBots = items.some(i => i.type === 'bot');
   const hasFiles = items.some(i => i.type === 'file');
+  const firstAgentIdx = items.findIndex(i => i.type === 'agent');
+  const firstBotIdx = items.findIndex(i => i.type === 'bot');
   const firstFileIdx = items.findIndex(i => i.type === 'file');
 
   return (
@@ -111,24 +129,34 @@ export function MentionPicker({ bots, files, query, selectedIndex, onSelectBot, 
         maxHeight: '360px',
       }}
     >
-      {hasBots && (
-        <div className="px-3 pt-2 pb-1">
-          <span className="text-[11px] font-medium uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>
-            Bots
-          </span>
-        </div>
-      )}
-
       {items.map((item, i) => {
         const isActive = i === selectedIndex;
 
-        // Insert file section label before first file
+        // Section labels
+        const showAgentLabel = hasAgents && i === firstAgentIdx;
+        const showBotLabel = hasBots && i === firstBotIdx;
         const showFileLabel = hasFiles && i === firstFileIdx;
 
+        const itemKey = item.type === 'agent' ? `agent-${item.agent.name}` : item.type === 'bot' ? `bot-${item.bot.id}` : `file-${item.file.path}`;
+
         return (
-          <div key={item.type === 'bot' ? `bot-${item.bot.id}` : `file-${item.file.path}`}>
+          <div key={itemKey}>
+            {showAgentLabel && (
+              <div className="px-3 pt-2 pb-1">
+                <span className="text-[11px] font-medium uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>
+                  Agents
+                </span>
+              </div>
+            )}
+            {showBotLabel && (
+              <div className="px-3 pt-2 pb-1" style={hasAgents ? { borderTop: '1px solid var(--color-border)' } : undefined}>
+                <span className="text-[11px] font-medium uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>
+                  Bots
+                </span>
+              </div>
+            )}
             {showFileLabel && (
-              <div className="px-3 pt-2 pb-1" style={hasBots ? { borderTop: '1px solid var(--color-border)' } : undefined}>
+              <div className="px-3 pt-2 pb-1" style={(hasAgents || hasBots) ? { borderTop: '1px solid var(--color-border)' } : undefined}>
                 <span className="text-[11px] font-medium uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>
                   Files
                 </span>
@@ -137,7 +165,8 @@ export function MentionPicker({ bots, files, query, selectedIndex, onSelectBot, 
             <div
               ref={isActive ? activeRef : undefined}
               onClick={() => {
-                if (item.type === 'bot') onSelectBot(item.bot);
+                if (item.type === 'agent') onSelectAgent?.(item.agent);
+                else if (item.type === 'bot') onSelectBot(item.bot);
                 else onSelectFile(item.file);
               }}
               className="flex items-center gap-2.5 px-3 py-2 mx-1 rounded-lg cursor-pointer transition-colors"
@@ -151,7 +180,25 @@ export function MentionPicker({ bots, files, query, selectedIndex, onSelectBot, 
                 e.currentTarget.style.background = isActive ? 'var(--color-primary-subtle)' : 'transparent';
               }}
             >
-              {item.type === 'bot' ? (
+              {item.type === 'agent' ? (
+                <>
+                  <span
+                    className="text-[15px] shrink-0 w-5 h-5 flex items-center justify-center rounded-md"
+                    style={{ background: item.agent.color ? `${item.agent.color}22` : 'var(--color-bg-subtle)' }}
+                  >
+                    {item.agent.emoji}
+                  </span>
+                  <span
+                    className="flex-1 text-[13px] truncate"
+                    style={{ color: isActive ? 'var(--color-text)' : 'var(--color-text-secondary)' }}
+                  >
+                    {item.agent.name}
+                  </span>
+                  <span className="text-[11px] shrink-0" style={{ color: 'var(--color-text-muted)' }}>
+                    {item.agent.description.slice(0, 30)}{item.agent.description.length > 30 ? '...' : ''}
+                  </span>
+                </>
+              ) : item.type === 'bot' ? (
                 <>
                   <Bot
                     size={15}

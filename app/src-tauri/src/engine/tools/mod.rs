@@ -11,6 +11,7 @@ pub(crate) mod claude_code;
 mod task_tools;
 mod canvas_tools;
 mod spawn_tools;
+mod computer_tools;
 pub(crate) mod shell_security;
 pub(crate) mod permission_gate;
 
@@ -77,6 +78,19 @@ tokio::task_local! {
 // Per-task working directory override. When set, tools use this instead of the global workspace.
 tokio::task_local! {
     pub static TASK_WORKING_DIR: std::path::PathBuf;
+}
+
+// Per-agent tool filter for runtime enforcement. Prevents prompt-injection bypass.
+tokio::task_local! {
+    static AGENT_TOOL_FILTER: super::react_agent::ToolFilter;
+}
+
+/// Scope a future with a tool filter for runtime enforcement.
+pub async fn with_tool_filter<F, R>(filter: super::react_agent::ToolFilter, fut: F) -> R
+where
+    F: std::future::Future<Output = R>,
+{
+    AGENT_TOOL_FILTER.scope(filter, fut).await
 }
 
 /// Authorized folders loaded at startup, updated at runtime.
@@ -852,6 +866,7 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
     tools.extend(task_tools::definitions());
     tools.extend(canvas_tools::definitions());
     tools.extend(spawn_tools::definitions());
+    tools.extend(computer_tools::definitions());
     tools
 }
 
@@ -863,6 +878,20 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
             content: "[已取消]".to_string(),
             images: vec![],
         };
+    }
+
+    // Runtime tool filter enforcement — prevents prompt-injection bypass
+    if let Ok(filter) = AGENT_TOOL_FILTER.try_with(|f| f.clone()) {
+        if !filter.is_allowed(&call.function.name) {
+            return ToolResult {
+                tool_call_id: call.id.clone(),
+                content: format!(
+                    "Error: Tool '{}' is not available to this agent.",
+                    call.function.name
+                ),
+                images: vec![],
+            };
+        }
     }
 
     let args: serde_json::Value = match serde_json::from_str(&call.function.arguments) {
@@ -1034,6 +1063,14 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         "pty_send_input" => system_tools::pty_send_input_tool(&args).await,
         "pty_read_output" => system_tools::pty_read_output_tool(&args).await,
         "pty_close_session" => system_tools::pty_close_session_tool(&args).await,
+        "computer_control" => {
+            let (content, images) = computer_tools::computer_control_tool(&args).await;
+            return ToolResult {
+                tool_call_id: call.id.clone(),
+                content,
+                images,
+            };
+        }
         _ => {
             // Try MCP runtime for unknown tools
             if let Some(runtime) = MCP_RUNTIME.get() {

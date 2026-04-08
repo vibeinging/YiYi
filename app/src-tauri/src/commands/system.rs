@@ -732,7 +732,7 @@ pub async fn trigger_meditation(
         std::sync::atomic::Ordering::SeqCst,
         std::sync::atomic::Ordering::Relaxed,
     ).is_err() {
-        return Err("A meditation session is already running".into());
+        return Err("冥想正在进行中 / A meditation session is already running".into());
     }
 
     let config = resolve_llm_config(&state).await.map_err(|e| {

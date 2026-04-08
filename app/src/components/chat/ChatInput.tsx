@@ -2,7 +2,7 @@
  * ChatInput — Message input area with slash commands, @mentions, task picker, attachments.
  */
 
-import { useState, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
+import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Send, X, Paperclip, FileText, Square, Loader2, Sparkles, FolderOpen,
@@ -12,7 +12,9 @@ import { QuickActionsOverlay } from './QuickActionsOverlay';
 import { MentionPicker, buildMentionList } from '../MentionPicker';
 import { MentionInput, type MentionInputHandle, type MentionTag } from '../MentionInput';
 import { SlashCommandPicker, filterCommands, SLASH_COMMANDS, type SlashCommand } from '../SlashCommandPicker';
+import { VoiceButton } from '../voice/VoiceButton';
 import { listAllTasksBrief } from '../../api/tasks';
+import { listAgents, type AgentSummary } from '../../api/agents';
 import type { Attachment } from '../../api/agent';
 import type { WorkspaceFile } from '../../api/workspace';
 
@@ -98,6 +100,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const [taskPickerIndex, setTaskPickerIndex] = useState(0);
   const [taskSuggestions, setTaskSuggestions] = useState<TaskSuggestion[]>([]);
   const skipTaskPickerCloseRef = useRef(false);
+
+  // Agents for @mention
+  const [agents, setAgents] = useState<AgentSummary[]>([]);
+  useEffect(() => {
+    listAgents().then(setAgents).catch(() => setAgents([]));
+  }, []);
 
   useImperativeHandle(ref, () => ({
     focus: () => inputRef.current?.focus(),
@@ -281,15 +289,21 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       if (e.key === 'Escape') { e.preventDefault(); setShowTaskPicker(false); return; }
     }
     if (showFilePicker) {
-      const items = buildMentionList([], workspaceFiles, filePickerQuery);
+      const items = buildMentionList([], workspaceFiles, filePickerQuery, agents);
       const maxIdx = items.length - 1;
       if (e.key === 'ArrowDown') { e.preventDefault(); setFilePickerIndex(prev => Math.min(prev + 1, maxIdx)); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); setFilePickerIndex(prev => Math.max(prev - 1, 0)); return; }
       if (e.key === 'Enter' || e.key === 'Tab') {
         e.preventDefault();
         const selected = items[filePickerIndex];
-        if (selected && selected.type === 'file') {
-          onFileSelect(selected.file);
+        if (selected) {
+          if (selected.type === 'agent') {
+            const tag: MentionTag = { type: 'agent', id: selected.agent.name, name: selected.agent.name };
+            inputRef.current?.insertMention(tag);
+            setShowFilePicker(false);
+          } else if (selected.type === 'file') {
+            onFileSelect(selected.file);
+          }
         }
         return;
       }
@@ -373,6 +387,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               selectedIndex={filePickerIndex}
               onSelectBot={() => {}}
               onSelectFile={onFileSelect}
+              agents={agents}
+              onSelectAgent={(agent) => {
+                const tag: MentionTag = { type: 'agent', id: agent.name, name: agent.name };
+                inputRef.current?.insertMention(tag);
+                setShowFilePicker(false);
+              }}
             />
           )}
 
@@ -451,6 +471,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               title={t('chat.quick.title', '快速操作')}>
               <Sparkles size={16} />
             </button>
+
+            {/* VoiceButton hidden — requires OpenAI Realtime API key, will enable in future */}
 
             <MentionInput
               ref={inputRef}

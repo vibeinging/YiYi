@@ -35,6 +35,7 @@ import { ChatWelcome } from '../components/chat/ChatWelcome';
 import { ChatMessages, type ChatMessagesHandle } from '../components/chat/ChatMessages';
 import { ChatInput, type ChatInputHandle } from '../components/chat/ChatInput';
 import { BuddySprite } from '../components/buddy';
+import { VoiceOverlay } from '../components/voice/VoiceOverlay';
 import { useBuddyStore } from '../stores/buddyStore';
 
 import logoImg from '../assets/yiyi-logo.png';
@@ -258,6 +259,13 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
         }),
       );
       userMessage = fileContents.join('\n\n') + '\n\n' + userMessage;
+    }
+
+    // Bind @mentioned agents — prepend agent context for backend routing
+    const agentMentions = mentions.filter(m => m.type === 'agent');
+    if (agentMentions.length > 0) {
+      const agentNames = agentMentions.map(m => m.name).join(', ');
+      userMessage = `[agent: ${agentNames}]\n${userMessage}`;
     }
 
     // Bind @mentioned bots
@@ -500,6 +508,9 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
         onFileSelect={() => {}}
         onFetchWorkspaceFiles={fetchWorkspaceFiles}
       />
+
+      {/* Voice Overlay */}
+      <VoiceOverlay />
 
       {/* Buddy Companion */}
       <BuddySprite />

@@ -748,6 +748,9 @@ const resources = {
           noTasks: '暂无任务',
           taskNotFound: '未找到任务',
           taskUsage: '用法: /task <任务名称>',
+          exploreDesc: '用探索 Agent 快速搜索',
+          planDesc: '用规划 Agent 制定计划',
+          agentsDesc: '查看可用 Agent 列表',
         },
         bots: {
           bound: '已绑定机器人',
@@ -1548,6 +1551,9 @@ const resources = {
           noTasks: 'No tasks found',
           taskNotFound: 'Task not found',
           taskUsage: 'Usage: /task <task name>',
+          exploreDesc: 'Quick search with Explore Agent',
+          planDesc: 'Create a plan with Plan Agent',
+          agentsDesc: 'View available Agents',
         },
       },
       // Setup Wizard
