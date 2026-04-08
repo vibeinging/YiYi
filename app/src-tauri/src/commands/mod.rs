@@ -15,3 +15,6 @@ pub mod tasks;
 pub mod pty;
 pub mod cli;
 pub mod buddy;
+pub mod voice;
+pub mod permissions;
+pub mod agents;

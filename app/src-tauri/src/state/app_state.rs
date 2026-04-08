@@ -54,6 +54,10 @@ pub struct AppState {
     pub meditation_running: Arc<AtomicBool>,
     /// MemMe vector memory store.
     pub memme_store: Arc<memme_core::MemoryStore>,
+    /// Voice session manager.
+    pub voice_manager: Arc<tokio::sync::RwLock<crate::engine::voice::VoiceSessionManager>>,
+    /// Agent definition registry.
+    pub agent_registry: Arc<tokio::sync::RwLock<crate::engine::agents::AgentRegistry>>,
 }
 
 impl AppState {
@@ -79,6 +83,8 @@ impl AppState {
             pty_manager: self.pty_manager.clone(),
             meditation_running: self.meditation_running.clone(),
             memme_store: self.memme_store.clone(),
+            voice_manager: self.voice_manager.clone(),
+            agent_registry: self.agent_registry.clone(),
         }
     }
 
@@ -270,6 +276,9 @@ impl AppState {
 
         let providers = Arc::new(RwLock::new(providers));
 
+        // Load agent definitions before moving working_dir into Self
+        let agent_registry = crate::engine::agents::AgentRegistry::load(&working_dir, None);
+
         Self {
             working_dir,
             user_workspace: std::sync::RwLock::new(user_workspace),
@@ -286,6 +295,10 @@ impl AppState {
             pty_manager: Arc::new(crate::engine::pty_manager::PtyManager::new()),
             meditation_running: Arc::new(AtomicBool::new(false)),
             memme_store,
+            voice_manager: Arc::new(tokio::sync::RwLock::new(
+                crate::engine::voice::VoiceSessionManager::new(),
+            )),
+            agent_registry: Arc::new(tokio::sync::RwLock::new(agent_registry)),
         }
     }
 }

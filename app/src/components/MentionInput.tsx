@@ -8,7 +8,7 @@
 import { useRef, useImperativeHandle, forwardRef, useCallback, useEffect } from 'react';
 
 export interface MentionTag {
-  type: 'bot' | 'file';
+  type: 'bot' | 'file' | 'agent';
   id: string;
   name: string;
 }
@@ -45,8 +45,20 @@ function createMentionSpan(tag: MentionTag): HTMLSpanElement {
   span.setAttribute('data-name', tag.name);
   span.textContent = `@${tag.name}`;
 
-  // Bot: purple / File: muted
-  if (tag.type === 'bot') {
+  // Agent: amber / Bot: purple / File: muted
+  if (tag.type === 'agent') {
+    span.style.cssText = `
+      background: rgba(245,158,11,0.15);
+      color: rgb(217,119,6);
+      padding: 1px 6px;
+      border-radius: 6px;
+      font-weight: 500;
+      font-size: 13px;
+      margin: 0 2px;
+      user-select: all;
+      white-space: nowrap;
+    `;
+  } else if (tag.type === 'bot') {
     span.style.cssText = `
       background: rgba(99,102,241,0.15);
       color: rgb(99,102,241);
@@ -109,7 +121,7 @@ function extractMentions(el: HTMLDivElement): MentionTag[] {
   const result: MentionTag[] = [];
   spans.forEach((span) => {
     result.push({
-      type: (span.getAttribute('data-type') as 'bot' | 'file') || 'file',
+      type: (span.getAttribute('data-type') as 'bot' | 'file' | 'agent') || 'file',
       id: span.getAttribute('data-id') || '',
       name: span.getAttribute('data-name') || '',
     });

@@ -73,6 +73,7 @@ function ContextMenu({ x, y, task, onClose }: { x: number; y: number; task: Task
         return (
           <button
             key={i}
+            onMouseDown={(e) => e.stopPropagation()}
             onClick={item.action}
             className="w-full flex items-center gap-2.5 px-3.5 py-[7px] text-[12.5px] transition-colors text-left"
             style={{ color: item.danger ? 'var(--color-error)' : 'var(--color-text)' }}
@@ -128,6 +129,7 @@ function CronJobContextMenu({ x, y, job, onClose }: {
         return (
           <button
             key={i}
+            onMouseDown={(e) => e.stopPropagation()}
             onClick={item.action}
             className="w-full flex items-center gap-2.5 px-3.5 py-[7px] text-[12.5px] transition-colors text-left"
             style={{ color: item.danger ? 'var(--color-error)' : 'var(--color-text)' }}
@@ -166,9 +168,21 @@ function SessionContextMenu({ x, y, session, onClose, onStartRename }: {
     onStartRename();
   };
 
+  const handleDelete = async () => {
+    console.log('[SessionContextMenu] handleDelete called, session.id =', session.id);
+    const id = session.id;
+    onClose();
+    try {
+      await deleteSession(id);
+      console.log('[SessionContextMenu] deleteSession succeeded');
+    } catch (err) {
+      console.error('[SessionContextMenu] deleteSession failed:', err);
+    }
+  };
+
   const items = [
     { icon: Pencil, label: '重命名', danger: false, action: handleRename },
-    { icon: Trash2, label: '删除', danger: true, action: () => { deleteSession(session.id); onClose(); } },
+    { icon: Trash2, label: '删除', danger: true, action: handleDelete },
   ];
 
   return (
@@ -187,7 +201,8 @@ function SessionContextMenu({ x, y, session, onClose, onStartRename }: {
         return (
           <button
             key={i}
-            onClick={item.action}
+            onMouseDown={(e) => { console.log('[SessionMenu] mousedown on', item.label); e.stopPropagation(); }}
+            onClick={() => { console.log('[SessionMenu] onClick on', item.label); item.action(); }}
             className="w-full flex items-center gap-2.5 px-3.5 py-[7px] text-[12.5px] transition-colors text-left"
             style={{ color: item.danger ? 'var(--color-error)' : 'var(--color-text)' }}
             onMouseEnter={(e) => { e.currentTarget.style.background = item.danger ? 'rgba(255,69,58,0.08)' : 'var(--color-bg-muted)'; }}

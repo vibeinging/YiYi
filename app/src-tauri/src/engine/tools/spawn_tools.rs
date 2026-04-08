@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 // Depth counter for spawn_agents to prevent infinite recursion.
 tokio::task_local! {
@@ -19,6 +19,10 @@ struct AgentSpec {
     /// If true, this agent is read-only (no write tools). Defaults to false.
     #[serde(default)]
     read_only: bool,
+    /// Named agent type from the registry (e.g. "explore", "planner", "desktop_operator").
+    /// When set, overrides read_only and skills with the agent definition's config.
+    #[serde(default)]
+    agent_type: Option<String>,
 }
 
 /// Spawn agents tool definitions.
@@ -42,6 +46,10 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
                                     "type": "array",
                                     "items": { "type": "string" },
                                     "description": "Optional array of skill names to load for this agent"
+                                },
+                                "agent_type": {
+                                    "type": "string",
+                                    "description": "Named agent type: 'explore' (fast read-only search), 'planner' (structured planning), 'desktop_operator' (GUI automation), 'memory_curator' (memory management), 'bot_coordinator' (bot operations). Overrides read_only and skills."
                                 }
                             },
                             "required": ["name", "task"]
@@ -204,21 +212,46 @@ fn spawn_agents_background(
 
             async move {
                 let agent_name = spec.name.clone();
-                let tool_filter = if spec.read_only {
+
+                // Resolve agent definition from registry if agent_type is specified
+                let agent_def: Option<crate::engine::agents::AgentDefinition> = if let Some(ref at) = spec.agent_type {
+                    // Try to load from global AppState via APP_HANDLE
+                    if let Some(handle) = super::APP_HANDLE.get() {
+                        let state: tauri::State<'_, crate::state::AppState> = handle.state::<crate::state::AppState>();
+                        let registry = state.agent_registry.read().await;
+                        let found: Option<crate::engine::agents::AgentDefinition> = registry.get(at).cloned();
+                        found
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                let tool_filter = if let Some(ref def) = agent_def {
+                    def.tool_filter()
+                } else if spec.read_only {
                     super::react_agent::ToolFilter::read_only()
                 } else {
                     super::react_agent::ToolFilter::All
                 };
 
+                // Skills: agent definition skills take priority, then spec.skills
+                let effective_skills: Vec<String> = if let Some(ref def) = agent_def {
+                    if !def.skills.is_empty() { def.skills.clone() } else { spec.skills.clone() }
+                } else {
+                    spec.skills.clone()
+                };
+
                 // Apply tool filter to MCP extra tools
                 let mcp_extra = tool_filter.apply(&mcp_extra);
 
-                // Filter skill index if agent specifies specific skills
-                let filtered_index: Vec<crate::commands::agent::SkillIndexEntry> = if spec.skills.is_empty() {
+                // Filter skill index
+                let filtered_index: Vec<crate::commands::agent::SkillIndexEntry> = if effective_skills.is_empty() {
                     skill_idx
                 } else {
                     skill_idx.into_iter()
-                        .filter(|e| spec.skills.iter().any(|s| s == &e.name))
+                        .filter(|e| effective_skills.iter().any(|s| s == &e.name))
                         .collect()
                 };
 
@@ -229,13 +262,22 @@ fn spawn_agents_background(
                     &wd, None, &filtered_index, &always_active, None, mcp_ref, unavail_ref,
                 ).await;
 
-                let system_prompt = format!(
-                    "You are **{}**, a specialist agent.\n\
-                    Your task: {}\n\n\
-                    Complete the task thoroughly and return a clear, concise result.\n\n\
-                    {}",
-                    spec.name, spec.task, base_prompt
-                );
+                // Build system prompt: agent definition instructions take priority
+                let agent_identity = if let Some(ref def) = agent_def {
+                    format!(
+                        "{} {}\n\nYour assigned task: {}\n\n{}\n\n{}",
+                        def.emoji(), def.name, spec.task, def.instructions, base_prompt
+                    )
+                } else {
+                    format!(
+                        "You are **{}**, a specialist agent.\n\
+                        Your task: {}\n\n\
+                        Complete the task thoroughly and return a clear, concise result.\n\n\
+                        {}",
+                        spec.name, spec.task, base_prompt
+                    )
+                };
+                let system_prompt = agent_identity;
 
                 let result = if let Some(ref handle) = handle_for_agent {
                     let h = handle.clone();
@@ -310,17 +352,21 @@ fn spawn_agents_background(
                         }
                     };
                     DELEGATION_DEPTH.scope(depth, Box::pin(
-                        super::react_agent::run_react_with_options_stream(
-                            &config, &system_prompt, &spec.task, &mcp_extra,
-                            &[], None, Some(&wd), on_event,
-                            cancelled_for_agent.as_ref().map(|c| c.as_ref()), None, None,
+                        super::with_tool_filter(tool_filter.clone(),
+                            super::react_agent::run_react_with_options_stream(
+                                &config, &system_prompt, &spec.task, &mcp_extra,
+                                &[], None, Some(&wd), on_event,
+                                cancelled_for_agent.as_ref().map(|c| c.as_ref()), None, None,
+                            )
                         )
                     )).await
                 } else {
                     DELEGATION_DEPTH.scope(depth, Box::pin(
-                        super::react_agent::run_react_with_options(
-                            &config, &system_prompt, &spec.task, &mcp_extra,
-                            &[], None, Some(&wd),
+                        super::with_tool_filter(tool_filter.clone(),
+                            super::react_agent::run_react_with_options(
+                                &config, &system_prompt, &spec.task, &mcp_extra,
+                                &[], None, Some(&wd),
+                            )
                         )
                     )).await
                 };

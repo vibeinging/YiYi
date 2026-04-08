@@ -207,10 +207,6 @@ impl super::Database {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM messages WHERE session_id = ?1", params![id])
             .map_err(|e| format!("Failed to delete messages: {}", e))?;
-        // Clean up bot bindings for this session (also handled by ON DELETE CASCADE
-        // when foreign_keys is enabled, but we do it explicitly for safety)
-        conn.execute("DELETE FROM session_bots WHERE session_id = ?1", params![id])
-            .map_err(|e| format!("Failed to delete session bot bindings: {}", e))?;
         conn.execute("DELETE FROM sessions WHERE id = ?1", params![id])
             .map_err(|e| format!("Failed to delete session: {}", e))?;
         Ok(())

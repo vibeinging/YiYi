@@ -1024,6 +1024,7 @@ pub struct BotConversationInfo {
     pub session_id: String,
     pub linked_session_id: Option<String>,
     pub trigger_mode: String,
+    pub agent_config_json: Option<String>,
     pub last_message_at: Option<i64>,
     pub message_count: i64,
     pub created_at: i64,
@@ -1049,6 +1050,7 @@ pub async fn bot_conversations_list(
         session_id: c.session_id,
         linked_session_id: c.linked_session_id,
         trigger_mode: c.trigger_mode,
+        agent_config_json: c.agent_config_json,
         last_message_at: c.last_message_at,
         message_count: c.message_count,
         created_at: c.created_at,
@@ -1074,6 +1076,20 @@ pub async fn bot_conversation_link(
     linked_session_id: Option<String>,
 ) -> Result<(), String> {
     state.db.link_conversation(&conversation_id, linked_session_id.as_deref())
+}
+
+#[tauri::command]
+pub async fn bot_conversation_set_agent(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    agent_config: Option<String>,
+) -> Result<(), String> {
+    // Validate JSON if provided
+    if let Some(ref json) = agent_config {
+        serde_json::from_str::<crate::engine::db::AgentRouteConfig>(json)
+            .map_err(|e| format!("Invalid agent config JSON: {}", e))?;
+    }
+    state.db.update_conversation_agent(&conversation_id, agent_config.as_deref())
 }
 
 #[tauri::command]

@@ -19,7 +19,7 @@ mod quick_actions;
 pub use sessions::ChatSession;
 pub use messages::ChatMessage;
 pub use providers::{ProviderSettingRow, CustomProviderRow};
-pub use bots::{BotRow, BotConversationRow};
+pub use bots::{BotRow, BotConversationRow, AgentRouteConfig};
 pub use cronjobs::{ExecutionMode, CronJobRow, CronJobExecutionRow, HeartbeatRow};
 // Memories now live in MemMe (DuckDB). SQLite memories table kept for schema compat only.
 pub use workspace::{AuthorizedFolderRow, SensitivePathRow};
@@ -571,6 +571,17 @@ impl Database {
                  ALTER TABLE meditation_sessions ADD COLUMN growth_synthesis TEXT;"
             ).map_err(|e| format!("Migration error (meditation V2): {}", e))?;
             log::info!("Migrated meditation_sessions table: added depth, phases_completed, tomorrow_intentions, growth_synthesis columns");
+        }
+
+        // Bot conversations: add agent_config_json for per-conversation agent routing
+        let has_agent_config: bool = conn
+            .prepare("SELECT agent_config_json FROM bot_conversations LIMIT 0")
+            .is_ok();
+        if !has_agent_config {
+            conn.execute_batch(
+                "ALTER TABLE bot_conversations ADD COLUMN agent_config_json TEXT DEFAULT NULL;"
+            ).map_err(|e| format!("Migration error (bot_conversations agent_config_json): {}", e))?;
+            log::info!("Migrated bot_conversations table: added agent_config_json column");
         }
 
         // Quick actions table -- user-defined quick action shortcuts

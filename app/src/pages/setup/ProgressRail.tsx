@@ -9,6 +9,7 @@ import {
   Check,
   FolderOpen,
   Brain,
+  Database,
 } from 'lucide-react';
 import yiyiLogo from '../../assets/yiyi-logo.png';
 import type { Lang, Step } from './setupWizardData';
@@ -20,6 +21,7 @@ const STEP_META = [
   { id: 'model' as const, icon: Cpu, labelKey: { zh: '模型', en: 'Model' } },
   { id: 'workspace' as const, icon: FolderOpen, labelKey: { zh: '工作空间', en: 'Workspace' } },
   { id: 'persona' as const, icon: User, labelKey: { zh: '人格', en: 'Persona' } },
+  { id: 'memory' as const, icon: Database, labelKey: { zh: '记忆', en: 'Memory' } },
   { id: 'meditation' as const, icon: Brain, labelKey: { zh: '冥想', en: 'Meditation' } },
 ];
 

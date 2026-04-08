@@ -386,6 +386,7 @@ pub fn run() {
             commands::bots::bot_conversation_delete,
             commands::bots::bots_test_connection,
             commands::bots::bots_get_status,
+            commands::bots::bot_conversation_set_agent,
             // Agent & Chat
             commands::agent::chat::chat,
             commands::agent::chat::chat_stream_start,
@@ -491,6 +492,20 @@ pub fn run() {
             commands::buddy::save_buddy_config,
             commands::buddy::hatch_buddy,
             commands::buddy::buddy_observe,
+            // Voice Control
+            commands::voice::start_voice_session,
+            commands::voice::stop_voice_session,
+            commands::voice::get_voice_status,
+            // Permissions
+            commands::permissions::check_permissions,
+            commands::permissions::request_accessibility,
+            commands::permissions::request_screen_recording,
+            commands::permissions::request_microphone,
+            // Agents
+            commands::agents::list_agents,
+            commands::agents::get_agent,
+            commands::agents::save_agent,
+            commands::agents::delete_agent,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

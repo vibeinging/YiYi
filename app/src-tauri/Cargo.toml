@@ -59,6 +59,10 @@ memme-core = { version = "0.1.1", default-features = false, features = ["bundled
 memme-embeddings = { version = "0.1.1", default-features = false, features = ["openai"] }
 memme-llm = { version = "0.1.1", default-features = false, features = ["openai"] }
 strip-ansi-escapes = "0.2"
+cpal = "0.15"
+rubato = "0.16"
+arboard = "3"
+serde_yaml = "0.9"
 tauri-plugin-updater = "2.10.0"
 tauri-plugin-process = "2.3.1"
 
@@ -66,6 +70,7 @@ tauri-plugin-process = "2.3.1"
 cocoa = "0.26"
 window-vibrancy = "0.5"
 mac-notification-sys = "0.6"
+core-graphics = "0.24"
 
 [profile.release]
 strip = true

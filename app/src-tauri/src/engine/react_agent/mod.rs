@@ -114,6 +114,15 @@ impl ToolFilter {
         ])
     }
 
+    /// Check if a specific tool is allowed by this filter.
+    pub fn is_allowed(&self, tool_name: &str) -> bool {
+        match self {
+            ToolFilter::All => true,
+            ToolFilter::Allow(names) => names.iter().any(|n| n == tool_name),
+            ToolFilter::Deny(names) => !names.iter().any(|n| n == tool_name),
+        }
+    }
+
     /// Apply filter to a tool list, returning only the allowed tools.
     pub fn apply(&self, tools: &[crate::engine::tools::ToolDefinition]) -> Vec<crate::engine::tools::ToolDefinition> {
         match self {

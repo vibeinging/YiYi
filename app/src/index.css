@@ -442,6 +442,227 @@ select {
   animation: voicePulse 1.2s ease-in-out infinite;
 }
 
+/* ─── Voice overlay & button animations ─── */
+
+@keyframes voiceOverlayIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(16px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0) scale(1);
+  }
+}
+
+@keyframes voiceOverlayOut {
+  from {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-50%) translateY(12px) scale(0.97);
+  }
+}
+
+.voice-overlay-enter {
+  animation: voiceOverlayIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.voice-overlay-exit {
+  animation: voiceOverlayOut 0.25s cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+/* Concentric ring pulse for active listening */
+@keyframes voiceRingPulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.5;
+  }
+  100% {
+    transform: scale(1.8);
+    opacity: 0;
+  }
+}
+
+.voice-ring-pulse::before,
+.voice-ring-pulse::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: inherit;
+  border: 2px solid var(--color-error, #FF453A);
+  animation: voiceRingPulse 1.5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  pointer-events: none;
+}
+
+.voice-ring-pulse::after {
+  animation-delay: 0.5s;
+}
+
+/* Connecting dot pulse */
+@keyframes voiceConnecting {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1); }
+}
+
+.voice-connecting-dots span {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-primary, #6366F1);
+  animation: voiceConnecting 1.4s ease-in-out infinite;
+}
+
+.voice-connecting-dots span:nth-child(2) { animation-delay: 0.2s; }
+.voice-connecting-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+/* Audio waveform bars for listening state */
+@keyframes voiceWaveBar {
+  0%, 100% { transform: scaleY(0.3); }
+  50% { transform: scaleY(1); }
+}
+
+.voice-waveform {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 24px;
+}
+
+.voice-waveform span {
+  width: 3px;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--color-error, #FF453A);
+  transform-origin: center;
+  animation: voiceWaveBar 1s ease-in-out infinite;
+}
+
+.voice-waveform span:nth-child(1) { animation-delay: 0s; animation-duration: 0.8s; }
+.voice-waveform span:nth-child(2) { animation-delay: 0.15s; animation-duration: 1.1s; }
+.voice-waveform span:nth-child(3) { animation-delay: 0.05s; animation-duration: 0.9s; }
+.voice-waveform span:nth-child(4) { animation-delay: 0.2s; animation-duration: 1.0s; }
+.voice-waveform span:nth-child(5) { animation-delay: 0.1s; animation-duration: 0.85s; }
+
+/* Speaking wave (green) */
+.voice-waveform.speaking span {
+  background: var(--color-success, #34C759);
+}
+
+/* Transcript bubble entrance */
+@keyframes voiceBubbleIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.voice-bubble-in {
+  animation: voiceBubbleIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Tool chip entrance */
+@keyframes voiceToolChipIn {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.voice-tool-chip-in {
+  animation: voiceToolChipIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Permission modal entrance */
+@keyframes permissionModalIn {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes permissionBackdropIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.permission-modal-enter {
+  animation: permissionModalIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.permission-backdrop-enter {
+  animation: permissionBackdropIn 0.2s ease-out forwards;
+}
+
+/* Permission item stagger */
+.permission-item {
+  opacity: 0;
+  animation: voiceBubbleIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.permission-item:nth-child(1) { animation-delay: 0.1s; }
+.permission-item:nth-child(2) { animation-delay: 0.2s; }
+.permission-item:nth-child(3) { animation-delay: 0.3s; }
+
+/* Restart hint slide down */
+@keyframes restartHintIn {
+  from {
+    opacity: 0;
+    max-height: 0;
+    margin-top: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+  to {
+    opacity: 1;
+    max-height: 80px;
+    margin-top: 16px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+}
+
+.restart-hint-enter {
+  animation: restartHintIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  overflow: hidden;
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .voice-overlay-enter,
+  .voice-overlay-exit,
+  .voice-ring-pulse::before,
+  .voice-ring-pulse::after,
+  .voice-connecting-dots span,
+  .voice-waveform span,
+  .voice-bubble-in,
+  .voice-tool-chip-in,
+  .permission-modal-enter,
+  .permission-backdrop-enter,
+  .permission-item,
+  .restart-hint-enter {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+    max-height: none !important;
+  }
+}
+
 /* ─── MentionInput placeholder ─── */
 .mention-input:empty::before {
   content: attr(data-placeholder);

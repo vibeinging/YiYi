@@ -103,6 +103,15 @@ export async function listBotSessions(): Promise<BotSession[]> {
 
 export type TriggerMode = 'mention' | 'all' | 'keyword' | 'muted';
 
+export interface AgentRouteConfig {
+  agent_id?: string;
+  persona?: string;
+  allowed_tools?: string[];
+  blocked_tools?: string[];
+  working_dir?: string;
+  max_iterations?: number;
+}
+
 export interface BotConversationInfo {
   id: string;
   bot_id: string;
@@ -113,6 +122,7 @@ export interface BotConversationInfo {
   session_id: string;
   linked_session_id: string | null;
   trigger_mode: TriggerMode;
+  agent_config_json: string | null;
   last_message_at: number | null;
   message_count: number;
   created_at: number;
@@ -134,6 +144,14 @@ export async function linkBotConversation(
   linkedSessionId: string | null,
 ): Promise<void> {
   return await invoke('bot_conversation_link', { conversationId, linkedSessionId });
+}
+
+export async function setConversationAgent(
+  conversationId: string,
+  agentConfig: AgentRouteConfig | null,
+): Promise<void> {
+  const agentConfigStr = agentConfig ? JSON.stringify(agentConfig) : null;
+  return await invoke('bot_conversation_set_agent', { conversationId, agentConfig: agentConfigStr });
 }
 
 export async function deleteBotConversation(conversationId: string): Promise<void> {

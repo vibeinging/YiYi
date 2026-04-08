@@ -28,7 +28,7 @@ import {
   removeAuthorizedFolder,
   type AuthorizedFolder,
 } from '../api/workspace';
-import { completeSetup } from '../api/system';
+import { completeSetup, saveMemmeConfig, type MemmeConfig } from '../api/system';
 import {
   QUICK_PROVIDERS,
   BUILTIN_PROVIDER_IDS,
@@ -41,6 +41,7 @@ import { StepModel } from './setup/StepModel';
 import { StepWorkspace } from './setup/StepWorkspace';
 import { StepPersona } from './setup/StepPersona';
 import { StepMeditation } from './setup/StepMeditation';
+import { StepMemory } from './setup/StepMemory';
 import { SetupWizardStyles } from './setup/SetupWizardStyles';
 import { ProgressRail } from './setup/ProgressRail';
 
@@ -84,6 +85,18 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
   const [selectedRole, setSelectedRole] = useState('assistant');
   const [customSoul, setCustomSoul] = useState('');
   const [finishing, setFinishing] = useState(false);
+
+  // Memory (Embedding) step — full MemmeConfig with all fields
+  const [memoryConfig, setMemoryConfig] = useState<MemmeConfig>({
+    embedding_provider: 'openai',
+    embedding_base_url: '',
+    embedding_api_key: '',
+    embedding_model: 'text-embedding-3-small',
+    embedding_dims: 1536,
+    enable_graph: true,
+    enable_forgetting_curve: true,
+    extraction_depth: 'standard',
+  });
 
   // Meditation step
   const [meditationEnabled, setMeditationEnabled] = useState(true);
@@ -217,6 +230,9 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
 
+      // Save memory (embedding) config
+      await saveMemmeConfig(memoryConfig);
+
       // Save meditation config
       await invoke('save_meditation_config', {
         enabled: meditationEnabled,
@@ -253,8 +269,9 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     switch (currentStep) {
       case 'language': return true;
       case 'model': return !!selectedProvider && !!apiKey.trim() && (useCustomModel ? !!customModelId.trim() : !!selectedModel);
-      case 'workspace': return true; // workspace has defaults, always can proceed
+      case 'workspace': return true;
       case 'persona': return selectedRole !== 'custom' || customSoul.trim().length > 0;
+      case 'memory': return true;
       case 'meditation': return true;
     }
   };
@@ -263,7 +280,8 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     if (currentStep === 'language') transitionTo('model');
     else if (currentStep === 'model') handleModelSave();
     else if (currentStep === 'workspace') transitionTo('persona');
-    else if (currentStep === 'persona') transitionTo('meditation');
+    else if (currentStep === 'persona') transitionTo('memory');
+    else if (currentStep === 'memory') transitionTo('meditation');
     else if (currentStep === 'meditation') handleFinish();
   };
 
@@ -271,7 +289,8 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     if (currentStep === 'model') transitionTo('language');
     else if (currentStep === 'workspace') transitionTo('model');
     else if (currentStep === 'persona') transitionTo('workspace');
-    else if (currentStep === 'meditation') transitionTo('persona');
+    else if (currentStep === 'memory') transitionTo('persona');
+    else if (currentStep === 'meditation') transitionTo('memory');
   };
 
   // Slide animation style — uses quart easing for natural deceleration
@@ -356,6 +375,15 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                 onToneStyleChange={setToneStyle}
                 onSelectedRoleChange={setSelectedRole}
                 onCustomSoulChange={setCustomSoul}
+              />
+            )}
+
+            {currentStep === 'memory' && (
+              <StepMemory
+                lang={lang}
+                config={memoryConfig}
+                onChange={setMemoryConfig}
+                llmProviderName={QUICK_PROVIDERS.find(p => p.id === selectedProvider)?.name}
               />
             )}
 

@@ -1,6 +1,18 @@
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
+/// Per-conversation agent routing configuration.
+/// Allows different bot conversations to use different agent personas and tool sets.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentRouteConfig {
+    pub agent_id: Option<String>,
+    pub persona: Option<String>,
+    pub allowed_tools: Option<Vec<String>>,
+    pub blocked_tools: Option<Vec<String>>,
+    pub working_dir: Option<String>,
+    pub max_iterations: Option<usize>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BotRow {
     pub id: String,
@@ -105,7 +117,7 @@ impl super::Database {
         let existing: Option<BotConversationRow> = conn
             .query_row(
                 "SELECT id, bot_id, external_id, platform, display_name, session_id, \
-                 linked_session_id, trigger_mode, last_message_at, message_count, created_at \
+                 linked_session_id, trigger_mode, agent_config_json, last_message_at, message_count, created_at \
                  FROM bot_conversations WHERE bot_id = ?1 AND external_id = ?2",
                 params![bot_id, external_id],
                 |row| Ok(Self::row_to_conversation(row)),
@@ -146,6 +158,7 @@ impl super::Database {
             session_id,
             linked_session_id: None,
             trigger_mode: "mention".to_string(),
+            agent_config_json: None,
             last_message_at: None,
             message_count: 0,
             created_at: now,
@@ -233,6 +246,16 @@ impl super::Database {
         Ok(())
     }
 
+    /// Update the agent routing config for a conversation.
+    pub fn update_conversation_agent(&self, id: &str, agent_config_json: Option<&str>) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE bot_conversations SET agent_config_json = ?1 WHERE id = ?2",
+            params![agent_config_json, id],
+        ).map_err(|e| format!("Failed to update agent config: {}", e))?;
+        Ok(())
+    }
+
     /// Delete a conversation record.
     pub fn delete_conversation(&self, id: &str) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
@@ -263,9 +286,10 @@ impl super::Database {
             session_id: row.get(5).unwrap_or_default(),
             linked_session_id: row.get(6).ok(),
             trigger_mode: row.get(7).unwrap_or_else(|_| "mention".to_string()),
-            last_message_at: row.get(8).ok(),
-            message_count: row.get(9).unwrap_or(0),
-            created_at: row.get(10).unwrap_or(0),
+            agent_config_json: row.get(8).ok().and_then(|v: Option<String>| v),
+            last_message_at: row.get(9).ok(),
+            message_count: row.get(10).unwrap_or(0),
+            created_at: row.get(11).unwrap_or(0),
         }
     }
 }
@@ -280,6 +304,7 @@ pub struct BotConversationRow {
     pub session_id: String,
     pub linked_session_id: Option<String>,
     pub trigger_mode: String,
+    pub agent_config_json: Option<String>,
     pub last_message_at: Option<i64>,
     pub message_count: i64,
     pub created_at: i64,

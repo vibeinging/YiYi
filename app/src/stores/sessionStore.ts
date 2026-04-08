@@ -180,6 +180,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       get()._persistActive();
     } catch (err) {
       console.error('Failed to delete session:', err);
+      // Surface error so user knows something went wrong
+      alert(`删除失败: ${err}`);
     }
   },
 

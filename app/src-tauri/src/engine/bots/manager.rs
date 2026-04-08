@@ -4,10 +4,10 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 
 use super::IncomingMessage;
-use crate::engine::db::BotRow;
+use crate::engine::db::{BotRow, AgentRouteConfig};
 use crate::engine::llm_client::{LLMMessage, MessageContent};
 use crate::engine::react_agent;
-use crate::engine::tools::mcp_tools_as_definitions;
+use crate::engine::tools::{mcp_tools_as_definitions, ToolDefinition};
 use crate::state::AppState;
 use crate::state::config::AccessPolicy;
 
@@ -610,6 +610,17 @@ async fn process_message(
         _ => {} // "all" → always respond
     }
 
+    // --- Agent routing: parse per-conversation agent config ---
+    let agent_route: Option<AgentRouteConfig> = conv.agent_config_json
+        .as_deref()
+        .and_then(|json| match serde_json::from_str(json) {
+            Ok(r) => Some(r),
+            Err(e) => {
+                log::warn!("Failed to parse agent_config_json for conv {}: {e}", conv.id);
+                None
+            }
+        });
+
     // Determine effective session: linked session takes priority, else conversation's own
     let session_id = conv.linked_session_id.as_deref()
         .unwrap_or(&conv.session_id)
@@ -678,10 +689,17 @@ async fn process_message(
         }
     }
 
-    let (lang, max_iter) = {
+    let (lang, mut max_iter) = {
         let cfg = state.config.read().await;
         (cfg.agents.language.clone(), cfg.agents.max_iterations)
     };
+
+    // Override max_iterations from agent route config
+    if let Some(ref route) = agent_route {
+        if let Some(mi) = route.max_iterations {
+            max_iter = Some(mi);
+        }
+    }
 
     // Build system prompt using global config
     let user_ws = state.user_workspace();
@@ -716,11 +734,14 @@ async fn process_message(
         msg.platform, sender_display
     ));
 
-    if let Some(bot) = bot {
-        if let Some(ref persona) = bot.persona {
-            if !persona.is_empty() {
-                system_prompt.push_str(&format!("\n\n## Bot Persona\n{}", persona));
-            }
+    // Agent route persona overrides bot persona
+    let effective_persona = agent_route.as_ref()
+        .and_then(|r| r.persona.as_deref())
+        .or_else(|| bot.and_then(|b| b.persona.as_deref()));
+
+    if let Some(persona) = effective_persona {
+        if !persona.is_empty() {
+            system_prompt.push_str(&format!("\n\n## Bot Persona\n{}", persona));
         }
     }
 
@@ -728,6 +749,30 @@ async fn process_message(
     let mcp_tools = state.mcp_runtime.get_all_tools().await;
     let empty_overrides = std::collections::HashMap::new();
     let extra_tools = mcp_tools_as_definitions(&mcp_tools, &empty_overrides);
+
+    // Apply tool filtering from agent route config using ToolFilter for both definition + runtime
+    let route_tool_filter: Option<react_agent::ToolFilter> = if let Some(ref route) = agent_route {
+        if let Some(ref allowed) = route.allowed_tools {
+            Some(react_agent::ToolFilter::Allow(allowed.clone()))
+        } else if let Some(ref blocked) = route.blocked_tools {
+            Some(react_agent::ToolFilter::Deny(blocked.clone()))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let tools_override: Option<Vec<ToolDefinition>> = route_tool_filter.as_ref().map(|filter| {
+        let mut all_tools = crate::engine::tools::builtin_tools();
+        all_tools.extend(extra_tools.clone());
+        filter.apply(&all_tools)
+    });
+
+    // Determine effective working directory
+    let effective_working_dir = agent_route.as_ref()
+        .and_then(|r| r.working_dir.as_deref())
+        .map(std::path::PathBuf::from);
 
     // Download any media attachments and enrich the message content.
     // For platform-specific URLs (telegram://file/xxx, feishu://image/xxx, etc.),
@@ -861,11 +906,20 @@ async fn process_message(
                 }
             });
 
-            let result = react_agent::run_react_with_options_stream(
+            let agent_working_dir = effective_working_dir.as_deref()
+                .unwrap_or(&state.working_dir);
+
+            // Wrap with runtime tool filter for security (prevents prompt-injection bypass)
+            let agent_fut = react_agent::run_react_with_options_stream(
                 &config, &system_prompt, &enriched_message, &extra_tools,
-                &llm_history, max_iter, Some(&state.working_dir),
-                on_event, None, None, None,
-            ).await;
+                &llm_history, max_iter, Some(agent_working_dir),
+                on_event, None, None, tools_override,
+            );
+            let result = if let Some(ref filter) = route_tool_filter {
+                crate::engine::tools::with_tool_filter(filter.clone(), agent_fut).await
+            } else {
+                agent_fut.await
+            };
 
             // Graceful shutdown: drop the watch sender so send_task sees channel closed,
             // then wait up to 2 seconds for it to finish instead of aborting.

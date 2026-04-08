@@ -247,17 +247,18 @@ export const ROLE_PRESETS = [
 ];
 
 // Step metadata with icons - icons imported separately by consumers
-export const STEP_IDS = ['language', 'model', 'workspace', 'persona', 'meditation'] as const;
+export const STEP_IDS = ['language', 'model', 'workspace', 'persona', 'memory', 'meditation'] as const;
 export const STEP_LABELS: Record<Step, { zh: string; en: string }> = {
   language: { zh: '语言', en: 'Language' },
   model: { zh: '模型', en: 'Model' },
   workspace: { zh: '工作空间', en: 'Workspace' },
   persona: { zh: '人格', en: 'Persona' },
+  memory: { zh: '记忆', en: 'Memory' },
   meditation: { zh: '冥想', en: 'Meditation' },
 };
 
-export type Step = 'language' | 'model' | 'workspace' | 'persona' | 'meditation';
-export const STEPS: Step[] = ['language', 'model', 'workspace', 'persona', 'meditation'];
+export type Step = 'language' | 'model' | 'workspace' | 'persona' | 'memory' | 'meditation';
+export const STEPS: Step[] = ['language', 'model', 'workspace', 'persona', 'memory', 'meditation'];
 
 export type Lang = 'zh' | 'en';
 
