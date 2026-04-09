@@ -41,7 +41,7 @@ static MCP_RUNTIME: std::sync::OnceLock<Arc<MCPRuntime>> = std::sync::OnceLock::
 static WORKING_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
 /// Global Tauri app handle for emitting events to the frontend.
-static APP_HANDLE: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+pub(crate) static APP_HANDLE: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
 
 /// Global database reference for tools that need DB access.
 static DATABASE: std::sync::OnceLock<Arc<super::db::Database>> = std::sync::OnceLock::new();
@@ -862,7 +862,9 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
     tools.extend(cron_tools::definitions());
     tools.extend(bot_tools::definitions());
     tools.extend(skill_tools::definitions());
-    tools.extend(claude_code::definitions());
+    // claude_code tool disabled — YiYi's built-in tools now handle coding tasks directly.
+    // Kept as module for backward compatibility. Uncomment to re-enable:
+    // tools.extend(claude_code::definitions());
     tools.extend(task_tools::definitions());
     tools.extend(canvas_tools::definitions());
     tools.extend(spawn_tools::definitions());
@@ -1072,8 +1074,22 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
             };
         }
         _ => {
+            // Try plugin tools first (format: plugin__<id>__<tool_name>)
+            if call.function.name.starts_with("plugin__") {
+                if let Some(handle) = APP_HANDLE.get() {
+                    use tauri::Manager;
+                    let state: tauri::State<'_, crate::state::AppState> = handle.state();
+                    let registry = state.plugin_registry.blocking_read();
+                    match registry.execute_tool(&call.function.name, &args) {
+                        Ok(result) => result,
+                        Err(e) => format!("Plugin tool error: {e}"),
+                    }
+                } else {
+                    format!("Plugin tool unavailable: no app handle")
+                }
+            }
             // Try MCP runtime for unknown tools
-            if let Some(runtime) = MCP_RUNTIME.get() {
+            else if let Some(runtime) = MCP_RUNTIME.get() {
                 match try_mcp_tool(runtime, &call.function.name, &args).await {
                     Some(result) => result,
                     None => format!("Unknown tool: {}", call.function.name),

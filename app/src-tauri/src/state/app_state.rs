@@ -58,6 +58,8 @@ pub struct AppState {
     pub voice_manager: Arc<tokio::sync::RwLock<crate::engine::voice::VoiceSessionManager>>,
     /// Agent definition registry.
     pub agent_registry: Arc<tokio::sync::RwLock<crate::engine::agents::AgentRegistry>>,
+    /// Plugin registry.
+    pub plugin_registry: Arc<tokio::sync::RwLock<crate::engine::plugins::PluginRegistry>>,
 }
 
 impl AppState {
@@ -85,6 +87,7 @@ impl AppState {
             memme_store: self.memme_store.clone(),
             voice_manager: self.voice_manager.clone(),
             agent_registry: self.agent_registry.clone(),
+            plugin_registry: self.plugin_registry.clone(),
         }
     }
 
@@ -279,6 +282,9 @@ impl AppState {
         // Load agent definitions before moving working_dir into Self
         let agent_registry = crate::engine::agents::AgentRegistry::load(&working_dir, None);
 
+        // Load plugins from ~/.yiyi/plugins/
+        let plugin_registry = crate::engine::plugins::PluginRegistry::load(&working_dir.join("plugins"));
+
         Self {
             working_dir,
             user_workspace: std::sync::RwLock::new(user_workspace),
@@ -299,6 +305,7 @@ impl AppState {
                 crate::engine::voice::VoiceSessionManager::new(),
             )),
             agent_registry: Arc::new(tokio::sync::RwLock::new(agent_registry)),
+            plugin_registry: Arc::new(tokio::sync::RwLock::new(plugin_registry)),
         }
     }
 }

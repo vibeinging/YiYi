@@ -372,6 +372,16 @@ When setting up bots, open the developer console:
         mcp_status = mcp_status,
     ));
 
+    // Inject git context if workspace is a git repo
+    {
+        let git_workspace = user_workspace.unwrap_or(working_dir);
+        if let Some(git_ctx) = crate::engine::git_context::render_git_context(git_workspace) {
+            prompt.push_str("\n\n");
+            prompt.push_str(&git_ctx);
+            prompt.push('\n');
+        }
+    }
+
     // Load HOT-tier context from MemMe (high-importance memories)
     {
         let hot_context = crate::engine::tiered_memory::load_hot_context(2500);

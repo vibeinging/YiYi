@@ -177,37 +177,6 @@ export function useChatEventBridge() {
       // Task streaming events (task://stream_chunk, task://tool_start, task://tool_end)
       // are handled exclusively by useTaskEventBridge to avoid duplicate subscriptions.
 
-      // Claude Code streaming events
-      listen<{ type: string; session_id: string; content?: string; tool_name?: string; working_dir?: string }>(
-        'chat://claude_code_stream',
-        (event) => {
-          if (cancelled) return;
-          if (event.payload.session_id !== store().sessionId) return;
-          const { type, content, tool_name, working_dir } = event.payload;
-          switch (type) {
-            case 'start':
-              store().claudeCodeStart(working_dir || '');
-              // Show long task progress panel for Claude Code (inherently long-running)
-              store().longTaskRoundStart(1, 1);
-              break;
-            case 'text_delta':
-              if (content) store().claudeCodeTextDelta(content);
-              break;
-            case 'tool_start':
-              if (tool_name) store().claudeCodeToolStart(tool_name);
-              break;
-            case 'tool_end':
-              if (tool_name) store().claudeCodeToolEnd(tool_name);
-              break;
-            case 'done':
-              store().claudeCodeDone();
-              // Complete the long task panel when Claude Code finishes
-              store().longTaskFinished('task_complete');
-              break;
-          }
-        },
-      ),
-
       // Canvas events (Live Canvas / A2UI)
       listen<CanvasEvent>('chat://canvas', (event) => {
         if (cancelled) return;

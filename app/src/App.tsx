@@ -28,17 +28,9 @@ import { usePermissionBridge } from './hooks/usePermissionBridge';
 import { TaskSidebar } from './components/TaskSidebar';
 import { TaskDetailOverlay } from './components/TaskDetailOverlay';
 import { useTaskSidebarStore } from './stores/taskSidebarStore';
-import { ClaudeCodeTerminal } from './pages/ClaudeCodeTerminal';
-
 export type Page = 'chat' | 'skills' | 'cronjobs' | 'workspace' | 'mcp' | 'heartbeat' | 'growth' | 'bots' | 'terminal' | 'settings';
 
-// Check for standalone window views before rendering the main app
-const standaloneView = new URLSearchParams(window.location.search).get('view');
-
 function App() {
-  if (standaloneView === 'claude-code-terminal') {
-    return <ClaudeCodeTerminal />;
-  }
   return <MainApp />;
 }
 

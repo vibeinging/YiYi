@@ -18,3 +18,5 @@ pub mod buddy;
 pub mod voice;
 pub mod permissions;
 pub mod agents;
+pub mod plugins;
+pub mod workers;
