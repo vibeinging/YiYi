@@ -135,6 +135,17 @@ pub(super) async fn read_file_tool(args: &serde_json::Value) -> String {
         Err(e) => return format!("Error: {}", e),
     }
 
+    // Reject binary files (NUL byte detection in first 8KB)
+    if let Ok(mut f) = tokio::fs::File::open(path).await {
+        use tokio::io::AsyncReadExt;
+        let mut probe = vec![0u8; 8192];
+        if let Ok(n) = f.read(&mut probe).await {
+            if probe[..n].contains(&0) {
+                return format!("Error: '{}' appears to be a binary file. Use execute_shell to inspect binary files.", path);
+            }
+        }
+    }
+
     let offset = args["offset"].as_u64().unwrap_or(1).max(1) as usize;
     let limit = args["limit"].as_u64().unwrap_or(2000) as usize;
 
@@ -212,6 +223,10 @@ pub(super) async fn write_file_tool(args: &serde_json::Value) -> String {
     if let Some(parent) = std::path::Path::new(path).parent() {
         tokio::fs::create_dir_all(parent).await.ok();
     }
+    // Read original content for diff (if file exists)
+    let original = tokio::fs::read_to_string(path).await.ok();
+    let is_create = original.is_none();
+
     match tokio::fs::write(path, content).await {
         Ok(_) => {
             // Auto-register scripts in code library
@@ -227,17 +242,19 @@ pub(super) async fn write_file_tool(args: &serde_json::Value) -> String {
                         else if path.ends_with(".js") || path.ends_with(".ts") { "javascript" }
                         else if path.ends_with(".sh") || path.ends_with(".bash") { "bash" }
                         else { "other" };
-                    // Extract first comment line as description, or use filename
                     let desc = content.lines()
                         .find(|l| l.starts_with('#') || l.starts_with("//") || l.starts_with("\"\"\""))
                         .map(|l| l.trim_matches(['#', '/', ' ', '"', '!', '\'']).trim().to_string())
                         .filter(|d| d.len() > 5)
                         .unwrap_or_else(|| format!("Script: {}", stem));
                     db.register_code(stem, path, &desc, lang, None, None).ok();
-                    log::info!("Auto-registered script in code library: {}", stem);
                 }
             }
-            format!("Wrote {} bytes to {}", content.len(), path)
+
+            // Generate structured diff for AI perception
+            let kind = if is_create { "created" } else { "updated" };
+            let diff = generate_diff(original.as_deref().unwrap_or(""), content, path);
+            format!("File {} ({}, {} bytes).\n\n{}", path, kind, content.len(), diff)
         }
         Err(e) => format!("Error writing file: {}", e),
     }
@@ -289,11 +306,14 @@ pub(super) async fn edit_file_tool(args: &serde_json::Value) -> String {
             };
             match tokio::fs::write(path, &new_content).await {
                 Ok(_) => {
-                    if replace_all && match_count > 1 {
-                        format!("Edited {} successfully ({} replacements)", path, match_count)
+                    // Generate structured diff so the AI can see exactly what changed
+                    let diff = generate_diff(&content, &new_content, path);
+                    let replace_info = if replace_all && match_count > 1 {
+                        format!(" ({} replacements)", match_count)
                     } else {
-                        format!("Edited {} successfully", path)
-                    }
+                        String::new()
+                    };
+                    format!("Edited {}{}\n\n{}", path, replace_info, diff)
                 }
                 Err(e) => format!("Error writing: {}", e),
             }
@@ -623,4 +643,105 @@ pub(super) async fn glob_search_tool(args: &serde_json::Value) -> String {
         }
         Err(e) => format!("Invalid glob pattern: {}", e),
     }
+}
+
+// ── Structured diff generation ──────────────────────────────────────────
+
+/// Generate a unified diff between old and new content for AI perception.
+/// Shows exactly what lines changed with context, so the LLM understands
+/// the spatial impact of its edits.
+fn generate_diff(old: &str, new: &str, path: &str) -> String {
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+
+    if old_lines == new_lines {
+        return "No changes.".into();
+    }
+
+    // For small files or complete rewrites, show summary only
+    if old.is_empty() {
+        return format!("New file with {} lines.", new_lines.len());
+    }
+    if new.is_empty() {
+        return format!("File cleared (was {} lines).", old_lines.len());
+    }
+
+    // Generate simplified unified diff (context = 3 lines)
+    let mut hunks: Vec<String> = Vec::new();
+    let mut i = 0;
+    let mut j = 0;
+    let context = 3;
+
+    while i < old_lines.len() || j < new_lines.len() {
+        // Skip matching lines
+        if i < old_lines.len() && j < new_lines.len() && old_lines[i] == new_lines[j] {
+            i += 1;
+            j += 1;
+            continue;
+        }
+
+        // Found a difference — collect the hunk
+        let hunk_start_i = i.saturating_sub(context);
+        let hunk_start_j = j.saturating_sub(context);
+
+        let mut hunk = format!("@@ -{},{} +{},{} @@\n",
+            hunk_start_i + 1, 0, // line counts filled later
+            hunk_start_j + 1, 0,
+        );
+
+        // Context before
+        let ctx_start = i.saturating_sub(context);
+        for k in ctx_start..i {
+            if k < old_lines.len() {
+                hunk.push_str(&format!(" {}\n", old_lines[k]));
+            }
+        }
+
+        // Changed lines: find end of difference
+        let diff_start_i = i;
+        let diff_start_j = j;
+        while i < old_lines.len() && j < new_lines.len() && old_lines[i] != new_lines[j] {
+            i += 1;
+            j += 1;
+        }
+        // Handle length differences
+        while i < old_lines.len() && (j >= new_lines.len() || (i < old_lines.len() && j < new_lines.len() && old_lines[i] != new_lines[j])) {
+            i += 1;
+        }
+        while j < new_lines.len() && (i >= old_lines.len() || (i < old_lines.len() && j < new_lines.len() && old_lines[i] != new_lines[j])) {
+            j += 1;
+        }
+
+        for k in diff_start_i..i.min(old_lines.len()) {
+            hunk.push_str(&format!("-{}\n", old_lines[k]));
+        }
+        for k in diff_start_j..j.min(new_lines.len()) {
+            hunk.push_str(&format!("+{}\n", new_lines[k]));
+        }
+
+        // Context after
+        for k in i..i.saturating_add(context).min(old_lines.len()) {
+            hunk.push_str(&format!(" {}\n", old_lines[k]));
+        }
+
+        hunks.push(hunk);
+
+        // Skip ahead past context
+        i = i.saturating_add(context).min(old_lines.len());
+        j = j.saturating_add(context).min(new_lines.len());
+
+        // Limit hunks to prevent giant diffs
+        if hunks.len() >= 10 {
+            hunks.push("... (diff truncated, more changes follow)".into());
+            break;
+        }
+    }
+
+    if hunks.is_empty() {
+        // Fallback: show line count change
+        return format!("Changed: {} → {} lines", old_lines.len(), new_lines.len());
+    }
+
+    let header = format!("--- a/{}\n+++ b/{}\n", path, path);
+    format!("```diff\n{}{}\n```", header, hunks.join("\n"))
 }
