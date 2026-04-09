@@ -473,30 +473,32 @@ where
                 return Err("cancelled".to_string());
             }
 
-            // Execute tool calls with hook integration (pre → execute → post)
+            // ── Phase 1: Sequential pre-checks (permission + pre-hook) ──
+            // These may require UI interaction so must be sequential.
+            struct PreparedCall {
+                call: crate::engine::tools::ToolCall,
+                effective_call: crate::engine::tools::ToolCall,
+                pre_messages: Vec<String>,
+                denied: Option<String>, // Some = blocked, None = proceed
+            }
+
+            let mut prepared: Vec<PreparedCall> = Vec::with_capacity(tool_calls.len());
+
             for call in tool_calls {
                 let tool_name = &call.function.name;
                 let tool_input = &call.function.arguments;
 
-                // ── Permission mode check ──
+                // Permission mode check
                 let perm_outcome = permission_policy.is_allowed(tool_name);
                 if let PermissionOutcome::Deny { reason } = &perm_outcome {
                     log::info!("Permission denied for tool {}: {}", tool_name, reason);
-                    let result_preview = reason.chars().take(200).collect::<String>();
-                    on_event(AgentStreamEvent::ToolEnd {
-                        name: tool_name.clone(),
-                        result_preview: result_preview.clone(),
-                    });
-                    messages.push(LLMMessage {
-                        role: "tool".into(),
-                        content: Some(MessageContent::text(format!("Error: {reason}"))),
-                        tool_calls: None,
-                        tool_call_id: Some(call.id.clone()),
+                    prepared.push(PreparedCall {
+                        call: call.clone(), effective_call: call.clone(),
+                        pre_messages: vec![], denied: Some(format!("Error: {reason}")),
                     });
                     continue;
                 }
 
-                // NeedsConfirmation: delegate to existing permission_gate
                 if let PermissionOutcome::NeedsConfirmation { reason } = &perm_outcome {
                     let req = crate::engine::tools::permission_gate::PermissionRequest {
                         request_id: uuid::Uuid::new_v4().to_string(),
@@ -507,95 +509,108 @@ where
                         risk_level: "medium".into(),
                     };
                     if !crate::engine::tools::permission_gate::request_permission(req).await {
-                        let deny_msg = format!("User denied: {reason}");
-                        on_event(AgentStreamEvent::ToolEnd {
-                            name: tool_name.clone(),
-                            result_preview: deny_msg.clone(),
-                        });
-                        messages.push(LLMMessage {
-                            role: "tool".into(),
-                            content: Some(MessageContent::text(format!("Error: {deny_msg}"))),
-                            tool_calls: None,
-                            tool_call_id: Some(call.id.clone()),
+                        prepared.push(PreparedCall {
+                            call: call.clone(), effective_call: call.clone(),
+                            pre_messages: vec![], denied: Some(format!("Error: User denied: {reason}")),
                         });
                         continue;
                     }
                 }
 
-                // ── Pre-hook: can modify input, deny, or override permissions ──
+                // Pre-hook
                 let pre_result = hook_runner.run_pre_tool_use(tool_name, tool_input, None);
-
-                let (result_content, result_images, is_error) = if pre_result.is_blocked() {
-                    // Hook denied/failed/cancelled this tool call
+                if pre_result.is_blocked() {
                     let reason = pre_result.messages().join("; ");
-                    let msg = if reason.is_empty() {
-                        format!("Tool '{}' blocked by hook", tool_name)
+                    let msg = if reason.is_empty() { format!("Tool '{}' blocked by hook", tool_name) } else { reason };
+                    prepared.push(PreparedCall {
+                        call: call.clone(), effective_call: call.clone(),
+                        pre_messages: pre_result.messages().to_vec(), denied: Some(msg),
+                    });
+                    continue;
+                }
+
+                let mut effective_call = call.clone();
+                if let Some(updated) = pre_result.updated_input() {
+                    effective_call.function.arguments = updated.to_string();
+                }
+                prepared.push(PreparedCall {
+                    call: call.clone(), effective_call,
+                    pre_messages: pre_result.messages().to_vec(), denied: None,
+                });
+            }
+
+            if cancelled.map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                return Err("cancelled".to_string());
+            }
+
+            // ── Phase 2: Parallel tool execution ──
+            let futures: Vec<_> = prepared.iter().map(|p| {
+                let is_denied = p.denied.is_some();
+                let denied_msg = p.denied.clone();
+                let eff_call = p.effective_call.clone();
+                async move {
+                    if let Some(msg) = denied_msg {
+                        // Blocked — return error without executing
+                        (msg, vec![], true)
                     } else {
-                        reason
-                    };
-                    log::info!("Hook blocked tool {}: {}", tool_name, msg);
-                    (msg, vec![], true)
-                } else {
-                    // Use potentially modified input from hook
-                    let effective_input = pre_result.updated_input()
-                        .unwrap_or(tool_input)
-                        .to_string();
-
-                    let mut effective_call = call.clone();
-                    if pre_result.updated_input().is_some() {
-                        effective_call.function.arguments = effective_input.clone();
+                        let result = execute_tool(&eff_call).await;
+                        (result.content, result.images, false)
                     }
+                }
+            }).collect();
+            let results = futures::future::join_all(futures).await;
 
-                    // ── Execute tool ──
-                    let result = execute_tool(&effective_call).await;
-                    let mut output = result.content;
-                    let images = result.images;
-                    let mut err = false;
+            if cancelled.map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                return Err("cancelled".to_string());
+            }
 
-                    // Merge pre-hook feedback into output
-                    output = merge_hook_feedback(pre_result.messages(), output, false);
+            // ── Phase 3: Sequential post-processing (post-hook + emit + persist + push) ──
+            for (prep, (mut output, images, mut is_error)) in prepared.iter().zip(results.into_iter()) {
+                let tool_name = &prep.call.function.name;
+                let effective_input = &prep.effective_call.function.arguments;
 
-                    // ── Post-hook: can modify output or inject feedback ──
-                    let post_result = if err {
-                        hook_runner.run_post_tool_use_failure(tool_name, &effective_input, &output, None)
+                // Merge pre-hook feedback
+                if !prep.pre_messages.is_empty() && !is_error {
+                    output = merge_hook_feedback(&prep.pre_messages, output, false);
+                }
+
+                // Post-hook (skip for denied tools)
+                if prep.denied.is_none() {
+                    let post_result = if is_error {
+                        hook_runner.run_post_tool_use_failure(tool_name, effective_input, &output, None)
                     } else {
-                        hook_runner.run_post_tool_use(tool_name, &effective_input, &output, false, None)
+                        hook_runner.run_post_tool_use(tool_name, effective_input, &output, false, None)
                     };
-
-                    if post_result.is_blocked() {
-                        err = true;
-                    }
+                    if post_result.is_blocked() { is_error = true; }
                     output = merge_hook_feedback(post_result.messages(), output, post_result.is_blocked());
-
-                    (output, images, err)
-                };
+                }
 
                 // Emit ToolEnd
-                let result_preview: String = result_content.chars().take(200).collect();
                 on_event(AgentStreamEvent::ToolEnd {
                     name: tool_name.clone(),
-                    result_preview,
+                    result_preview: output.chars().take(200).collect(),
                 });
 
-                // Persist tool result
+                // Persist
                 if let Some(ref pfn) = persist_fn {
                     pfn(ToolPersistEvent::ToolResult {
-                        tool_call_id: call.id.clone(),
+                        tool_call_id: prep.call.id.clone(),
                         tool_name: tool_name.clone(),
-                        result_content: result_content.chars().take(2000).collect(),
+                        result_content: output.chars().take(2000).collect(),
                     });
                 }
 
-                let content = if result_images.is_empty() {
-                    MessageContent::text(result_content)
+                // Push to messages
+                let content = if images.is_empty() {
+                    MessageContent::text(output)
                 } else {
-                    MessageContent::with_images(&result_content, &result_images)
+                    MessageContent::with_images(&output, &images)
                 };
                 messages.push(LLMMessage {
                     role: "tool".into(),
                     content: Some(content),
                     tool_calls: None,
-                    tool_call_id: Some(call.id.clone()),
+                    tool_call_id: Some(prep.call.id.clone()),
                 });
             }
 
