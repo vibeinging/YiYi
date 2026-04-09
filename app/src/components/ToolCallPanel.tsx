@@ -144,18 +144,6 @@ const ClaudeCodePanel = memo(function ClaudeCodePanel({ state }: { state: Claude
           </span>
         )}
         <div className="flex-1" />
-        {state.active && (
-          <div
-            className="p-1 rounded hover:bg-[var(--color-bg)] transition-colors cursor-pointer"
-            title="Open in new window"
-            onClick={(e) => {
-              e.stopPropagation();
-              openClaudeCodeWindow(sessionId);
-            }}
-          >
-            <ExternalLink size={11} style={{ color: 'var(--color-text-muted)' }} />
-          </div>
-        )}
         {state.active ? (
           <Loader2 size={12} className="animate-spin" style={{ color: 'var(--color-primary)' }} />
         ) : (
