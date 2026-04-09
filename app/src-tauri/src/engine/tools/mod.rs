@@ -805,13 +805,6 @@ fn strip_frontmatter(content: &str) -> &str {
     }
 }
 
-/// Format a millisecond timestamp into a human-readable string.
-fn format_timestamp(ts: i64) -> String {
-    chrono::DateTime::from_timestamp_millis(ts)
-        .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
-        .unwrap_or_else(|| ts.to_string())
-}
-
 /// Check if Claude Code CLI is installed (cached after first check).
 pub(crate) async fn is_claude_cli_available() -> bool {
     claude_code::is_claude_cli_available().await

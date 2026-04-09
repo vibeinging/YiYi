@@ -150,8 +150,5 @@ pub(crate) const COMPACT_THRESHOLD: usize = 80_000;
 pub(crate) static GROWTH_LLM_SEMAPHORE: std::sync::LazyLock<tokio::sync::Semaphore> =
     std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(3));
 
-/// Compact summary file name within working_dir.
-pub(crate) const COMPACT_SUMMARY_FILE: &str = ".compact_summary.txt";
-
 /// Bootstrap completed flag file.
 pub(crate) const BOOTSTRAP_COMPLETED: &str = ".bootstrap_completed";

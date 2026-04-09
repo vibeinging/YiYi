@@ -352,8 +352,8 @@ const READ_ONLY_SAFE_LIST: &[&str] = &[
     "file", "stat", "diff", "sort", "uniq", "tr", "cut", "paste", "tee",
     "xargs", "test", "true", "false", "type", "readlink", "realpath",
     "basename", "dirname", "sha256sum", "md5sum", "xxd", "hexdump", "od",
-    "strings", "tree", "jq", "yq", "python3", "python", "node", "ruby",
-    "cargo", "rustc", "git", "gh", "id", "groups", "hostname", "arch",
+    "strings", "tree", "jq", "yq",
+    "git", "gh", "id", "groups", "hostname", "arch",
     "sw_vers", "sysctl", "nproc", "lscpu", "top", "ps", "pgrep",
 ];
 

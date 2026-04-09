@@ -2,12 +2,9 @@ use super::compaction::{compact_messages_if_needed, force_compact_messages, sani
 use super::prompt::critical_system_reminder;
 use super::{AgentStreamEvent, PersistToolFn, ToolPersistEvent, DEFAULT_MAX_ITERATIONS};
 use crate::engine::hooks::{HookRunner, HookConfig, merge_hook_feedback};
-use crate::engine::usage::UsageTracker;
-use crate::engine::compact;
 use crate::engine::permission_mode::{PermissionMode, PermissionPolicy, PermissionOutcome};
 
 /// Auto-compaction threshold: compress when estimated tokens exceed this.
-const AUTO_COMPACT_TOKEN_THRESHOLD: usize = 80_000;
 use crate::engine::llm_client::{chat_completion, chat_completion_stream, LLMConfig, LLMMessage, MessageContent, StreamEvent};
 use crate::engine::llm_client::retry::parse_context_overflow;
 use crate::engine::tools::{builtin_tools, execute_tool, get_current_session_id, ToolDefinition};
@@ -136,6 +133,8 @@ pub async fn run_react_with_options(
 }
 
 /// Run ReAct loop with optional tool persistence callback.
+/// Delegates to the streaming path with a no-op event handler to ensure
+/// all permission checks and hooks are applied consistently.
 pub async fn run_react_with_options_persist(
     config: &LLMConfig,
     system_prompt: &str,
@@ -146,185 +145,17 @@ pub async fn run_react_with_options_persist(
     working_dir: Option<&std::path::Path>,
     persist_fn: Option<PersistToolFn>,
 ) -> Result<String, String> {
-    let max_iter = max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS);
-    let mut tools = builtin_tools();
-    tools.extend(extra_tools.iter().cloned());
-
-    let mut messages: Vec<LLMMessage> = vec![
-        LLMMessage {
-            role: "system".into(),
-            content: Some(MessageContent::text(system_prompt)),
-            tool_calls: None,
-            tool_call_id: None,
-        },
-    ];
-
-    // Load context summary from MemMe for continuity
-    inject_memme_context(&mut messages).await;
-
-    // Insert conversation history between system prompt and current user message
-    if !history.is_empty() {
-        messages.extend(history.iter().cloned());
-    }
-
-    messages.push(LLMMessage {
-        role: "user".into(),
-        content: Some(MessageContent::text(user_message)),
-        tool_calls: None,
-        tool_call_id: None,
-    });
-
-    // Sanitize history messages (fix orphan tool results from previous sessions)
-    sanitize_messages(&mut messages);
-
-    // Pre-compact if history made context too large before first LLM call
-    compact_messages_if_needed(&mut messages, config, working_dir).await;
-
-    const MAX_EMPTY_RETRIES: usize = 3;
-    let mut consecutive_empty = 0u8;
-
-    for iteration in 0..max_iter {
-        log::info!("ReAct iteration {}/{}", iteration + 1, max_iter);
-
-        // Re-inject critical constraints every iteration after the first to prevent
-        // the model from drifting past safety boundaries in long tool-use sessions.
-        if iteration > 0 {
-            inject_critical_reminder(&mut messages);
-        }
-
-        let response = match chat_completion(config, &messages, &tools).await {
-            Ok(r) => r,
-            Err(e) if is_context_overflow_error(&e) => {
-                log::warn!("Context overflow detected, force-compacting and retrying: {}", &e[..e.len().min(200)]);
-                force_compact_messages(&mut messages, config, working_dir).await;
-                chat_completion(config, &messages, &tools).await?
-            }
-            Err(e) => return Err(e),
-        };
-
-        // Add assistant message to history
-        messages.push(response.message.clone());
-
-        // Determine whether we got valid tool calls
-        let has_tool_calls = response.message.tool_calls.as_ref()
-            .map_or(false, |tc| !tc.is_empty());
-
-        if has_tool_calls {
-            consecutive_empty = 0;
-            let tool_calls = response.message.tool_calls.as_ref().unwrap();
-
-            // Persist assistant message with tool_calls
-            if let Some(ref pfn) = persist_fn {
-                let content_text = response.message.content.as_ref()
-                    .map(|c| c.as_text().unwrap_or("").to_string())
-                    .unwrap_or_default();
-                let tc_json: Vec<serde_json::Value> = tool_calls.iter().map(|tc| {
-                    serde_json::json!({
-                        "id": tc.id,
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments.chars().take(500).collect::<String>(),
-                    })
-                }).collect();
-                pfn(ToolPersistEvent::AssistantWithToolCalls {
-                    content: content_text,
-                    tool_calls_json: serde_json::to_string(&tc_json).unwrap_or_default(),
-                });
-            }
-
-            // Execute all tool calls concurrently, preserving original order
-            for call in tool_calls {
-                log::info!(
-                    "Tool call: {}({})",
-                    call.function.name,
-                    call.function.arguments.chars().take(100).collect::<String>()
-                );
-            }
-
-            let futures: Vec<_> = tool_calls
-                .iter()
-                .map(|call| async move { execute_tool(call).await })
-                .collect();
-            let results = futures::future::join_all(futures).await;
-
-            for (call, result) in tool_calls.iter().zip(results.into_iter()) {
-                log::info!(
-                    "Tool result ({}): {}...",
-                    call.function.name,
-                    result.content.chars().take(200).collect::<String>()
-                );
-
-                // Persist tool result
-                if let Some(ref pfn) = persist_fn {
-                    pfn(ToolPersistEvent::ToolResult {
-                        tool_call_id: result.tool_call_id.clone(),
-                        tool_name: call.function.name.clone(),
-                        result_content: result.content.chars().take(2000).collect(),
-                    });
-                }
-
-                let content = if result.images.is_empty() {
-                    MessageContent::text(result.content)
-                } else {
-                    MessageContent::with_images(&result.content, &result.images)
-                };
-                messages.push(LLMMessage {
-                    role: "tool".into(),
-                    content: Some(content),
-                    tool_calls: None,
-                    tool_call_id: Some(result.tool_call_id),
-                });
-            }
-        } else {
-            // No tool calls — check if we got a text response
-            let text = response.message.content
-                .map(|c| c.into_text())
-                .unwrap_or_default();
-            let text = text.trim().to_string();
-
-            if !text.is_empty() {
-                // Valid final text response
-                return Ok(text);
-            }
-
-            // Empty response — retry with a nudge
-            consecutive_empty += 1;
-            log::warn!(
-                "LLM returned empty response (retry {}/{})",
-                consecutive_empty, MAX_EMPTY_RETRIES
-            );
-
-            if (consecutive_empty as usize) >= MAX_EMPTY_RETRIES {
-                log::error!("LLM returned empty response {} times, giving up", MAX_EMPTY_RETRIES);
-                return Ok(String::new());
-            }
-
-            // Remove the empty assistant message we just pushed
-            messages.pop();
-
-            // Push a nudge to coax the LLM into responding
-            messages.push(LLMMessage {
-                role: "user".into(),
-                content: Some(MessageContent::text(
-                    "Please provide your response. Summarize what was done or answer the question."
-                )),
-                tool_calls: None,
-                tool_call_id: None,
-            });
-        }
-
-        // After executing tool calls, always continue the loop so the LLM
-        // can produce a final text response based on tool results.
-        // Do NOT check finish_reason here — some providers return "stop"
-        // even when tool_calls are present, and the content would be None.
-
-        compact_messages_if_needed(&mut messages, config, working_dir).await;
-    }
-
-    Err(format!(
-        "Agent reached maximum iterations ({})",
-        max_iter
-    ))
+    // Delegate to streaming path to ensure permission + hook enforcement
+    run_react_with_options_stream(
+        config, system_prompt, user_message, extra_tools,
+        history, max_iterations, working_dir,
+        |_event| {}, // no-op event handler
+        None, persist_fn, None,
+    ).await
 }
+
+// ---------------------------------------------------------------------------
+
 
 // ---------------------------------------------------------------------------
 // Streaming ReAct agent

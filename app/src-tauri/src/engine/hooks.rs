@@ -438,14 +438,10 @@ fn parse_hook_output(stdout: &str) -> ParsedOutput {
 }
 
 /// Merge hook feedback messages into tool output.
-pub fn merge_hook_feedback(hook_messages: &[String], output: String, is_error: bool) -> String {
+pub fn merge_hook_feedback(hook_messages: &[String], output: String, _is_error: bool) -> String {
     if hook_messages.is_empty() {
         return output;
     }
     let feedback = hook_messages.join("\n");
-    if is_error {
-        format!("{output}\n\n[Hook feedback]\n{feedback}")
-    } else {
-        format!("{output}\n\n[Hook feedback]\n{feedback}")
-    }
+    format!("{output}\n\n[Hook feedback]\n{feedback}")
 }
