@@ -1,7 +1,7 @@
 use base64::Engine;
 use tauri::State;
 use crate::state::AppState;
-use crate::engine::pty_manager::PtySessionInfo;
+use crate::engine::infra::pty_manager::PtySessionInfo;
 
 #[tauri::command]
 pub async fn pty_spawn(

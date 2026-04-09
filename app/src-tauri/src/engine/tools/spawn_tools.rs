@@ -190,7 +190,7 @@ fn spawn_agents_background(
     app_handle: Option<tauri::AppHandle>,
     all_skill_index: Vec<crate::commands::agent::SkillIndexEntry>,
     all_always_active: Vec<String>,
-    mcp_tools_list: Vec<super::mcp_runtime::MCPTool>,
+    mcp_tools_list: Vec<crate::engine::infra::mcp_runtime::MCPTool>,
     unavailable_servers: Vec<String>,
     mcp_extra: Vec<super::ToolDefinition>,
     session_id: String,

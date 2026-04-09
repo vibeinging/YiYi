@@ -17,8 +17,8 @@ pub(crate) mod permission_gate;
 
 // Imports used by this module and sub-modules via `super::`
 pub(self) use super::doc_tools;
-use super::mcp_runtime::MCPRuntime;
-pub(self) use super::python_bridge;
+use crate::engine::infra::mcp_runtime::MCPRuntime;
+pub(self) use crate::engine::infra::python_bridge;
 // Playwright bridge: browser automation via external Node.js process
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -29,10 +29,10 @@ use tokio::sync::Mutex;
 // Re-export engine sub-modules so child modules can access them via `super::`
 pub(self) use super::db;
 pub(self) use super::llm_client;
-pub(self) use super::memory;
+pub(self) use super::mem::memory;
 pub(self) use super::react_agent;
 pub(self) use super::scheduler;
-pub(self) use super::mcp_runtime;
+pub(self) use crate::engine::infra::mcp_runtime;
 
 /// Global MCP runtime reference for tool routing.
 static MCP_RUNTIME: std::sync::OnceLock<Arc<MCPRuntime>> = std::sync::OnceLock::new();
@@ -116,7 +116,7 @@ pub async fn get_task_workspace_for_session(session_id: &str) -> Option<String> 
 }
 
 /// Global PTY manager reference for interactive terminal sessions.
-static PTY_MANAGER: std::sync::OnceLock<Arc<crate::engine::pty_manager::PtyManager>> = std::sync::OnceLock::new();
+static PTY_MANAGER: std::sync::OnceLock<Arc<crate::engine::infra::pty_manager::PtyManager>> = std::sync::OnceLock::new();
 
 /// Sensitive path patterns.
 static SENSITIVE_PATTERNS: std::sync::OnceLock<Mutex<Vec<SensitivePattern>>> =
@@ -478,7 +478,7 @@ pub fn set_user_workspace(dir: std::path::PathBuf) {
     USER_WORKSPACE.set(dir).ok();
 }
 
-pub fn set_pty_manager(mgr: Arc<crate::engine::pty_manager::PtyManager>) {
+pub fn set_pty_manager(mgr: Arc<crate::engine::infra::pty_manager::PtyManager>) {
     PTY_MANAGER.set(mgr).ok();
 }
 
@@ -514,7 +514,7 @@ pub fn get_working_dir() -> Option<std::path::PathBuf> {
 }
 
 /// Get the PTY manager reference, returning error if not initialized.
-fn get_pty_manager() -> Result<&'static Arc<crate::engine::pty_manager::PtyManager>, String> {
+fn get_pty_manager() -> Result<&'static Arc<crate::engine::infra::pty_manager::PtyManager>, String> {
     PTY_MANAGER.get().ok_or_else(|| "PTY manager not initialized".to_string())
 }
 
@@ -554,7 +554,7 @@ pub fn get_app_handle() -> Option<&'static tauri::AppHandle> {
 
 /// Convert MCP tools to agent ToolDefinitions.
 pub fn mcp_tools_as_definitions(
-    tools: &[super::mcp_runtime::MCPTool],
+    tools: &[crate::engine::infra::mcp_runtime::MCPTool],
     skill_overrides: &HashMap<String, String>,
 ) -> Vec<ToolDefinition> {
     tools

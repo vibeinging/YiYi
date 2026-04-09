@@ -1,5 +1,5 @@
 use std::process::Stdio;
-use super::python_bridge;
+use crate::engine::infra::python_bridge;
 use super::shell_security::{self, CommandClass, SecurityVerdict};
 use super::permission_gate;
 
