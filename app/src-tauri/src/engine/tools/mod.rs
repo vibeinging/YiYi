@@ -62,6 +62,19 @@ static MEMME_STORE: std::sync::OnceLock<Arc<memme_core::MemoryStore>> = std::syn
 /// Shared MemMe user ID constant. All memory operations use this as the user scope.
 pub(crate) const MEMME_USER_ID: &str = "yiyi_default_user";
 
+/// Readiness flag — set to true after all OnceLock statics are initialized.
+static TOOLS_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Mark tools subsystem as fully initialized.
+pub fn mark_ready() {
+    TOOLS_READY.store(true, std::sync::atomic::Ordering::Release);
+}
+
+/// Check if tools subsystem is ready.
+pub fn is_ready() -> bool {
+    TOOLS_READY.load(std::sync::atomic::Ordering::Acquire)
+}
+
 // Per-task session ID for tools that need session context (e.g. send_bot_message).
 // Uses task_local so concurrent agent runs track depth independently.
 tokio::task_local! {
@@ -874,6 +887,15 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
 
 /// Execute a tool call and return the result
 pub async fn execute_tool(call: &ToolCall) -> ToolResult {
+    // Startup readiness check — reject tool calls if subsystem not yet initialized
+    if !is_ready() {
+        return ToolResult {
+            tool_call_id: call.id.clone(),
+            content: "Error: Tool subsystem not yet initialized. Please wait for app startup to complete.".into(),
+            images: vec![],
+        };
+    }
+
     if is_task_cancelled() {
         return ToolResult {
             tool_call_id: call.id.clone(),

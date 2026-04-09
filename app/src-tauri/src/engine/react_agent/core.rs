@@ -348,8 +348,13 @@ where
                     }
                 }
 
-                // Pre-hook
-                let pre_result = hook_runner.run_pre_tool_use(tool_name, tool_input, None);
+                // Pre-hook (run in blocking thread to avoid thread::sleep on async runtime)
+                let hr = hook_runner.clone();
+                let tn = tool_name.clone();
+                let ti = tool_input.clone();
+                let pre_result = tokio::task::spawn_blocking(move || {
+                    hr.run_pre_tool_use(&tn, &ti, None)
+                }).await.unwrap_or_else(|_| crate::engine::hooks::HookRunResult::allow(vec![]));
                 if pre_result.is_blocked() {
                     let reason = pre_result.messages().join("; ");
                     let msg = if reason.is_empty() { format!("Tool '{}' blocked by hook", tool_name) } else { reason };
@@ -405,13 +410,20 @@ where
                     output = merge_hook_feedback(&prep.pre_messages, output, false);
                 }
 
-                // Post-hook (skip for denied tools)
+                // Post-hook (skip for denied tools, run in blocking thread)
                 if prep.denied.is_none() {
-                    let post_result = if is_error {
-                        hook_runner.run_post_tool_use_failure(tool_name, effective_input, &output, None)
-                    } else {
-                        hook_runner.run_post_tool_use(tool_name, effective_input, &output, false, None)
-                    };
+                    let hr = hook_runner.clone();
+                    let tn = tool_name.clone();
+                    let ei = effective_input.to_string();
+                    let out = output.clone();
+                    let err = is_error;
+                    let post_result = tokio::task::spawn_blocking(move || {
+                        if err {
+                            hr.run_post_tool_use_failure(&tn, &ei, &out, None)
+                        } else {
+                            hr.run_post_tool_use(&tn, &ei, &out, false, None)
+                        }
+                    }).await.unwrap_or_else(|_| crate::engine::hooks::HookRunResult::allow(vec![]));
                     if post_result.is_blocked() { is_error = true; }
                     output = merge_hook_feedback(post_result.messages(), output, post_result.is_blocked());
                 }

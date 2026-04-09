@@ -107,6 +107,9 @@ pub fn run() {
             engine::tools::set_pty_manager(state.pty_manager.clone());
             engine::tools::set_memme_store(state.memme_store.clone());
 
+            // Mark tools subsystem as ready (all OnceLock statics initialized)
+            engine::tools::mark_ready();
+
             // Initialize the unified task registry
             engine::task_registry::init_global_registry();
 

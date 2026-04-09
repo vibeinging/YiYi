@@ -148,6 +148,7 @@ impl HookRunResult {
 // ── Hook Runner ─────────────────────────────────────────────────────────
 
 /// Executes configured hook commands for tool lifecycle events.
+#[derive(Clone)]
 pub struct HookRunner {
     config: HookConfig,
 }
