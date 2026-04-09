@@ -478,7 +478,7 @@ impl super::Database {
         .ok()
         .into_iter()
         .flatten()
-        .filter_map(|r| r.ok())
+        .filter_map(|r| r.map_err(|e| log::warn!("Row parse error: {}", e)).ok())
         .collect()
     }
 

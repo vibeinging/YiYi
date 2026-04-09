@@ -223,7 +223,10 @@ impl MCPRuntime {
                 if let Some(id) = &id {
                     pending.lock().await.insert(id.clone(), resp_tx);
                 }
-                tx.send(serde_json::to_string(&req).unwrap()).await.ok();
+                if let Err(e) = tx.send(serde_json::to_string(&req).unwrap()).await {
+                    log::warn!("MCP send failed (channel closed): {}", e);
+                    return None;
+                }
                 if id.is_some() {
                     tokio::time::timeout(
                         std::time::Duration::from_secs(timeout_secs),

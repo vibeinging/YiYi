@@ -7,7 +7,7 @@ pub(crate) mod memory_tools;
 mod cron_tools;
 mod bot_tools;
 mod skill_tools;
-pub(crate) mod claude_code;
+// pub(crate) mod claude_code; // REMOVED: YiYi handles coding natively
 mod task_tools;
 mod canvas_tools;
 mod spawn_tools;
@@ -820,13 +820,13 @@ fn strip_frontmatter(content: &str) -> &str {
 
 /// Check if Claude Code CLI is installed (cached after first check).
 pub(crate) async fn is_claude_cli_available() -> bool {
-    claude_code::is_claude_cli_available().await
+    false // claude_code removed
 }
 
 /// Refresh Claude Code CLI availability cache (call after installation).
 #[allow(dead_code)]
 pub fn refresh_claude_cli_cache() {
-    claude_code::refresh_claude_cli_cache();
+    // claude_code removed
 }
 
 /// Atomically write progress.json (tmp + rename) for crash recovery.
@@ -1104,7 +1104,7 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         "manage_bot" => bot_tools::manage_bot_tool(&args).await,
         "send_notification" => system_tools::send_notification_tool(&args),
         "add_calendar_event" => system_tools::add_calendar_event_tool(&args).await,
-        "claude_code" => claude_code::claude_code_tool(&args).await,
+        // "claude_code" removed — YiYi handles coding natively
         "send_file_to_user" => system_tools::send_file_to_user_tool(&args).await,
         "create_task" => task_tools::create_task_tool(&args).await,
         "render_canvas" => canvas_tools::render_canvas_tool(&args).await,

@@ -41,7 +41,7 @@ impl super::Database {
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?
-            .filter_map(|r| r.ok())
+            .filter_map(|r| r.map_err(|e| log::warn!("Row parse error: {}", e)).ok())
             .collect();
 
         Ok(messages)
@@ -77,7 +77,7 @@ impl super::Database {
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?
-            .filter_map(|r| r.ok())
+            .filter_map(|r| r.map_err(|e| log::warn!("Row parse error: {}", e)).ok())
             .collect();
 
         // rows are DESC order — stop when hitting a context_reset marker

@@ -230,7 +230,7 @@ pub(super) async fn create_workspace_dir_tool(args: &serde_json::Value) -> Strin
         }
     }
 
-    if let Err(e) = std::fs::create_dir_all(&target) {
+    if let Err(e) = tokio::fs::create_dir_all(&target).await {
         format!("Failed to create workspace directory: {}", e)
     } else {
         let abs_path = target.to_string_lossy().to_string();
@@ -274,7 +274,7 @@ pub(super) async fn report_progress_tool(args: &serde_json::Value) -> String {
         // Update progress.json
         if let Some(wd) = super::WORKING_DIR.get() {
             let progress_dir = wd.join("tasks").join(&task.id);
-            std::fs::create_dir_all(&progress_dir).ok();
+            tokio::fs::create_dir_all(&progress_dir).await.ok();
             let progress = serde_json::json!({
                 "task_id": task.id,
                 "session_id": session_id,

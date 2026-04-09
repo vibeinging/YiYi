@@ -335,7 +335,7 @@ pub(super) async fn manage_cronjob_tool(args: &serde_json::Value) -> String {
                 Ok(execs) => {
                     let total = execs.len();
                     // execs are ordered DESC (newest first), we display with index
-                    let all_count = db.list_executions(&job_id, 10000).map(|v| v.len()).unwrap_or(total);
+                    let all_count = db.list_executions(&job_id, 100).map(|v| v.len()).unwrap_or(total);
                     let items: Vec<String> = execs.iter().enumerate().map(|(i, e)| {
                         let idx = all_count - i; // 1-based, newest = highest
                         let started = chrono::DateTime::from_timestamp(e.started_at, 0)
@@ -371,7 +371,7 @@ pub(super) async fn manage_cronjob_tool(args: &serde_json::Value) -> String {
             // Find the target execution: by execution_id or execution_index
             if let Some(exec_id) = args["execution_id"].as_i64() {
                 // Direct lookup by execution record ID
-                match db.list_executions(&job_id, 10000) {
+                match db.list_executions(&job_id, 100) {
                     Ok(execs) => {
                         match execs.iter().find(|e| e.id == exec_id) {
                             Some(e) => format_full_execution(e, &execs),
@@ -381,7 +381,7 @@ pub(super) async fn manage_cronjob_tool(args: &serde_json::Value) -> String {
                     Err(e) => format!("Error: {}", e),
                 }
             } else if let Some(idx) = args["execution_index"].as_i64() {
-                match db.list_executions(&job_id, 10000) {
+                match db.list_executions(&job_id, 100) {
                     Ok(execs) if execs.is_empty() => "该任务暂无执行记录。".into(),
                     Ok(execs) => {
                         let total = execs.len() as i64;

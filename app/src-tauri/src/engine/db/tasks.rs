@@ -194,7 +194,7 @@ impl super::Database {
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?
-            .filter_map(|r| r.ok())
+            .filter_map(|r| r.map_err(|e| log::warn!("Row parse error: {}", e)).ok())
             .collect();
 
         Ok(tasks)

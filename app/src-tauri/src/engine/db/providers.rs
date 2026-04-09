@@ -39,7 +39,7 @@ impl super::Database {
             })
         })
         .unwrap()
-        .filter_map(|r| r.ok())
+        .filter_map(|r| r.map_err(|e| log::warn!("Row parse error: {}", e)).ok())
         .collect()
     }
 
@@ -101,7 +101,7 @@ impl super::Database {
             })
         })
         .unwrap()
-        .filter_map(|r| r.ok())
+        .filter_map(|r| r.map_err(|e| log::warn!("Row parse error: {}", e)).ok())
         .collect()
     }
 

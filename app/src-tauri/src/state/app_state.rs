@@ -143,8 +143,8 @@ impl AppState {
             .join(".yiyi.secret");
 
         // Ensure directories exist
-        std::fs::create_dir_all(&working_dir).ok();
-        std::fs::create_dir_all(&secret_dir).ok();
+        std::fs::create_dir_all(&working_dir).map_err(|e| log::warn!("Failed to create working dir: {}", e)).ok();
+        std::fs::create_dir_all(&secret_dir).map_err(|e| log::warn!("Failed to create secret dir: {}", e)).ok();
 
         #[cfg(unix)]
         {
@@ -169,7 +169,7 @@ impl AppState {
                     .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
                     .join("YiYi")
             });
-        std::fs::create_dir_all(&user_workspace).ok();
+        std::fs::create_dir_all(&user_workspace).map_err(|e| log::warn!("Failed to create workspace dir: {}", e)).ok();
 
         // Load .env if exists
         let env_path = working_dir.join(".env");
@@ -178,7 +178,10 @@ impl AppState {
         }
 
         // Open SQLite database (migrates chats.json automatically)
-        let db = Database::open(&working_dir).expect("Failed to open database");
+        let db = Database::open(&working_dir).unwrap_or_else(|e| {
+            log::error!("FATAL: Cannot open database at {}: {}", working_dir.display(), e);
+            panic!("Cannot open database: {e}. Check permissions on {}", working_dir.display());
+        });
         let db = Arc::new(db);
 
         // Migrate JSON files to SQLite (one-time)

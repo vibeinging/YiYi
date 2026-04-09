@@ -286,7 +286,9 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
       // Refresh session list to pick up auto-generated title
       await useSessionStore.getState().refreshSessions();
       // Trigger buddy observer (non-blocking)
-      const recentMsgs = messages.slice(-5).map(m => `${m.role}: ${m.content.slice(0, 200)}`);
+      // Use messagesRef or re-read state to avoid stale closure
+      const currentMessages = await getHistory(activeSessionId);
+      const recentMsgs = (currentMessages || []).slice(-5).map((m: any) => `${m.role}: ${(m.content || '').slice(0, 200)}`);
       recentMsgs.push(`user: ${userMessage.slice(0, 200)}`);
       useBuddyStore.getState().triggerObserve(recentMsgs).catch(() => {});
     } catch (error) {

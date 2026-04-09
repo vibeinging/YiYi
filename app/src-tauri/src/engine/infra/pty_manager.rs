@@ -34,7 +34,7 @@ impl OutputBuffer {
     }
 
     fn push(&self, bytes: &[u8]) {
-        let mut buf = self.data.lock().unwrap();
+        let mut buf = self.data.lock().unwrap_or_else(|e| e.into_inner());
         let overflow = (buf.len() + bytes.len()).saturating_sub(OUTPUT_BUFFER_SIZE);
         if overflow > 0 {
             buf.drain(..overflow);
@@ -45,7 +45,7 @@ impl OutputBuffer {
     }
 
     fn drain(&self) -> Vec<u8> {
-        let mut buf = self.data.lock().unwrap();
+        let mut buf = self.data.lock().unwrap_or_else(|e| e.into_inner());
         buf.drain(..).collect()
     }
 

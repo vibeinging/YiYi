@@ -49,7 +49,7 @@ impl super::Database {
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?
-            .filter_map(|r| r.ok())
+            .filter_map(|r| r.map_err(|e| log::warn!("Row parse error: {}", e)).ok())
             .collect();
         Ok(rows)
     }
@@ -181,12 +181,12 @@ impl super::Database {
         let rows: Vec<BotConversationRow> = if let Some(bid) = bot_id {
             stmt.query_map(params![bid], |row| Ok(Self::row_to_conversation(row)))
                 .map_err(|e| format!("Query error: {}", e))?
-                .filter_map(|r| r.ok())
+                .filter_map(|r| r.map_err(|e| log::warn!("Row parse error: {}", e)).ok())
                 .collect()
         } else {
             stmt.query_map([], |row| Ok(Self::row_to_conversation(row)))
                 .map_err(|e| format!("Query error: {}", e))?
-                .filter_map(|r| r.ok())
+                .filter_map(|r| r.map_err(|e| log::warn!("Row parse error: {}", e)).ok())
                 .collect()
         };
         Ok(rows)
