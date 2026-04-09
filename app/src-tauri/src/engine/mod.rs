@@ -1,33 +1,41 @@
-pub mod bots;
-pub mod canvas;
-pub mod db;
-pub mod config_watcher;
-pub mod meditation;
-pub mod memory;
-pub mod doc_tools;
-pub mod llm_client;
-pub mod mcp_runtime;
-pub mod mcp_server;
-pub mod python_bridge;
+//! YiYi Engine — core subsystems for the AI assistant.
+
+// ── Core: Agent loop, hooks, permissions, session management ──
 pub mod react_agent;
-pub mod scheduler;
-pub mod skills_hub;
-pub mod tiered_memory;
-pub mod token_counter;
-pub mod task_registry;
-pub mod tools;
-pub mod pty_manager;
-pub mod voice;
-pub mod agents;
 pub mod hooks;
-pub mod usage;
-pub mod compact;
 pub mod permission_mode;
-pub mod plugins;
-pub mod git_context;
-pub mod worker;
-pub mod bash_validation;
-pub mod lsp_client;
+pub mod compact;
+pub mod usage;
 pub mod prompt_cache;
-pub mod mcp_lifecycle;
+
+// ── Tools: built-in tool system ──
+pub mod tools;
+pub mod doc_tools;
+pub mod canvas;
+pub mod token_counter;
+
+// ── Coding: code intelligence, bash validation, git context ──
+pub mod coding;
+
+// ── Memory: memory store, tiered memory, meditation ──
+pub mod mem;
+
+// ── Social: bots, worker, scheduler ──
+pub mod bots;
+pub mod worker;
+pub mod scheduler;
+
+// ── Extensions: agents, plugins, skills, policies ──
+pub mod agents;
+pub mod plugins;
+pub mod skills_hub;
 pub mod policy_engine;
+
+// ── Infrastructure: DB, LLM, MCP, Python, PTY, config ──
+pub mod db;
+pub mod llm_client;
+pub mod infra;
+pub mod task_registry;
+
+// ── Voice control ──
+pub mod voice;

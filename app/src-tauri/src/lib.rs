@@ -3,8 +3,8 @@ mod engine;
 mod state;
 mod tray;
 
-use engine::config_watcher::ConfigWatcher;
-use engine::python_bridge;
+use engine::infra::config_watcher::ConfigWatcher;
+use engine::infra::python_bridge;
 use engine::scheduler::CronScheduler;
 use state::AppState;
 use tauri::{Emitter, Manager};
@@ -191,7 +191,7 @@ pub fn run() {
                 };
                 let wd = state.working_dir.clone();
                 tauri::async_runtime::spawn(async move {
-                    engine::mcp_server::start_skill_server(wd, &skill_server_config).await;
+                    engine::infra::mcp_server::start_skill_server(wd, &skill_server_config).await;
                 });
             }
 
@@ -269,7 +269,7 @@ pub fn run() {
             {
                 let migration_flag = state.working_dir.join(".memme_seeded");
                 if !migration_flag.exists() {
-                    crate::engine::tiered_memory::seed_from_files(&state.working_dir);
+                    crate::engine::mem::tiered_memory::seed_from_files(&state.working_dir);
                     std::fs::write(&migration_flag, "done").ok();
                     log::info!("MemMe seeded from legacy files");
                 }
@@ -604,7 +604,7 @@ fn start_meditation_timer(app_handle: tauri::AppHandle) {
             let working_dir = state.working_dir.clone();
             let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-            match crate::engine::meditation::run_meditation_session(
+            match crate::engine::mem::meditation::run_meditation_session(
                 &llm_config, &db, &working_dir, cancel,
             )
             .await

@@ -123,7 +123,7 @@ pub async fn build_system_prompt(
     skill_index: &[crate::commands::agent::SkillIndexEntry],
     always_active_skills: &[String],
     language: Option<&str>,
-    mcp_tools: Option<&[crate::engine::mcp_runtime::MCPTool]>,
+    mcp_tools: Option<&[crate::engine::infra::mcp_runtime::MCPTool]>,
     unavailable_servers: Option<&[String]>,
 ) -> String {
     let persona = load_persona(working_dir, user_workspace).await;
@@ -375,7 +375,7 @@ When setting up bots, open the developer console:
     // Inject git context if workspace is a git repo
     {
         let git_workspace = user_workspace.unwrap_or(working_dir);
-        if let Some(git_ctx) = crate::engine::git_context::render_git_context(git_workspace) {
+        if let Some(git_ctx) = crate::engine::coding::git_context::render_git_context(git_workspace) {
             prompt.push_str("\n\n");
             prompt.push_str(&git_ctx);
             prompt.push('\n');
@@ -384,7 +384,7 @@ When setting up bots, open the developer console:
 
     // Load HOT-tier context from MemMe (high-importance memories)
     {
-        let hot_context = crate::engine::tiered_memory::load_hot_context(2500);
+        let hot_context = crate::engine::mem::tiered_memory::load_hot_context(2500);
         if !hot_context.is_empty() {
             prompt.push_str(&hot_context);
         } else if let Some(db) = crate::engine::tools::get_database() {

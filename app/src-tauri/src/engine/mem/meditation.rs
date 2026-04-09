@@ -4,10 +4,10 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use super::db::Database;
-use super::llm_client::{chat_completion, LLMConfig, LLMMessage, MessageContent};
+use crate::engine::db::Database;
+use crate::engine::llm_client::{chat_completion, LLMConfig, LLMMessage, MessageContent};
 use super::memory;
-use super::react_agent;
+use crate::engine::react_agent;
 use super::tiered_memory;
 
 // ---------------------------------------------------------------------------
@@ -97,7 +97,7 @@ async fn run_phases(
     db: &Database,
     working_dir: &Path,
     cancel: &Arc<AtomicBool>,
-    previous_session: Option<&super::db::MeditationSession>,
+    previous_session: Option<&crate::engine::db::MeditationSession>,
 ) -> Result<MeditationResult, String> {
     // Gather today's context for YiYi-specific phases
     let since_timestamp = match previous_session {

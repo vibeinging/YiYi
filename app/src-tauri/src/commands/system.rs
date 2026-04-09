@@ -721,7 +721,7 @@ pub async fn get_latest_meditation(
 pub async fn trigger_meditation(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    use crate::engine::meditation::run_meditation_session;
+    use crate::engine::mem::meditation::run_meditation_session;
     use crate::commands::agent::resolve_llm_config;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;

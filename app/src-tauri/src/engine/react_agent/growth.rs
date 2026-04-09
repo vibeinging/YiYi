@@ -125,7 +125,7 @@ Extract memories (JSON array only):"#
                     // Sync HOT tier to files
                     if matches!(cat, "fact" | "preference" | "principle") {
                         if let Some(working_dir) = crate::engine::tools::get_working_dir() {
-                            if let Err(e) = crate::engine::tiered_memory::sync_hot_to_files(&working_dir) {
+                            if let Err(e) = crate::engine::mem::tiered_memory::sync_hot_to_files(&working_dir) {
                                 log::warn!("Failed to sync hot-tier to files: {}", e);
                             }
                         }
@@ -134,7 +134,7 @@ Extract memories (JSON array only):"#
             }
             // Also write to diary (diary is separate from tiered memory)
             if let Some(working_dir) = crate::engine::tools::get_working_dir() {
-                let _ = crate::engine::memory::append_diary(&working_dir, &mem.content, Some(cat));
+                let _ = crate::engine::mem::memory::append_diary(&working_dir, &mem.content, Some(cat));
             }
         }
     }
@@ -831,7 +831,7 @@ pub async fn consolidate_corrections_to_principles(
     }
 
     // Load existing principles for context
-    let existing_principles = crate::engine::memory::read_principles_md(working_dir);
+    let existing_principles = crate::engine::mem::memory::read_principles_md(working_dir);
 
     // Build correction list for LLM (include confidence info)
     let mut corrections_text = String::new();
@@ -928,7 +928,7 @@ Consolidated principles:"#,
     }
 
     // Sync HOT-tier to files (updates PRINCIPLES.md and MEMORY.md cache)
-    if let Err(e) = crate::engine::tiered_memory::sync_hot_to_files(working_dir) {
+    if let Err(e) = crate::engine::mem::tiered_memory::sync_hot_to_files(working_dir) {
         log::warn!("Failed to sync hot-tier to files: {}", e);
     }
 

@@ -9,7 +9,7 @@ use super::config::Config;
 use super::providers::ProvidersState;
 use crate::engine::bots::manager::BotManager;
 use crate::engine::db::Database;
-use crate::engine::mcp_runtime::MCPRuntime;
+use crate::engine::infra::mcp_runtime::MCPRuntime;
 use crate::engine::scheduler::CronScheduler;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,7 +49,7 @@ pub struct AppState {
     pub scheduler: Arc<RwLock<Option<CronScheduler>>>,
     pub streaming_state: Arc<std::sync::Mutex<HashMap<String, StreamingSnapshot>>>,
     pub task_cancellations: Arc<std::sync::Mutex<HashMap<String, Arc<AtomicBool>>>>,
-    pub pty_manager: Arc<crate::engine::pty_manager::PtyManager>,
+    pub pty_manager: Arc<crate::engine::infra::pty_manager::PtyManager>,
     /// Guard to prevent concurrent meditation sessions.
     pub meditation_running: Arc<AtomicBool>,
     /// MemMe vector memory store.
@@ -298,7 +298,7 @@ impl AppState {
             scheduler: Arc::new(RwLock::new(None)),
             streaming_state: Arc::new(std::sync::Mutex::new(HashMap::new())),
             task_cancellations: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            pty_manager: Arc::new(crate::engine::pty_manager::PtyManager::new()),
+            pty_manager: Arc::new(crate::engine::infra::pty_manager::PtyManager::new()),
             meditation_running: Arc::new(AtomicBool::new(false)),
             memme_store,
             voice_manager: Arc::new(tokio::sync::RwLock::new(
