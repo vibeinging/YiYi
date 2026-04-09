@@ -401,8 +401,11 @@ pub async fn check_tool_available(tool: String) -> Result<bool, String> {
         "brew" => check_command("brew", &["--version"]),
         "cargo" => check_command("cargo", &["--version"]),
         "docker" => check_command("docker", &["--version"]),
-        // Default: try running `tool --version`
-        _ => check_command(&tool, &["--version"]),
+        // Reject unknown tools to prevent command injection
+        _ => {
+            log::warn!("check_tool_available: rejected unknown tool '{}'", tool);
+            false
+        }
     };
     Ok(result)
 }
@@ -570,10 +573,9 @@ pub async fn install_tool(tool: String) -> Result<String, String> {
             }
         }
         _ => {
-            // For unknown tools, try common installation paths anyway
-            None
-                .or_else(|| try_brew_install(&tool))
-                .or_else(|| try_linux_package_install(&tool))
+            // Reject unknown tools to prevent arbitrary package installation
+            log::warn!("install_tool: rejected unknown tool '{}'", tool);
+            return Err(format!("Installation of '{}' is not supported. Only known tools can be installed.", tool));
         }
     };
 

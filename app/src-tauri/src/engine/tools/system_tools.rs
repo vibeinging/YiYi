@@ -265,8 +265,8 @@ pub(super) async fn execute_shell_tool(args: &serde_json::Value) -> String {
     let analysis = shell_security::analyze_command(command);
 
     // Truncate command for display in permission dialog (prevent giant popups)
-    let display_cmd: String = if command.len() > 200 {
-        format!("{}…", &command[..200])
+    let display_cmd: String = if command.chars().count() > 200 {
+        format!("{}…", command.chars().take(200).collect::<String>())
     } else {
         command.to_string()
     };
