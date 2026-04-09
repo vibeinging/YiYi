@@ -438,7 +438,7 @@ async fn do_compact(
     total: usize,
 ) {
     let session_id = get_current_session_id();
-    let summary = if !session_id.is_empty() {
+    let raw_summary = if !session_id.is_empty() {
         match generate_memme_summary(&session_id).await {
             Some(s) => s,
             None => generate_preview_summary(messages, config).await,
@@ -446,7 +446,19 @@ async fn do_compact(
     } else {
         generate_preview_summary(messages, config).await
     };
-    apply_compaction(messages, &summary, working_dir, total).await;
+
+    // Compress the summary to stay within token budget
+    let compressed = crate::engine::compact::compress_summary(
+        &raw_summary,
+        crate::engine::compact::CompressionConfig::default(),
+    );
+    if compressed.lines_removed > 0 || compressed.compressed_chars < compressed.original_chars {
+        log::info!(
+            "Compact summary compressed: {} → {} chars, {} lines removed",
+            compressed.original_chars, compressed.compressed_chars, compressed.lines_removed
+        );
+    }
+    apply_compaction(messages, &compressed.text, working_dir, total).await;
 }
 
 // ---------------------------------------------------------------------------

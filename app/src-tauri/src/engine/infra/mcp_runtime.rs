@@ -9,6 +9,14 @@ use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::state::config::MCPClientConfig;
+use crate::engine::infra::mcp_lifecycle::{McpLifecycleTracker, McpPhase};
+
+// Global MCP lifecycle tracker
+static MCP_LIFECYCLE: std::sync::OnceLock<std::sync::Mutex<McpLifecycleTracker>> = std::sync::OnceLock::new();
+
+fn lifecycle_tracker() -> &'static std::sync::Mutex<McpLifecycleTracker> {
+    MCP_LIFECYCLE.get_or_init(|| std::sync::Mutex::new(McpLifecycleTracker::new()))
+}
 
 // ---------------------------------------------------------------------------
 // Shared HTTP client for MCP HTTP transport — reuses connection pool & TLS
@@ -95,10 +103,20 @@ impl MCPRuntime {
         key: &str,
         config: &MCPClientConfig,
     ) -> Result<Vec<MCPTool>, String> {
+        // Track lifecycle
+        if let Ok(mut tracker) = lifecycle_tracker().lock() {
+            tracker.transition(key, McpPhase::SpawnConnect);
+        }
+
         let command = config
             .command
             .as_ref()
-            .ok_or("No command specified for stdio transport")?;
+            .ok_or_else(|| {
+                if let Ok(mut tracker) = lifecycle_tracker().lock() {
+                    tracker.record_error(key, McpPhase::SpawnConnect, "No command specified", true);
+                }
+                "No command specified for stdio transport".to_string()
+            })?;
 
         let mut cmd = Command::new(command);
         cmd.args(&config.args);
@@ -276,6 +294,10 @@ impl MCPRuntime {
 
         let mut processes = self.processes.write().await;
         processes.insert(key.to_string(), process);
+
+        if let Ok(mut tracker) = lifecycle_tracker().lock() {
+            tracker.transition(key, McpPhase::Ready);
+        }
 
         Ok(tools)
     }

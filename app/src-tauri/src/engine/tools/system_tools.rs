@@ -242,6 +242,25 @@ pub(super) async fn execute_shell_tool(args: &serde_json::Value) -> String {
         return "Error: command is required".into();
     }
 
+    // --- Phase 0: Permission-mode-aware bash validation ---
+    {
+        use crate::engine::coding::bash_validation::{validate_bash_command, BashValidation};
+        use crate::engine::permission_mode::PermissionMode;
+        // TODO: read actual mode from agent context; default Standard
+        let mode = PermissionMode::Standard;
+        let workspace = super::USER_WORKSPACE.get().map(|p| p.as_path());
+        match validate_bash_command(command, mode, workspace) {
+            BashValidation::Deny(reason) => {
+                return format!("Error: {reason}");
+            }
+            BashValidation::Warn(reason) => {
+                log::info!("Bash validation warning: {reason}");
+                // Warnings pass through to existing shell_security for further analysis
+            }
+            BashValidation::Allow => {}
+        }
+    }
+
     // --- Phase 1: Analyze command (classification + security + path extraction) ---
     let analysis = shell_security::analyze_command(command);
 

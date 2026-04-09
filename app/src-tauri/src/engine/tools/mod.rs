@@ -12,6 +12,7 @@ mod task_tools;
 mod canvas_tools;
 mod spawn_tools;
 mod computer_tools;
+mod lsp_tools;
 pub(crate) mod shell_security;
 pub(crate) mod permission_gate;
 
@@ -91,6 +92,11 @@ where
     F: std::future::Future<Output = R>,
 {
     AGENT_TOOL_FILTER.scope(filter, fut).await
+}
+
+/// Get the current agent tool filter (if set).
+pub fn current_tool_filter() -> Option<super::react_agent::ToolFilter> {
+    AGENT_TOOL_FILTER.try_with(|f| f.clone()).ok()
 }
 
 /// Authorized folders loaded at startup, updated at runtime.
@@ -869,6 +875,7 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
     tools.extend(canvas_tools::definitions());
     tools.extend(spawn_tools::definitions());
     tools.extend(computer_tools::definitions());
+    tools.extend(lsp_tools::definitions());
     tools
 }
 
@@ -1065,6 +1072,7 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         "pty_send_input" => system_tools::pty_send_input_tool(&args).await,
         "pty_read_output" => system_tools::pty_read_output_tool(&args).await,
         "pty_close_session" => system_tools::pty_close_session_tool(&args).await,
+        "code_intelligence" => lsp_tools::code_intelligence_tool(&args).await,
         "computer_control" => {
             let (content, images) = computer_tools::computer_control_tool(&args).await;
             return ToolResult {

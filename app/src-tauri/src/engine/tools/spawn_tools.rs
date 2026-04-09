@@ -213,6 +213,16 @@ fn spawn_agents_background(
             async move {
                 let agent_name = spec.name.clone();
 
+                // Register worker in WorkerRegistry
+                let worker_id = if let Some(handle) = super::APP_HANDLE.get() {
+                    let registry = handle.state::<crate::engine::worker::WorkerRegistry>();
+                    let wid = registry.spawn(&agent_name);
+                    let _ = registry.transition(&wid, crate::engine::worker::WorkerState::Running);
+                    Some(wid)
+                } else {
+                    None
+                };
+
                 // Resolve agent definition from registry if agent_type is specified
                 let agent_def: Option<crate::engine::agents::AgentDefinition> = if let Some(ref at) = spec.agent_type {
                     // Try to load from global AppState via APP_HANDLE
@@ -375,6 +385,21 @@ fn spawn_agents_background(
                     Ok(reply) => (super::truncate_output(&reply, 12000), false),
                     Err(e) => (e, true),
                 };
+
+                // Transition worker state
+                if let (Some(ref wid), Some(handle)) = (&worker_id, super::APP_HANDLE.get()) {
+                    use crate::engine::worker::{WorkerState, FailureReason};
+                    let registry = handle.state::<crate::engine::worker::WorkerRegistry>();
+                    if is_error {
+                        let _ = registry.transition(wid, WorkerState::Failed {
+                            reason: FailureReason::RuntimeError(agent_result_text.chars().take(200).collect()),
+                        });
+                    } else {
+                        let _ = registry.transition(wid, WorkerState::Finished {
+                            result: agent_result_text.chars().take(500).collect(),
+                        });
+                    }
+                }
 
                 if let Some(ref handle) = handle_for_agent {
                     handle.emit("chat://spawn_agent_complete", serde_json::json!({
