@@ -8,13 +8,15 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
     vec![
         super::tool_def(
             "execute_shell",
-            "Execute a shell command and return its output. Has a timeout to prevent hanging.",
+            "Execute a shell command and return its output. Has a timeout to prevent hanging. \
+             Set run_in_background=true for long-running commands (tests, builds, servers) — returns immediately with a task ID.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
                     "command": { "type": "string", "description": "The shell command to execute" },
                     "cwd": { "type": "string", "description": "Working directory (optional)" },
-                    "timeout_secs": { "type": "integer", "description": "Timeout in seconds. Default 120 (2 minutes)." }
+                    "timeout_secs": { "type": "integer", "description": "Timeout in seconds. Default 120 (2 minutes)." },
+                    "run_in_background": { "type": "boolean", "description": "If true, runs command in background and returns task ID immediately. Use for long-running operations." }
                 },
                 "required": ["command"]
             }),
@@ -329,7 +331,52 @@ pub(super) async fn execute_shell_tool(args: &serde_json::Value) -> String {
         }
     }
 
-    // --- Phase 2: Execute ---
+    // --- Background execution ---
+    let run_in_background = args["run_in_background"].as_bool().unwrap_or(false);
+    if run_in_background {
+        let task_id = uuid::Uuid::new_v4().to_string();
+        let task_id_for_return = task_id.clone();
+        let cmd_str = command.to_string();
+        let bg_cwd = cwd.map(|s| s.to_string())
+            .unwrap_or_else(|| super::get_effective_workspace().to_string_lossy().to_string());
+
+        tokio::spawn(async move {
+            let output = tokio::process::Command::new("sh")
+                .arg("-c")
+                .arg(&cmd_str)
+                .current_dir(&bg_cwd)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output()
+                .await;
+
+            match output {
+                Ok(out) => {
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    log::info!("Background task {} finished (exit {}): stdout={} bytes, stderr={} bytes",
+                        task_id, out.status.code().unwrap_or(-1), stdout.len(), stderr.len());
+                    // Emit result to frontend
+                    if let Some(handle) = super::APP_HANDLE.get() {
+                        use tauri::Emitter;
+                        handle.emit("shell://background_complete", serde_json::json!({
+                            "task_id": task_id,
+                            "exit_code": out.status.code(),
+                            "stdout": super::truncate_output(stdout.trim(), 8000),
+                            "stderr": super::truncate_output(stderr.trim(), 2000),
+                        })).ok();
+                    }
+                }
+                Err(e) => {
+                    log::error!("Background task {} failed: {}", task_id, e);
+                }
+            }
+        });
+
+        return format!("Command running in background (task_id: {}). Results will be emitted via shell://background_complete event.", task_id_for_return);
+    }
+
+    // --- Phase 2: Execute (foreground) ---
     let effective_cwd = match cwd {
         Some(dir) => Some(dir.to_string()),
         None => Some(super::get_effective_workspace().to_string_lossy().to_string()),
