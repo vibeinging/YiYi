@@ -39,11 +39,12 @@ export function RetryStatusBar() {
 
   return (
     <div
-      className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-[12px] animate-in fade-in slide-in-from-bottom-1 duration-200"
+      className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-[12px] animate-in fade-in slide-in-from-bottom-1 duration-200"
       style={{
         background: 'rgba(var(--color-warning-rgb, 255,190,60), 0.10)',
         border: '1px solid rgba(var(--color-warning-rgb, 255,190,60), 0.25)',
         color: 'var(--color-text-secondary)',
+        maxWidth: 'fit-content',
       }}
     >
       <RefreshCw size={13} className="animate-spin" style={{ opacity: 0.7 }} />

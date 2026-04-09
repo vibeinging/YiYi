@@ -34,7 +34,6 @@ import { toast } from '../components/Toast';
 import { ChatWelcome } from '../components/chat/ChatWelcome';
 import { ChatMessages, type ChatMessagesHandle } from '../components/chat/ChatMessages';
 import { ChatInput, type ChatInputHandle } from '../components/chat/ChatInput';
-import { BuddySprite } from '../components/buddy';
 import { VoiceOverlay } from '../components/voice/VoiceOverlay';
 import { useBuddyStore } from '../stores/buddyStore';
 
@@ -511,9 +510,6 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
 
       {/* Voice Overlay */}
       <VoiceOverlay />
-
-      {/* Buddy Companion */}
-      <BuddySprite />
 
       {/* Lightbox */}
       {lightboxSrc && (

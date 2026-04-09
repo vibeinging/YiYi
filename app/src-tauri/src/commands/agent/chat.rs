@@ -95,9 +95,10 @@ pub async fn chat(
     )
     .await?;
 
-    // Save assistant reply (final text-only response)
-    if !reply.is_empty() && reply != "(no response)" {
-        state.db.push_message(&sid, "assistant", &reply)?;
+    // Save assistant reply (final text-only response), strip internal markers
+    let clean_reply = crate::engine::tools::strip_stage_markers(&reply);
+    if !clean_reply.is_empty() && clean_reply != "(no response)" {
+        state.db.push_message(&sid, "assistant", &clean_reply)?;
     }
 
     // Feed conversation into MemMe Session pipeline
@@ -361,11 +362,12 @@ pub async fn chat_stream_start(
                             let thinking_text = thinking_buf.lock().ok()
                                 .map(|mut b| std::mem::take(&mut *b))
                                 .unwrap_or_default();
+                            let clean_reply = crate::engine::tools::strip_stage_markers(&reply);
                             if thinking_text.is_empty() {
-                                db.push_message(&sid_clone, "assistant", &reply).ok();
+                                db.push_message(&sid_clone, "assistant", &clean_reply).ok();
                             } else {
                                 let meta = serde_json::json!({ "thinking": thinking_text }).to_string();
-                                db.push_message_with_metadata(&sid_clone, "assistant", &reply, Some(&meta)).ok();
+                                db.push_message_with_metadata(&sid_clone, "assistant", &clean_reply, Some(&meta)).ok();
                             }
                         } else {
                             // Clear thinking buffer even if no reply

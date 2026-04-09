@@ -20,6 +20,7 @@ import { useTheme } from './hooks/useTheme';
 import { useDragRegion } from './hooks/useDragRegion';
 import { ToastProvider } from './components/Toast';
 import { ClaudeCodeDialog } from './components/ClaudeCodeDialog';
+import { BuddySprite } from './components/buddy';
 import { useChatEventBridge } from './hooks/useChatEventBridge';
 import { useTaskEventBridge } from './hooks/useTaskEventBridge';
 import { useBotEventBridge } from './hooks/useBotEventBridge';
@@ -298,6 +299,7 @@ function MainApp() {
       {/* Task Detail Overlay (left slide-out, covers main area) */}
       {selectedTaskId && <TaskDetailOverlay />}
     </div>
+    <BuddySprite />
     <ClaudeCodeDialog />
     </ToastProvider>
   );

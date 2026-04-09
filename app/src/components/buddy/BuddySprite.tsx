@@ -118,39 +118,48 @@ export const BuddySprite: React.FC = () => {
     // Default: bottom-right corner
     return { x: window.innerWidth - 80, y: window.innerHeight - 140 }
   })
+  const positionRef = useRef(position)
+  positionRef.current = position
   const draggingRef = useRef(false)
   const dragStartRef = useRef({ mouseX: 0, mouseY: 0, posX: 0, posY: 0 })
   const hasDraggedRef = useRef(false)
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return // left button only
-    e.currentTarget.setPointerCapture(e.pointerId)
+    e.preventDefault() // prevent text selection during drag
     draggingRef.current = true
     hasDraggedRef.current = false
-    dragStartRef.current = { mouseX: e.clientX, mouseY: e.clientY, posX: position.x, posY: position.y }
-  }, [position])
-
-  const onPointerMove = useCallback((e: React.PointerEvent) => {
-    if (!draggingRef.current) return
-    const dx = e.clientX - dragStartRef.current.mouseX
-    const dy = e.clientY - dragStartRef.current.mouseY
-    if (!hasDraggedRef.current && Math.abs(dx) + Math.abs(dy) < 5) return
-    hasDraggedRef.current = true
-    const newPos = clampPosition(dragStartRef.current.posX + dx, dragStartRef.current.posY + dy)
-    setPosition(newPos)
+    dragStartRef.current = { mouseX: e.clientX, mouseY: e.clientY, posX: positionRef.current.x, posY: positionRef.current.y }
   }, [])
 
-  const onPointerUp = useCallback((e: React.PointerEvent) => {
-    if (!draggingRef.current) return
-    draggingRef.current = false
-    if (hasDraggedRef.current) {
-      // Save position
-      const newPos = clampPosition(
-        dragStartRef.current.posX + e.clientX - dragStartRef.current.mouseX,
-        dragStartRef.current.posY + e.clientY - dragStartRef.current.mouseY
-      )
+  // Window-level drag tracking (avoids setPointerCapture which eats child clicks)
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      if (!draggingRef.current) return
+      const dx = e.clientX - dragStartRef.current.mouseX
+      const dy = e.clientY - dragStartRef.current.mouseY
+      if (!hasDraggedRef.current && Math.abs(dx) + Math.abs(dy) < 5) return
+      hasDraggedRef.current = true
+      const newPos = clampPosition(dragStartRef.current.posX + dx, dragStartRef.current.posY + dy)
       setPosition(newPos)
-      localStorage.setItem(BUDDY_POS_KEY, JSON.stringify(newPos))
+    }
+    const onUp = (e: PointerEvent) => {
+      if (!draggingRef.current) return
+      draggingRef.current = false
+      if (hasDraggedRef.current) {
+        const newPos = clampPosition(
+          dragStartRef.current.posX + e.clientX - dragStartRef.current.mouseX,
+          dragStartRef.current.posY + e.clientY - dragStartRef.current.mouseY
+        )
+        setPosition(newPos)
+        localStorage.setItem(BUDDY_POS_KEY, JSON.stringify(newPos))
+      }
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
     }
   }, [])
 
@@ -229,17 +238,19 @@ export const BuddySprite: React.FC = () => {
 
   return (
     <div
-      className="fixed z-20"
+      className="fixed z-[9990]"
       style={{ left: position.x, top: position.y, pointerEvents: 'none' }}
     >
       <div
         className="relative"
         style={{ pointerEvents: 'auto', cursor: draggingRef.current ? 'grabbing' : 'grab' }}
         onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
       >
-        {showStats && <BuddyStatsCard companion={companion} onClose={() => setShowStats(false)} flipRight={flipRight} />}
+        {showStats && (
+          <div onPointerDown={e => e.stopPropagation()}>
+            <BuddyStatsCard companion={companion} onClose={() => setShowStats(false)} flipRight={flipRight} />
+          </div>
+        )}
         {bubbleText && <BuddyBubble text={bubbleText} visible={bubbleVisible} color={accentColor} flipRight={flipRight} />}
 
         {/* Floating Hearts */}
