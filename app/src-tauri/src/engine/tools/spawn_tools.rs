@@ -125,28 +125,8 @@ pub(super) async fn spawn_agents_tool(args: serde_json::Value) -> String {
         }
     }
 
-    // Load skill index + always-active skills for sub-agents
-    let skills_dir = working_dir.join("active_skills");
-    let mut all_skill_index: Vec<crate::commands::agent::SkillIndexEntry> = Vec::new();
-    let mut all_always_active: Vec<String> = Vec::new();
-    if let Ok(mut entries) = tokio::fs::read_dir(&skills_dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let path = entry.path();
-            let skill_md = path.join("SKILL.md");
-            if let Ok(content) = tokio::fs::read_to_string(&skill_md).await {
-                let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                let (description, is_always_active) = crate::commands::agent::parse_skill_frontmatter(&content);
-                if is_always_active {
-                    all_always_active.push(content);
-                } else {
-                    all_skill_index.push(crate::commands::agent::SkillIndexEntry {
-                        name,
-                        description: description.unwrap_or_default(),
-                    });
-                }
-            }
-        }
-    }
+    // Load skill index + always-active skills (cached for 30s to avoid redundant disk I/O)
+    let (all_skill_index, all_always_active) = load_cached_skills(&working_dir).await;
 
     // Load MCP tools (inherited from parent)
     let (mcp_tools_list, unavailable_servers) = if let Some(runtime) = super::MCP_RUNTIME.get() {
@@ -480,4 +460,59 @@ fn spawn_agents_background(
     }
     // Drop handle — task runs independently. Cancellation is via the AtomicBool signal.
     drop(handle);
+}
+
+// ── Cached skill loading ────────────────────────────────────────────────
+
+type SkillCacheEntry = (
+    Vec<crate::commands::agent::SkillIndexEntry>,
+    Vec<String>,
+    std::time::Instant,
+);
+static SKILL_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<SkillCacheEntry>>> = std::sync::OnceLock::new();
+
+fn skill_cache() -> &'static std::sync::Mutex<Option<SkillCacheEntry>> {
+    SKILL_CACHE.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+async fn load_cached_skills(
+    working_dir: &std::path::Path,
+) -> (Vec<crate::commands::agent::SkillIndexEntry>, Vec<String>) {
+    // Check if cache is still fresh (30s TTL)
+    if let Ok(guard) = skill_cache().lock() {
+        if let Some((idx, active, ts)) = guard.as_ref() {
+            if ts.elapsed() < std::time::Duration::from_secs(30) {
+                return (idx.clone(), active.clone());
+            }
+        }
+    }
+
+    let skills_dir = working_dir.join("active_skills");
+    let mut skill_index = Vec::new();
+    let mut always_active = Vec::new();
+
+    if let Ok(mut entries) = tokio::fs::read_dir(&skills_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            let skill_md = path.join("SKILL.md");
+            if let Ok(content) = tokio::fs::read_to_string(&skill_md).await {
+                let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                let (description, is_always_active) = crate::commands::agent::parse_skill_frontmatter(&content);
+                if is_always_active {
+                    always_active.push(content);
+                } else {
+                    skill_index.push(crate::commands::agent::SkillIndexEntry {
+                        name,
+                        description: description.unwrap_or_default(),
+                    });
+                }
+            }
+        }
+    }
+
+    // Store in cache
+    if let Ok(mut guard) = skill_cache().lock() {
+        *guard = Some((skill_index.clone(), always_active.clone(), std::time::Instant::now()));
+    }
+    (skill_index, always_active)
 }

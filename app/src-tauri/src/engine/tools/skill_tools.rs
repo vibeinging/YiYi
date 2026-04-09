@@ -121,23 +121,23 @@ pub(super) async fn manage_skill_tool(args: &serde_json::Value) -> String {
             let skill_custom = custom_dir.join(name);
             let skill_active = active_dir.join(name);
 
-            if let Err(e) = std::fs::create_dir_all(&skill_custom) {
+            if let Err(e) = tokio::fs::create_dir_all(&skill_custom).await {
                 return format!("Error creating skill dir: {}", e);
             }
-            if let Err(e) = std::fs::write(skill_custom.join("SKILL.md"), content) {
+            if let Err(e) = tokio::fs::write(skill_custom.join("SKILL.md"), content).await {
                 return format!("Error writing SKILL.md: {}", e);
             }
 
-            std::fs::create_dir_all(&skill_active).ok();
-            std::fs::write(skill_active.join("SKILL.md"), content).ok();
+            tokio::fs::create_dir_all(&skill_active).await.ok();
+            tokio::fs::write(skill_active.join("SKILL.md"), content).await.ok();
 
             // Create script files if provided
             let mut script_count = 0;
             if let Some(scripts) = args["scripts"].as_object() {
                 let scripts_dir_custom = skill_custom.join("scripts");
                 let scripts_dir_active = skill_active.join("scripts");
-                std::fs::create_dir_all(&scripts_dir_custom).ok();
-                std::fs::create_dir_all(&scripts_dir_active).ok();
+                tokio::fs::create_dir_all(&scripts_dir_custom).await.ok();
+                tokio::fs::create_dir_all(&scripts_dir_active).await.ok();
 
                 for (filename, content_val) in scripts {
                     // Security: sanitize filename to prevent path traversal
@@ -152,8 +152,8 @@ pub(super) async fn manage_skill_tool(args: &serde_json::Value) -> String {
                     if let Some(script_content) = content_val.as_str() {
                         let custom_path = scripts_dir_custom.join(safe_name);
                         let active_path = scripts_dir_active.join(safe_name);
-                        std::fs::write(&custom_path, script_content).ok();
-                        std::fs::write(&active_path, script_content).ok();
+                        tokio::fs::write(&custom_path, script_content).await.ok();
+                        tokio::fs::write(&active_path, script_content).await.ok();
 
                         // Auto-register in code library
                         if let Some(db) = super::DATABASE.get() {
@@ -235,7 +235,7 @@ pub(super) async fn manage_skill_tool(args: &serde_json::Value) -> String {
                 return format!("Skill '{}' is already enabled.", name);
             }
             if src.exists() {
-                std::fs::create_dir_all(&active_dir).ok();
+                tokio::fs::create_dir_all(&active_dir).await.ok();
                 fn copy_dir(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
                     std::fs::create_dir_all(dst)?;
                     for entry in std::fs::read_dir(src)? {
@@ -267,7 +267,7 @@ pub(super) async fn manage_skill_tool(args: &serde_json::Value) -> String {
             }
             let path = active_dir.join(name);
             if path.exists() {
-                if let Err(e) = std::fs::remove_dir_all(&path) {
+                if let Err(e) = tokio::fs::remove_dir_all(&path).await {
                     return format!("Error disabling skill: {}", e);
                 }
             }
@@ -285,10 +285,10 @@ pub(super) async fn manage_skill_tool(args: &serde_json::Value) -> String {
             let active_path = active_dir.join(name);
 
             if custom_path.exists() {
-                std::fs::remove_dir_all(&custom_path).ok();
+                tokio::fs::remove_dir_all(&custom_path).await.ok();
             }
             if active_path.exists() {
-                std::fs::remove_dir_all(&active_path).ok();
+                tokio::fs::remove_dir_all(&active_path).await.ok();
             }
 
             if let Some(handle) = super::APP_HANDLE.get() {

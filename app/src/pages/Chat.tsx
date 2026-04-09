@@ -232,11 +232,14 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     });
     const unComplete = await onChatComplete((reply) => { resolveComplete(reply); });
     const unError = await onChatError((err) => { rejectComplete(new Error(err)); });
-    await chatStreamStart(text, sessionId, attachments);
-    const reply = await completePromise;
-    unComplete();
-    unError();
-    return reply;
+    try {
+      await chatStreamStart(text, sessionId, attachments);
+      const reply = await completePromise;
+      return reply;
+    } finally {
+      unComplete();
+      unError();
+    }
   };
 
   const handleSend = async (plainText: string, mentions: MentionTag[], attachments: Attachment[]) => {
@@ -421,35 +424,18 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   const [meditationStatus, setMeditationStatus] = useState<'idle' | 'running' | 'completed' | null>(null);
 
   useEffect(() => {
-    let prevStatus: string | null = null;
-    const checkMeditation = () => {
-      invoke('get_meditation_status').then((status: any) => {
-        if (status && (status === 'running' || status === 'completed')) {
-          setMeditationStatus(status);
-          // Show buddy bubble on status change
-          if (status !== prevStatus) {
-            const { showBubble } = useBuddyStore.getState();
-            if (status === 'running') {
-              showBubble('我去整理一下记忆~');
-            } else if (status === 'completed') {
-              invoke<string | null>('get_meditation_summary').then((summary) => {
-                showBubble(summary ? `整理好啦！${summary} ✨` : '记忆整理好啦！✨');
-              }).catch(() => {
-                showBubble('记忆整理好啦！✨');
-              });
-              setTimeout(() => setMeditationStatus(null), 5000);
-            }
-          }
-          prevStatus = status;
-        } else {
-          prevStatus = null;
-          setMeditationStatus(null);
-        }
-      }).catch(() => {});
-    };
-    checkMeditation();
-    const interval = setInterval(checkMeditation, 30_000);
-    return () => clearInterval(interval);
+    // Listen for meditation-complete event instead of polling every 30s
+    const unlisten = listen<any>('meditation-complete', (event) => {
+      setMeditationStatus('completed');
+      const { showBubble } = useBuddyStore.getState();
+      const data = event.payload;
+      const summary = data?.sessions_reviewed
+        ? `整理了 ${data.sessions_reviewed} 个对话，更新了 ${data.memories_updated} 条记忆 ✨`
+        : '记忆整理好啦！✨';
+      showBubble(summary);
+      setTimeout(() => setMeditationStatus(null), 5000);
+    });
+    return () => { unlisten.then(fn => fn()); };
   }, []);
 
   const isCronSession = activeSessionId.startsWith('cron:');

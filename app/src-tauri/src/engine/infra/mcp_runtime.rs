@@ -256,7 +256,15 @@ impl MCPRuntime {
             }
         });
 
-        let _init_resp = send_and_wait(&tx, &pending, init_req, 30).await;
+        let init_resp = send_and_wait(&tx, &pending, init_req, 30).await;
+        // Validate initialize response
+        if let Some(ref resp) = init_resp {
+            if let Some(err) = resp.get("error") {
+                log::warn!("MCP '{}' init error: {}", key, err);
+            }
+        } else {
+            log::warn!("MCP '{}' init timeout — server may not support protocol", key);
+        }
 
         // Send initialized notification (no id, no response expected)
         let notif = serde_json::json!({
