@@ -19,3 +19,6 @@ pub mod tools;
 pub mod pty_manager;
 pub mod voice;
 pub mod agents;
+pub mod hooks;
+pub mod usage;
+pub mod compact;

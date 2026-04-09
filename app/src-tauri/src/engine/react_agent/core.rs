@@ -1,9 +1,17 @@
 use super::compaction::{compact_messages_if_needed, force_compact_messages, sanitize_messages};
 use super::prompt::critical_system_reminder;
 use super::{AgentStreamEvent, PersistToolFn, ToolPersistEvent, DEFAULT_MAX_ITERATIONS};
+use crate::engine::hooks::{HookRunner, HookConfig, merge_hook_feedback};
+use crate::engine::usage::UsageTracker;
 use crate::engine::llm_client::{chat_completion, chat_completion_stream, LLMConfig, LLMMessage, MessageContent, StreamEvent};
 use crate::engine::llm_client::retry::parse_context_overflow;
 use crate::engine::tools::{builtin_tools, execute_tool, get_current_session_id, ToolDefinition};
+
+/// Load hook configuration from the app's config.
+fn load_hook_config() -> HookConfig {
+    // TODO: Load from config.json hooks section. For now, empty (no hooks).
+    HookConfig::default()
+}
 
 /// Check if an LLM error is a context overflow that we can recover from
 /// by force-compacting the conversation history.
@@ -325,6 +333,11 @@ where
     sanitize_messages(&mut messages);
     compact_messages_if_needed(&mut messages, config, working_dir).await;
 
+    // Hook runner for pre/post tool use (borrowed from Claw Code design)
+    let hook_runner = HookRunner::new(load_hook_config());
+    // Token usage tracker
+    let mut _usage_tracker = UsageTracker::new();
+
     const MAX_EMPTY_RETRIES: usize = 3;
     let mut consecutive_empty = 0u8;
 
@@ -353,7 +366,6 @@ where
             Ok(r) => r,
             Err(e) if is_context_overflow_error(&e) => {
                 log::warn!("Context overflow in stream, force-compacting and retrying: {}", &e[..e.len().min(200)]);
-                // Reset UI streaming state to avoid duplicate content from the partial first attempt
                 on_event(AgentStreamEvent::ContextOverflowRetry);
                 force_compact_messages(&mut messages, config, working_dir).await;
                 let cb2 = on_event.clone();
@@ -370,7 +382,6 @@ where
 
         messages.push(response.message.clone());
 
-        // Determine whether we got valid tool calls
         let has_tool_calls = response.message.tool_calls.as_ref()
             .map_or(false, |tc| !tc.is_empty());
 
@@ -405,66 +416,107 @@ where
                 });
             }
 
-            // Check cancellation before starting tool execution
             if cancelled.map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
                 return Err("cancelled".to_string());
             }
 
-            // Execute all tool calls concurrently, preserving original order
-            let futures: Vec<_> = tool_calls
-                .iter()
-                .map(|call| async move { execute_tool(call).await })
-                .collect();
-            let results = futures::future::join_all(futures).await;
+            // Execute tool calls with hook integration (pre → execute → post)
+            for call in tool_calls {
+                let tool_name = &call.function.name;
+                let tool_input = &call.function.arguments;
 
-            // Check cancellation after tool execution, before feeding results back to LLM
-            if cancelled.map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
-                return Err("cancelled".to_string());
-            }
+                // ── Pre-hook: can modify input, deny, or override permissions ──
+                let pre_result = hook_runner.run_pre_tool_use(tool_name, tool_input, None);
 
-            // Emit ToolEnd events and push results in order
-            for (call, result) in tool_calls.iter().zip(results.into_iter()) {
-                let result_preview: String = result.content.chars().take(200).collect();
+                let (result_content, result_images, is_error) = if pre_result.is_blocked() {
+                    // Hook denied/failed/cancelled this tool call
+                    let reason = pre_result.messages().join("; ");
+                    let msg = if reason.is_empty() {
+                        format!("Tool '{}' blocked by hook", tool_name)
+                    } else {
+                        reason
+                    };
+                    log::info!("Hook blocked tool {}: {}", tool_name, msg);
+                    (msg, vec![], true)
+                } else {
+                    // Use potentially modified input from hook
+                    let effective_input = pre_result.updated_input()
+                        .unwrap_or(tool_input)
+                        .to_string();
+
+                    let mut effective_call = call.clone();
+                    if pre_result.updated_input().is_some() {
+                        effective_call.function.arguments = effective_input.clone();
+                    }
+
+                    // ── Execute tool ──
+                    let result = execute_tool(&effective_call).await;
+                    let mut output = result.content;
+                    let images = result.images;
+                    let mut err = false;
+
+                    // Merge pre-hook feedback into output
+                    output = merge_hook_feedback(pre_result.messages(), output, false);
+
+                    // ── Post-hook: can modify output or inject feedback ──
+                    let post_result = if err {
+                        hook_runner.run_post_tool_use_failure(tool_name, &effective_input, &output, None)
+                    } else {
+                        hook_runner.run_post_tool_use(tool_name, &effective_input, &output, false, None)
+                    };
+
+                    if post_result.is_blocked() {
+                        err = true;
+                    }
+                    output = merge_hook_feedback(post_result.messages(), output, post_result.is_blocked());
+
+                    (output, images, err)
+                };
+
+                // Emit ToolEnd
+                let result_preview: String = result_content.chars().take(200).collect();
                 on_event(AgentStreamEvent::ToolEnd {
-                    name: call.function.name.clone(),
+                    name: tool_name.clone(),
                     result_preview,
                 });
 
                 // Persist tool result
                 if let Some(ref pfn) = persist_fn {
                     pfn(ToolPersistEvent::ToolResult {
-                        tool_call_id: result.tool_call_id.clone(),
-                        tool_name: call.function.name.clone(),
-                        result_content: result.content.chars().take(2000).collect(),
+                        tool_call_id: call.id.clone(),
+                        tool_name: tool_name.clone(),
+                        result_content: result_content.chars().take(2000).collect(),
                     });
                 }
 
-                let content = if result.images.is_empty() {
-                    MessageContent::text(result.content)
+                let content = if result_images.is_empty() {
+                    MessageContent::text(result_content)
                 } else {
-                    MessageContent::with_images(&result.content, &result.images)
+                    MessageContent::with_images(&result_content, &result_images)
                 };
                 messages.push(LLMMessage {
                     role: "tool".into(),
                     content: Some(content),
                     tool_calls: None,
-                    tool_call_id: Some(result.tool_call_id),
+                    tool_call_id: Some(call.id.clone()),
                 });
             }
+
+            // Check cancellation after all tool executions
+            if cancelled.map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                return Err("cancelled".to_string());
+            }
         } else {
-            // No tool calls — check if we got a text response
             let text = response.message.content
                 .map(|c| c.into_text())
                 .unwrap_or_default();
             let text = text.trim().to_string();
 
             if !text.is_empty() {
-                // Valid final text response
                 on_event(AgentStreamEvent::Complete);
                 return Ok(text);
             }
 
-            // Empty response — retry with a nudge
             consecutive_empty += 1;
             log::warn!(
                 "LLM returned empty response (retry {}/{})",
@@ -477,10 +529,7 @@ where
                 return Ok(String::new());
             }
 
-            // Remove the empty assistant message we just pushed
             messages.pop();
-
-            // Push a nudge to coax the LLM into responding
             messages.push(LLMMessage {
                 role: "user".into(),
                 content: Some(MessageContent::text(
@@ -490,11 +539,6 @@ where
                 tool_call_id: None,
             });
         }
-
-        // After executing tool calls, always continue the loop so the LLM
-        // can produce a final text response based on tool results.
-        // Do NOT check finish_reason here — some providers return "stop"
-        // even when tool_calls are present, and the content would be None.
 
         compact_messages_if_needed(&mut messages, config, working_dir).await;
     }
