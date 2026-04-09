@@ -27,3 +27,7 @@ pub mod plugins;
 pub mod git_context;
 pub mod worker;
 pub mod bash_validation;
+pub mod lsp_client;
+pub mod prompt_cache;
+pub mod mcp_lifecycle;
+pub mod policy_engine;
