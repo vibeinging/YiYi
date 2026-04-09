@@ -69,11 +69,9 @@ async fn remember_approval(permission_type: &str, path: &str) {
     let key = session_key(permission_type, path);
     let mut set = session_allowed().lock().await;
     if set.len() >= MAX_SESSION_ENTRIES {
-        // Simple eviction: clear half when full
-        let keys: Vec<String> = set.iter().take(MAX_SESSION_ENTRIES / 2).cloned().collect();
-        for k in keys {
-            set.remove(&k);
-        }
+        // Clear all when full — user will be re-prompted for previously approved items
+        // This is simpler and more predictable than partial random eviction
+        set.clear();
     }
     set.insert(key);
 }

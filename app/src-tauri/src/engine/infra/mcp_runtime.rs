@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(dead_code)] // TODO: audit and remove dead MCP code after stabilization
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Stdio;

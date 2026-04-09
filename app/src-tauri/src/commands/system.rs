@@ -100,7 +100,7 @@ pub async fn save_agents_config(
         config.agents.language = Some(lang);
     }
     if let Some(max) = max_iterations {
-        config.agents.max_iterations = Some(max);
+        config.agents.max_iterations = Some(max.min(500)); // Cap to prevent infinite loops
     }
     config.save(&state.working_dir)
 }
@@ -618,6 +618,7 @@ pub async fn get_app_flag(
     state: State<'_, AppState>,
     key: String,
 ) -> Result<Option<String>, String> {
+    validate_flag_key(&key)?;
     Ok(state.db.get_config(&key))
 }
 
@@ -628,7 +629,20 @@ pub async fn set_app_flag(
     key: String,
     value: String,
 ) -> Result<(), String> {
+    validate_flag_key(&key)?;
     state.db.set_config(&key, &value)
+}
+
+fn validate_flag_key(key: &str) -> Result<(), String> {
+    const ALLOWED_KEYS: &[&str] = &[
+        "setup_complete", "channels_migrated", "memme_seeded",
+        "onboarding_step", "last_meditation", "theme",
+    ];
+    if ALLOWED_KEYS.contains(&key) || key.starts_with("user_") {
+        Ok(())
+    } else {
+        Err(format!("Unknown flag key: '{}'. Only known flags are allowed.", key))
+    }
 }
 
 // ---------------------------------------------------------------------------

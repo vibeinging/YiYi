@@ -246,8 +246,22 @@ pub(super) async fn execute_shell_tool(args: &serde_json::Value) -> String {
     {
         use crate::engine::coding::bash_validation::{validate_bash_command, BashValidation};
         use crate::engine::permission_mode::PermissionMode;
-        // TODO: read actual mode from agent context; default Standard
-        let mode = PermissionMode::Standard;
+        // Derive permission mode from current agent tool filter
+        let mode = if let Some(filter) = super::current_tool_filter() {
+            use crate::engine::permission_mode::PermissionPolicy;
+            if let crate::engine::react_agent::ToolFilter::Allow(ref names) = filter {
+                let policy = PermissionPolicy::new(PermissionMode::ReadOnly);
+                if names.iter().all(|n| policy.required_mode_for(n) == PermissionMode::ReadOnly) {
+                    PermissionMode::ReadOnly
+                } else {
+                    PermissionMode::Standard
+                }
+            } else {
+                PermissionMode::Standard
+            }
+        } else {
+            PermissionMode::Standard
+        };
         let workspace = super::USER_WORKSPACE.get().map(|p| p.as_path());
         match validate_bash_command(command, mode, workspace) {
             BashValidation::Deny(reason) => {

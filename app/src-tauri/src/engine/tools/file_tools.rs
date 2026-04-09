@@ -138,24 +138,56 @@ pub(super) async fn read_file_tool(args: &serde_json::Value) -> String {
     let offset = args["offset"].as_u64().unwrap_or(1).max(1) as usize;
     let limit = args["limit"].as_u64().unwrap_or(2000) as usize;
 
-    match tokio::fs::read_to_string(path).await {
-        Ok(content) => {
-            let lines: Vec<&str> = content.lines().collect();
-            let total = lines.len();
-            let start = (offset - 1).min(total);
-            let end = (start + limit).min(total);
-            let selected = &lines[start..end];
+    // Use BufReader to avoid reading entire file into memory
+    match tokio::fs::File::open(path).await {
+        Ok(file) => {
+            use tokio::io::{AsyncBufReadExt, BufReader};
+            let reader = BufReader::new(file);
+            let mut lines_iter = reader.lines();
+            let start = offset - 1;
+            let mut line_num = 0usize;
+            let mut selected: Vec<String> = Vec::with_capacity(limit);
+
+            // Skip to offset
+            while line_num < start {
+                match lines_iter.next_line().await {
+                    Ok(Some(_)) => line_num += 1,
+                    Ok(None) => break,
+                    Err(e) => return format!("Error reading file: {}", e),
+                }
+            }
+
+            // Read `limit` lines
+            while selected.len() < limit {
+                match lines_iter.next_line().await {
+                    Ok(Some(line)) => {
+                        line_num += 1;
+                        selected.push(line);
+                    }
+                    Ok(None) => break,
+                    Err(e) => return format!("Error reading file: {}", e),
+                }
+            }
+
+            // Count remaining lines for total
+            let mut total = line_num;
+            loop {
+                match lines_iter.next_line().await {
+                    Ok(Some(_)) => total += 1,
+                    _ => break,
+                }
+            }
 
             if selected.is_empty() {
                 return format!("(empty file or offset {} beyond {} total lines)", offset, total);
             }
 
-            // Format with line numbers like `cat -n`
+            let end = start + selected.len();
             let width = format!("{}", end).len();
             let mut result = String::with_capacity(selected.len() * 80);
             for (i, line) in selected.iter().enumerate() {
-                let line_num = start + i + 1;
-                result.push_str(&format!("{:>width$}\t{}\n", line_num, line, width = width));
+                let ln = start + i + 1;
+                result.push_str(&format!("{:>width$}\t{}\n", ln, line, width = width));
             }
 
             if end < total {
