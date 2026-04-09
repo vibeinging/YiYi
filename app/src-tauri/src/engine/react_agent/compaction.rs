@@ -450,15 +450,16 @@ async fn do_compact(
     // Compress the summary to stay within token budget
     let compressed = crate::engine::compact::compress_summary(
         &raw_summary,
-        crate::engine::compact::CompressionConfig::default(),
+        crate::engine::compact::SummaryCompressionBudget::default(),
     );
-    if compressed.lines_removed > 0 || compressed.compressed_chars < compressed.original_chars {
+    if compressed.omitted_count > 0 || compressed.compressed_chars < compressed.original_chars {
         log::info!(
-            "Compact summary compressed: {} → {} chars, {} lines removed",
-            compressed.original_chars, compressed.compressed_chars, compressed.lines_removed
+            "Compact summary compressed: {} → {} chars, {} lines omitted, {} deduped",
+            compressed.original_chars, compressed.compressed_chars,
+            compressed.omitted_count, compressed.dedup_count
         );
     }
-    apply_compaction(messages, &compressed.text, working_dir, total).await;
+    apply_compaction(messages, &compressed.summary, working_dir, total).await;
 }
 
 // ---------------------------------------------------------------------------
