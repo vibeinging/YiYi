@@ -30,6 +30,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::new())
+        .manage(engine::worker::WorkerRegistry::new())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -521,6 +522,9 @@ pub fn run() {
             commands::plugins::enable_plugin,
             commands::plugins::disable_plugin,
             commands::plugins::reload_plugins,
+            // Workers
+            commands::workers::list_workers,
+            commands::workers::resolve_worker_trust,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

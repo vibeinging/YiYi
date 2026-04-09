@@ -24,3 +24,5 @@ pub mod usage;
 pub mod compact;
 pub mod permission_mode;
 pub mod plugins;
+pub mod git_context;
+pub mod worker;
