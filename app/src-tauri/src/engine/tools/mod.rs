@@ -862,7 +862,9 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
     tools.extend(cron_tools::definitions());
     tools.extend(bot_tools::definitions());
     tools.extend(skill_tools::definitions());
-    tools.extend(claude_code::definitions());
+    // claude_code tool disabled — YiYi's built-in tools now handle coding tasks directly.
+    // Kept as module for backward compatibility. Uncomment to re-enable:
+    // tools.extend(claude_code::definitions());
     tools.extend(task_tools::definitions());
     tools.extend(canvas_tools::definitions());
     tools.extend(spawn_tools::definitions());
