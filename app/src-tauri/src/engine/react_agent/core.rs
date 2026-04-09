@@ -3,6 +3,7 @@ use super::prompt::critical_system_reminder;
 use super::{AgentStreamEvent, PersistToolFn, ToolPersistEvent, DEFAULT_MAX_ITERATIONS};
 use crate::engine::hooks::{HookRunner, HookConfig, merge_hook_feedback};
 use crate::engine::usage::UsageTracker;
+use crate::engine::permission_mode::{PermissionMode, PermissionPolicy, PermissionOutcome};
 use crate::engine::llm_client::{chat_completion, chat_completion_stream, LLMConfig, LLMMessage, MessageContent, StreamEvent};
 use crate::engine::llm_client::retry::parse_context_overflow;
 use crate::engine::tools::{builtin_tools, execute_tool, get_current_session_id, ToolDefinition};
@@ -11,6 +12,12 @@ use crate::engine::tools::{builtin_tools, execute_tool, get_current_session_id, 
 fn load_hook_config() -> HookConfig {
     // TODO: Load from config.json hooks section. For now, empty (no hooks).
     HookConfig::default()
+}
+
+/// Load permission mode from the app's config.
+fn load_permission_mode() -> PermissionMode {
+    // TODO: Load from config.json or Agent definition. Default: Standard.
+    PermissionMode::Standard
 }
 
 /// Check if an LLM error is a context overflow that we can recover from
@@ -335,6 +342,8 @@ where
 
     // Hook runner for pre/post tool use (borrowed from Claw Code design)
     let hook_runner = HookRunner::new(load_hook_config());
+    // Permission policy (three-level mode borrowed from Claw Code)
+    let permission_policy = PermissionPolicy::new(load_permission_mode());
     // Token usage tracker
     let mut _usage_tracker = UsageTracker::new();
 
@@ -424,6 +433,50 @@ where
             for call in tool_calls {
                 let tool_name = &call.function.name;
                 let tool_input = &call.function.arguments;
+
+                // ── Permission mode check ──
+                let perm_outcome = permission_policy.is_allowed(tool_name);
+                if let PermissionOutcome::Deny { reason } = &perm_outcome {
+                    log::info!("Permission denied for tool {}: {}", tool_name, reason);
+                    let result_preview = reason.chars().take(200).collect::<String>();
+                    on_event(AgentStreamEvent::ToolEnd {
+                        name: tool_name.clone(),
+                        result_preview: result_preview.clone(),
+                    });
+                    messages.push(LLMMessage {
+                        role: "tool".into(),
+                        content: Some(MessageContent::text(format!("Error: {reason}"))),
+                        tool_calls: None,
+                        tool_call_id: Some(call.id.clone()),
+                    });
+                    continue;
+                }
+
+                // NeedsConfirmation: delegate to existing permission_gate
+                if let PermissionOutcome::NeedsConfirmation { reason } = &perm_outcome {
+                    let req = crate::engine::tools::permission_gate::PermissionRequest {
+                        request_id: uuid::Uuid::new_v4().to_string(),
+                        permission_type: "permission_mode".into(),
+                        path: format!("{}({})", tool_name, tool_input.chars().take(100).collect::<String>()),
+                        parent_folder: String::new(),
+                        reason: reason.clone(),
+                        risk_level: "medium".into(),
+                    };
+                    if !crate::engine::tools::permission_gate::request_permission(req).await {
+                        let deny_msg = format!("User denied: {reason}");
+                        on_event(AgentStreamEvent::ToolEnd {
+                            name: tool_name.clone(),
+                            result_preview: deny_msg.clone(),
+                        });
+                        messages.push(LLMMessage {
+                            role: "tool".into(),
+                            content: Some(MessageContent::text(format!("Error: {deny_msg}"))),
+                            tool_calls: None,
+                            tool_call_id: Some(call.id.clone()),
+                        });
+                        continue;
+                    }
+                }
 
                 // ── Pre-hook: can modify input, deny, or override permissions ──
                 let pre_result = hook_runner.run_pre_tool_use(tool_name, tool_input, None);
