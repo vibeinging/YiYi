@@ -19,7 +19,7 @@ impl super::Database {
         session_id: &str,
         limit: Option<usize>,
     ) -> Result<Vec<ChatMessage>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let limit = limit.unwrap_or(200);
 
         let mut stmt = conn
@@ -55,7 +55,7 @@ impl super::Database {
         session_id: &str,
         limit: usize,
     ) -> Result<Vec<ChatMessage>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         let mut stmt = conn
             .prepare(
@@ -109,7 +109,7 @@ impl super::Database {
         metadata: Option<&str>,
     ) -> Result<i64, String> {
         let now = super::now_ts();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let tx = conn.unchecked_transaction()
             .map_err(|e| format!("Failed to begin transaction: {}", e))?;
 
@@ -142,7 +142,7 @@ impl super::Database {
     }
 
     pub fn clear_messages(&self, session_id: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "DELETE FROM messages WHERE session_id = ?1",
             params![session_id],
@@ -152,14 +152,14 @@ impl super::Database {
     }
 
     pub fn delete_message(&self, message_id: i64) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute("DELETE FROM messages WHERE id = ?1", params![message_id])
             .map_err(|e| format!("Failed to delete message: {}", e))?;
         Ok(())
     }
 
     pub(super) fn message_count(&self, session_id: &str) -> Result<i64, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM messages WHERE session_id = ?1",

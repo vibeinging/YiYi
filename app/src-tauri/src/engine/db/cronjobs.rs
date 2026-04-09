@@ -72,7 +72,7 @@ impl super::Database {
     // === Cron Jobs ===
 
     pub fn list_cronjobs(&self) -> Result<Vec<CronJobRow>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare("SELECT id, name, enabled, schedule_json, task_type, text, request_json, dispatch_json, runtime_json, execution_mode FROM cronjobs")
             .map_err(|e| format!("Query error: {}", e))?;
@@ -98,7 +98,7 @@ impl super::Database {
     }
 
     pub fn get_cronjob(&self, id: &str) -> Result<Option<CronJobRow>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let result = conn.query_row(
             "SELECT id, name, enabled, schedule_json, task_type, text, request_json, dispatch_json, runtime_json, execution_mode FROM cronjobs WHERE id = ?1",
             params![id],
@@ -125,7 +125,7 @@ impl super::Database {
     }
 
     pub fn upsert_cronjob(&self, row: &CronJobRow) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT OR REPLACE INTO cronjobs (id, name, enabled, schedule_json, task_type, text, request_json, dispatch_json, runtime_json, execution_mode)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -136,7 +136,7 @@ impl super::Database {
     }
 
     pub fn delete_cronjob(&self, id: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let tx = conn.unchecked_transaction()
             .map_err(|e| format!("Failed to begin transaction: {}", e))?;
         let session_id = format!("cron:{}", id);
@@ -157,7 +157,7 @@ impl super::Database {
 
     pub fn insert_execution(&self, job_id: &str, trigger_type: &str) -> Result<i64, String> {
         let now = super::now_ts();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT INTO cronjob_executions (job_id, started_at, status, trigger_type) VALUES (?1, ?2, 'running', ?3)",
             params![job_id, now, trigger_type],
@@ -168,7 +168,7 @@ impl super::Database {
 
     pub fn update_execution(&self, exec_id: i64, status: &str, result: Option<&str>) -> Result<(), String> {
         let now = super::now_ts();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE cronjob_executions SET finished_at = ?1, status = ?2, result = ?3 WHERE id = ?4",
             params![now, status, result, exec_id],
@@ -197,7 +197,7 @@ impl super::Database {
     }
 
     pub fn list_executions(&self, job_id: &str, limit: usize) -> Result<Vec<CronJobExecutionRow>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare(
                 "SELECT id, job_id, started_at, finished_at, status, result, trigger_type
@@ -223,7 +223,7 @@ impl super::Database {
     }
 
     pub fn get_last_execution(&self, job_id: &str) -> Result<Option<CronJobExecutionRow>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let result = conn.query_row(
             "SELECT id, job_id, started_at, finished_at, status, result, trigger_type
              FROM cronjob_executions WHERE job_id = ?1 ORDER BY started_at DESC LIMIT 1",
@@ -248,7 +248,7 @@ impl super::Database {
     }
 
     pub fn set_cronjob_enabled(&self, id: &str, enabled: bool) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE cronjobs SET enabled = ?1 WHERE id = ?2",
             params![enabled, id],
@@ -260,7 +260,7 @@ impl super::Database {
     // === Heartbeat History ===
 
     pub fn push_heartbeat(&self, item: &HeartbeatRow) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT INTO heartbeat_history (timestamp, success, message, target) VALUES (?1, ?2, ?3, ?4)",
             params![item.timestamp, item.success, item.message, item.target],
@@ -278,7 +278,7 @@ impl super::Database {
     }
 
     pub fn get_heartbeat_history(&self, limit: usize) -> Result<Vec<HeartbeatRow>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare(
                 "SELECT timestamp, success, message, target FROM heartbeat_history ORDER BY timestamp DESC LIMIT ?1",
@@ -311,7 +311,7 @@ impl super::Database {
 
         // Check if we already have data
         {
-            let conn = self.conn.lock().unwrap();
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM cronjobs", [], |row| row.get(0))
                 .unwrap_or(0);
@@ -366,7 +366,7 @@ impl super::Database {
 
         // Check if we already have data
         {
-            let conn = self.conn.lock().unwrap();
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM heartbeat_history", [], |row| row.get(0))
                 .unwrap_or(0);
@@ -392,7 +392,7 @@ impl super::Database {
         let items: Vec<OldItem> = serde_json::from_str(&content).unwrap_or_default();
 
         if !items.is_empty() {
-            let conn = self.conn.lock().unwrap();
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
             for item in &items {
                 conn.execute(
                     "INSERT INTO heartbeat_history (timestamp, success, message, target) VALUES (?1, ?2, ?3, ?4)",

@@ -21,7 +21,7 @@ impl super::Database {
     // --- Session CRUD ---
 
     pub fn list_sessions(&self) -> Result<Vec<ChatSession>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare("SELECT id, name, created_at, updated_at, source, source_meta FROM sessions ORDER BY updated_at DESC")
             .map_err(|e| format!("Query error: {}", e))?;
@@ -46,7 +46,7 @@ impl super::Database {
 
     /// List sessions filtered by source type
     pub fn list_sessions_by_source(&self, source: &str) -> Result<Vec<ChatSession>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare("SELECT id, name, created_at, updated_at, source, source_meta FROM sessions WHERE source = ?1 ORDER BY updated_at DESC")
             .map_err(|e| format!("Query error: {}", e))?;
@@ -76,7 +76,7 @@ impl super::Database {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<ChatSession>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare(
                 "SELECT id, name, created_at, updated_at, source, source_meta \
@@ -110,7 +110,7 @@ impl super::Database {
         query: &str,
         limit: i64,
     ) -> Result<Vec<ChatSession>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let pattern = format!("%{}%", query);
         let mut stmt = conn
             .prepare(
@@ -150,7 +150,7 @@ impl super::Database {
         name: &str,
         now: i64,
     ) -> Result<ChatSession, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT OR IGNORE INTO sessions (id, name, created_at, updated_at, source) VALUES (?1, ?2, ?3, ?4, 'chat')",
             params![id, name, now, now],
@@ -176,7 +176,7 @@ impl super::Database {
         source_meta: Option<&str>,
     ) -> Result<ChatSession, String> {
         let now = super::now_ts();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT OR IGNORE INTO sessions (id, name, created_at, updated_at, source, source_meta) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![id, name, now, now, source, source_meta],
@@ -194,7 +194,7 @@ impl super::Database {
     }
 
     pub fn rename_session(&self, id: &str, name: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE sessions SET name = ?1 WHERE id = ?2",
             params![name, id],
@@ -204,7 +204,7 @@ impl super::Database {
     }
 
     pub fn delete_session(&self, id: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute("DELETE FROM messages WHERE session_id = ?1", params![id])
             .map_err(|e| format!("Failed to delete messages: {}", e))?;
         conn.execute("DELETE FROM sessions WHERE id = ?1", params![id])

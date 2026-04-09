@@ -20,7 +20,7 @@ impl super::Database {
 
     /// List all custom quick actions, ordered by sort_order then created_at.
     pub fn list_quick_actions(&self) -> Vec<QuickActionRow> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = match conn.prepare(
             "SELECT id, label, description, prompt, icon, color, sort_order
              FROM quick_actions ORDER BY sort_order ASC, created_at ASC",
@@ -55,7 +55,7 @@ impl super::Database {
     ) -> Result<String, String> {
         let id = uuid::Uuid::new_v4().to_string();
         let now = super::now_ts();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT INTO quick_actions (id, label, description, prompt, icon, color, sort_order, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?7)",
@@ -76,7 +76,7 @@ impl super::Database {
         color: &str,
     ) -> Result<(), String> {
         let now = super::now_ts();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let changed = conn
             .execute(
                 "UPDATE quick_actions SET label = ?1, description = ?2, prompt = ?3, icon = ?4, color = ?5, updated_at = ?6 WHERE id = ?7",
@@ -91,7 +91,7 @@ impl super::Database {
 
     /// Delete a custom quick action by id.
     pub fn delete_quick_action(&self, id: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let changed = conn
             .execute("DELETE FROM quick_actions WHERE id = ?1", params![id])
             .map_err(|e| format!("Failed to delete quick action: {}", e))?;

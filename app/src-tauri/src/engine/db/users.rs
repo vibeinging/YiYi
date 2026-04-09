@@ -25,7 +25,7 @@ impl super::Database {
     pub fn create_unified_user(&self, display_name: Option<&str>) -> Result<UnifiedUserRow, String> {
         let id = uuid::Uuid::new_v4().to_string();
         let now = super::now_ts();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT INTO unified_users (id, display_name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
             params![id, display_name, now, now],
@@ -40,7 +40,7 @@ impl super::Database {
     }
 
     pub fn get_unified_user(&self, id: &str) -> Result<Option<UnifiedUserRow>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let result = conn.query_row(
             "SELECT id, display_name, created_at, updated_at FROM unified_users WHERE id = ?1",
             params![id],
@@ -61,7 +61,7 @@ impl super::Database {
     }
 
     pub fn list_unified_users(&self) -> Result<Vec<UnifiedUserRow>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare("SELECT id, display_name, created_at, updated_at FROM unified_users ORDER BY updated_at DESC")
             .map_err(|e| format!("Query error: {}", e))?;
@@ -92,7 +92,7 @@ impl super::Database {
         display_name: Option<&str>,
     ) -> Result<(), String> {
         let now = super::now_ts();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let tx = conn.unchecked_transaction()
             .map_err(|e| format!("Failed to begin transaction: {}", e))?;
         tx.execute(
@@ -120,7 +120,7 @@ impl super::Database {
         platform_user_id: &str,
         bot_id: &str,
     ) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "DELETE FROM user_identities WHERE platform = ?1 AND platform_user_id = ?2 AND bot_id = ?3",
             params![platform, platform_user_id, bot_id],
@@ -136,7 +136,7 @@ impl super::Database {
         platform_user_id: &str,
         bot_id: &str,
     ) -> Result<Option<String>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let result = conn.query_row(
             "SELECT unified_user_id FROM user_identities WHERE platform = ?1 AND platform_user_id = ?2 AND bot_id = ?3",
             params![platform, platform_user_id, bot_id],
@@ -151,7 +151,7 @@ impl super::Database {
 
     /// List all identities linked to a unified user.
     pub fn list_user_identities(&self, unified_user_id: &str) -> Result<Vec<UserIdentityRow>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare(
                 "SELECT platform, platform_user_id, unified_user_id, bot_id, display_name, created_at
@@ -176,7 +176,7 @@ impl super::Database {
     }
 
     pub fn delete_unified_user(&self, id: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute("DELETE FROM unified_users WHERE id = ?1", params![id])
             .map_err(|e| format!("Failed to delete unified user: {}", e))?;
         Ok(())

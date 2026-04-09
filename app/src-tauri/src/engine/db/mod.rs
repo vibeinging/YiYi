@@ -69,7 +69,7 @@ impl Database {
     }
 
     fn init_tables(&self) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS sessions (
                 id TEXT PRIMARY KEY,
@@ -439,7 +439,7 @@ impl Database {
     }
 
     fn migrate_tables(&self) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         // Check if metadata column exists
         let has_metadata: bool = conn
             .prepare("SELECT metadata FROM messages LIMIT 0")
@@ -640,7 +640,7 @@ impl Database {
         // Create a default session for migrated messages
         self.create_session_with_id("default", "Default", now)?;
 
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         for msg in &old_messages {
             let ts = msg.timestamp.unwrap_or(now as u64) as i64;
             conn.execute(

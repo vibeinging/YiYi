@@ -60,7 +60,7 @@ impl super::Database {
     ) -> Result<String, String> {
         let id = uuid::Uuid::new_v4().to_string();
         let now = super::now_ts();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT INTO reflections (id, task_id, session_id, outcome, summary, lesson, skill_opportunity, signal_type, confidence, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -81,7 +81,7 @@ impl super::Database {
     ) -> Result<String, String> {
         let id = uuid::Uuid::new_v4().to_string();
         let now = super::now_ts();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT INTO corrections (id, trigger_pattern, wrong_behavior, correct_behavior, source, confidence, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -93,7 +93,7 @@ impl super::Database {
 
     /// Get active corrections for system prompt injection (most recent first, limited).
     pub fn get_active_corrections(&self, limit: usize) -> Vec<(String, String, String)> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = match conn.prepare(
             "SELECT trigger_pattern, correct_behavior, source
              FROM corrections WHERE active = 1
@@ -116,7 +116,7 @@ impl super::Database {
 
     /// Get all active corrections ordered by time ASC (for consolidation -- newer = higher priority).
     pub fn get_all_active_corrections(&self) -> Vec<(String, String, String, f64)> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = match conn.prepare(
             "SELECT trigger_pattern, correct_behavior, source, confidence
              FROM corrections WHERE active = 1
@@ -140,7 +140,7 @@ impl super::Database {
 
     /// Count active corrections.
     pub fn count_active_corrections(&self) -> usize {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row("SELECT COUNT(*) FROM corrections WHERE active = 1", [], |r| r.get::<_, i64>(0))
             .unwrap_or(0) as usize
     }
@@ -151,7 +151,7 @@ impl super::Database {
         &self,
         since_timestamp: i64,
     ) -> Vec<(String, Option<String>, String, String, i64)> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = match conn.prepare(
             "SELECT trigger_pattern, wrong_behavior, correct_behavior, source, created_at
              FROM corrections WHERE active = 1 AND created_at >= ?1
@@ -176,7 +176,7 @@ impl super::Database {
 
     /// Disable a correction by id.
     pub fn disable_correction(&self, id: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute("UPDATE corrections SET active = 0 WHERE id = ?1", params![id])
             .map_err(|e| format!("Failed to disable correction: {}", e))?;
         Ok(())
@@ -184,7 +184,7 @@ impl super::Database {
 
     /// Get recent reflections for growth analysis.
     pub fn get_recent_reflections(&self, limit: usize) -> Vec<(String, String, Option<String>)> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = match conn.prepare(
             "SELECT outcome, summary, lesson FROM reflections
              ORDER BY created_at DESC LIMIT ?1",
@@ -218,7 +218,7 @@ impl super::Database {
         invoke_hint: Option<&str>,
         skill_name: Option<&str>,
     ) -> Result<String, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let id = uuid::Uuid::new_v4().to_string();
         let now = super::now_ts();
 
@@ -245,7 +245,7 @@ impl super::Database {
 
     /// Record a script execution result (success or failure with error).
     pub fn record_code_execution(&self, name: &str, success: bool, error: Option<&str>) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = super::now_ts();
         if success {
             conn.execute(
@@ -262,7 +262,7 @@ impl super::Database {
 
     /// Record execution by path (more reliable than name matching).
     pub fn record_code_execution_by_path(&self, path: &str, success: bool, error: Option<&str>) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = super::now_ts();
         // Try exact path match first, then fall back to name match using file stem
         let sql_success = "UPDATE code_registry SET run_count = run_count + 1, success_count = success_count + 1, last_error = NULL, updated_at = ?1 WHERE path = ?2";
@@ -305,7 +305,7 @@ impl super::Database {
 
     /// Search code registry by name or description keywords.
     pub fn search_code_registry(&self, query: &str, limit: usize) -> Vec<CodeRegistryEntry> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let pattern = format!("%{}%", query);
         let mut stmt = match conn.prepare(
             "SELECT name, path, description, language, invoke_hint, skill_name, run_count, success_count, last_error
@@ -343,7 +343,7 @@ impl super::Database {
     // ---- Meditation Sessions ----
 
     pub fn create_meditation_session(&self, id: &str) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = super::now_ts();
         conn.execute(
             "INSERT INTO meditation_sessions (id, started_at, status) VALUES (?1, ?2, 'running')",
@@ -363,7 +363,7 @@ impl super::Database {
         journal: Option<&str>,
         error: Option<&str>,
     ) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = super::now_ts();
         conn.execute(
             "UPDATE meditation_sessions SET
@@ -382,7 +382,7 @@ impl super::Database {
     }
 
     pub fn get_latest_meditation_session(&self) -> Option<MeditationSession> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare(
                 "SELECT id, started_at, finished_at, status, sessions_reviewed,
@@ -416,7 +416,7 @@ impl super::Database {
     /// Get the latest meditation session that is NOT currently running.
     /// Used to determine the "since" timestamp for a new meditation session.
     pub fn get_latest_completed_meditation_session(&self) -> Option<MeditationSession> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare(
                 "SELECT id, started_at, finished_at, status, sessions_reviewed,
@@ -449,7 +449,7 @@ impl super::Database {
 
     /// Get today's chat messages for meditation review: (session_id, role, content)
     pub fn get_today_sessions_messages(&self) -> Vec<(String, String, String)> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         // Calculate start of today in milliseconds
         let today_start = {
             let now = chrono::Local::now();
@@ -484,7 +484,7 @@ impl super::Database {
 
     /// Get corrections with confidence >= threshold
     pub fn get_high_confidence_corrections(&self, limit: usize, min_confidence: f64) -> Vec<(String, Option<String>, String, f64)> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = match conn.prepare(
             "SELECT trigger_pattern, wrong_behavior, correct_behavior, confidence
              FROM corrections WHERE active = 1 AND confidence >= ?1
@@ -515,7 +515,7 @@ impl super::Database {
         tomorrow_intentions: Option<&str>,
         growth_synthesis: Option<&str>,
     ) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE meditation_sessions SET depth = ?1, phases_completed = ?2, tomorrow_intentions = ?3, growth_synthesis = ?4 WHERE id = ?5",
             params![depth, phases_completed, tomorrow_intentions, growth_synthesis, id],

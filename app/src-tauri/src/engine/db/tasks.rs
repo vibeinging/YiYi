@@ -46,7 +46,7 @@ impl super::Database {
         total_stages: i32,
         created_at: i64,
     ) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT INTO tasks (id, title, description, status, session_id, parent_session_id, plan, total_stages, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
@@ -58,7 +58,7 @@ impl super::Database {
 
     pub fn update_task_workspace_path(&self, task_id: &str, path: &str) -> Result<(), String> {
         let now = super::now_ts();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE tasks SET workspace_path = ?1, updated_at = ?2 WHERE id = ?3",
             params![path, now, task_id],
@@ -68,7 +68,7 @@ impl super::Database {
     }
 
     pub fn search_tasks_by_name(&self, query: &str) -> Result<Option<TaskInfo>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let pattern = format!("%{}%", query);
         conn.query_row(
             "SELECT id, title, description, status, session_id, parent_session_id, plan,
@@ -105,7 +105,7 @@ impl super::Database {
     }
 
     pub fn get_task(&self, task_id: &str) -> Result<Option<TaskInfo>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
             "SELECT id, title, description, status, session_id, parent_session_id, plan,
                     current_stage, total_stages, progress, error_message,
@@ -145,7 +145,7 @@ impl super::Database {
         parent_session_id: Option<&str>,
         status: Option<&str>,
     ) -> Result<Vec<TaskInfo>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         let mut sql = String::from(
             "SELECT id, title, description, status, session_id, parent_session_id, plan,
@@ -202,7 +202,7 @@ impl super::Database {
 
     pub fn update_task_status(&self, task_id: &str, status: &str) -> Result<(), String> {
         let now = super::now_ts();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let completed_at: Option<i64> = if status == "completed" || status == "cancelled" {
             Some(now)
         } else {
@@ -224,7 +224,7 @@ impl super::Database {
         progress: f64,
     ) -> Result<(), String> {
         let now = super::now_ts();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE tasks SET current_stage = ?1, total_stages = ?2, progress = ?3, updated_at = ?4, last_activity_at = ?4 WHERE id = ?5",
             params![current_stage, total_stages, progress, now, task_id],
@@ -240,7 +240,7 @@ impl super::Database {
         error_message: &str,
     ) -> Result<(), String> {
         let now = super::now_ts();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE tasks SET status = ?1, error_message = ?2, updated_at = ?3 WHERE id = ?4",
             params![status, error_message, now, task_id],
@@ -251,7 +251,7 @@ impl super::Database {
 
     pub fn pin_task(&self, task_id: &str, pinned: bool) -> Result<(), String> {
         let now = super::now_ts();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE tasks SET pinned = ?1, last_activity_at = ?2, updated_at = ?2 WHERE id = ?3",
             params![pinned as i32, now, task_id],
@@ -261,7 +261,7 @@ impl super::Database {
     }
 
     pub fn delete_task(&self, task_id: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         // Get the session_id for this task so we can cascade-delete the session
         let session_id: Option<String> = conn
             .query_row(

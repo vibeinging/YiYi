@@ -25,7 +25,7 @@ impl super::Database {
     // --- Authorized folders CRUD ---
 
     pub fn list_authorized_folders(&self) -> Vec<AuthorizedFolderRow> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare(
                 "SELECT id, path, label, permission, is_default, created_at, updated_at
@@ -49,7 +49,7 @@ impl super::Database {
     }
 
     pub fn get_authorized_folder(&self, id: &str) -> Result<Option<AuthorizedFolderRow>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let result = conn.query_row(
             "SELECT id, path, label, permission, is_default, created_at, updated_at
              FROM authorized_folders WHERE id = ?1",
@@ -74,7 +74,7 @@ impl super::Database {
     }
 
     pub fn upsert_authorized_folder(&self, folder: &AuthorizedFolderRow) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT INTO authorized_folders (id, path, label, permission, is_default, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
@@ -95,7 +95,7 @@ impl super::Database {
     }
 
     pub fn remove_authorized_folder(&self, id: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "DELETE FROM authorized_folders WHERE id = ?1",
             params![id],
@@ -107,7 +107,7 @@ impl super::Database {
     // --- Sensitive paths CRUD ---
 
     pub fn list_sensitive_paths(&self) -> Vec<SensitivePathRow> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare(
                 "SELECT id, pattern, is_builtin, enabled, created_at
@@ -129,7 +129,7 @@ impl super::Database {
     }
 
     pub fn upsert_sensitive_path(&self, row: &SensitivePathRow) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT INTO sensitive_paths (id, pattern, is_builtin, enabled, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5)
@@ -148,7 +148,7 @@ impl super::Database {
     }
 
     pub fn remove_sensitive_path(&self, id: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "DELETE FROM sensitive_paths WHERE id = ?1",
             params![id],
@@ -158,7 +158,7 @@ impl super::Database {
     }
 
     pub fn toggle_sensitive_path(&self, id: &str, enabled: bool) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE sensitive_paths SET enabled = ?1 WHERE id = ?2",
             params![enabled as i32, id],
@@ -182,7 +182,7 @@ impl super::Database {
             "~/.npmrc",
             "~/.pypirc",
         ];
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         for pattern in &builtin_patterns {
             let exists: bool = conn
                 .prepare("SELECT 1 FROM sensitive_paths WHERE pattern = ?1")
@@ -201,7 +201,7 @@ impl super::Database {
 
     /// Migrate old sandbox_paths entries to authorized_folders (one-time).
     pub(super) fn migrate_sandbox_to_authorized_folders(&self) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let sandbox_paths: Vec<String> = conn
             .prepare("SELECT path FROM sandbox_paths")
             .and_then(|mut stmt| {

@@ -26,7 +26,7 @@ impl super::Database {
     // === Provider Settings ===
 
     pub fn get_all_provider_settings(&self) -> Vec<ProviderSettingRow> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare("SELECT provider_id, api_key, base_url, extra_models FROM provider_settings")
             .unwrap();
@@ -50,7 +50,7 @@ impl super::Database {
         base_url: Option<&str>,
         extra_models_json: Option<&str>,
     ) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         // Get existing row
         let existing = conn
             .query_row(
@@ -84,7 +84,7 @@ impl super::Database {
     // === Custom Providers ===
 
     pub fn get_all_custom_providers(&self) -> Vec<CustomProviderRow> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare("SELECT id, name, default_base_url, api_key_prefix, models, is_local, api_key, base_url FROM custom_providers")
             .unwrap();
@@ -106,7 +106,7 @@ impl super::Database {
     }
 
     pub fn upsert_custom_provider(&self, row: &CustomProviderRow) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT OR REPLACE INTO custom_providers (id, name, default_base_url, api_key_prefix, models, is_local, api_key, base_url)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -117,7 +117,7 @@ impl super::Database {
     }
 
     pub fn delete_custom_provider(&self, id: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute("DELETE FROM custom_providers WHERE id = ?1", params![id])
             .map_err(|e| format!("Failed to delete custom provider: {}", e))?;
         Ok(())
@@ -126,7 +126,7 @@ impl super::Database {
     // === App Config (key-value) ===
 
     pub fn get_config(&self, key: &str) -> Option<String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
             "SELECT value FROM app_config WHERE key = ?1",
             params![key],
@@ -136,7 +136,7 @@ impl super::Database {
     }
 
     pub fn set_config(&self, key: &str, value: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT OR REPLACE INTO app_config (key, value) VALUES (?1, ?2)",
             params![key, value],
@@ -154,7 +154,7 @@ impl super::Database {
 
         // Check if we already have provider data
         {
-            let conn = self.conn.lock().unwrap();
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM provider_settings", [], |row| row.get(0))
                 .unwrap_or(0);

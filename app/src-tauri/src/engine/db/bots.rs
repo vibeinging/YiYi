@@ -30,7 +30,7 @@ impl super::Database {
     // === Bots ===
 
     pub fn list_bots(&self) -> Result<Vec<BotRow>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare("SELECT id, name, platform, enabled, config_json, persona, access_json, created_at, updated_at FROM bots ORDER BY created_at DESC")
             .map_err(|e| format!("Query error: {}", e))?;
@@ -55,7 +55,7 @@ impl super::Database {
     }
 
     pub fn get_bot(&self, id: &str) -> Result<Option<BotRow>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let result = conn.query_row(
             "SELECT id, name, platform, enabled, config_json, persona, access_json, created_at, updated_at FROM bots WHERE id = ?1",
             params![id],
@@ -81,7 +81,7 @@ impl super::Database {
     }
 
     pub fn upsert_bot(&self, row: &BotRow) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT OR REPLACE INTO bots (id, name, platform, enabled, config_json, persona, access_json, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -92,7 +92,7 @@ impl super::Database {
     }
 
     pub fn delete_bot(&self, id: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute("DELETE FROM bots WHERE id = ?1", params![id])
             .map_err(|e| format!("Failed to delete bot: {}", e))?;
         Ok(())
@@ -110,7 +110,7 @@ impl super::Database {
         platform: &str,
         display_name: Option<&str>,
     ) -> Result<BotConversationRow, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = super::now_ts();
 
         // Try to find existing
@@ -167,14 +167,14 @@ impl super::Database {
 
     /// List conversations, optionally filtered by bot_id.
     pub fn list_conversations(&self, bot_id: Option<&str>) -> Result<Vec<BotConversationRow>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let sql = if bot_id.is_some() {
             "SELECT id, bot_id, external_id, platform, display_name, session_id, \
-             linked_session_id, trigger_mode, last_message_at, message_count, created_at \
+             linked_session_id, trigger_mode, agent_config_json, last_message_at, message_count, created_at \
              FROM bot_conversations WHERE bot_id = ?1 ORDER BY last_message_at DESC NULLS LAST"
         } else {
             "SELECT id, bot_id, external_id, platform, display_name, session_id, \
-             linked_session_id, trigger_mode, last_message_at, message_count, created_at \
+             linked_session_id, trigger_mode, agent_config_json, last_message_at, message_count, created_at \
              FROM bot_conversations ORDER BY last_message_at DESC NULLS LAST"
         };
         let mut stmt = conn.prepare(sql).map_err(|e| format!("Query error: {}", e))?;
@@ -194,10 +194,10 @@ impl super::Database {
 
     /// Get a conversation by its (bot_id, external_id) pair.
     pub fn get_conversation_by_external(&self, bot_id: &str, external_id: &str) -> Result<Option<BotConversationRow>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let result = conn.query_row(
             "SELECT id, bot_id, external_id, platform, display_name, session_id, \
-             linked_session_id, trigger_mode, last_message_at, message_count, created_at \
+             linked_session_id, trigger_mode, agent_config_json, last_message_at, message_count, created_at \
              FROM bot_conversations WHERE bot_id = ?1 AND external_id = ?2",
             params![bot_id, external_id],
             |row| Ok(Self::row_to_conversation(row)),
@@ -211,10 +211,10 @@ impl super::Database {
 
     /// Get a conversation by its primary ID.
     pub fn get_conversation(&self, id: &str) -> Result<Option<BotConversationRow>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let result = conn.query_row(
             "SELECT id, bot_id, external_id, platform, display_name, session_id, \
-             linked_session_id, trigger_mode, last_message_at, message_count, created_at \
+             linked_session_id, trigger_mode, agent_config_json, last_message_at, message_count, created_at \
              FROM bot_conversations WHERE id = ?1",
             params![id],
             |row| Ok(Self::row_to_conversation(row)),
@@ -228,7 +228,7 @@ impl super::Database {
 
     /// Update the trigger mode for a conversation.
     pub fn update_conversation_trigger(&self, id: &str, trigger_mode: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE bot_conversations SET trigger_mode = ?1 WHERE id = ?2",
             params![trigger_mode, id],
@@ -238,7 +238,7 @@ impl super::Database {
 
     /// Link (or unlink) a conversation to a main chat session.
     pub fn link_conversation(&self, id: &str, linked_session_id: Option<&str>) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE bot_conversations SET linked_session_id = ?1 WHERE id = ?2",
             params![linked_session_id, id],
@@ -248,7 +248,7 @@ impl super::Database {
 
     /// Update the agent routing config for a conversation.
     pub fn update_conversation_agent(&self, id: &str, agent_config_json: Option<&str>) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE bot_conversations SET agent_config_json = ?1 WHERE id = ?2",
             params![agent_config_json, id],
@@ -258,7 +258,7 @@ impl super::Database {
 
     /// Delete a conversation record.
     pub fn delete_conversation(&self, id: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute("DELETE FROM bot_conversations WHERE id = ?1", params![id])
             .map_err(|e| format!("Failed to delete conversation: {}", e))?;
         Ok(())
@@ -267,7 +267,7 @@ impl super::Database {
     /// Update activity timestamp and increment message count.
     pub fn update_conversation_activity(&self, bot_id: &str, external_id: &str) -> Result<(), String> {
         let now = super::now_ts();
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE bot_conversations SET last_message_at = ?1, message_count = message_count + 1 \
              WHERE bot_id = ?2 AND external_id = ?3",
