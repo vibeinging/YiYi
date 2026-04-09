@@ -22,7 +22,7 @@ fn get_plugin_hook_config() -> Option<HookConfig> {
     let handle = crate::engine::tools::APP_HANDLE.get()?;
     use tauri::Manager;
     let app_state = handle.state::<crate::state::AppState>();
-    let reg = app_state.inner().plugin_registry.blocking_read();
+    let reg = app_state.inner().plugin_registry.read().unwrap();
     let plugin_hooks = reg.aggregated_hooks();
     if plugin_hooks.is_empty() {
         None
@@ -41,7 +41,7 @@ fn get_plugin_tool_definitions() -> Vec<ToolDefinition> {
     };
     use tauri::Manager;
     let app_state = handle.state::<crate::state::AppState>();
-    let reg = app_state.inner().plugin_registry.blocking_read();
+    let reg = app_state.inner().plugin_registry.read().unwrap();
     reg.all_tool_definitions()
 }
 
@@ -51,11 +51,11 @@ fn load_permission_mode() -> PermissionMode {
     if let Some(filter) = crate::engine::tools::current_tool_filter() {
         use super::ToolFilter;
         if let ToolFilter::Allow(ref names) = filter {
-            let all_readonly = names.iter().all(|n| matches!(n.as_str(),
-                "read_file" | "list_directory" | "grep_search" | "glob_search"
-                | "web_search" | "get_current_time" | "desktop_screenshot"
-                | "memory_search" | "memory_list" | "read_pdf" | "read_spreadsheet" | "read_docx"
-            ));
+            // Use PermissionPolicy as single source of truth for tool mode requirements
+            let policy = PermissionPolicy::new(PermissionMode::ReadOnly);
+            let all_readonly = names.iter().all(|n| {
+                policy.required_mode_for(n) == PermissionMode::ReadOnly
+            });
             if all_readonly {
                 return PermissionMode::ReadOnly;
             }
@@ -390,8 +390,6 @@ where
     let hook_runner = HookRunner::new(load_hook_config());
     // Permission policy (three-level mode borrowed from Claw Code)
     let permission_policy = PermissionPolicy::new(load_permission_mode());
-    // Token usage tracker — estimates based on message content since API doesn't return usage in stream
-    let mut usage_tracker = UsageTracker::new();
 
     const MAX_EMPTY_RETRIES: usize = 3;
     let mut consecutive_empty = 0u8;
@@ -436,20 +434,6 @@ where
         };
 
         messages.push(response.message.clone());
-
-        // Track estimated token usage (approximate: input = all messages, output = response)
-        {
-            let input_est: usize = messages.iter()
-                .map(|m| m.content.as_ref().map_or(0, |c| crate::engine::compact::estimate_tokens(&c.as_text().unwrap_or(""))))
-                .sum();
-            let output_est = response.message.content.as_ref()
-                .map_or(0, |c| crate::engine::compact::estimate_tokens(&c.as_text().unwrap_or("")));
-            usage_tracker.record(crate::engine::usage::TokenUsage {
-                input_tokens: input_est as u32,
-                output_tokens: output_est as u32,
-                ..Default::default()
-            });
-        }
 
         let has_tool_calls = response.message.tool_calls.as_ref()
             .map_or(false, |tc| !tc.is_empty());

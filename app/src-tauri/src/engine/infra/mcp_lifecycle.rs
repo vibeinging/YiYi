@@ -122,6 +122,10 @@ impl McpLifecycleTracker {
             });
         lifecycle.current_phase = McpPhase::Error;
         lifecycle.errors.push(error);
+        // Cap errors to prevent unbounded growth
+        if lifecycle.errors.len() > 50 {
+            lifecycle.errors.drain(..lifecycle.errors.len() - 50);
+        }
     }
 
     /// Return a status summary for every tracked server.

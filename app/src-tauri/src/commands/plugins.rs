@@ -16,7 +16,7 @@ pub struct PluginInfo {
 
 #[tauri::command]
 pub async fn list_plugins(state: State<'_, AppState>) -> Result<Vec<PluginInfo>, String> {
-    let registry = state.plugin_registry.read().await;
+    let registry = state.plugin_registry.read().unwrap();
     Ok(registry.list().iter().map(|p| PluginInfo {
         id: p.id.clone(),
         name: p.manifest.name.clone(),
@@ -34,7 +34,7 @@ pub async fn enable_plugin(
     id: String,
 ) -> Result<(), String> {
     let plugins_dir = state.working_dir.join("plugins");
-    let mut registry = state.plugin_registry.write().await;
+    let mut registry = state.plugin_registry.write().unwrap();
     registry.set_enabled(&plugins_dir, &id, true);
     // Run init for newly enabled plugin
     if let Some(plugin) = registry.get(&id) {
@@ -51,7 +51,7 @@ pub async fn disable_plugin(
     id: String,
 ) -> Result<(), String> {
     let plugins_dir = state.working_dir.join("plugins");
-    let mut registry = state.plugin_registry.write().await;
+    let mut registry = state.plugin_registry.write().unwrap();
     // Run shutdown before disabling
     if let Some(plugin) = registry.get(&id) {
         if let Err(e) = plugin.shutdown() {
@@ -65,7 +65,7 @@ pub async fn disable_plugin(
 #[tauri::command]
 pub async fn reload_plugins(state: State<'_, AppState>) -> Result<usize, String> {
     let plugins_dir = state.working_dir.join("plugins");
-    let mut registry = state.plugin_registry.write().await;
+    let mut registry = state.plugin_registry.write().unwrap();
     *registry = crate::engine::plugins::PluginRegistry::load(&plugins_dir);
     registry.initialize_all();
     Ok(registry.list().len())

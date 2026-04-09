@@ -1087,7 +1087,7 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
                 if let Some(handle) = APP_HANDLE.get() {
                     use tauri::Manager;
                     let state: tauri::State<'_, crate::state::AppState> = handle.state();
-                    let registry = state.plugin_registry.blocking_read();
+                    let registry = state.plugin_registry.read().unwrap();
                     match registry.execute_tool(&call.function.name, &args) {
                         Ok(result) => result,
                         Err(e) => format!("Plugin tool error: {e}"),

@@ -59,7 +59,7 @@ pub struct AppState {
     /// Agent definition registry.
     pub agent_registry: Arc<tokio::sync::RwLock<crate::engine::agents::AgentRegistry>>,
     /// Plugin registry.
-    pub plugin_registry: Arc<tokio::sync::RwLock<crate::engine::plugins::PluginRegistry>>,
+    pub plugin_registry: Arc<std::sync::RwLock<crate::engine::plugins::PluginRegistry>>,
 }
 
 impl AppState {
@@ -305,7 +305,7 @@ impl AppState {
                 crate::engine::voice::VoiceSessionManager::new(),
             )),
             agent_registry: Arc::new(tokio::sync::RwLock::new(agent_registry)),
-            plugin_registry: Arc::new(tokio::sync::RwLock::new(plugin_registry)),
+            plugin_registry: Arc::new(std::sync::RwLock::new(plugin_registry)),
         }
     }
 }

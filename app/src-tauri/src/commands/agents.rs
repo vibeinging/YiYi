@@ -30,6 +30,10 @@ pub async fn save_agent(
     if def.name.is_empty() {
         return Err("Agent name is required".into());
     }
+    // Sanitize name to prevent path traversal
+    if def.name.contains('/') || def.name.contains('\\') || def.name.contains("..") {
+        return Err("Agent name must not contain path separators or '..'".into());
+    }
     let partial_name = def.name.clone();
 
     // Write to custom agents directory
@@ -51,6 +55,9 @@ pub async fn delete_agent(
     state: State<'_, AppState>,
     name: String,
 ) -> Result<(), String> {
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err("Agent name must not contain path separators or '..'".into());
+    }
     let agent_dir = state.working_dir.join("agents").join(&name);
     if !agent_dir.exists() {
         return Err(format!("Custom agent '{}' not found", name));

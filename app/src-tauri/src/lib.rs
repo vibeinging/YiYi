@@ -277,7 +277,7 @@ pub fn run() {
 
             // Initialize plugins (run lifecycle Init commands)
             {
-                let plugin_registry = tauri::async_runtime::block_on(state.plugin_registry.read());
+                let plugin_registry = state.plugin_registry.read().unwrap();
                 plugin_registry.initialize_all();
                 let plugin_count = plugin_registry.list().len();
                 if plugin_count > 0 {
