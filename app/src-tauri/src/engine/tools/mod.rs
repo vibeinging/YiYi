@@ -1072,8 +1072,22 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
             };
         }
         _ => {
+            // Try plugin tools first (format: plugin__<id>__<tool_name>)
+            if call.function.name.starts_with("plugin__") {
+                if let Some(handle) = APP_HANDLE.get() {
+                    use tauri::Manager;
+                    let state: tauri::State<'_, crate::state::AppState> = handle.state();
+                    let registry = state.plugin_registry.blocking_read();
+                    match registry.execute_tool(&call.function.name, &args) {
+                        Ok(result) => result,
+                        Err(e) => format!("Plugin tool error: {e}"),
+                    }
+                } else {
+                    format!("Plugin tool unavailable: no app handle")
+                }
+            }
             // Try MCP runtime for unknown tools
-            if let Some(runtime) = MCP_RUNTIME.get() {
+            else if let Some(runtime) = MCP_RUNTIME.get() {
                 match try_mcp_tool(runtime, &call.function.name, &args).await {
                     Some(result) => result,
                     None => format!("Unknown tool: {}", call.function.name),
