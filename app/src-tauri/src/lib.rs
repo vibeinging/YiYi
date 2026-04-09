@@ -274,6 +274,16 @@ pub fn run() {
                 }
             }
 
+            // Initialize plugins (run lifecycle Init commands)
+            {
+                let plugin_registry = tauri::async_runtime::block_on(state.plugin_registry.read());
+                plugin_registry.initialize_all();
+                let plugin_count = plugin_registry.list().len();
+                if plugin_count > 0 {
+                    log::info!("Initialized {} plugins", plugin_count);
+                }
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -506,6 +516,11 @@ pub fn run() {
             commands::agents::get_agent,
             commands::agents::save_agent,
             commands::agents::delete_agent,
+            // Plugins
+            commands::plugins::list_plugins,
+            commands::plugins::enable_plugin,
+            commands::plugins::disable_plugin,
+            commands::plugins::reload_plugins,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

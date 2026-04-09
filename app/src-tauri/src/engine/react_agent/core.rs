@@ -3,15 +3,46 @@ use super::prompt::critical_system_reminder;
 use super::{AgentStreamEvent, PersistToolFn, ToolPersistEvent, DEFAULT_MAX_ITERATIONS};
 use crate::engine::hooks::{HookRunner, HookConfig, merge_hook_feedback};
 use crate::engine::usage::UsageTracker;
+use crate::engine::compact;
 use crate::engine::permission_mode::{PermissionMode, PermissionPolicy, PermissionOutcome};
+
+/// Auto-compaction threshold: compress when estimated tokens exceed this.
+const AUTO_COMPACT_TOKEN_THRESHOLD: usize = 80_000;
 use crate::engine::llm_client::{chat_completion, chat_completion_stream, LLMConfig, LLMMessage, MessageContent, StreamEvent};
 use crate::engine::llm_client::retry::parse_context_overflow;
 use crate::engine::tools::{builtin_tools, execute_tool, get_current_session_id, ToolDefinition};
 
-/// Load hook configuration from the app's config.
+/// Load hook configuration from plugins + app config.
 fn load_hook_config() -> HookConfig {
-    // TODO: Load from config.json hooks section. For now, empty (no hooks).
-    HookConfig::default()
+    get_plugin_hook_config().unwrap_or_default()
+}
+
+/// Helper: access PluginRegistry and extract hook config.
+fn get_plugin_hook_config() -> Option<HookConfig> {
+    let handle = crate::engine::tools::APP_HANDLE.get()?;
+    use tauri::Manager;
+    let app_state = handle.state::<crate::state::AppState>();
+    let reg = app_state.inner().plugin_registry.blocking_read();
+    let plugin_hooks = reg.aggregated_hooks();
+    if plugin_hooks.is_empty() {
+        None
+    } else {
+        log::debug!("Loaded {} pre-hooks, {} post-hooks from plugins",
+            plugin_hooks.pre_tool_use.len(), plugin_hooks.post_tool_use.len());
+        Some(plugin_hooks.to_hook_config())
+    }
+}
+
+/// Helper: get plugin tool definitions.
+fn get_plugin_tool_definitions() -> Vec<ToolDefinition> {
+    let handle = match crate::engine::tools::APP_HANDLE.get() {
+        Some(h) => h,
+        None => return vec![],
+    };
+    use tauri::Manager;
+    let app_state = handle.state::<crate::state::AppState>();
+    let reg = app_state.inner().plugin_registry.blocking_read();
+    reg.all_tool_definitions()
 }
 
 /// Load permission mode from the app's config.
@@ -313,6 +344,8 @@ where
     } else {
         let mut t = builtin_tools();
         t.extend(extra_tools.iter().cloned());
+        // Inject plugin custom tools
+        t.extend(get_plugin_tool_definitions());
         t
     };
 

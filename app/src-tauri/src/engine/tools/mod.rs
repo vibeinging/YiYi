@@ -41,7 +41,7 @@ static MCP_RUNTIME: std::sync::OnceLock<Arc<MCPRuntime>> = std::sync::OnceLock::
 static WORKING_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
 /// Global Tauri app handle for emitting events to the frontend.
-static APP_HANDLE: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+pub(crate) static APP_HANDLE: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
 
 /// Global database reference for tools that need DB access.
 static DATABASE: std::sync::OnceLock<Arc<super::db::Database>> = std::sync::OnceLock::new();
