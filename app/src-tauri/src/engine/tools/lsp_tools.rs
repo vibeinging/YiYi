@@ -27,14 +27,31 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
 }
 
 pub(super) async fn code_intelligence_tool(args: &serde_json::Value) -> String {
-    let action = args["action"].as_str().unwrap_or("");
-    let path = args["path"].as_str().unwrap_or("");
+    let action = args["action"].as_str().unwrap_or("").to_string();
+    let path = args["path"].as_str().unwrap_or("").to_string();
     let line = args["line"].as_u64().unwrap_or(0) as u32;
     let col = args["col"].as_u64().unwrap_or(0) as u32;
 
     if path.is_empty() {
         return "Error: path is required".into();
     }
+
+    // Wrap in spawn_blocking + timeout since LSP uses synchronous I/O
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tokio::task::spawn_blocking(move || {
+            lsp_execute_sync(&action, &path, line, col)
+        }),
+    ).await;
+
+    match result {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => format!("Error: LSP task failed: {e}"),
+        Err(_) => "Error: LSP request timed out (10s)".into(),
+    }
+}
+
+fn lsp_execute_sync(action: &str, path: &str, line: u32, col: u32) -> String {
 
     use crate::engine::coding::lsp_client::LspRegistry;
     use std::sync::OnceLock;

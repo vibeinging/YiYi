@@ -118,9 +118,11 @@ fn detect_destructive(cmd: &str) -> Option<String> {
         return Some("Blocked: fork bomb pattern detected".into());
     }
 
-    // rm -rf / (root deletion)
-    if cmd.contains("rm ") && cmd.contains("-rf") && (cmd.contains(" /") || cmd.contains(" /*")) {
-        // Check it's actually targeting root, not a subpath
+    // rm -rf / (root deletion) — detect both short and long flag forms
+    let has_rm = cmd.contains("rm ");
+    let has_recursive_force = cmd.contains("-rf") || cmd.contains("-fr")
+        || (cmd.contains("--recursive") && cmd.contains("--force"));
+    if has_rm && has_recursive_force && (cmd.contains(" /") || cmd.contains(" /*")) {
         if cmd.contains(" / ") || cmd.ends_with(" /") || cmd.contains(" /* ") || cmd.ends_with(" /*") {
             return Some("Blocked: recursive deletion of root filesystem".into());
         }

@@ -850,26 +850,26 @@ pub fn spawn_task_execution(
 // builtin_tools & execute_tool — the public API
 // ============================================================================
 
-/// Built-in tools available to the agent
+/// Built-in tools available to the agent. Cached after first call.
 pub fn builtin_tools() -> Vec<ToolDefinition> {
-    let mut tools = Vec::new();
-    tools.extend(system_tools::definitions());
-    tools.extend(file_tools::definitions());
-    tools.extend(web_tools::definitions());
-    tools.extend(browser_tools::definitions());
-    tools.extend(memory_tools::definitions());
-    tools.extend(cron_tools::definitions());
-    tools.extend(bot_tools::definitions());
-    tools.extend(skill_tools::definitions());
-    // claude_code tool disabled — YiYi's built-in tools now handle coding tasks directly.
-    // Kept as module for backward compatibility. Uncomment to re-enable:
-    // tools.extend(claude_code::definitions());
-    tools.extend(task_tools::definitions());
-    tools.extend(canvas_tools::definitions());
-    tools.extend(spawn_tools::definitions());
-    tools.extend(computer_tools::definitions());
-    tools.extend(lsp_tools::definitions());
-    tools
+    static CACHE: std::sync::OnceLock<Vec<ToolDefinition>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| {
+        let mut tools = Vec::new();
+        tools.extend(system_tools::definitions());
+        tools.extend(file_tools::definitions());
+        tools.extend(web_tools::definitions());
+        tools.extend(browser_tools::definitions());
+        tools.extend(memory_tools::definitions());
+        tools.extend(cron_tools::definitions());
+        tools.extend(bot_tools::definitions());
+        tools.extend(skill_tools::definitions());
+        tools.extend(task_tools::definitions());
+        tools.extend(canvas_tools::definitions());
+        tools.extend(spawn_tools::definitions());
+        tools.extend(computer_tools::definitions());
+        tools.extend(lsp_tools::definitions());
+        tools
+    }).clone()
 }
 
 /// Execute a tool call and return the result
@@ -891,6 +891,35 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
                     "Error: Tool '{}' is not available to this agent.",
                     call.function.name
                 ),
+                images: vec![],
+            };
+        }
+    }
+
+    // Defense-in-depth: PermissionPolicy check at tool dispatch level
+    // Even if the caller forgot to check, this prevents ReadOnly agents from writing
+    {
+        use crate::engine::permission_mode::{PermissionPolicy, PermissionMode, PermissionOutcome};
+        let mode = if let Ok(filter) = AGENT_TOOL_FILTER.try_with(|f| f.clone()) {
+            // Derive mode from tool filter (same logic as core.rs)
+            if let super::react_agent::ToolFilter::Allow(ref names) = filter {
+                let policy = PermissionPolicy::new(PermissionMode::ReadOnly);
+                if names.iter().all(|n| policy.required_mode_for(n) == PermissionMode::ReadOnly) {
+                    PermissionMode::ReadOnly
+                } else {
+                    PermissionMode::Standard
+                }
+            } else {
+                PermissionMode::Standard
+            }
+        } else {
+            PermissionMode::Standard
+        };
+        let policy = PermissionPolicy::new(mode);
+        if let PermissionOutcome::Deny { reason } = policy.is_allowed(&call.function.name) {
+            return ToolResult {
+                tool_call_id: call.id.clone(),
+                content: format!("Error: {reason}"),
                 images: vec![],
             };
         }

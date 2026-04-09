@@ -265,6 +265,21 @@ pub fn run() {
                 start_meditation_timer(app_handle);
             }
 
+            // Periodic worker cleanup (every 5 min, remove finished workers older than 30 min)
+            {
+                let cleanup_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                        let registry = cleanup_handle.state::<engine::worker::WorkerRegistry>();
+                        let cleaned = registry.cleanup_finished(30 * 60 * 1000);
+                        if cleaned > 0 {
+                            log::info!("Cleaned up {cleaned} finished workers");
+                        }
+                    }
+                });
+            }
+
             // One-time migration: seed MemMe from legacy MEMORY.md/PRINCIPLES.md
             {
                 let migration_flag = state.working_dir.join(".memme_seeded");
