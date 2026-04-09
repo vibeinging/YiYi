@@ -485,11 +485,11 @@ pub fn run() {
             commands::mcp::update_mcp_client,
             commands::mcp::toggle_mcp_client,
             commands::mcp::delete_mcp_client,
-            // Unified Users (cross-platform identity)
-            commands::unified_users::unified_users_list,
-            commands::unified_users::unified_users_create,
-            commands::unified_users::unified_users_link,
-            commands::unified_users::unified_users_unlink,
+            // Unified Users — disabled (no frontend consumer, reduces attack surface)
+            // commands::unified_users::unified_users_list,
+            // commands::unified_users::unified_users_create,
+            // commands::unified_users::unified_users_link,
+            // commands::unified_users::unified_users_unlink,
             // Tasks
             commands::tasks::create_task,
             commands::tasks::list_tasks,

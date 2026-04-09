@@ -445,10 +445,12 @@ fn try_brew_install(pkg: &str) -> Option<String> {
 /// Try to install a package via Linux package managers.
 /// Attempts apt-get, dnf, yum, pacman, zypper in order,
 /// first without sudo, then with sudo.
+#[allow(dead_code)] // Kept for known-tool install paths but blocked from wildcard
 fn try_linux_package_install(pkg: &str) -> Option<String> {
     if !cfg!(target_os = "linux") {
         return None;
     }
+    log::warn!("try_linux_package_install: attempting to install '{}' — may use sudo", pkg);
     let managers: &[(&str, &[&str])] = &[
         ("apt-get", &["install", "-y"]),
         ("dnf", &["install", "-y"]),
