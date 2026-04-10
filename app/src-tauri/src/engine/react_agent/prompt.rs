@@ -241,6 +241,9 @@ For advanced operations (PDF forms, PPTX creation, complex Excel), use run_pytho
 - Use project_tree to understand project structure before making changes
 - Use undo_edit if an edit introduced errors
 - Summarize the results for the user
+- For multi-step tasks: call `request_continuation` tool when you need more rounds to complete
+- For tasks that create files or run long operations: use `create_task` for background execution
+- Skills provide domain-specific instructions — use `tool_search` + `activate_skills` to load them when needed
 
 ## 后台任务 (IMPORTANT)
 任何需要**创建文件**或**设置定时任务**的请求，都必须使用 `create_task` 创建后台任务。\
@@ -449,9 +452,11 @@ When setting up bots, open the developer console:
     // Long-term memory is now included in HOT-tier context loaded above (via tiered_memory::load_hot_context).
     // No separate MEMORY.md file read needed.
 
-    // Skill index — model calls activate_skills tool to load full content on demand
+    // Skills — all loaded on demand via tool_search → activate_skills (Claw Code pattern)
+    // No more always_active injection. Core behaviors are in the system prompt directly.
     if !skill_index.is_empty() {
-        prompt.push_str("\n\n## Available Skills (call `activate_skills` tool to load detailed instructions)\n");
+        prompt.push_str("\n\n## Available Skills\n");
+        prompt.push_str("Use `tool_search` to find `activate_skills`, then call it to load skill instructions.\n");
         for entry in skill_index {
             if entry.description.is_empty() {
                 prompt.push_str(&format!("- {}\n", entry.name));
@@ -460,15 +465,9 @@ When setting up bots, open the developer console:
             }
         }
     }
-
-    // Always-active skills — injected directly (e.g. auto_continue)
-    for skill in always_active_skills {
-        if !skill.is_empty() {
-            prompt.push_str("\n---\n");
-            prompt.push_str(skill);
-            prompt.push('\n');
-        }
-    }
+    // Note: always_active_skills parameter kept for backward compatibility but no longer injected.
+    // auto_continue and task_proposer behaviors are now in the system prompt directly.
+    let _ = always_active_skills;
 
     prompt
 }
