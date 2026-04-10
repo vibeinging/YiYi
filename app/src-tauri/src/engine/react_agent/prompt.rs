@@ -375,10 +375,18 @@ When setting up bots, open the developer console:
     // Inject git context if workspace is a git repo
     {
         let git_workspace = user_workspace.unwrap_or(working_dir);
-        if let Some(git_ctx) = crate::engine::coding::git_context::render_git_context(git_workspace) {
-            prompt.push_str("\n\n");
-            prompt.push_str(&git_ctx);
-            prompt.push('\n');
+        if crate::engine::coding::git_context::is_git_repo(git_workspace) {
+            if let Some(git_ctx) = crate::engine::coding::git_context::render_git_context(git_workspace) {
+                prompt.push_str("\n\n");
+                prompt.push_str(&git_ctx);
+                prompt.push('\n');
+            }
+        }
+        // Also inject project info if detectable
+        let project_info = crate::engine::coding::project_detect::detect_project(git_workspace);
+        if project_info.project_type != crate::engine::coding::project_detect::ProjectType::Unknown {
+            prompt.push_str(&format!("\n\n{}\n",
+                crate::engine::coding::project_detect::project_summary(&project_info)));
         }
     }
 
