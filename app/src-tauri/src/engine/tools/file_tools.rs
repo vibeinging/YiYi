@@ -71,12 +71,35 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
             }),
         ),
         super::tool_def(
+            "undo_edit",
+            "Undo the last edit to a file by restoring from backup. Use when an edit introduced errors.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Absolute path to the file to restore" }
+                },
+                "required": ["path"]
+            }),
+        ),
+        super::tool_def(
             "list_directory",
             "List files and directories in a given path.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Directory path to list" }
+                },
+                "required": ["path"]
+            }),
+        ),
+        super::tool_def(
+            "project_tree",
+            "Show the file tree of a project workspace. Cached for 60s. \
+             Use this FIRST when working on an unfamiliar project to understand its structure.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Project root directory" }
                 },
                 "required": ["path"]
             }),
@@ -254,7 +277,14 @@ pub(super) async fn write_file_tool(args: &serde_json::Value) -> String {
             // Generate structured diff for AI perception
             let kind = if is_create { "created" } else { "updated" };
             let diff = generate_diff(original.as_deref().unwrap_or(""), content, path);
-            format!("File {} ({}, {} bytes).\n\n{}", path, kind, content.len(), diff)
+            let mut result = format!("File {} ({}, {} bytes).\n\n{}", path, kind, content.len(), diff);
+
+            // Auto-test: run project checks after write
+            if let Some(test_result) = crate::engine::coding::auto_test::run_auto_test(path).await {
+                result.push_str(&crate::engine::coding::auto_test::format_test_result(&test_result));
+            }
+
+            result
         }
         Err(e) => format!("Error writing file: {}", e),
     }
@@ -313,7 +343,14 @@ pub(super) async fn edit_file_tool(args: &serde_json::Value) -> String {
                     } else {
                         String::new()
                     };
-                    format!("Edited {}{}\n\n{}", path, replace_info, diff)
+                    let mut result = format!("Edited {}{}\n\n{}", path, replace_info, diff);
+
+                    // Auto-test: run project checks after edit
+                    if let Some(test_result) = crate::engine::coding::auto_test::run_auto_test(path).await {
+                        result.push_str(&crate::engine::coding::auto_test::format_test_result(&test_result));
+                    }
+
+                    result
                 }
                 Err(e) => format!("Error writing: {}", e),
             }
@@ -394,6 +431,59 @@ pub(super) async fn delete_file_tool(args: &serde_json::Value) -> String {
             Ok(_) => format!("Deleted file '{}'", path),
             Err(e) => format!("Error deleting file: {}", e),
         }
+    }
+}
+
+pub(super) async fn project_tree_tool(args: &serde_json::Value) -> String {
+    let path = args["path"].as_str().unwrap_or(".");
+    if let Err(e) = super::access_check(path, false).await {
+        return format!("Error: {}", e);
+    }
+    let workspace = std::path::Path::new(path);
+    if !workspace.is_dir() {
+        return format!("Error: '{}' is not a directory", path);
+    }
+
+    let tree = crate::engine::coding::project_tree::get_project_tree(workspace);
+
+    // Also detect project type and show info
+    let info = crate::engine::coding::project_detect::detect_project(workspace);
+    let project_info = crate::engine::coding::project_detect::project_summary(&info);
+
+    format!("{}\n\n{}", project_info, tree)
+}
+
+pub(super) async fn undo_edit_tool(args: &serde_json::Value) -> String {
+    let path = args["path"].as_str().unwrap_or("");
+    if path.is_empty() {
+        return "Error: path is required".into();
+    }
+
+    let safe_name = path.replace(['/', '\\'], "__");
+    let backup_path = dirs::home_dir()
+        .unwrap_or_default()
+        .join(".yiyi")
+        .join("backups")
+        .join(format!("{}.backup", safe_name));
+
+    if !backup_path.exists() {
+        return format!("Error: no backup found for {}. Backups are created automatically when edit_file is used.", path);
+    }
+
+    match tokio::fs::read_to_string(&backup_path).await {
+        Ok(backup_content) => {
+            // Read current content for diff
+            let current = tokio::fs::read_to_string(path).await.unwrap_or_default();
+
+            match tokio::fs::write(path, &backup_content).await {
+                Ok(_) => {
+                    let diff = generate_diff(&current, &backup_content, path);
+                    format!("Restored {} from backup.\n\n{}", path, diff)
+                }
+                Err(e) => format!("Error restoring: {}", e),
+            }
+        }
+        Err(e) => format!("Error reading backup: {}", e),
     }
 }
 
