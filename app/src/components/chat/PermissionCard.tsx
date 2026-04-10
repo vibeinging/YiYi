@@ -5,7 +5,7 @@
 
 import { useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Shield, ShieldAlert, ShieldCheck, ShieldX, FolderOpen, Terminal, FileWarning } from 'lucide-react';
+import { Shield, ShieldAlert, ShieldCheck, ShieldX, FolderOpen, Terminal, FileWarning, Monitor } from 'lucide-react';
 import { useChatStreamStore, type PermissionRequestState } from '../../stores/chatStreamStore';
 
 const TYPE_CONFIG: Record<string, {
@@ -18,6 +18,8 @@ const TYPE_CONFIG: Record<string, {
   shell_block: { icon: Terminal, label: '危险命令', color: 'var(--color-error)' },
   shell_warn: { icon: Terminal, label: '可疑命令', color: 'var(--color-warning, #f59e0b)' },
   sensitive_path: { icon: FileWarning, label: '敏感文件', color: 'var(--color-error)' },
+  permission_mode: { icon: ShieldAlert, label: '需要授权', color: 'var(--color-warning, #f59e0b)' },
+  computer_control: { icon: Monitor, label: '电脑控制', color: 'var(--color-error)' },
 };
 
 function truncatePath(path: string, max: number = 80): string {
@@ -94,8 +96,8 @@ export function PermissionCard({ request }: { request: PermissionRequestState })
 
       {/* Body */}
       <div className="px-3 py-2">
-        <div className="text-[12px] font-mono truncate" style={{ color: 'var(--color-text)' }} title={request.path}>
-          {truncatePath(request.path)}
+        <div className="text-[12px] truncate" style={{ color: 'var(--color-text)' }} title={request.path}>
+          {request.path}
         </div>
         {request.reason && (
           <div className="text-[11px] mt-1" style={{ color: 'var(--color-text-muted)' }}>

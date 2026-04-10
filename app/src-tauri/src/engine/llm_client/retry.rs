@@ -192,6 +192,7 @@ pub fn emit_retry_resolved() {
 pub struct RetryOutcome {
     pub response: reqwest::Response,
     /// True when at least one retry happened before success.
+    #[allow(dead_code)]
     pub did_retry: bool,
 }
 
@@ -277,12 +278,12 @@ where
                     );
                     emit_retry_event(&evt);
                     tokio::time::sleep(delay).await;
-                    last_err = format!("{} API error ({}): {}", provider_name, status, body);
+                    last_err = humanize_api_error(status, &body);
                     continue;
                 }
 
                 // Non-retryable or retries exhausted
-                let err_msg = format!("{} API error ({}): {}", provider_name, status, body);
+                let err_msg = humanize_api_error(status, &body);
                 log::error!("{}", err_msg);
                 return Err((err_msg, category));
             }
@@ -337,10 +338,12 @@ where
 // ── Context overflow recovery ──────────────────────────────────────────
 
 /// Minimum output tokens we'll accept when auto-adjusting for context overflow.
+#[allow(dead_code)]
 const FLOOR_OUTPUT_TOKENS: u64 = 3000;
 
 /// Given a context overflow error, compute a safe `max_tokens` value.
 /// Returns `None` if the remaining space is too small to be useful.
+#[allow(dead_code)]
 pub fn compute_adjusted_max_tokens(input_tokens: u64, context_limit: u64) -> Option<u64> {
     let safety_buffer = 1000u64;
     let available = context_limit.saturating_sub(input_tokens + safety_buffer);
@@ -351,6 +354,35 @@ pub fn compute_adjusted_max_tokens(input_tokens: u64, context_limit: u64) -> Opt
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
+
+/// Convert raw API errors into user-friendly messages.
+fn humanize_api_error(status: u16, body: &str) -> String {
+    match status {
+        429 => {
+            if body.contains("quota") || body.contains("billing") || body.contains("exceeded") {
+                "API 额度已用完，请检查账户余额或升级套餐".into()
+            } else {
+                "请求过于频繁，请稍后再试".into()
+            }
+        }
+        401 => "API 密钥无效或已过期，请在设置中检查".into(),
+        403 => "API 访问被拒绝，请检查密钥权限".into(),
+        500 | 502 | 503 => "AI 服务暂时不可用，请稍后再试".into(),
+        408 | 504 => "请求超时，请稍后再试".into(),
+        _ => {
+            // Try to extract a human-readable message from JSON body
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
+                if let Some(msg) = json["error"]["message"].as_str()
+                    .or(json["message"].as_str())
+                    .or(json["error"].as_str())
+                {
+                    return msg.to_string();
+                }
+            }
+            format!("API 错误 ({})", status)
+        }
+    }
+}
 
 /// Truncate & clean an error body for user display.
 /// If it's HTML (e.g. Cloudflare error page), extract the <title>.

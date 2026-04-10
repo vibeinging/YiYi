@@ -386,13 +386,13 @@ fn check_block_patterns(normalized: &str) -> Option<String> {
 
     for (pattern, label) in patterns {
         if normalized.contains(pattern) {
-            return Some(format!("command matches dangerous pattern ({}). This could cause irreversible damage.", label));
+            return Some(format!("命令匹配危险模式 ({})，可能造成不可逆损害", label));
         }
     }
 
     // Encoded/obfuscated command detection
     if (normalized.contains("$'\\x") || normalized.contains("\\x")) && normalized.contains("eval") {
-        return Some("encoded/obfuscated command detected (hex escape + eval). Potential command injection.".into());
+        return Some("检测到编码/混淆命令 (hex escape + eval)，可能是命令注入".into());
     }
 
     None
@@ -408,7 +408,7 @@ fn check_warn_patterns(command: &str) -> Option<String> {
     let normalized_lower = command.to_lowercase();
     for var in dangerous_env {
         if normalized_lower.contains(&var.to_lowercase()) {
-            warnings.push(format!("sets dangerous environment variable ({})", var.trim_end_matches('=')));
+            warnings.push(format!("设置了危险的环境变量 ({})", var.trim_end_matches('=')));
         }
     }
 
@@ -435,7 +435,7 @@ fn check_warn_patterns(command: &str) -> Option<String> {
         found
     };
     if has_cmd_sub {
-        warnings.push("contains command substitution ($() or backticks)".into());
+        warnings.push("包含命令替换 ($() 或反引号)".into());
     }
 
     // Data exfiltration hints
@@ -445,7 +445,7 @@ fn check_warn_patterns(command: &str) -> Option<String> {
         let sensitive = [".env", ".ssh", "passwd", "shadow", "credentials", "secret", "token", "key"];
         for s in sensitive {
             if normalized_lower.contains(s) {
-                warnings.push(format!("may exfiltrate sensitive data ({}) via HTTP POST", s));
+                warnings.push(format!("可能通过 HTTP POST 泄露敏感数据 ({})", s));
                 break;
             }
         }
@@ -453,13 +453,13 @@ fn check_warn_patterns(command: &str) -> Option<String> {
 
     // Newlines in command
     if command.contains('\n') {
-        warnings.push("contains newline characters (may hide commands)".into());
+        warnings.push("包含换行符（可能隐藏命令）".into());
     }
 
     if warnings.is_empty() {
         None
     } else {
-        Some(format!("[WARNING] {}", warnings.join("; ")))
+        Some(format!("[注意] {}", warnings.join("；")))
     }
 }
 

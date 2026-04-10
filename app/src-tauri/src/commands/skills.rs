@@ -36,10 +36,7 @@ static EMBEDDED_SKILLS: Dir = include_dir!("$CARGO_MANIFEST_DIR/skills");
 
 /// System-internal skills — always active, cannot be edited/disabled/deleted.
 /// Loaded from embedded resources regardless of active_skills/ directory.
-pub const SYSTEM_SKILL_NAMES: &[&str] = &[
-    "auto_continue",
-    "task_proposer",
-];
+pub const SYSTEM_SKILL_NAMES: &[&str] = &[];
 
 /// Returns true if the skill is a system-internal skill.
 pub fn is_system_skill(name: &str) -> bool {
@@ -56,30 +53,21 @@ pub fn get_embedded_skill_content(name: &str) -> Option<String> {
 
 /// Names of all builtin skills
 const BUILTIN_SKILL_NAMES: &[&str] = &[
+    "algorithmic_art",
     "bot_setup",
-    "browser_visible",
-    "coding_assistant",
-    "file_reader",
-    "news",
-    "himalaya",
+    "canvas_design",
     "docx",
+    "feishu",
+    "frontend_design",
+    "himalaya",
+    "mcp_builder",
     "pdf",
     "pptx",
-    "xlsx",
-    "cron",
     "skill_creator",
-    "algorithmic_art",
-    "canvas_design",
-    "doc_coauthoring",
-    "frontend_design",
-    "mcp_builder",
     "theme_factory",
     "webapp_testing",
-    "auto_continue",
-    "task_proposer",
-    "seo",
     "wechat_writer",
-    "app_guide",
+    "xlsx",
 ];
 
 /// Seed builtin skills into active_skills/ if not already present.
@@ -102,28 +90,13 @@ pub fn seed_builtin_skills(working_dir: &Path) {
         }
     }
 
-    // Migration: remove deprecated claude_code skill (merged into coding_assistant)
-    let deprecated = active_dir.join("claude_code");
-    if deprecated.exists() {
-        std::fs::remove_dir_all(&deprecated).ok();
-        log::info!("Removed deprecated 'claude_code' skill (merged into coding_assistant)");
-    }
-
-    // Always refresh system-internal skills to ensure they stay up-to-date
-    for name in SYSTEM_SKILL_NAMES {
-        if let Some(dir) = EMBEDDED_SKILLS.get_dir(name) {
-            std::fs::create_dir_all(active_dir.join(name)).ok();
-            if let Err(e) = dir.extract(&active_dir) {
-                log::error!("Failed to refresh system skill '{}': {}", name, e);
-            }
-        }
-    }
-
-    // Always refresh coding_assistant SKILL.md to pick up merged content
-    if let Some(dir) = EMBEDDED_SKILLS.get_dir("coding_assistant") {
-        std::fs::create_dir_all(active_dir.join("coding_assistant")).ok();
-        if let Err(e) = dir.extract(&active_dir) {
-            log::error!("Failed to refresh coding_assistant skill: {}", e);
+    // Migration: remove deprecated skills that have been deleted or merged into core
+    for deprecated_name in &["claude_code", "coding_assistant", "file_reader", "auto_continue",
+                              "task_proposer", "browser_visible", "cron", "seo", "doc_coauthoring", "news", "app_guide"] {
+        let deprecated = active_dir.join(deprecated_name);
+        if deprecated.exists() {
+            std::fs::remove_dir_all(&deprecated).ok();
+            log::info!("Removed deprecated '{}' skill", deprecated_name);
         }
     }
 }

@@ -130,6 +130,7 @@ impl super::Database {
     }
 
     /// Look up the unified_user_id for a given platform identity.
+    #[allow(dead_code)]
     pub fn get_unified_user_by_identity(
         &self,
         platform: &str,
@@ -175,6 +176,7 @@ impl super::Database {
         Ok(rows)
     }
 
+    #[allow(dead_code)]
     pub fn delete_unified_user(&self, id: &str) -> Result<(), String> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute("DELETE FROM unified_users WHERE id = ?1", params![id])

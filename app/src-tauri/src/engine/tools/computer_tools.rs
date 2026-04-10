@@ -158,36 +158,44 @@ fn is_dangerous_key_combo(combo: &str) -> bool {
 fn describe_action(action: &str, args: &serde_json::Value) -> String {
     match action {
         "launch_app" => {
-            let name = args["app_name"].as_str().or(args["text"].as_str()).unwrap_or("unknown");
-            format!("Launch application: {name}")
+            let name = args["app_name"].as_str().or(args["text"].as_str()).unwrap_or("应用");
+            format!("启动应用: {name}")
         }
         "quit_app" => {
-            let name = args["app_name"].as_str().or(args["text"].as_str()).unwrap_or("unknown");
-            format!("Quit application: {name}")
+            let name = args["app_name"].as_str().or(args["text"].as_str()).unwrap_or("应用");
+            format!("退出应用: {name}")
         }
-        "close_window" | "minimize_window" | "move_window" | "resize_window" => {
-            let title = args["window_title"].as_str().unwrap_or("unknown");
-            format!("{action}: {title}")
+        "close_window" => {
+            let title = args["window_title"].as_str().unwrap_or("窗口");
+            format!("关闭窗口: {title}")
+        }
+        "minimize_window" => {
+            let title = args["window_title"].as_str().unwrap_or("窗口");
+            format!("最小化窗口: {title}")
+        }
+        "move_window" | "resize_window" => {
+            let title = args["window_title"].as_str().unwrap_or("窗口");
+            format!("调整窗口: {title}")
         }
         "clipboard_write" => {
             let text = args["text"].as_str().unwrap_or("");
-            let preview: String = text.chars().take(60).collect();
-            let suffix = if text.chars().count() > 60 { "..." } else { "" };
-            format!("Write to clipboard: \"{preview}{suffix}\"")
+            let preview: String = text.chars().take(40).collect();
+            let suffix = if text.chars().count() > 40 { "…" } else { "" };
+            format!("写入剪贴板: \"{preview}{suffix}\"")
         }
         "set_volume" => {
             let level = args["amount"].as_i64().unwrap_or(50);
-            format!("Set system volume to {level}%")
+            format!("设置系统音量为 {level}%")
         }
         "key_press" => {
             let combo = args["key"].as_str().unwrap_or("");
-            format!("Press dangerous key combo: {combo}")
+            format!("按键: {combo}")
         }
         "osascript" => {
             let script = args["text"].as_str().unwrap_or("");
-            let preview: String = script.chars().take(120).collect();
-            let suffix = if script.chars().count() > 120 { "..." } else { "" };
-            format!("Run AppleScript: {preview}{suffix}")
+            let preview: String = script.chars().take(80).collect();
+            let suffix = if script.chars().count() > 80 { "…" } else { "" };
+            format!("执行 AppleScript: {preview}{suffix}")
         }
         _ => format!("{action}"),
     }
@@ -215,7 +223,9 @@ async fn gate_action(action: &str, risk: ActionRisk, args: &serde_json::Value) -
                 path: format!("{action}: {}", description),
                 parent_folder: String::new(),
                 reason: format!(
-                    "The AI agent wants to {description}. This is a {risk_level}-risk computer control action.",
+                    "YiYi 想要{}，这是一个{}风险的电脑控制操作",
+                    description,
+                    if risk_level == "high" { "高" } else { "中" },
                 ),
                 risk_level: risk_level.to_string(),
             };

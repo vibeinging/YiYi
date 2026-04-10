@@ -32,12 +32,12 @@ const STATUS_COLORS: Record<TaskInfo['status'], string> = {
 };
 
 const STATUS_LABELS: Record<TaskInfo['status'], string> = {
-  running:   'Running',
-  completed: 'Completed',
-  failed:    'Failed',
-  paused:    'Paused',
-  pending:   'Pending',
-  cancelled: 'Cancelled',
+  running:   '执行中',
+  completed: '已完成',
+  failed:    '失败',
+  paused:    '暂停',
+  pending:   '等待中',
+  cancelled: '已取消',
 };
 
 function StatusDot({ status }: { status: TaskInfo['status'] }) {
@@ -173,7 +173,7 @@ export const TaskCard = memo(function TaskCard({ taskId }: TaskCardProps) {
           onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
         >
           <ExternalLink size={10} />
-          View details
+          查看详情
         </button>
       </div>
     </div>

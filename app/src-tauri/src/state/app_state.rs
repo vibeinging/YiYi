@@ -386,7 +386,7 @@ fn build_memme_llm(providers: &ProvidersState) -> Option<std::sync::Arc<dyn memm
     }
 
     let model = slot.model.clone();
-    let provider_id = slot.provider_id.to_lowercase();
+    let _provider_id = slot.provider_id.to_lowercase();
     let url = if base_url.is_empty() { "https://api.openai.com".to_string() } else { base_url };
 
     log::info!("MemMe LLM: Using OpenAI-compatible provider '{}' with model '{}'", slot.provider_id, model);

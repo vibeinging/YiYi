@@ -244,6 +244,7 @@ impl super::Database {
     }
 
     /// Record a script execution result (success or failure with error).
+    #[allow(dead_code)]
     pub fn record_code_execution(&self, name: &str, success: bool, error: Option<&str>) {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = super::now_ts();
@@ -336,6 +337,7 @@ impl super::Database {
     }
 
     /// List all registered code entries.
+    #[allow(dead_code)]
     pub fn list_code_registry(&self) -> Vec<CodeRegistryEntry> {
         self.search_code_registry("", 100)
     }
@@ -507,6 +509,7 @@ impl super::Database {
     }
 
     /// Update meditation session with extended V2 fields
+    #[allow(dead_code)]
     pub fn update_meditation_extended(
         &self,
         id: &str,

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Unified Task Registry — a single framework for all async work in YiYi.
 //!
 //! Replaces the ad-hoc task tracking scattered across CronScheduler, Agent chat,

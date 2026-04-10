@@ -25,9 +25,12 @@ import {
   Brain,
   Play,
   FileText,
+  BarChart3,
   Eye,
   EyeOff,
   Info,
+  Puzzle,
+  Bot,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { check, type Update } from '@tauri-apps/plugin-updater';
@@ -37,6 +40,7 @@ import { PageHeader } from '../components/PageHeader';
 import { ModelsPage } from './Models';
 import { EnvironmentsPage } from './Environments';
 import { getUserWorkspace, setUserWorkspace, getMemmeConfig, saveMemmeConfig, type MemmeConfig } from '../api/system';
+import { exportConversations, exportMemories, exportSettings } from '../api/export';
 import {
   listAuthorizedFolders,
   addAuthorizedFolder,
@@ -52,6 +56,9 @@ import {
 } from '../api/workspace';
 import { toast } from '../components/Toast';
 import { listCliProviders, saveCliProviderConfig, installCliProvider, deleteCliProvider, type CliProviderInfo } from '../api/cli';
+import { UsagePanel } from '../components/UsagePanel';
+import { PluginsPanel } from '../components/PluginsPanel';
+import { AgentsPanel } from '../components/AgentsPanel';
 
 type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'installing' | 'up-to-date' | 'error';
 
@@ -217,7 +224,7 @@ function UpdateChecker() {
   );
 }
 
-type SettingsTab = 'general' | 'models' | 'environments' | 'workspace' | 'cli';
+type SettingsTab = 'general' | 'models' | 'environments' | 'workspace' | 'cli' | 'plugins' | 'agents' | 'usage';
 
 export function SettingsPage() {
   const { t } = useTranslation();
@@ -238,6 +245,60 @@ export function SettingsPage() {
     journal_path?: string;
   } | null>(null);
   const [meditationTriggering, setMeditationTriggering] = useState(false);
+
+  // Export state
+  const [exportingConversations, setExportingConversations] = useState(false);
+  const [exportingMemories, setExportingMemories] = useState(false);
+  const [exportingSettings, setExportingSettings] = useState(false);
+  const [lastExportPath, setLastExportPath] = useState<string | null>(null);
+
+  const revealExportFile = async (filePath: string) => {
+    try {
+      // Open the containing folder (cross-platform)
+      const dir = filePath.substring(0, filePath.lastIndexOf('/'));
+      const { open } = await import('@tauri-apps/plugin-shell');
+      await open(dir);
+    } catch { /* ignore */ }
+  };
+
+  const handleExportConversations = async (format: 'markdown' | 'json') => {
+    setExportingConversations(true);
+    try {
+      const path = await exportConversations(format);
+      setLastExportPath(path);
+      toast.success('导出成功');
+    } catch (e) {
+      toast.error('导出失败: ' + String(e));
+    } finally {
+      setExportingConversations(false);
+    }
+  };
+
+  const handleExportMemories = async () => {
+    setExportingMemories(true);
+    try {
+      const path = await exportMemories();
+      setLastExportPath(path);
+      toast.success('导出成功');
+    } catch (e) {
+      toast.error('导出失败: ' + String(e));
+    } finally {
+      setExportingMemories(false);
+    }
+  };
+
+  const handleExportSettings = async () => {
+    setExportingSettings(true);
+    try {
+      const path = await exportSettings();
+      setLastExportPath(path);
+      toast.success('导出成功');
+    } catch (e) {
+      toast.error('导出失败: ' + String(e));
+    } finally {
+      setExportingSettings(false);
+    }
+  };
 
   // MemMe memory engine state
   const [memmeConfig, setMemmeConfig] = useState<MemmeConfig | null>(null);
@@ -418,6 +479,9 @@ export function SettingsPage() {
     { id: 'environments', labelKey: 'settings.tabEnvs', icon: Key },
     { id: 'workspace', labelKey: 'settings.tabWorkspace', icon: Shield },
     { id: 'cli', labelKey: 'settings.tabCli', icon: FileText },
+    { id: 'plugins', labelKey: 'settings.tabPlugins', icon: Puzzle },
+    { id: 'agents', labelKey: 'settings.tabAgents', icon: Bot },
+    { id: 'usage', labelKey: 'settings.tabUsage', icon: BarChart3 },
   ];
 
   return (
@@ -812,6 +876,113 @@ export function SettingsPage() {
               </div>
             </div>
 
+            {/* Data Export */}
+            <div className="p-5 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
+              <div className="flex items-center gap-2 mb-1">
+                <Download size={18} className="text-[var(--color-primary)]" />
+                <h2 className="font-semibold text-[14px]">{t('settings.exportTitle', '数据导出')}</h2>
+              </div>
+              <p className="text-[12px] text-[var(--color-text-muted)] mb-4 ml-[26px]">
+                导出数据到 ~/Documents/YiYi/exports/
+              </p>
+
+              <div className="space-y-2">
+                {/* Export conversations */}
+                <div className="flex items-center justify-between p-3 rounded-xl hover:bg-[var(--color-bg-subtle)] transition-colors">
+                  <div>
+                    <div className="text-[13px] font-medium">{t('settings.exportConversations', '导出对话')}</div>
+                    <div className="text-[12px] text-[var(--color-text-muted)]">
+                      {t('settings.exportConversationsDesc', '导出所有聊天会话和消息')}
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleExportConversations('markdown')}
+                      disabled={exportingConversations}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-50"
+                      style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text)' }}
+                      onMouseEnter={(e) => { if (!exportingConversations) e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--color-bg-subtle)'; }}
+                    >
+                      {exportingConversations ? <Loader2 size={12} className="animate-spin" /> : <FileText size={12} />}
+                      Markdown
+                    </button>
+                    <button
+                      onClick={() => handleExportConversations('json')}
+                      disabled={exportingConversations}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-50"
+                      style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text)' }}
+                      onMouseEnter={(e) => { if (!exportingConversations) e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--color-bg-subtle)'; }}
+                    >
+                      {exportingConversations ? <Loader2 size={12} className="animate-spin" /> : <FileText size={12} />}
+                      JSON
+                    </button>
+                  </div>
+                </div>
+
+                {/* Export memories */}
+                <div className="flex items-center justify-between p-3 rounded-xl hover:bg-[var(--color-bg-subtle)] transition-colors">
+                  <div>
+                    <div className="text-[13px] font-medium">{t('settings.exportMemories', '导出记忆')}</div>
+                    <div className="text-[12px] text-[var(--color-text-muted)]">
+                      {t('settings.exportMemoriesDesc', '导出 MemMe 记忆引擎中的所有记忆')}
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleExportMemories}
+                    disabled={exportingMemories}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-50"
+                    style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text)' }}
+                    onMouseEnter={(e) => { if (!exportingMemories) e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--color-bg-subtle)'; }}
+                  >
+                    {exportingMemories ? <Loader2 size={12} className="animate-spin" /> : <Brain size={12} />}
+                    JSON
+                  </button>
+                </div>
+
+                {/* Export settings */}
+                <div className="flex items-center justify-between p-3 rounded-xl hover:bg-[var(--color-bg-subtle)] transition-colors">
+                  <div>
+                    <div className="text-[13px] font-medium">{t('settings.exportSettings', '导出设置')}</div>
+                    <div className="text-[12px] text-[var(--color-text-muted)]">
+                      {t('settings.exportSettingsDesc', '导出应用设置（不含 API 密钥）')}
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleExportSettings}
+                    disabled={exportingSettings}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-50"
+                    style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text)' }}
+                    onMouseEnter={(e) => { if (!exportingSettings) e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--color-bg-subtle)'; }}
+                  >
+                    {exportingSettings ? <Loader2 size={12} className="animate-spin" /> : <SlidersHorizontal size={12} />}
+                    JSON
+                  </button>
+                </div>
+
+                {/* Last export path + open folder */}
+                {lastExportPath && (
+                  <div className="flex items-center gap-2 mt-3 p-2.5 rounded-lg" style={{ background: 'var(--color-bg-subtle)' }}>
+                    <CheckCircle size={14} style={{ color: 'var(--color-primary)', flexShrink: 0 }} />
+                    <span className="text-[11px] truncate flex-1" style={{ color: 'var(--color-text-muted)' }}>
+                      {lastExportPath.split('/').slice(-2).join('/')}
+                    </span>
+                    <button
+                      onClick={() => revealExportFile(lastExportPath)}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium whitespace-nowrap transition-colors"
+                      style={{ background: 'var(--color-primary)', color: '#fff' }}
+                    >
+                      <FolderOpen size={12} />
+                      打开文件夹
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
             {/* About & Update */}
             <div className="p-5 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
               <div className="flex items-center justify-between mb-4">
@@ -1009,6 +1180,18 @@ export function SettingsPage() {
 
         {activeTab === 'cli' && (
           <CliProvidersSection />
+        )}
+
+        {activeTab === 'plugins' && (
+          <PluginsPanel />
+        )}
+
+        {activeTab === 'agents' && (
+          <AgentsPanel />
+        )}
+
+        {activeTab === 'usage' && (
+          <UsagePanel />
         )}
       </div>
     </div>

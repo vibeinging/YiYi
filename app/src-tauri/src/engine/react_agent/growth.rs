@@ -1,6 +1,20 @@
 use super::{SignalType, GROWTH_LLM_SEMAPHORE};
 use crate::engine::llm_client::{chat_completion, LLMConfig, LLMMessage, MessageContent};
 
+/// Strip markdown code fences (```json ... ```) from LLM responses.
+fn strip_code_fence(s: &str) -> &str {
+    let trimmed = s.trim();
+    if trimmed.starts_with("```") {
+        trimmed
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim()
+    } else {
+        trimmed
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Auto-memory extraction — extract noteworthy info from conversations
 // ---------------------------------------------------------------------------
@@ -14,13 +28,6 @@ pub async fn extract_memories_from_conversation(
     assistant_reply: &str,
     session_id: Option<&str>,
 ) {
-    use crate::engine::tools::get_database;
-
-    let db = match get_database() {
-        Some(db) => db,
-        None => return,
-    };
-
     // Skip very short conversations (greetings, etc.)
     if user_message.len() < 20 && assistant_reply.len() < 50 {
         return;
@@ -66,18 +73,7 @@ Extract memories (JSON array only):"#
         }
     };
 
-    // Parse the JSON response
-    let trimmed = result.trim();
-    // Handle cases where LLM wraps in ```json ... ```
-    let json_str = if trimmed.starts_with("```") {
-        trimmed
-            .trim_start_matches("```json")
-            .trim_start_matches("```")
-            .trim_end_matches("```")
-            .trim()
-    } else {
-        trimmed
-    };
+    let json_str = strip_code_fence(&result);
 
     #[derive(serde::Deserialize)]
     struct ExtractedMemory {
@@ -142,6 +138,14 @@ Extract memories (JSON array only):"#
     if added > 0 {
         log::info!("Auto-extracted {} memories from conversation", added);
     }
+
+    // Periodically update the structured USER.md profile
+    let cfg = config.clone();
+    let um = user_message.to_string();
+    let ar = assistant_reply.to_string();
+    tokio::spawn(async move {
+        update_user_model(&cfg, &um, &ar).await;
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -198,8 +202,20 @@ Respond ONLY with a JSON object:
   "outcome": "success" | "partial" | "failure",
   "summary": "one-sentence summary of what happened",
   "lesson": "generalizable lesson for future tasks (or null if none)",
-  "skill_opportunity": "if this task could be automated as a reusable skill, describe it briefly (or null)"
+  "skill_opportunity": null or {{
+    "type": "skill" | "code" | "workflow",
+    "name": "suggested short name",
+    "description": "what it does and why it's reusable",
+    "reason": "why this should be persisted"
+  }}
 }}
+
+skill_opportunity guidelines:
+- "skill": reusable domain knowledge/instructions (e.g. writing patterns, platform guides)
+- "code": a script or tool the user might run again (e.g. data processor, automation script)
+- "workflow": a multi-step process worth remembering (e.g. deploy flow, review checklist)
+- Only suggest if the work has genuine reuse value. Most simple Q&A has none.
+- Threshold: would the user benefit from having this ready-made next time? If yes, suggest it.
 
 JSON only:"#
     );
@@ -226,24 +242,23 @@ JSON only:"#
         }
     };
 
-    // Parse JSON
-    let trimmed = result.trim();
-    let json_str = if trimmed.starts_with("```") {
-        trimmed
-            .trim_start_matches("```json")
-            .trim_start_matches("```")
-            .trim_end_matches("```")
-            .trim()
-    } else {
-        trimmed
-    };
+    let json_str = strip_code_fence(&result);
+
+    #[derive(serde::Deserialize)]
+    struct SkillOpportunity {
+        #[serde(rename = "type")]
+        opp_type: String,
+        name: String,
+        description: String,
+        reason: Option<String>,
+    }
 
     #[derive(serde::Deserialize)]
     struct ReflectionResult {
         outcome: Option<String>,
         summary: Option<String>,
         lesson: Option<String>,
-        skill_opportunity: Option<String>,
+        skill_opportunity: Option<SkillOpportunity>,
     }
 
     let parsed: ReflectionResult = match serde_json::from_str(json_str) {
@@ -263,14 +278,46 @@ JSON only:"#
     let outcome = parsed.outcome.as_deref().unwrap_or(outcome_hint);
     let summary = parsed.summary.as_deref().unwrap_or("(no summary)");
 
+    // Serialize skill_opportunity as JSON for DB storage (preserves structure)
+    let skill_opp_str = parsed.skill_opportunity.as_ref().map(|o| {
+        serde_json::json!({
+            "type": o.opp_type,
+            "name": o.name,
+            "description": o.description,
+            "reason": o.reason,
+        }).to_string()
+    });
+
     // Save reflection
     if let Ok(ref_id) = db.add_reflection(
         task_id, session_id, outcome, summary,
         parsed.lesson.as_deref(),
-        parsed.skill_opportunity.as_deref(),
+        skill_opp_str.as_deref(),
         signal_type.as_str(), signal_type.base_confidence(),
     ) {
         log::info!("Reflection saved: {} (outcome: {}, signal: {})", ref_id, outcome, signal_type.as_str());
+    }
+
+    // Notify frontend immediately when a persist-worthy opportunity is detected
+    if let Some(ref opp) = parsed.skill_opportunity {
+        if let Some(handle) = crate::engine::tools::APP_HANDLE.get() {
+            use tauri::Emitter;
+            let payload = serde_json::json!({
+                "type": opp.opp_type,
+                "name": opp.name,
+                "description": opp.description,
+                "reason": opp.reason,
+                "session_id": session_id,
+                "task_id": task_id,
+            });
+            if let Err(e) = handle.emit("growth://persist_suggestion", &payload) {
+                log::warn!("Failed to emit persist_suggestion event: {}", e);
+            }
+            log::info!(
+                "Persist suggestion: [{}] {} — {}",
+                opp.opp_type, opp.name, opp.description
+            );
+        }
     }
 
     // Only promote lessons from explicit signals — silence is not approval
@@ -286,6 +333,250 @@ JSON only:"#
                 }
             }
         }
+    }
+
+    // Skill improvement: if skills were activated during this task, try to improve them
+    let activated = crate::engine::tools::skill_tools::drain_recent_activations();
+    if !activated.is_empty() && was_successful {
+        for skill_name in activated {
+            let cfg = config.clone();
+            let desc = task_description.to_string();
+            let res = result_text.to_string();
+            tokio::spawn(async move {
+                improve_skill_from_experience(&cfg, &skill_name, &desc, &res, true).await;
+            });
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Skill Self-Improvement — refine skill instructions after successful use
+// ---------------------------------------------------------------------------
+
+/// Improve a skill's instructions based on task execution experience.
+/// Reads the existing SKILL.md, asks LLM whether it can be improved, and
+/// writes the updated content back to both `active_skills/` and `customized_skills/`.
+pub async fn improve_skill_from_experience(
+    config: &LLMConfig,
+    skill_name: &str,
+    task_description: &str,
+    task_result: &str,
+    was_successful: bool,
+) {
+    let _permit = match GROWTH_LLM_SEMAPHORE.try_acquire() {
+        Ok(p) => p,
+        Err(_) => {
+            log::debug!("Skill improvement skipped ({}): too many concurrent LLM calls", skill_name);
+            return;
+        }
+    };
+
+    let working_dir = match crate::engine::tools::get_working_dir() {
+        Some(wd) => wd,
+        None => return,
+    };
+
+    let active_path = working_dir.join("active_skills").join(skill_name).join("SKILL.md");
+    let current_content = match tokio::fs::read_to_string(&active_path).await {
+        Ok(c) => c,
+        Err(_) => {
+            log::debug!("Skill improvement: SKILL.md not found for '{}'", skill_name);
+            return;
+        }
+    };
+
+    let content_preview: String = current_content.chars().take(3000).collect();
+    let desc_preview: String = task_description.chars().take(1000).collect();
+    let result_preview: String = task_result.chars().take(1000).collect();
+    let outcome = if was_successful { "successful" } else { "failed" };
+
+    let prompt = format!(
+        r#"You are reviewing a skill's instructions after it was used to complete a task.
+Analyze whether the instructions could be improved based on the execution experience.
+
+Skill name: {skill_name}
+Current SKILL.md content:
+```
+{content_preview}
+```
+
+Task description: {desc_preview}
+Task outcome: {outcome}
+Task result: {result_preview}
+
+If the skill instructions are already good and no improvement is needed, respond with exactly: UNCHANGED
+
+Otherwise, respond with the COMPLETE improved SKILL.md content (including YAML frontmatter if present).
+Improvements might include:
+- Adding edge cases or tips discovered during execution
+- Clarifying ambiguous instructions
+- Adding common pitfalls or error handling guidance
+- Removing outdated or incorrect information
+- Better organizing the instructions
+
+Respond with either UNCHANGED or the complete improved SKILL.md:"#
+    );
+
+    let messages = vec![LLMMessage {
+        role: "user".into(),
+        content: Some(MessageContent::text(prompt)),
+        tool_calls: None,
+        tool_call_id: None,
+    }];
+
+    let result = match chat_completion(config, &messages, &[]).await {
+        Ok(resp) => resp.message.content.map(|c| c.into_text()).unwrap_or_default(),
+        Err(e) => {
+            log::warn!("Skill improvement LLM call failed for '{}': {}", skill_name, e);
+            return;
+        }
+    };
+
+    let trimmed = result.trim();
+    if trimmed == "UNCHANGED" || trimmed.is_empty() {
+        log::debug!("Skill '{}': no improvement needed", skill_name);
+        return;
+    }
+
+    // Strip markdown code fences if present
+    let improved = strip_code_fence(trimmed);
+
+    // Buddy review: let the user's digital twin approve the improvement
+    let review_question = format!(
+        "技能「{}」被提议改进。\n原版摘要：{}字\n改进版摘要：{}字\n这个改动是否合理？",
+        skill_name,
+        current_content.chars().count(),
+        improved.chars().count(),
+    );
+    if let Some(approved) = crate::engine::buddy_delegate::delegate_yes_no(
+        config, &review_question, crate::engine::buddy_delegate::DelegateContext::SkillReview,
+    ).await {
+        if !approved {
+            log::info!("Buddy rejected skill improvement for '{}'", skill_name);
+            return;
+        }
+    }
+    // If buddy returns None (not confident), proceed anyway — improvement is low risk
+
+    // Write back to active_skills and customized_skills
+    let custom_path = working_dir.join("customized_skills").join(skill_name).join("SKILL.md");
+
+    if let Err(e) = tokio::fs::write(&active_path, improved).await {
+        log::warn!("Failed to write improved SKILL.md to active_skills for '{}': {}", skill_name, e);
+        return;
+    }
+
+    // Ensure customized_skills directory exists and write there too
+    if let Some(parent) = custom_path.parent() {
+        tokio::fs::create_dir_all(parent).await.ok();
+    }
+    if let Err(e) = tokio::fs::write(&custom_path, improved).await {
+        log::warn!("Failed to write improved SKILL.md to customized_skills for '{}': {}", skill_name, e);
+    }
+
+    log::info!("Skill '{}' improved based on task experience", skill_name);
+}
+
+// ---------------------------------------------------------------------------
+// User Model — structured USER.md maintained over time
+// ---------------------------------------------------------------------------
+
+/// Update the persistent USER.md user profile based on conversation content.
+/// Only runs every ~5 conversations to avoid excessive LLM calls.
+pub async fn update_user_model(
+    config: &LLMConfig,
+    user_message: &str,
+    assistant_reply: &str,
+) {
+    // Only run occasionally (1 in 5 conversations)
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    if COUNTER.fetch_add(1, Ordering::Relaxed) % 5 != 0 {
+        return;
+    }
+
+    let working_dir = match crate::engine::tools::get_working_dir() {
+        Some(wd) => wd,
+        None => return,
+    };
+
+    let _permit = match GROWTH_LLM_SEMAPHORE.try_acquire() {
+        Ok(p) => p,
+        Err(_) => {
+            log::debug!("User model update skipped: too many concurrent LLM calls");
+            return;
+        }
+    };
+
+    let existing = crate::engine::mem::user_model::load_user_model(&working_dir);
+
+    let existing_display = if existing.is_empty() {
+        "(empty — first time)".to_string()
+    } else {
+        existing.clone()
+    };
+
+    let user_preview: String = user_message.chars().take(1000).collect();
+    let assistant_preview: String = assistant_reply.chars().take(1000).collect();
+
+    let prompt = format!(
+        r#"You maintain a structured user profile in markdown format. Based on the latest conversation, update the profile.
+
+Current profile:
+{existing_display}
+
+Latest conversation:
+User: {user_preview}
+Assistant: {assistant_preview}
+
+Update the profile with any new information learned. Keep the following structure:
+## Basic Info
+(name, role, occupation if known)
+
+## Work Style
+(how they work, what tools they prefer, communication style)
+
+## Preferences
+(likes, dislikes, formatting preferences)
+
+## Domain Knowledge
+(what they know about, expertise areas)
+
+## Current Projects
+(what they're working on)
+
+If nothing new to add, respond with exactly: UNCHANGED
+Otherwise respond with the COMPLETE updated profile (not just the changes)."#
+    );
+
+    let messages = vec![LLMMessage {
+        role: "user".into(),
+        content: Some(MessageContent::text(prompt)),
+        tool_calls: None,
+        tool_call_id: None,
+    }];
+
+    let result = match chat_completion(config, &messages, &[]).await {
+        Ok(resp) => resp.message.content.map(|c| c.into_text()).unwrap_or_default(),
+        Err(e) => {
+            log::warn!("User model update LLM call failed: {}", e);
+            return;
+        }
+    };
+
+    let trimmed = result.trim();
+    if trimmed == "UNCHANGED" || trimmed.is_empty() {
+        log::debug!("User model: no updates needed");
+        return;
+    }
+
+    // Strip markdown code fences if present
+    let updated = strip_code_fence(trimmed);
+
+    if let Err(e) = crate::engine::mem::user_model::save_user_model(&working_dir, updated) {
+        log::warn!("Failed to save USER.md: {}", e);
+    } else {
+        log::info!("USER.md user model updated");
     }
 }
 
@@ -353,16 +644,7 @@ JSON only:"#
         }
     };
 
-    let trimmed = result.trim();
-    let json_str = if trimmed.starts_with("```") {
-        trimmed
-            .trim_start_matches("```json")
-            .trim_start_matches("```")
-            .trim_end_matches("```")
-            .trim()
-    } else {
-        trimmed
-    };
+    let json_str = strip_code_fence(&result);
 
     #[derive(serde::Deserialize)]
     struct CorrectionResult {

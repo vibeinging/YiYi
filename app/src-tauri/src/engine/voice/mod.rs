@@ -42,6 +42,7 @@ impl std::fmt::Display for VoiceStatus {
 pub struct VoiceSession {
     pub status: Arc<RwLock<VoiceStatus>>,
     pub cancel: Arc<AtomicBool>,
+    #[allow(dead_code)]
     pub session_id: String,
 }
 

@@ -644,8 +644,8 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                     background: 'rgba(var(--color-error-rgb, 255,69,58), 0.08)',
                     border: '1px solid var(--color-error)', borderBottomLeftRadius: '6px', color: 'var(--color-error)',
                   }}>
-                  <div className="font-semibold mb-1">Error</div>
-                  <div style={{ color: 'var(--color-text-secondary)', wordBreak: 'break-word' }}>{streamError}</div>
+                  <div className="font-semibold mb-1">出错了</div>
+                  <div style={{ color: 'var(--color-text-secondary)', wordBreak: 'break-word' }}>{streamError?.replace(/^Error:\s*/i, '')}</div>
                 </div>
               </div>
             )}

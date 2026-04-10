@@ -27,8 +27,8 @@ pub async fn resolve_llm_config(state: &AppState) -> Result<LLMConfig, String> {
 /// - `index`: compact list for the system prompt (model uses `activate_skills` tool to load full content)
 /// - `always_active`: full content of skills marked `always_active: true` (injected directly)
 ///
-/// System skills (auto_continue, task_proposer) are always loaded from embedded resources,
-/// regardless of whether they exist in active_skills/. They are fundamental app capabilities.
+/// System skills (if any) are always loaded from embedded resources,
+/// regardless of whether they exist in active_skills/.
 pub(super) async fn load_skill_index(state: &AppState) -> (Vec<SkillIndexEntry>, Vec<String>) {
     let skills_dir = state.working_dir.join("active_skills");
     let mut index = Vec::new();

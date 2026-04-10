@@ -159,6 +159,9 @@ fn parse_anthropic_response(json: &serde_json::Value) -> Result<LLMResponse, Str
     } else {
         Some(MessageContent::text(text_parts.join("")))
     };
+    // Parse Anthropic usage data
+    let usage = parse_usage(&json["usage"]);
+
     Ok(LLMResponse {
         message: LLMMessage {
             role: "assistant".into(),
@@ -170,6 +173,18 @@ fn parse_anthropic_response(json: &serde_json::Value) -> Result<LLMResponse, Str
             },
             tool_call_id: None,
         },
+        usage,
+    })
+}
+
+/// Parse Anthropic usage JSON into TokenUsage.
+fn parse_usage(v: &serde_json::Value) -> Option<crate::engine::usage::TokenUsage> {
+    if v.is_null() { return None; }
+    Some(crate::engine::usage::TokenUsage {
+        input_tokens: v["input_tokens"].as_u64().unwrap_or(0) as u32,
+        output_tokens: v["output_tokens"].as_u64().unwrap_or(0) as u32,
+        cache_creation_input_tokens: v["cache_creation_input_tokens"].as_u64().unwrap_or(0) as u32,
+        cache_read_input_tokens: v["cache_read_input_tokens"].as_u64().unwrap_or(0) as u32,
     })
 }
 
@@ -192,7 +207,13 @@ fn build_request_body(
         body["stream"] = serde_json::json!(true);
     }
     if let Some(sys) = system_prompt {
-        body["system"] = serde_json::Value::String(sys);
+        // Use content block array with cache_control for Anthropic prompt caching.
+        // The system prompt is static across ReAct iterations — caching it saves ~90% input cost.
+        body["system"] = serde_json::json!([{
+            "type": "text",
+            "text": sys,
+            "cache_control": {"type": "ephemeral"}
+        }]);
     }
     if !tools.is_empty() {
         body["tools"] = serde_json::Value::Array(tools_to_anthropic(tools));
@@ -220,6 +241,7 @@ async fn send_request(
                 .post(&url)
                 .header("x-api-key", &api_key)
                 .header("anthropic-version", "2023-06-01")
+                .header("anthropic-beta", "prompt-caching-2024-07-31")
                 .header("Content-Type", "application/json");
             if needs_ua {
                 req = req.header("User-Agent", super::CODING_AGENT_UA);
@@ -306,6 +328,7 @@ where
     let mut current_tool_id = String::new();
     let mut current_tool_name = String::new();
     let mut current_tool_input = String::new();
+    let mut stream_usage: Option<crate::engine::usage::TokenUsage> = None;
 
     {
         let fc = &mut full_content;
@@ -314,6 +337,7 @@ where
         let ct_id = &mut current_tool_id;
         let ct_name = &mut current_tool_name;
         let ct_input = &mut current_tool_input;
+        let su = &mut stream_usage;
 
         process_anthropic_sse_stream(resp, cancelled, |event_type, json| {
             match event_type {
@@ -359,9 +383,21 @@ where
                         ct_input.clear();
                     }
                 }
+                "message_start" => {
+                    // Anthropic sends input usage in message_start.usage
+                    if let Some(u) = parse_usage(&json["message"]["usage"]) {
+                        *su = Some(u);
+                    }
+                }
                 "message_delta" => {
                     if let Some(sr) = json["delta"]["stop_reason"].as_str() {
                         *fr = normalize_stop_reason(sr);
+                    }
+                    // Anthropic sends output_tokens in message_delta.usage
+                    if let Some(out) = json["usage"]["output_tokens"].as_u64() {
+                        if let Some(ref mut u) = su {
+                            u.output_tokens = out as u32;
+                        }
                     }
                 }
                 "error" => {
@@ -393,5 +429,5 @@ where
     } else {
         Some(tool_calls)
     };
-    Ok(build_stream_response(full_content, tool_calls_opt))
+    Ok(build_stream_response(full_content, tool_calls_opt, stream_usage))
 }

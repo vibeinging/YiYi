@@ -138,6 +138,9 @@ pub async fn chat_completion(
     let content = msg["content"].as_str().map(|s| MessageContent::text(s));
     let tool_calls = parse_tool_calls(&msg["tool_calls"]);
 
+    // Parse OpenAI usage
+    let usage = parse_openai_usage(&json["usage"]);
+
     Ok(LLMResponse {
         message: LLMMessage {
             role: "assistant".into(),
@@ -145,6 +148,18 @@ pub async fn chat_completion(
             tool_calls,
             tool_call_id: None,
         },
+        usage,
+    })
+}
+
+/// Parse OpenAI usage JSON into TokenUsage.
+fn parse_openai_usage(v: &serde_json::Value) -> Option<crate::engine::usage::TokenUsage> {
+    if v.is_null() { return None; }
+    Some(crate::engine::usage::TokenUsage {
+        input_tokens: v["prompt_tokens"].as_u64().unwrap_or(0) as u32,
+        output_tokens: v["completion_tokens"].as_u64().unwrap_or(0) as u32,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: v["prompt_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0) as u32,
     })
 }
 
@@ -193,7 +208,8 @@ where
             let msg = &choice["message"];
             let content_text = msg["content"].as_str().unwrap_or("").to_string();
             let tool_calls = parse_tool_calls(&msg["tool_calls"]);
-            let response = build_stream_response(content_text, tool_calls);
+            let usage = parse_openai_usage(&json["usage"]);
+            let response = build_stream_response(content_text, tool_calls, usage);
             emit_fallback_content(&response, &on_event);
             Ok(response)
         }
@@ -315,7 +331,8 @@ where
         log::warn!("LLM stream completed with no content and no tool calls (finish_reason: {})", finish_reason);
     }
 
-    Ok(build_stream_response(full_content, tool_calls))
+    // OpenAI streaming doesn't reliably include usage in SSE chunks
+    Ok(build_stream_response(full_content, tool_calls, None))
 }
 
 /// Parse tool_calls array from OpenAI response JSON

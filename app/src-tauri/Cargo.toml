@@ -65,6 +65,7 @@ arboard = "3"
 serde_yaml = "0.9"
 tauri-plugin-updater = "2.10.0"
 tauri-plugin-process = "2.3.1"
+keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "linux-native"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"

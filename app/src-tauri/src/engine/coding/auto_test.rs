@@ -46,6 +46,7 @@ pub async fn run_auto_test(edited_file: &str) -> Option<AutoTestResult> {
 }
 
 /// Run a specific test command and capture results.
+#[allow(dead_code)]
 pub async fn run_test_command(command: &str, workspace: &Path) -> Option<AutoTestResult> {
     run_command(command, workspace).await
 }
@@ -161,6 +162,45 @@ async fn run_command(cmd: &str, cwd: &Path) -> Option<AutoTestResult> {
             duration_ms,
         }),
     }
+}
+
+/// Session-scoped GreenContract tracking.
+static GREEN_CONTRACTS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, super::green_contract::GreenContract>>> =
+    std::sync::OnceLock::new();
+
+fn contracts_map() -> &'static std::sync::Mutex<std::collections::HashMap<String, super::green_contract::GreenContract>> {
+    GREEN_CONTRACTS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Update the session's GreenContract based on auto-test results.
+pub fn update_green_contract(result: &AutoTestResult) {
+    use super::green_contract::{GreenContract, GreenLevel};
+
+    let session_id = crate::engine::tools::get_current_session_id();
+    if session_id.is_empty() { return; }
+
+    let mut contracts = contracts_map().lock().unwrap_or_else(|e| e.into_inner());
+    let contract = contracts
+        .entry(session_id)
+        .or_insert_with(|| GreenContract::new(GreenLevel::TargetedTests));
+
+    if result.passed {
+        contract.update_level(GreenLevel::TargetedTests);
+    }
+}
+
+/// Get the current session's green contract status (for tool output).
+#[allow(dead_code)]
+pub fn current_green_status() -> Option<String> {
+    let session_id = crate::engine::tools::get_current_session_id();
+    if session_id.is_empty() { return None; }
+
+    let contracts = contracts_map().lock().unwrap_or_else(|e| e.into_inner());
+    contracts.get(&session_id).map(|c| {
+        let level = c.current_level.map_or("none", |l| l.as_str());
+        let satisfied = c.evaluate().is_satisfied();
+        format!("[Green: {} | {}]", level, if satisfied { "✅" } else { "⏳" })
+    })
 }
 
 /// Format auto-test result as a message to append to tool output.

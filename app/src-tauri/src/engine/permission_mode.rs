@@ -37,6 +37,7 @@ impl PermissionMode {
         }
     }
 
+    #[allow(dead_code)]
     pub fn from_str(s: &str) -> Self {
         match s {
             "read_only" | "readonly" => Self::ReadOnly,
@@ -121,6 +122,7 @@ impl PermissionPolicy {
         }
     }
 
+    #[allow(dead_code)]
     pub fn active_mode(&self) -> PermissionMode {
         self.active_mode
     }
@@ -145,8 +147,7 @@ impl PermissionPolicy {
             // Standard mode can use Full tools with user confirmation
             PermissionOutcome::NeedsConfirmation {
                 reason: format!(
-                    "Tool '{}' requires full access (current mode: standard). Confirm to proceed.",
-                    tool_name
+                    "此操作需要更高权限，请确认是否允许执行"
                 ),
             }
         } else {
@@ -174,6 +175,7 @@ pub enum PermissionOutcome {
 }
 
 impl PermissionOutcome {
+    #[allow(dead_code)]
     pub fn is_allowed(&self) -> bool {
         matches!(self, Self::Allow)
     }

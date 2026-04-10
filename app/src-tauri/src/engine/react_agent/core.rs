@@ -4,10 +4,9 @@ use super::{AgentStreamEvent, PersistToolFn, ToolPersistEvent, DEFAULT_MAX_ITERA
 use crate::engine::hooks::{HookRunner, HookConfig, merge_hook_feedback};
 use crate::engine::permission_mode::{PermissionMode, PermissionPolicy, PermissionOutcome};
 
-/// Auto-compaction threshold: compress when estimated tokens exceed this.
-use crate::engine::llm_client::{chat_completion, chat_completion_stream, LLMConfig, LLMMessage, MessageContent, StreamEvent};
+use crate::engine::llm_client::{chat_completion_stream, LLMConfig, LLMMessage, MessageContent, StreamEvent};
 use crate::engine::llm_client::retry::parse_context_overflow;
-use crate::engine::tools::{builtin_tools, execute_tool, get_current_session_id, ToolDefinition};
+use crate::engine::tools::{builtin_tools, execute_tool, get_current_session_id, resolve_deferred_tools, ToolDefinition};
 
 /// Load hook configuration from plugins + app config.
 fn load_hook_config() -> HookConfig {
@@ -183,7 +182,7 @@ where
     F: Fn(AgentStreamEvent) + Send + Clone + 'static,
 {
     let max_iter = max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS);
-    let tools = if let Some(ovr) = tools_override {
+    let mut tools = if let Some(ovr) = tools_override {
         ovr
     } else {
         let mut t = builtin_tools();
@@ -221,6 +220,8 @@ where
     let hook_runner = HookRunner::new(load_hook_config());
     // Permission policy (three-level mode borrowed from Claw Code)
     let permission_policy = PermissionPolicy::new(load_permission_mode());
+    // Token usage tracking
+    let mut usage_tracker = crate::engine::usage::UsageTracker::new();
 
     const MAX_EMPTY_RETRIES: usize = 3;
     let mut consecutive_empty = 0u8;
@@ -265,6 +266,11 @@ where
         };
 
         messages.push(response.message.clone());
+
+        // Track token usage
+        if let Some(u) = response.usage {
+            usage_tracker.record(u);
+        }
 
         let has_tool_calls = response.message.tool_calls.as_ref()
             .map_or(false, |tc| !tc.is_empty());
@@ -331,20 +337,30 @@ where
                 }
 
                 if let PermissionOutcome::NeedsConfirmation { reason } = &perm_outcome {
-                    let req = crate::engine::tools::permission_gate::PermissionRequest {
-                        request_id: uuid::Uuid::new_v4().to_string(),
-                        permission_type: "permission_mode".into(),
-                        path: format!("{}({})", tool_name, tool_input.chars().take(100).collect::<String>()),
-                        parent_folder: String::new(),
-                        reason: reason.clone(),
-                        risk_level: "medium".into(),
-                    };
-                    if !crate::engine::tools::permission_gate::request_permission(req).await {
-                        prepared.push(PreparedCall {
-                            call: call.clone(), effective_call: call.clone(),
-                            pre_messages: vec![], denied: Some(format!("Error: User denied: {reason}")),
-                        });
-                        continue;
+                    // Buddy hosted mode: auto-approve non-destructive tools
+                    let high_risk = matches!(tool_name.as_str(),
+                        "execute_shell" | "delete_file" | "computer_control");
+                    if crate::engine::buddy_delegate::is_hosted() && !high_risk {
+                        let friendly = humanize_tool_action(tool_name, tool_input);
+                        log::info!("Buddy auto-approved: {}", friendly);
+                        // Proceed without asking user
+                    } else {
+                        let friendly_desc = humanize_tool_action(tool_name, tool_input);
+                        let req = crate::engine::tools::permission_gate::PermissionRequest {
+                            request_id: uuid::Uuid::new_v4().to_string(),
+                            permission_type: "permission_mode".into(),
+                            path: friendly_desc,
+                            parent_folder: String::new(),
+                            reason: reason.clone(),
+                            risk_level: "medium".into(),
+                        };
+                        if !crate::engine::tools::permission_gate::request_permission(req).await {
+                            prepared.push(PreparedCall {
+                                call: call.clone(), effective_call: call.clone(),
+                                pre_messages: vec![], denied: Some(format!("Error: User denied: {reason}")),
+                            });
+                            continue;
+                        }
                     }
                 }
 
@@ -381,7 +397,7 @@ where
 
             // ── Phase 2: Parallel tool execution ──
             let futures: Vec<_> = prepared.iter().map(|p| {
-                let is_denied = p.denied.is_some();
+                let _is_denied = p.denied.is_some();
                 let denied_msg = p.denied.clone();
                 let eff_call = p.effective_call.clone();
                 async move {
@@ -401,6 +417,9 @@ where
             }
 
             // ── Phase 3: Sequential post-processing (post-hook + emit + persist + push) ──
+            // Also detect tool_search results for dynamic tool injection (Claw Code pattern).
+            let mut discovered_tool_names: Vec<String> = Vec::new();
+
             for (prep, (mut output, images, mut is_error)) in prepared.iter().zip(results.into_iter()) {
                 let tool_name = &prep.call.function.name;
                 let effective_input = &prep.effective_call.function.arguments;
@@ -426,6 +445,22 @@ where
                     }).await.unwrap_or_else(|_| crate::engine::hooks::HookRunResult::allow(vec![]));
                     if post_result.is_blocked() { is_error = true; }
                     output = merge_hook_feedback(post_result.messages(), output, post_result.is_blocked());
+                }
+
+                // Detect tool_search results: parse [TOOLS_DISCOVERED:name1,name2] tag
+                if tool_name == "tool_search" && !is_error {
+                    let tag = crate::engine::tools::TOOLS_DISCOVERED_TAG;
+                    if let Some(start) = output.find(tag) {
+                        if let Some(end) = output[start..].find(']') {
+                            let tag_content = &output[start + tag.len()..start + end];
+                            for name in tag_content.split(',') {
+                                let name = name.trim();
+                                if !name.is_empty() {
+                                    discovered_tool_names.push(name.to_string());
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Emit ToolEnd
@@ -457,6 +492,24 @@ where
                 });
             }
 
+            // ── Dynamic tool injection (Claw Code pattern) ──
+            // When tool_search discovers tools, inject their full definitions into
+            // the tools list so the LLM can call them in subsequent iterations.
+            if !discovered_tool_names.is_empty() {
+                let names_ref: Vec<&str> = discovered_tool_names.iter().map(|s| s.as_str()).collect();
+                let new_tools = resolve_deferred_tools(&names_ref);
+                // Collect existing names as owned strings to avoid borrow conflict
+                let existing_names: std::collections::HashSet<String> = tools.iter()
+                    .map(|t| t.function.name.clone())
+                    .collect();
+                for tool in new_tools {
+                    if !existing_names.contains(&tool.function.name) {
+                        log::info!("Dynamic tool injection: adding '{}' to active tools", tool.function.name);
+                        tools.push(tool);
+                    }
+                }
+            }
+
             // Check cancellation after all tool executions
             if cancelled.map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
                 return Err("cancelled".to_string());
@@ -468,6 +521,7 @@ where
             let text = text.trim().to_string();
 
             if !text.is_empty() {
+                emit_usage(&on_event, &usage_tracker, config);
                 on_event(AgentStreamEvent::Complete);
                 return Ok(text);
             }
@@ -480,6 +534,7 @@ where
 
             if (consecutive_empty as usize) >= MAX_EMPTY_RETRIES {
                 log::error!("LLM returned empty response {} times, giving up", MAX_EMPTY_RETRIES);
+                emit_usage(&on_event, &usage_tracker, config);
                 on_event(AgentStreamEvent::Complete);
                 return Ok(String::new());
             }
@@ -498,9 +553,94 @@ where
         compact_messages_if_needed(&mut messages, config, working_dir).await;
     }
 
+    emit_usage(&on_event, &usage_tracker, config);
     let err = format!("Agent reached maximum iterations ({})", max_iter);
     on_event(AgentStreamEvent::Error);
     Err(err)
+}
+
+/// Emit cumulative usage event if any tokens were tracked.
+fn emit_usage<F: Fn(AgentStreamEvent)>(
+    on_event: &F,
+    tracker: &crate::engine::usage::UsageTracker,
+    config: &LLMConfig,
+) {
+    let cum = tracker.cumulative_usage();
+    if cum.input_tokens == 0 && cum.output_tokens == 0 {
+        return;
+    }
+    let cost = crate::engine::usage::estimate_cost(&cum, &config.model);
+    on_event(AgentStreamEvent::Usage {
+        input_tokens: cum.input_tokens,
+        output_tokens: cum.output_tokens,
+        cache_read_tokens: cum.cache_read_input_tokens,
+        estimated_cost_usd: cost,
+    });
+}
+
+/// Translate internal tool name + args into a human-readable action description.
+fn humanize_tool_action(tool_name: &str, tool_input: &str) -> String {
+    let args: serde_json::Value = serde_json::from_str(tool_input).unwrap_or_default();
+    match tool_name {
+        "browser_use" => {
+            let action = args["action"].as_str().unwrap_or("operate");
+            let url = args["url"].as_str().unwrap_or("");
+            match action {
+                "start" => "打开浏览器".into(),
+                "goto" | "open" => format!("打开网页: {}", truncate(url, 60)),
+                "click" => "点击网页元素".into(),
+                "type" | "input" => "在网页中输入文字".into(),
+                "screenshot" | "snapshot" => "截取网页截图".into(),
+                "stop" => "关闭浏览器".into(),
+                _ => format!("浏览器操作: {}", action),
+            }
+        }
+        "execute_shell" => {
+            let cmd = args["command"].as_str().unwrap_or("命令");
+            format!("执行命令: {}", truncate(cmd, 80))
+        }
+        "write_file" => {
+            let path = args["path"].as_str().unwrap_or("文件");
+            format!("写入文件: {}", truncate(path, 60))
+        }
+        "edit_file" => {
+            let path = args["path"].as_str().unwrap_or("文件");
+            format!("编辑文件: {}", truncate(path, 60))
+        }
+        "delete_file" => {
+            let path = args["path"].as_str().unwrap_or("文件");
+            format!("删除文件: {}", truncate(path, 60))
+        }
+        "computer_control" => {
+            let action = args["action"].as_str().unwrap_or("操作");
+            format!("电脑控制: {}", action)
+        }
+        "spawn_agents" => "启动子智能体".into(),
+        "manage_bot" => "管理 Bot 配置".into(),
+        "manage_cronjob" => "管理定时任务".into(),
+        "pip_install" => {
+            let pkg = args["package"].as_str().unwrap_or("包");
+            format!("安装 Python 包: {}", pkg)
+        }
+        "git_commit" => {
+            let msg = args["message"].as_str().unwrap_or("");
+            format!("Git 提交: {}", truncate(msg, 50))
+        }
+        "git_create_branch" => {
+            let name = args["name"].as_str().unwrap_or("分支");
+            format!("创建 Git 分支: {}", name)
+        }
+        _ => {
+            // Fallback: still better than raw tool_name(json)
+            let desc = tool_name.replace('_', " ");
+            format!("执行操作: {}", desc)
+        }
+    }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max { s.to_string() }
+    else { format!("{}…", s.chars().take(max).collect::<String>()) }
 }
 
 // ---------------------------------------------------------------------------

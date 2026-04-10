@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! LSP (Language Server Protocol) client for YiYi.
 //!
 //! Provides a lightweight LSP client that communicates with language servers

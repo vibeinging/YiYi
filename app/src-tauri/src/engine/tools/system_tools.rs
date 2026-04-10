@@ -804,6 +804,22 @@ pub(super) async fn pty_spawn_interactive_tool(args: &serde_json::Value) -> Stri
     let cols = args["cols"].as_u64().unwrap_or(80) as u16;
     let rows = args["rows"].as_u64().unwrap_or(24) as u16;
 
+    // Security gate: validate command before spawning PTY
+    {
+        use crate::engine::coding::bash_validation::{validate_bash_command, BashValidation};
+        use crate::engine::permission_mode::PermissionMode;
+        let workspace = super::USER_WORKSPACE.get().map(|p| p.as_path());
+        match validate_bash_command(command, PermissionMode::Standard, workspace) {
+            BashValidation::Deny(reason) => {
+                return format!("Error: PTY spawn blocked — {reason}");
+            }
+            BashValidation::Warn(reason) => {
+                log::info!("PTY spawn validation warning: {reason}");
+            }
+            BashValidation::Allow => {}
+        }
+    }
+
     match (super::get_pty_manager(), super::APP_HANDLE.get()) {
         (Ok(mgr), Some(handle)) => {
             match mgr.spawn(handle, command, &cmd_args, &cwd, cols, rows).await {
@@ -825,6 +841,14 @@ pub(super) async fn pty_send_input_tool(args: &serde_json::Value) -> String {
     let session_id = args["session_id"].as_str().unwrap_or("");
     let input = args["input"].as_str().unwrap_or("");
     let wait_ms = args["wait_ms"].as_u64().unwrap_or(3000);
+
+    // Security gate: analyze input before sending to PTY
+    {
+        let analysis = shell_security::analyze_command(input);
+        if let SecurityVerdict::Block { reason } = analysis.security_verdict {
+            return format!("Error: PTY input blocked — {reason}");
+        }
+    }
 
     let mgr = match super::get_pty_manager() {
         Ok(m) => m,

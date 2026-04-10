@@ -46,6 +46,7 @@ pub struct HookConfig {
 }
 
 impl HookConfig {
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.pre_tool_use.is_empty()
             && self.post_tool_use.is_empty()
@@ -74,6 +75,7 @@ impl HookAbortSignal {
         }
     }
 
+    #[allow(dead_code)]
     pub fn abort(&self) {
         self.aborted.store(true, Ordering::Relaxed);
     }
@@ -93,7 +95,9 @@ pub struct HookRunResult {
     cancelled: bool,
     messages: Vec<String>,
     /// Hook can override permission decision (allow/deny/ask).
+    #[allow(dead_code)]
     permission_override: Option<PermissionOverride>,
+    #[allow(dead_code)]
     permission_reason: Option<String>,
     /// Hook can modify the tool input before execution.
     updated_input: Option<String>,
@@ -119,14 +123,17 @@ impl HookRunResult {
         }
     }
 
+    #[allow(dead_code)]
     fn deny(messages: Vec<String>) -> Self {
         Self { denied: true, ..Self::allow(messages) }
     }
 
+    #[allow(dead_code)]
     fn fail(messages: Vec<String>) -> Self {
         Self { failed: true, ..Self::allow(messages) }
     }
 
+    #[allow(dead_code)]
     fn cancel(message: String) -> Self {
         Self {
             cancelled: true,
@@ -135,12 +142,17 @@ impl HookRunResult {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_denied(&self) -> bool { self.denied }
+    #[allow(dead_code)]
     pub fn is_failed(&self) -> bool { self.failed }
+    #[allow(dead_code)]
     pub fn is_cancelled(&self) -> bool { self.cancelled }
     pub fn is_blocked(&self) -> bool { self.denied || self.failed || self.cancelled }
     pub fn messages(&self) -> &[String] { &self.messages }
+    #[allow(dead_code)]
     pub fn permission_override(&self) -> Option<PermissionOverride> { self.permission_override }
+    #[allow(dead_code)]
     pub fn permission_reason(&self) -> Option<&str> { self.permission_reason.as_deref() }
     pub fn updated_input(&self) -> Option<&str> { self.updated_input.as_deref() }
 }
@@ -203,6 +215,7 @@ impl HookRunner {
         run_commands(&self.config.post_tool_use_failure, &payload, abort_signal)
     }
 
+    #[allow(dead_code)]
     pub fn has_hooks(&self) -> bool {
         !self.config.is_empty()
     }

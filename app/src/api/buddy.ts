@@ -8,6 +8,7 @@ export interface BuddyConfig {
   buddy_user_id: string
   stats_delta: Record<string, number>
   interaction_count: number
+  hosted_mode: boolean
 }
 
 export async function getBuddyConfig(): Promise<BuddyConfig> {
@@ -23,6 +24,14 @@ export async function hatchBuddy(
   personality: string,
 ): Promise<BuddyConfig> {
   return await invoke<BuddyConfig>('hatch_buddy', { name, personality })
+}
+
+export async function toggleBuddyHosted(enabled: boolean): Promise<boolean> {
+  return await invoke<boolean>('toggle_buddy_hosted', { enabled })
+}
+
+export async function getBuddyHosted(): Promise<boolean> {
+  return await invoke<boolean>('get_buddy_hosted')
 }
 
 export async function buddyObserve(

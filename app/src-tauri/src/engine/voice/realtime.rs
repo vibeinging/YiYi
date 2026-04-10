@@ -1,10 +1,11 @@
+#![allow(dead_code)]
 //! OpenAI Realtime API WebSocket client.
 //!
 //! Manages a persistent WebSocket connection to `wss://api.openai.com/v1/realtime`.
 //! Audio is exchanged as base64-encoded PCM16 in JSON envelopes.
 
 use futures_util::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;

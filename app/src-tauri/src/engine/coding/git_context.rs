@@ -89,6 +89,7 @@ pub fn modified_files(path: &Path) -> Vec<String> {
 }
 
 /// Human-readable one-line git status summary.
+#[allow(dead_code)]
 pub fn git_status_summary(path: &Path) -> String {
     let staged = staged_files(path);
     let modified = modified_files(path);

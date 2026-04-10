@@ -323,6 +323,7 @@ impl PluginRegistry {
     }
 
     /// Shutdown all enabled plugins (run lifecycle shutdown commands).
+    #[allow(dead_code)]
     pub fn shutdown_all(&self) {
         for plugin in self.plugins.iter().rev().filter(|p| p.enabled) {
             if let Err(e) = plugin.shutdown() {

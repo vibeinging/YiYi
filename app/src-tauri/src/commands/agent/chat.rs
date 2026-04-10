@@ -137,6 +137,23 @@ pub async fn chat_stream_start(
         }
     }
 
+    // Detect buddy delegation triggers in user message
+    {
+        let msg_lower = message.to_lowercase();
+        let buddy_name = state.config.read().await.buddy.name.to_lowercase();
+        let is_buddy_mention = msg_lower.contains(&format!("@{}", buddy_name))
+            || msg_lower.contains("@小精灵")
+            || msg_lower.contains("@buddy")
+            || msg_lower.contains("你来帮我做决定")
+            || msg_lower.contains("你来决定")
+            || msg_lower.contains("交给你了")
+            || msg_lower.contains("托管模式");
+        if is_buddy_mention {
+            crate::engine::buddy_delegate::enable_session_hosted();
+            log::info!("Buddy hosted mode activated by user message");
+        }
+    }
+
     let ctx = prepare_chat_context(&state, &sid, &message, &attachments).await?;
 
     // Auto-continue limits — the model decides via [CONTINUE] marker (see auto_continue skill)
@@ -178,6 +195,7 @@ pub async fn chat_stream_start(
         let handle = app_handle.clone();
         let ss_for_event = streaming_state.clone();
         let sid_for_event = sid_clone.clone();
+        let model_for_event = ctx.config.model.clone();
         let thinking_buf = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
         let thinking_buf_for_event = thinking_buf.clone();
         let tool_call_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -275,6 +293,23 @@ pub async fn chat_stream_start(
                         if let Some(snap) = ss.get_mut(&sid_for_event) {
                             snap.accumulated_text.clear();
                         }
+                    }
+                }
+                react_agent::AgentStreamEvent::Usage { input_tokens, output_tokens, cache_read_tokens, estimated_cost_usd } => {
+                    handle.emit("chat://usage", serde_json::json!({
+                        "session_id": sid_for_event,
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "cache_read_tokens": cache_read_tokens,
+                        "estimated_cost_usd": estimated_cost_usd,
+                    })).ok();
+                    // Persist to DB for historical queries
+                    if let Some(db) = crate::engine::tools::get_database() {
+                        db.record_usage(
+                            &sid_for_event, &model_for_event,
+                            *input_tokens, *output_tokens, *cache_read_tokens, 0,
+                            estimated_cost_usd.unwrap_or(0.0),
+                        );
                     }
                 }
                 react_agent::AgentStreamEvent::Complete
@@ -640,6 +675,17 @@ pub async fn chat_stream_start(
                                         was_successful,
                                         signal_type,
                                     ).await;
+                                });
+                            }
+
+                            // Auto-memory extraction: extract noteworthy info from this conversation
+                            {
+                                let config_mem = ctx.config.clone();
+                                let user_msg = ctx.augmented_message.clone();
+                                let reply_text = last_reply.clone();
+                                let sid = sid_clone.clone();
+                                tokio::spawn(async move {
+                                    react_agent::extract_memories_from_conversation(&config_mem, &user_msg, &reply_text, Some(&sid)).await;
                                 });
                             }
 

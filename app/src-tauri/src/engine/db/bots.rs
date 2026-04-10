@@ -193,6 +193,7 @@ impl super::Database {
     }
 
     /// Get a conversation by its (bot_id, external_id) pair.
+    #[allow(dead_code)]
     pub fn get_conversation_by_external(&self, bot_id: &str, external_id: &str) -> Result<Option<BotConversationRow>, String> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let result = conn.query_row(

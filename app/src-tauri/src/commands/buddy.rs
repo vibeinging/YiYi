@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::engine::llm_client::{self, LLMMessage, MessageContent};
@@ -49,6 +48,27 @@ pub async fn hatch_buddy(
     app_config.save(&state.working_dir)?;
 
     Ok(app_config.buddy.clone())
+}
+
+/// Toggle buddy hosted mode (global).
+#[tauri::command]
+pub async fn toggle_buddy_hosted(
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<bool, String> {
+    let mut config = state.config.write().await;
+    config.buddy.hosted_mode = enabled;
+    config.save(&state.working_dir)?;
+    // Global hosted mode is read from config by is_hosted(), no per-session flag needed
+    log::info!("Buddy hosted mode toggled: {}", enabled);
+    Ok(enabled)
+}
+
+/// Get current hosted mode status.
+#[tauri::command]
+pub async fn get_buddy_hosted(state: State<'_, AppState>) -> Result<bool, String> {
+    let config = state.config.read().await;
+    Ok(config.buddy.hosted_mode)
 }
 
 /// YiYi observes the conversation and decides whether to react with an emotional bubble.

@@ -25,17 +25,18 @@ pub mod bots;
 pub mod worker;
 pub mod scheduler;
 
-// ── Extensions: agents, plugins, skills, policies ──
+// ── Extensions: agents, plugins, skills ──
 pub mod agents;
 pub mod plugins;
 pub mod skills_hub;
-pub mod policy_engine;
 
 // ── Infrastructure: DB, LLM, MCP, Python, PTY, config ──
 pub mod db;
 pub mod llm_client;
 pub mod infra;
 pub mod task_registry;
+pub mod keystore;
+pub mod buddy_delegate;
 
 // ── Voice control ──
 pub mod voice;

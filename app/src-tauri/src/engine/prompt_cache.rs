@@ -1,7 +1,7 @@
-//! Prompt cache with dual TTL, LRU eviction, cache-break detection, and
+#![allow(dead_code)]
+//! Prompt cache — fingerprinting, cache-break detection, and
 //! session persistence — inspired by Claw Code's prompt_cache design.
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -10,44 +10,9 @@ use serde::{Deserialize, Serialize};
 
 const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
-const MAX_ENTRIES: usize = 100;
 
-/// Default TTL for completion (short-lived) cache entries — 30 seconds.
-const DEFAULT_COMPLETION_TTL_MS: i64 = 30_000;
-/// Default TTL for prompt (long-lived) cache entries — 5 minutes.
-const DEFAULT_PROMPT_TTL_MS: i64 = 5 * 60 * 1_000;
 /// Minimum token drop to consider a cache break — 2 000 tokens.
 const DEFAULT_BREAK_MIN_DROP: u32 = 2_000;
-
-// ── Cache entry types ─────────────────────────────────────────────────
-
-/// Which TTL tier this entry belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum CacheType {
-    /// Short-lived: API completion responses (default 30 s).
-    Completion,
-    /// Long-lived: prompt / system-prompt fragments (default 5 min).
-    Prompt,
-}
-
-/// A single cached prompt response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CacheEntry {
-    pub fingerprint: u64,
-    pub response_text: String,
-    pub created_at: i64,
-    pub ttl_ms: i64,
-    pub cache_type: CacheType,
-    /// Tracks recency for LRU eviction (higher = more recent).
-    last_accessed: u64,
-}
-
-impl CacheEntry {
-    fn is_expired(&self, now_ms: i64) -> bool {
-        // Use >= so that a TTL of 0 expires immediately.
-        now_ms - self.created_at >= self.ttl_ms
-    }
-}
 
 // ── Cache break detection ─────────────────────────────────────────────
 
@@ -85,17 +50,11 @@ pub struct CacheStats {
 
 // ── Prompt cache ──────────────────────────────────────────────────────
 
-/// In-memory prompt cache with dual TTL, LRU eviction, cache-break
-/// detection, and optional session persistence.
+/// Prompt cache with fingerprinting, cache-break detection, and
+/// optional session persistence.
 #[derive(Debug)]
 pub struct PromptCache {
-    entries: HashMap<u64, CacheEntry>,
     stats: CacheStats,
-    access_counter: u64,
-    /// Completion-tier TTL in ms.
-    completion_ttl_ms: i64,
-    /// Prompt-tier TTL in ms.
-    prompt_ttl_ms: i64,
     /// Minimum token-drop threshold to flag a cache break.
     break_min_drop: u32,
     /// Previous cache-read token count — used for break detection.
@@ -114,24 +73,10 @@ impl PromptCache {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            entries: HashMap::new(),
             stats: CacheStats::default(),
-            access_counter: 0,
-            completion_ttl_ms: DEFAULT_COMPLETION_TTL_MS,
-            prompt_ttl_ms: DEFAULT_PROMPT_TTL_MS,
             break_min_drop: DEFAULT_BREAK_MIN_DROP,
             previous_cache_read_tokens: None,
             previous_fingerprint: None,
-        }
-    }
-
-    /// Create a cache with custom TTLs.
-    #[must_use]
-    pub fn with_ttls(completion_ttl_ms: i64, prompt_ttl_ms: i64) -> Self {
-        Self {
-            completion_ttl_ms,
-            prompt_ttl_ms,
-            ..Self::new()
         }
     }
 
@@ -153,89 +98,6 @@ impl PromptCache {
             hash = hash.wrapping_mul(FNV_PRIME);
         }
         hash
-    }
-
-    // ── Lookup ────────────────────────────────────────────────────────
-
-    /// Look up a cached response by fingerprint. Returns `None` if missing or expired.
-    pub fn get(&mut self, fingerprint: u64) -> Option<&str> {
-        let now_ms = now_epoch_ms();
-        // Check expiration first (need to remove if expired).
-        if let Some(entry) = self.entries.get(&fingerprint) {
-            if entry.is_expired(now_ms) {
-                self.entries.remove(&fingerprint);
-                self.stats.evictions += 1;
-                self.stats.misses += 1;
-                return None;
-            }
-        } else {
-            self.stats.misses += 1;
-            return None;
-        }
-
-        // Entry exists and is valid — update access counter.
-        self.access_counter += 1;
-        let counter = self.access_counter;
-        if let Some(entry) = self.entries.get_mut(&fingerprint) {
-            entry.last_accessed = counter;
-            self.stats.hits += 1;
-            Some(&entry.response_text)
-        } else {
-            self.stats.misses += 1;
-            None
-        }
-    }
-
-    // ── Storage ───────────────────────────────────────────────────────
-
-    /// Store a **completion** response (short TTL — 30 s by default).
-    pub fn put(&mut self, fingerprint: u64, response: String) {
-        self.put_typed(fingerprint, response, CacheType::Completion);
-    }
-
-    /// Store a **prompt** fragment (long TTL — 5 min by default).
-    pub fn put_prompt(&mut self, fingerprint: u64, response: String) {
-        self.put_typed(fingerprint, response, CacheType::Prompt);
-    }
-
-    /// Store a response with an explicit TTL in milliseconds.
-    pub fn put_with_ttl(&mut self, fingerprint: u64, response: String, ttl_ms: i64) {
-        self.insert_entry(fingerprint, response, ttl_ms, CacheType::Completion);
-    }
-
-    /// Internal: store with a cache-type-derived TTL.
-    fn put_typed(&mut self, fingerprint: u64, response: String, cache_type: CacheType) {
-        let ttl = match cache_type {
-            CacheType::Completion => self.completion_ttl_ms,
-            CacheType::Prompt => self.prompt_ttl_ms,
-        };
-        self.insert_entry(fingerprint, response, ttl, cache_type);
-    }
-
-    fn insert_entry(
-        &mut self,
-        fingerprint: u64,
-        response: String,
-        ttl_ms: i64,
-        cache_type: CacheType,
-    ) {
-        self.evict_expired();
-
-        if self.entries.len() >= MAX_ENTRIES && !self.entries.contains_key(&fingerprint) {
-            self.evict_lru();
-        }
-
-        self.access_counter += 1;
-        let entry = CacheEntry {
-            fingerprint,
-            response_text: response,
-            created_at: now_epoch_ms(),
-            ttl_ms,
-            cache_type,
-            last_accessed: self.access_counter,
-        };
-        self.entries.insert(fingerprint, entry);
-        self.stats.writes += 1;
     }
 
     // ── Cache break detection ─────────────────────────────────────────
@@ -336,41 +198,6 @@ impl PromptCache {
     pub fn stats(&self) -> CacheStats {
         self.stats.clone()
     }
-
-    /// Number of entries currently stored.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    /// Whether the cache is empty.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    // ── Eviction ──────────────────────────────────────────────────────
-
-    /// Remove all expired entries.
-    pub fn evict_expired(&mut self) {
-        let now_ms = now_epoch_ms();
-        let before = self.entries.len();
-        self.entries.retain(|_, entry| !entry.is_expired(now_ms));
-        let removed = before - self.entries.len();
-        self.stats.evictions += removed as u64;
-    }
-
-    /// Evict the least-recently-used entry.
-    fn evict_lru(&mut self) {
-        if let Some((&lru_key, _)) = self
-            .entries
-            .iter()
-            .min_by_key(|(_, entry)| entry.last_accessed)
-        {
-            self.entries.remove(&lru_key);
-            self.stats.evictions += 1;
-        }
-    }
 }
 
 fn now_epoch_ms() -> i64 {
@@ -397,95 +224,6 @@ mod tests {
         let a = PromptCache::fingerprint("sys", "msg1");
         let b = PromptCache::fingerprint("sys", "msg2");
         assert_ne!(a, b);
-    }
-
-    #[test]
-    fn put_and_get_round_trip() {
-        let mut cache = PromptCache::new();
-        let fp = PromptCache::fingerprint("hello", "world");
-        cache.put(fp, "response".to_string());
-        assert_eq!(cache.get(fp), Some("response"));
-        assert_eq!(cache.stats().hits, 1);
-        assert_eq!(cache.stats().writes, 1);
-    }
-
-    #[test]
-    fn missing_key_counts_as_miss() {
-        let mut cache = PromptCache::new();
-        assert_eq!(cache.get(999), None);
-        assert_eq!(cache.stats().misses, 1);
-    }
-
-    #[test]
-    fn expired_entry_is_evicted_on_get() {
-        let mut cache = PromptCache::new();
-        let fp = PromptCache::fingerprint("a", "b");
-        cache.put_with_ttl(fp, "old".to_string(), 0); // TTL=0 -> immediately expired
-        assert_eq!(cache.get(fp), None);
-        assert_eq!(cache.stats().evictions, 1);
-    }
-
-    #[test]
-    fn lru_eviction_when_full() {
-        let mut cache = PromptCache::new();
-        for i in 0..MAX_ENTRIES {
-            cache.put(i as u64, format!("val-{i}"));
-        }
-        assert_eq!(cache.len(), MAX_ENTRIES);
-
-        // Access entry 50 to make it recently used.
-        let _ = cache.get(50);
-
-        // Insert one more — should evict the LRU.
-        cache.put(MAX_ENTRIES as u64, "new".to_string());
-        assert_eq!(cache.len(), MAX_ENTRIES);
-        assert!(cache.stats().evictions >= 1);
-    }
-
-    #[test]
-    fn evict_expired_removes_stale_entries() {
-        let mut cache = PromptCache::new();
-        cache.put_with_ttl(1, "a".to_string(), 0);
-        cache.put_with_ttl(2, "b".to_string(), 0);
-        cache.put(3, "c".to_string()); // default TTL, should survive
-        cache.evict_expired();
-        assert_eq!(cache.len(), 1);
-        assert_eq!(cache.stats().evictions, 2);
-    }
-
-    // ── Dual TTL tests ────────────────────────────────────────────────
-
-    #[test]
-    fn prompt_cache_type_gets_longer_ttl() {
-        let mut cache = PromptCache::new();
-        let fp = PromptCache::fingerprint("system", "msgs");
-        cache.put_prompt(fp, "prompt-data".to_string());
-
-        let entry = cache.entries.get(&fp).unwrap();
-        assert_eq!(entry.cache_type, CacheType::Prompt);
-        assert_eq!(entry.ttl_ms, DEFAULT_PROMPT_TTL_MS);
-    }
-
-    #[test]
-    fn completion_cache_type_gets_shorter_ttl() {
-        let mut cache = PromptCache::new();
-        let fp = PromptCache::fingerprint("system", "msgs");
-        cache.put(fp, "completion-data".to_string());
-
-        let entry = cache.entries.get(&fp).unwrap();
-        assert_eq!(entry.cache_type, CacheType::Completion);
-        assert_eq!(entry.ttl_ms, DEFAULT_COMPLETION_TTL_MS);
-    }
-
-    #[test]
-    fn custom_ttls_are_applied() {
-        let mut cache = PromptCache::with_ttls(10_000, 120_000);
-        let fp1 = 1u64;
-        let fp2 = 2u64;
-        cache.put(fp1, "c".to_string());
-        cache.put_prompt(fp2, "p".to_string());
-        assert_eq!(cache.entries.get(&fp1).unwrap().ttl_ms, 10_000);
-        assert_eq!(cache.entries.get(&fp2).unwrap().ttl_ms, 120_000);
     }
 
     // ── Cache break detection tests ───────────────────────────────────
@@ -544,16 +282,12 @@ mod tests {
         ));
 
         let mut cache = PromptCache::new();
-        cache.put(1, "a".to_string());
-        let _ = cache.get(1);
         cache.record_api_usage(1, 100, 200);
         cache.save_stats(&temp).expect("save should succeed");
 
         let mut cache2 = PromptCache::new();
         let loaded = cache2.load_stats(&temp).expect("load should succeed");
         assert!(loaded);
-        assert_eq!(cache2.stats().hits, 1);
-        assert_eq!(cache2.stats().writes, 1);
         assert_eq!(cache2.stats().total_cache_creation_tokens, 100);
 
         let _ = fs::remove_file(&temp);

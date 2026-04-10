@@ -25,6 +25,7 @@ import { useChatEventBridge } from './hooks/useChatEventBridge';
 import { useTaskEventBridge } from './hooks/useTaskEventBridge';
 import { useBotEventBridge } from './hooks/useBotEventBridge';
 import { usePermissionBridge } from './hooks/usePermissionBridge';
+import { useGrowthEventBridge } from './hooks/useGrowthEventBridge';
 import { TaskSidebar } from './components/TaskSidebar';
 import { TaskDetailOverlay } from './components/TaskDetailOverlay';
 import { useTaskSidebarStore } from './stores/taskSidebarStore';
@@ -61,6 +62,7 @@ function MainApp() {
   useTaskEventBridge();
   useBotEventBridge();
   usePermissionBridge();
+  useGrowthEventBridge();
 
   // Task sidebar store
   const sidebarCollapsed = useTaskSidebarStore((s) => s.sidebarCollapsed);

@@ -23,31 +23,6 @@ fn now_millis() -> i64 {
         .as_millis() as i64
 }
 
-// ── Trust prompt detection ───────────────────────────────────────────────
-
-/// Patterns that indicate a trust/permission prompt in tool output.
-const TRUST_PROMPT_PATTERNS: &[&str] = &[
-    "do you trust",
-    "allow and continue",
-    "grant access",
-    "approve",
-    "permission required",
-    "authorize",
-    "trust the files in this folder",
-    "yes, proceed",
-];
-
-/// Scan output text for trust/permission prompts.
-/// Returns the matching pattern as a `String` if found.
-#[must_use]
-pub fn detect_trust_prompt(output: &str) -> Option<String> {
-    let lowered = output.to_ascii_lowercase();
-    TRUST_PROMPT_PATTERNS
-        .iter()
-        .find(|&&pattern| lowered.contains(pattern))
-        .map(|&pattern| pattern.to_string())
-}
-
 // ── Failure reason ───────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -248,13 +223,6 @@ impl WorkerRegistry {
         worker_id
     }
 
-    /// Get a snapshot of a single worker.
-    #[must_use]
-    pub fn get(&self, id: &str) -> Option<Worker> {
-        let inner = self.inner.lock().expect("worker registry lock poisoned");
-        inner.workers.get(id).cloned()
-    }
-
     /// Transition a worker to a new state.
     ///
     /// Returns `Ok(())` on success, `Err(message)` if the transition is invalid
@@ -351,18 +319,6 @@ impl WorkerRegistry {
         inner.workers.values().cloned().collect()
     }
 
-    /// List workers filtered by state label (e.g. "running", "trust_required").
-    #[must_use]
-    pub fn list_by_state(&self, state_label: &str) -> Vec<Worker> {
-        let inner = self.inner.lock().expect("worker registry lock poisoned");
-        inner
-            .workers
-            .values()
-            .filter(|w| w.state.label() == state_label)
-            .cloned()
-            .collect()
-    }
-
     /// Remove finished/failed workers older than `max_age_ms` milliseconds.
     /// Returns the number of cleaned-up workers.
     pub fn cleanup_finished(&self, max_age_ms: i64) -> usize {
@@ -382,18 +338,16 @@ impl WorkerRegistry {
 mod tests {
     use super::*;
 
-    #[test]
-    fn detect_trust_prompt_finds_known_patterns() {
-        assert!(detect_trust_prompt("Do you trust the files?").is_some());
-        assert!(detect_trust_prompt("Permission Required: approve access").is_some());
-        assert!(detect_trust_prompt("hello world").is_none());
+    /// Helper: get a worker by id (test-only).
+    fn get_worker(reg: &WorkerRegistry, id: &str) -> Option<Worker> {
+        reg.list().into_iter().find(|w| w.id == id)
     }
 
     #[test]
     fn spawn_and_get() {
         let reg = WorkerRegistry::new();
         let id = reg.spawn("test-worker");
-        let w = reg.get(&id).unwrap();
+        let w = get_worker(&reg, &id).unwrap();
         assert_eq!(w.name, "test-worker");
         assert_eq!(w.state.label(), "spawning");
         assert_eq!(w.events.len(), 1);
@@ -405,10 +359,10 @@ mod tests {
         let id = reg.spawn("w1");
 
         reg.transition(&id, WorkerState::Ready).unwrap();
-        assert_eq!(reg.get(&id).unwrap().state.label(), "ready");
+        assert_eq!(get_worker(&reg, &id).unwrap().state.label(), "ready");
 
         reg.transition(&id, WorkerState::Running).unwrap();
-        assert_eq!(reg.get(&id).unwrap().state.label(), "running");
+        assert_eq!(get_worker(&reg, &id).unwrap().state.label(), "running");
 
         reg.transition(
             &id,
@@ -417,7 +371,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(reg.get(&id).unwrap().state.label(), "finished");
+        assert_eq!(get_worker(&reg, &id).unwrap().state.label(), "finished");
     }
 
     #[test]
@@ -432,10 +386,10 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(reg.get(&id).unwrap().state.label(), "trust_required");
+        assert_eq!(get_worker(&reg, &id).unwrap().state.label(), "trust_required");
 
         reg.resolve_trust(&id, true).unwrap();
-        assert_eq!(reg.get(&id).unwrap().state.label(), "ready");
+        assert_eq!(get_worker(&reg, &id).unwrap().state.label(), "ready");
     }
 
     #[test]
@@ -451,7 +405,7 @@ mod tests {
         )
         .unwrap();
         reg.resolve_trust(&id, false).unwrap();
-        assert_eq!(reg.get(&id).unwrap().state.label(), "failed");
+        assert_eq!(get_worker(&reg, &id).unwrap().state.label(), "failed");
     }
 
     #[test]
@@ -460,19 +414,6 @@ mod tests {
         let id = reg.spawn("w4");
         // Can't go from Spawning directly to Running
         assert!(reg.transition(&id, WorkerState::Running).is_err());
-    }
-
-    #[test]
-    fn list_by_state_filters() {
-        let reg = WorkerRegistry::new();
-        let id1 = reg.spawn("a");
-        let _id2 = reg.spawn("b");
-
-        reg.transition(&id1, WorkerState::Ready).unwrap();
-
-        assert_eq!(reg.list_by_state("spawning").len(), 1);
-        assert_eq!(reg.list_by_state("ready").len(), 1);
-        assert_eq!(reg.list_by_state("running").len(), 0);
     }
 
     #[test]
@@ -492,7 +433,7 @@ mod tests {
         // max_age_ms=0 means "remove anything that's already terminal"
         let removed = reg.cleanup_finished(0);
         assert_eq!(removed, 1);
-        assert!(reg.get(&id).is_none());
+        assert!(get_worker(&reg, &id).is_none());
     }
 
     #[test]
@@ -509,6 +450,6 @@ mod tests {
 
         // Restart: Failed → Spawning
         reg.transition(&id, WorkerState::Spawning).unwrap();
-        assert_eq!(reg.get(&id).unwrap().state.label(), "spawning");
+        assert_eq!(get_worker(&reg, &id).unwrap().state.label(), "spawning");
     }
 }

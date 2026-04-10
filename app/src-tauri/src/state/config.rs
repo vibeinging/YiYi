@@ -293,10 +293,14 @@ pub struct BuddyConfig {
     /// Total interaction count (used for growth rate scaling).
     #[serde(default)]
     pub interaction_count: u32,
+    /// Hosted mode: buddy auto-handles decisions, permissions, and task direction.
+    #[serde(default)]
+    pub hosted_mode: bool,
 }
 
 impl CliProviderConfig {
     /// Default configuration for Feishu CLI.
+    #[allow(dead_code)]
     pub fn feishu_default() -> Self {
         Self {
             enabled: false,

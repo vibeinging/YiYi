@@ -114,6 +114,8 @@ pub struct LLMConfig {
 #[derive(Debug)]
 pub struct LLMResponse {
     pub message: LLMMessage,
+    /// Token usage from this API call (if reported by the provider).
+    pub usage: Option<crate::engine::usage::TokenUsage>,
 }
 
 #[derive(Debug, Clone)]
@@ -232,6 +234,7 @@ pub fn emit_fallback_content<F: Fn(StreamEvent)>(response: &LLMResponse, on_even
 pub fn build_stream_response(
     full_content: String,
     tool_calls: Option<Vec<ToolCall>>,
+    usage: Option<crate::engine::usage::TokenUsage>,
 ) -> LLMResponse {
     let has_tool_calls = tool_calls.as_ref().map_or(false, |t| !t.is_empty());
     let content = if full_content.is_empty() {
@@ -246,5 +249,6 @@ pub fn build_stream_response(
             tool_calls: if has_tool_calls { tool_calls } else { None },
             tool_call_id: None,
         },
+        usage,
     }
 }

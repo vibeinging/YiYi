@@ -281,6 +281,7 @@ pub(super) async fn write_file_tool(args: &serde_json::Value) -> String {
 
             // Auto-test: run project checks after write
             if let Some(test_result) = crate::engine::coding::auto_test::run_auto_test(path).await {
+                crate::engine::coding::auto_test::update_green_contract(&test_result);
                 result.push_str(&crate::engine::coding::auto_test::format_test_result(&test_result));
             }
 
@@ -347,6 +348,7 @@ pub(super) async fn edit_file_tool(args: &serde_json::Value) -> String {
 
                     // Auto-test: run project checks after edit
                     if let Some(test_result) = crate::engine::coding::auto_test::run_auto_test(path).await {
+                        crate::engine::coding::auto_test::update_green_contract(&test_result);
                         result.push_str(&crate::engine::coding::auto_test::format_test_result(&test_result));
                     }
 

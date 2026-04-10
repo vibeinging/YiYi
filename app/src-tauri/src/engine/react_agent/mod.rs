@@ -5,13 +5,12 @@ mod prompt;
 pub mod verification;
 
 // Re-export all public items to maintain the same external API.
-pub use core::{run_react, run_react_with_options, run_react_with_options_persist, run_react_with_options_stream, run_subagent_stream};
-pub(crate) use compaction::load_memme_context;
+pub use core::{run_react, run_react_with_options, run_react_with_options_persist, run_react_with_options_stream};
 pub use growth::{
     build_capability_profile, build_growth_timeline, consolidate_corrections_to_principles,
-    detect_skill_opportunity, generate_growth_report,
-    generate_morning_reflection, learn_from_feedback, reflect_on_task, CapabilityDimension,
-    GrowthMilestone, GrowthReport,
+    detect_skill_opportunity, extract_memories_from_conversation, generate_growth_report,
+    generate_morning_reflection, improve_skill_from_experience, learn_from_feedback,
+    reflect_on_task, update_user_model,
 };
 pub use prompt::{build_system_prompt, seed_default_templates};
 
@@ -82,6 +81,13 @@ pub enum AgentStreamEvent {
     ToolEnd { name: String, result_preview: String },
     /// Context overflow detected — UI should reset streamed content before retry.
     ContextOverflowRetry,
+    /// Cumulative token usage for this agent run.
+    Usage {
+        input_tokens: u32,
+        output_tokens: u32,
+        cache_read_tokens: u32,
+        estimated_cost_usd: Option<f64>,
+    },
     Complete,
     Error,
 }

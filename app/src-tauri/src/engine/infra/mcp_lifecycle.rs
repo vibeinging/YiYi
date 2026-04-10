@@ -60,6 +60,7 @@ pub struct McpServerLifecycle {
 
 /// Summary status for a single MCP server, suitable for frontend display.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct ServerStatus {
     pub server_name: String,
     pub phase: McpPhase,
@@ -130,6 +131,7 @@ impl McpLifecycleTracker {
 
     /// Return a status summary for every tracked server.
     #[must_use]
+    #[allow(dead_code)]
     pub fn status_summary(&self) -> Vec<ServerStatus> {
         self.servers
             .values()
@@ -145,6 +147,7 @@ impl McpLifecycleTracker {
 
     /// Suggest a recovery hint based on the error's phase.
     #[must_use]
+    #[allow(dead_code)]
     pub fn get_recovery_hint(error: &McpError) -> Option<String> {
         if !error.recoverable {
             return Some("This error is not recoverable. Check the server configuration and restart.".to_string());
@@ -177,11 +180,13 @@ impl McpLifecycleTracker {
 
     /// Get the lifecycle for a specific server.
     #[must_use]
+    #[allow(dead_code)]
     pub fn get_server(&self, server: &str) -> Option<&McpServerLifecycle> {
         self.servers.get(server)
     }
 
     /// Remove a server from tracking (e.g. after shutdown).
+    #[allow(dead_code)]
     pub fn remove_server(&mut self, server: &str) {
         self.servers.remove(server);
     }

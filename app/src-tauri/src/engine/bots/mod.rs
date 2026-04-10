@@ -177,9 +177,11 @@ impl From<&str> for RichContent {
 }
 
 impl RichContent {
+    #[allow(dead_code)]
     pub fn text_only(s: impl Into<String>) -> Self {
         RichContent { text: s.into(), media: vec![] }
     }
+    #[allow(dead_code)]
     pub fn is_text_only(&self) -> bool {
         self.media.is_empty()
     }

@@ -102,8 +102,20 @@ pub(super) async fn create_task_tool(args: &serde_json::Value) -> String {
         }).to_string();
     }
 
-    let title = args.get("title").and_then(|v| v.as_str()).unwrap_or("Untitled Task");
-    let description = args.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    let raw_title = args.get("title").and_then(|v| v.as_str()).unwrap_or("");
+    let description_str = args.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    // Fallback: use description prefix if title is empty
+    let title: String = if raw_title.is_empty() {
+        if !description_str.is_empty() {
+            let t: String = description_str.chars().take(30).collect();
+            if description_str.chars().count() > 30 { format!("{}…", t) } else { t }
+        } else {
+            "新任务".into()
+        }
+    } else {
+        raw_title.into()
+    };
+    let description = description_str;
     let plan: Vec<String> = args
         .get("plan")
         .and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -121,7 +133,7 @@ pub(super) async fn create_task_tool(args: &serde_json::Value) -> String {
     // 1. Create task session and task record in DB
     if let Some(db) = super::DATABASE.get() {
         // Create a session for this task
-        if let Err(e) = db.ensure_session(&session_id, title, "task", Some(&task_id)) {
+        if let Err(e) = db.ensure_session(&session_id, &title, "task", Some(&task_id)) {
             return format!("Error creating task session: {}", e);
         }
 
@@ -143,7 +155,7 @@ pub(super) async fn create_task_tool(args: &serde_json::Value) -> String {
         // Create task record in tasks table
         if let Err(e) = db.create_task(
             &task_id,
-            title,
+            &title,
             Some(description),
             "pending",
             &session_id,
@@ -156,6 +168,20 @@ pub(super) async fn create_task_tool(args: &serde_json::Value) -> String {
         }
     } else {
         return "Error: database not available".into();
+    }
+
+    // 1b. Register in global TaskRegistry
+    if let Some(reg) = crate::engine::task_registry::global_registry() {
+        let entry = crate::engine::task_registry::TaskEntry::new(
+            &task_id,
+            crate::engine::task_registry::TaskKind::AgentTask {
+                session_id: session_id.clone(),
+                task_name: title.to_string(),
+            },
+            description,
+        );
+        reg.register(entry);
+        reg.start(&task_id);
     }
 
     // 2. Emit event to notify frontend
@@ -594,6 +620,11 @@ pub fn spawn_task_execution(
                     })).ok();
                 }
 
+                // Update TaskRegistry
+                if let Some(reg) = crate::engine::task_registry::global_registry() {
+                    reg.complete(&task_id);
+                }
+
                 log::info!("Task {} completed successfully", task_id);
                 (true, reply.clone())
             }
@@ -604,6 +635,15 @@ pub fn spawn_task_execution(
                     e.as_str()
                 };
                 let status = if e == "cancelled" { "cancelled" } else { "failed" };
+
+                // Update TaskRegistry
+                if let Some(reg) = crate::engine::task_registry::global_registry() {
+                    if status == "cancelled" {
+                        reg.kill(&task_id);
+                    } else {
+                        reg.fail(&task_id, error_msg);
+                    }
+                }
 
                 fail_task_with_status(&task_id, &session_id, error_msg, status);
                 log::warn!("Task {} {}: {}", task_id, status, error_msg);

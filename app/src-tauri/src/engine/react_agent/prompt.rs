@@ -1,5 +1,10 @@
 use super::growth::detect_skill_opportunity;
 use super::BOOTSTRAP_COMPLETED;
+use std::sync::Mutex;
+
+/// Cache for stale-branch check: (workspace_path, warning_option, timestamp).
+/// Re-checked only if >60s have passed since the last check.
+static STALE_CACHE: std::sync::OnceLock<Mutex<(String, Option<String>, std::time::Instant)>> = std::sync::OnceLock::new();
 
 // ---------------------------------------------------------------------------
 // Template seeding with multi-language support
@@ -244,6 +249,8 @@ For advanced operations (PDF forms, PPTX creation, complex Excel), use run_pytho
 - For multi-step tasks: call `request_continuation` tool when you need more rounds to complete
 - For tasks that create files or run long operations: use `create_task` for background execution
 - Skills provide domain-specific instructions — use `tool_search` + `activate_skills` to load them when needed
+- When you need to make a decision about user preferences (tech stack, coding style, quality standards), \
+use `tool_search` to find `ask_buddy` — the user's digital twin knows their preferences and can answer without interrupting the user
 
 ## 后台任务 (IMPORTANT)
 任何需要**创建文件**或**设置定时任务**的请求，都必须使用 `create_task` 创建后台任务。\
@@ -262,8 +269,9 @@ For advanced operations (PDF forms, PPTX creation, complex Excel), use run_pytho
 
 ### CRITICAL 规则：
 1. 不要在主对话中直接创建文件，一律通过 `create_task` 后台执行
-2. 创建任务后，立即用简短文字告知用户：任务已在后台开始执行，可以在右侧面板查看进度，不影响继续对话
+2. 调用 `create_task` 后**立即结束回复**，只说一句：任务已在后台开始，可以在左侧面板查看进度。**不要在主对话中继续执行任务内容，不要检查任务进度，不要重复做任务里的工作**
 3. 不需要询问用户是否要后台执行，直接创建任务即可
+4. `create_task` 的 `title` 参数必须填写有意义的标题（如 向量数据库介绍网站），不要留空
 
 ## Presenting Results (IMPORTANT)
 After completing a task, you MUST make the results immediately visible to the user:
@@ -365,6 +373,50 @@ When setting up bots, open the developer console:
                 prompt.push_str(&git_ctx);
                 prompt.push('\n');
             }
+            // Check branch freshness relative to main/master (cached for 60s)
+            if let Some(branch) = crate::engine::coding::git_context::current_branch(git_workspace) {
+                if branch != "main" && branch != "master" {
+                    let cache_key = format!("{}:{}", git_workspace.display(), branch);
+                    let cached_warning = {
+                        let cache = STALE_CACHE.get_or_init(|| {
+                            Mutex::new((String::new(), None, std::time::Instant::now() - std::time::Duration::from_secs(120)))
+                        });
+                        let guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+                        if guard.0 == cache_key && guard.2.elapsed() < std::time::Duration::from_secs(60) {
+                            Some(guard.1.clone())
+                        } else {
+                            None
+                        }
+                    };
+                    let warning = if let Some(w) = cached_warning {
+                        w
+                    } else {
+                        let base = std::process::Command::new("git")
+                            .args(["rev-parse", "--verify", "--quiet", "main"])
+                            .current_dir(git_workspace)
+                            .output()
+                            .ok()
+                            .filter(|o| o.status.success())
+                            .map(|_| "main")
+                            .unwrap_or("master");
+                        let freshness = crate::engine::coding::stale_branch::check_branch_freshness(
+                            git_workspace, &branch, base,
+                        );
+                        let w = crate::engine::coding::stale_branch::format_stale_warning(&freshness, &branch);
+                        // Update cache
+                        let cache = STALE_CACHE.get_or_init(|| {
+                            Mutex::new((String::new(), None, std::time::Instant::now()))
+                        });
+                        if let Ok(mut guard) = cache.lock() {
+                            *guard = (cache_key, w.clone(), std::time::Instant::now());
+                        }
+                        w
+                    };
+                    if let Some(warning) = warning {
+                        prompt.push_str(&format!("\n⚠️ {}\n", warning));
+                    }
+                }
+            }
         }
         // Also inject project info if detectable
         let project_info = crate::engine::coding::project_detect::detect_project(git_workspace);
@@ -393,14 +445,22 @@ When setting up bots, open the developer console:
         }
     }
 
-    // Skill genesis + consolidation trigger
-    if let Some(db) = crate::engine::tools::get_database() {
-        if let Some(suggestion) = detect_skill_opportunity(&db) {
-            prompt.push_str(&format!(
-                "\n\n## Proactive Suggestion\n{}\n\
-                 If the user agrees, use manage_skill(action='create') to create the skill.\n",
-                suggestion
-            ));
+    // Capability growth guidance + pending suggestions
+    {
+        prompt.push_str("\n\n## Capability Growth\n\
+            After completing meaningful work, evaluate if the result has reuse value:\n\
+            - **Script/tool created** → suggest registering to code library (search_my_code)\n\
+            - **Reusable workflow** → suggest creating a skill (activate_skills → skill_creator)\n\
+            - **Domain knowledge gained** → suggest saving as memory\n\
+            Ask the user briefly: \"这个[工具/流程]以后可能还会用到，要保存下来吗？\" Don't force it.\n");
+
+        if let Some(db) = crate::engine::tools::get_database() {
+            if let Some(suggestion) = detect_skill_opportunity(&db) {
+                prompt.push_str(&format!(
+                    "\n**Pending suggestion**: {}\n",
+                    suggestion
+                ));
+            }
         }
     }
 
@@ -449,25 +509,88 @@ When setting up bots, open the developer console:
         }
     }
 
+    // Buddy hosted mode notification
+    if crate::engine::buddy_delegate::is_hosted() {
+        prompt.push_str("\n\n## 托管模式已开启\n\
+            用户的数字分身（Buddy）正在代理决策。你可以：\n\
+            - 使用 `ask_buddy` 工具做技术决策，不需要中断用户\n\
+            - 权限请求会自动批准（buddy 已代为授权）\n\
+            - 大胆执行任务，减少确认步骤\n\
+            - 完成后向用户汇报结果即可\n");
+    }
+
+    // User model from USER.md
+    {
+        let user_model = crate::engine::mem::user_model::load_user_model(working_dir);
+        if !user_model.is_empty() {
+            prompt.push_str("\n\n## About the User\n");
+            // Truncate to ~500 chars to save tokens
+            let truncated: String = user_model.chars().take(500).collect();
+            prompt.push_str(&truncated);
+            if user_model.chars().count() > 500 {
+                prompt.push_str("\n...");
+            }
+            prompt.push('\n');
+        }
+    }
+
     // Long-term memory is now included in HOT-tier context loaded above (via tiered_memory::load_hot_context).
     // No separate MEMORY.md file read needed.
 
-    // Skills — all loaded on demand via tool_search → activate_skills (Claw Code pattern)
-    // No more always_active injection. Core behaviors are in the system prompt directly.
-    if !skill_index.is_empty() {
-        prompt.push_str("\n\n## Available Skills\n");
-        prompt.push_str("Use `tool_search` to find `activate_skills`, then call it to load skill instructions.\n");
-        for entry in skill_index {
-            if entry.description.is_empty() {
-                prompt.push_str(&format!("- {}\n", entry.name));
-            } else {
-                prompt.push_str(&format!("- **{}**: {}\n", entry.name, entry.description));
+    // Dynamic capability index — compact self-awareness (names only, details via activate_skills)
+    // Replaces static app_guide skill. Grows automatically as skills/bots/MCP change.
+    {
+        let _ = always_active_skills; // kept for API compat, no longer injected
+
+        let mut cap_lines: Vec<String> = Vec::new();
+
+        // Skills (names only — LLM uses activate_skills to load full content)
+        if !skill_index.is_empty() {
+            let names: Vec<&str> = skill_index.iter().map(|e| e.name.as_str()).collect();
+            cap_lines.push(format!("Skills: {}", names.join(", ")));
+        }
+
+        // Bots (from DB — platform + status)
+        if let Some(db) = crate::engine::tools::get_database() {
+            if let Ok(bots) = db.list_bots() {
+                if !bots.is_empty() {
+                    let bot_strs: Vec<String> = bots.iter().map(|b| {
+                        format!("{}({})", b.platform, if b.enabled { "on" } else { "off" })
+                    }).collect();
+                    cap_lines.push(format!("Bots: {}", bot_strs.join(", ")));
+                }
+            }
+        }
+
+        // MCP servers (already noted in mcp_status above, just add count)
+        if let Some(mcp) = mcp_tools {
+            if !mcp.is_empty() {
+                let server_keys: std::collections::HashSet<&str> = mcp.iter()
+                    .map(|t| t.server_key.as_str())
+                    .filter(|k| !k.is_empty())
+                    .collect();
+                if !server_keys.is_empty() {
+                    let mut names: Vec<&str> = server_keys.into_iter().collect();
+                    names.sort_unstable();
+                    cap_lines.push(format!("MCP: {}", names.join(", ")));
+                }
+            }
+        }
+
+        // Deferred tools (count only — LLM uses tool_search to discover)
+        let deferred_count = crate::engine::tools::deferred_tools_count();
+        if deferred_count > 0 {
+            cap_lines.push(format!("Extended tools: {} discoverable via tool_search", deferred_count));
+        }
+
+        if !cap_lines.is_empty() {
+            prompt.push_str("\n\n## Capabilities\n");
+            prompt.push_str("Use `activate_skills` to load skill details. Use `tool_search` to discover extended tools.\n");
+            for line in &cap_lines {
+                prompt.push_str(&format!("- {}\n", line));
             }
         }
     }
-    // Note: always_active_skills parameter kept for backward compatibility but no longer injected.
-    // auto_continue and task_proposer behaviors are now in the system prompt directly.
-    let _ = always_active_skills;
 
     prompt
 }

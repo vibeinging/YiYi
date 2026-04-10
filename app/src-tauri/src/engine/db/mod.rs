@@ -13,19 +13,20 @@ mod workspace;
 mod users;
 mod tasks;
 mod growth;
+pub mod usage;
 mod quick_actions;
 
 // Re-export all public types
 pub use sessions::ChatSession;
 pub use messages::ChatMessage;
-pub use providers::{ProviderSettingRow, CustomProviderRow};
-pub use bots::{BotRow, BotConversationRow, AgentRouteConfig};
+pub use providers::CustomProviderRow;
+pub use bots::{BotRow, AgentRouteConfig};
 pub use cronjobs::{ExecutionMode, CronJobRow, CronJobExecutionRow, HeartbeatRow};
 // Memories now live in MemMe (DuckDB). SQLite memories table kept for schema compat only.
 pub use workspace::{AuthorizedFolderRow, SensitivePathRow};
 pub use users::{UnifiedUserRow, UserIdentityRow};
 pub use tasks::TaskInfo;
-pub use growth::{MeditationSession, CodeRegistryEntry};
+pub use growth::MeditationSession;
 pub use quick_actions::QuickActionRow;
 
 pub struct Database {
@@ -434,6 +435,24 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_code_registry_skill ON code_registry(skill_name);",
         )
         .map_err(|e| format!("Failed to create code_registry table: {}", e))?;
+
+        // Token usage tracking (per API call, aggregatable by session/time)
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS token_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                model TEXT NOT NULL DEFAULT '',
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+                estimated_cost_usd REAL NOT NULL DEFAULT 0.0,
+                recorded_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_token_usage_session ON token_usage(session_id);
+            CREATE INDEX IF NOT EXISTS idx_token_usage_ts ON token_usage(recorded_at);",
+        )
+        .map_err(|e| format!("Failed to create token_usage table: {}", e))?;
 
         Ok(())
     }

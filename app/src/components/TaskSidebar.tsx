@@ -23,6 +23,7 @@ import { deleteCronJob, pauseCronJob, resumeCronJob } from '../api/cronjobs';
 import { TASK_STATUS_CONFIG, timeAgo } from '../utils/taskStatus';
 import type { Page } from '../App';
 import type { ChatSession } from '../api/agent';
+import { confirm } from './Toast';
 
 interface TaskSidebarProps {
   currentPage: Page;
@@ -169,14 +170,19 @@ function SessionContextMenu({ x, y, session, onClose, onStartRename }: {
   };
 
   const handleDelete = async () => {
-    console.log('[SessionContextMenu] handleDelete called, session.id =', session.id);
     const id = session.id;
     onClose();
+    // Check if session has running tasks
+    const tasks = useTaskSidebarStore.getState().tasks;
+    const runningTasks = tasks.filter(t => t.sessionId === id && t.status === 'running');
+    if (runningTasks.length > 0) {
+      const ok = await confirm(`该对话有 ${runningTasks.length} 个任务正在运行，删除后任务将被终止。确定删除吗？`);
+      if (!ok) return;
+    }
     try {
       await deleteSession(id);
-      console.log('[SessionContextMenu] deleteSession succeeded');
     } catch (err) {
-      console.error('[SessionContextMenu] deleteSession failed:', err);
+      console.error('Delete session failed:', err);
     }
   };
 
@@ -723,6 +729,8 @@ export const TaskSidebar = memo(function TaskSidebar({
     searchTimerRef.current = setTimeout(() => searchSessionsFn(value), 200);
   }, [searchSessionsFn, clearSearch]);
 
+  // Search expand state
+  const [searchOpen, setSearchOpen] = useState(false);
   // Refs
   const searchInputRef = useRef<HTMLInputElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -749,8 +757,8 @@ export const TaskSidebar = memo(function TaskSidebar({
       {/* ── Drag region (traffic lights space on macOS) ── */}
       <div className="h-10 shrink-0 app-drag-region" onMouseDown={onDragMouseDown} />
 
-      {/* ── New Chat + Search ── */}
-      <div className="shrink-0 px-2 pb-1 space-y-1">
+      {/* ── New Chat ── */}
+      <div className="shrink-0 px-2 pb-1">
         <button
           onClick={() => { createNewChat(); onPageChange('chat'); }}
           className="w-full flex items-center gap-2 px-3 py-[7px] rounded-[10px] transition-colors text-[12.5px] font-medium"
@@ -761,48 +769,57 @@ export const TaskSidebar = memo(function TaskSidebar({
           <Plus size={14} style={{ opacity: 0.7 }} />
           新对话
         </button>
-
-        {/* Search input */}
-        <div className="relative">
-          <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'var(--sidebar-text)', opacity: 0.4 }} />
-          <input
-            ref={searchInputRef}
-            type="text"
-            placeholder="搜索对话..."
-            defaultValue={searchQuery}
-            onChange={(e) => handleSearchChange(e.target.value)}
-            className="w-full pl-7 pr-7 py-[5px] rounded-lg text-[11.5px] outline-none transition-colors"
-            style={{
-              background: 'rgba(255,255,255,0.04)',
-              border: '1px solid rgba(255,255,255,0.06)',
-              color: 'var(--sidebar-text-active)',
-            }}
-            onFocus={(e) => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.12)'; }}
-            onBlur={(e) => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)'; }}
-          />
-          {isSearching && (
-            <button
-              onClick={() => {
-                clearSearch();
-                if (searchInputRef.current) searchInputRef.current.value = '';
-              }}
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded transition-colors"
-              style={{ color: 'var(--sidebar-text)', opacity: 0.5 }}
-              onMouseEnter={(e) => { (e.currentTarget.style as any).opacity = '1'; }}
-              onMouseLeave={(e) => { (e.currentTarget.style as any).opacity = '0.5'; }}
-            >
-              <X size={11} />
-            </button>
-          )}
-        </div>
       </div>
 
       {/* ── Content List ── */}
       <div className="flex-1 overflow-y-auto py-0.5" style={{ scrollbarWidth: 'thin' }}>
         {/* Chat sessions */}
-        {displaySessions.length > 0 && (
+        {(displaySessions.length > 0 || searchOpen || isSearching) && (
           <div className="mb-1">
-            <SectionLabel>{isSearching ? `搜索结果 (${displaySessions.length})` : '对话'}</SectionLabel>
+            {/* Section header with expandable search */}
+            <div className="flex items-center px-3.5 pt-3 pb-1.5">
+              {searchOpen || isSearching ? (
+                /* Expanded search input — slides in from right */
+                <div className="flex-1 flex items-center gap-1.5 animate-in slide-in-from-right-4 duration-200">
+                  <Search size={11} style={{ color: 'var(--sidebar-text-active)', opacity: 0.7, flexShrink: 0 }} />
+                  <input
+                    ref={searchInputRef}
+                    autoFocus
+                    type="text"
+                    placeholder="搜索对话..."
+                    defaultValue={searchQuery}
+                    onChange={(e) => handleSearchChange(e.target.value)}
+                    onBlur={() => { if (!isSearching) setSearchOpen(false); }}
+                    onKeyDown={(e) => { if (e.key === 'Escape') { clearSearch(); if (searchInputRef.current) searchInputRef.current.value = ''; setSearchOpen(false); } }}
+                    className="flex-1 min-w-0 py-0 bg-transparent text-[11px] outline-none placeholder:opacity-50"
+                    style={{ color: 'var(--sidebar-text-active)' }}
+                  />
+                  <button
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => { clearSearch(); if (searchInputRef.current) searchInputRef.current.value = ''; setSearchOpen(false); }}
+                    className="p-0.5 rounded transition-opacity opacity-60 hover:opacity-100"
+                    style={{ color: 'var(--sidebar-text-active)' }}
+                  >
+                    <X size={11} />
+                  </button>
+                </div>
+              ) : (
+                /* Collapsed: label + search icon */
+                <>
+                  <span className="text-[10px] font-semibold tracking-[0.08em] uppercase flex-1" style={{ color: 'var(--sidebar-section)' }}>
+                    对话
+                  </span>
+                  <button
+                    onClick={() => { setSearchOpen(true); }}
+                    className="p-0.5 rounded transition-opacity opacity-50 hover:opacity-100"
+                    style={{ color: 'var(--sidebar-text-active)' }}
+                    title="搜索对话"
+                  >
+                    <Search size={12} />
+                  </button>
+                </>
+              )}
+            </div>
             {displaySessions.map((session) => (
               <SidebarSessionCard
                 key={session.id}

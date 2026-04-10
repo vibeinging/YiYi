@@ -177,6 +177,9 @@ fn spawn_agents_background(
     cancelled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) {
     let sid = session_id.clone();
+    // Resolve current branch ONCE before spawning agents
+    let current_branch = crate::engine::coding::git_context::current_branch(&working_dir)
+        .unwrap_or_else(|| "default".to_string());
     let handle = tokio::spawn(super::with_session_id(sid.clone(), async move {
         let futures: Vec<_> = specs.into_iter().map(|spec| {
             let config = llm_config.clone();
@@ -189,6 +192,7 @@ fn spawn_agents_background(
             let handle_for_agent = app_handle.clone();
             let cancelled_for_agent = cancelled.clone();
             let sid_for_agent = session_id.clone();
+            let branch_name = current_branch.clone();
 
             async move {
                 let agent_name = spec.name.clone();
@@ -202,6 +206,32 @@ fn spawn_agents_background(
                 } else {
                     None
                 };
+
+                // Acquire branch lock to prevent file conflicts with other agents
+                let lock_module = spec.name.clone(); // Use agent name as module scope
+                {
+                    let mut locks = super::branch_lock_registry().lock().unwrap_or_else(|e| e.into_inner());
+                    let lock_agent_id = worker_id.as_deref().unwrap_or(&agent_name);
+                    if let Err(collision) = locks.acquire(&branch_name, &lock_module, lock_agent_id) {
+                        log::warn!("Branch lock collision for agent '{}': {}", agent_name, collision);
+                        // Don't block — just warn. The agent proceeds but may hit conflicts.
+                    }
+                }
+
+                // Register in global TaskRegistry
+                if let Some(reg) = crate::engine::task_registry::global_registry() {
+                    let task_reg_id = worker_id.as_deref().unwrap_or(&agent_name).to_string();
+                    let entry = crate::engine::task_registry::TaskEntry::new(
+                        &task_reg_id,
+                        crate::engine::task_registry::TaskKind::SpawnAgent {
+                            agent_name: agent_name.clone(),
+                            parent_session_id: sid_for_agent.clone(),
+                        },
+                        &spec.task,
+                    );
+                    reg.register(entry);
+                    reg.start(&task_reg_id);
+                }
 
                 // Resolve agent definition from registry if agent_type is specified
                 let agent_def: Option<crate::engine::agents::AgentDefinition> = if let Some(ref at) = spec.agent_type {
@@ -338,7 +368,8 @@ fn spawn_agents_background(
                             super::react_agent::AgentStreamEvent::Complete
                             | super::react_agent::AgentStreamEvent::Error
                             | super::react_agent::AgentStreamEvent::Thinking(_)
-                            | super::react_agent::AgentStreamEvent::ContextOverflowRetry => {}
+                            | super::react_agent::AgentStreamEvent::ContextOverflowRetry
+                            | super::react_agent::AgentStreamEvent::Usage { .. } => {}
                         }
                     };
                     DELEGATION_DEPTH.scope(depth, Box::pin(
@@ -379,6 +410,23 @@ fn spawn_agents_background(
                             result: agent_result_text.chars().take(500).collect(),
                         });
                     }
+                }
+
+                // Update TaskRegistry
+                if let Some(reg) = crate::engine::task_registry::global_registry() {
+                    let tid = worker_id.as_deref().unwrap_or(&agent_name);
+                    if is_error {
+                        reg.fail(tid, &agent_result_text.chars().take(200).collect::<String>());
+                    } else {
+                        reg.complete(tid);
+                    }
+                }
+
+                // Release branch lock
+                {
+                    let mut locks = super::branch_lock_registry().lock().unwrap_or_else(|e| e.into_inner());
+                    let lock_agent_id = worker_id.as_deref().unwrap_or(&agent_name);
+                    locks.release(&branch_name, lock_agent_id);
                 }
 
                 if let Some(ref handle) = handle_for_agent {
@@ -451,7 +499,7 @@ fn spawn_agents_background(
 
     // Register the JoinHandle for potential cancellation when session is closed
     if let Some(state_arc) = super::STREAMING_STATE.get() {
-        if let Ok(mut ss) = state_arc.lock() {
+        if let Ok(_ss) = state_arc.lock() {
             // Store handle abort capability — when session is deleted,
             // the streaming state cleanup can abort orphaned agent tasks.
             // For now, just log that the task is tracked.

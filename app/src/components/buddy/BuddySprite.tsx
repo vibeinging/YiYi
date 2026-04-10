@@ -6,6 +6,7 @@ import {
   getSpeciesLabel,
 } from '../../utils/buddy'
 import { useBuddyStore } from '../../stores/buddyStore'
+import { toggleBuddyHosted, getBuddyHosted } from '../../api/buddy'
 import { BuddyBubble } from './BuddyBubble'
 import { BuddyStatsCard } from './BuddyStatsCard'
 import { BuddyHatchAnimation } from './BuddyHatchAnimation'
@@ -109,6 +110,8 @@ export const BuddySprite: React.FC = () => {
 
   const [fidget, setFidget] = useState(false)
   const [particles, setParticles] = useState<{ id: number; x: number; y: number; emoji: string }[]>([])
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
+  const [hostedMode, setHostedMode] = useState(false)
   const particleIdRef = useRef(0)
 
   // Drag state
@@ -175,6 +178,7 @@ export const BuddySprite: React.FC = () => {
   }, [])
 
   useEffect(() => { if (!loaded) loadBuddy() }, [loaded, loadBuddy])
+  useEffect(() => { getBuddyHosted().then(setHostedMode).catch(() => {}) }, [])
 
   // Random fidget
   useEffect(() => {
@@ -234,7 +238,17 @@ export const BuddySprite: React.FC = () => {
     if (hasDraggedRef.current) return // ignore click after drag
     pet()
   }
-  const handleContext = (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation(); setShowStats(!showStats) }
+
+  const handleContext = (e: React.MouseEvent) => {
+    e.preventDefault(); e.stopPropagation()
+    setContextMenu({ x: e.clientX, y: e.clientY })
+  }
+  const closeContext = () => setContextMenu(null)
+  const handleToggleHosted = async () => {
+    const next = !hostedMode
+    try { await toggleBuddyHosted(next); setHostedMode(next) } catch {}
+    closeContext()
+  }
 
   return (
     <div
@@ -304,7 +318,39 @@ export const BuddySprite: React.FC = () => {
           onClick={() => setShowStats(!showStats)}
         >
           {companion.name}
+          {hostedMode && <span className="ml-0.5 text-[8px] opacity-60">🤖</span>}
         </div>
+
+        {/* Context menu */}
+        {contextMenu && (
+          <>
+            <div className="fixed inset-0 z-[9998]" onClick={closeContext} onContextMenu={(e) => { e.preventDefault(); closeContext() }} />
+            <div
+              className="fixed z-[9999] py-1 rounded-lg shadow-lg min-w-[140px]"
+              style={{
+                left: contextMenu.x,
+                top: contextMenu.y,
+                background: 'var(--color-bg-elevated)',
+                border: '1px solid var(--color-border)',
+              }}
+            >
+              <button
+                className="w-full text-left px-3 py-1.5 text-[12px] transition-colors hover:bg-[var(--color-bg-subtle)]"
+                style={{ color: 'var(--color-text)' }}
+                onClick={handleToggleHosted}
+              >
+                {hostedMode ? '✅ 托管模式（已开启）' : '🤖 开启托管模式'}
+              </button>
+              <button
+                className="w-full text-left px-3 py-1.5 text-[12px] transition-colors hover:bg-[var(--color-bg-subtle)]"
+                style={{ color: 'var(--color-text)' }}
+                onClick={() => { setShowStats(!showStats); closeContext() }}
+              >
+                📊 查看属性
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )

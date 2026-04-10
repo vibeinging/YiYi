@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 /// The level of "greenness" a branch has achieved.
 ///
 /// Levels are ordered from least to most rigorous. A higher level

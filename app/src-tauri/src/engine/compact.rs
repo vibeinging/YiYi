@@ -99,6 +99,7 @@ pub fn compress_summary(summary: &str, budget: SummaryCompressionBudget) -> Comp
 
 /// Convenience helper that returns just the compressed text with default budget.
 #[must_use]
+#[allow(dead_code)]
 pub fn compress_summary_text(summary: &str) -> String {
     compress_summary(summary, SummaryCompressionBudget::default()).summary
 }

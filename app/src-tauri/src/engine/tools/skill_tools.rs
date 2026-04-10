@@ -1,5 +1,39 @@
 use tauri::Emitter;
 
+// ---------------------------------------------------------------------------
+// Skill activation tracking — records which skills were used during a task
+// ---------------------------------------------------------------------------
+
+static ACTIVATED_SKILLS: std::sync::OnceLock<tokio::sync::Mutex<Vec<(String, std::time::Instant)>>> =
+    std::sync::OnceLock::new();
+
+pub(crate) fn record_skill_activation(name: &str) {
+    let store = ACTIVATED_SKILLS.get_or_init(|| tokio::sync::Mutex::new(Vec::new()));
+    if let Ok(mut skills) = store.try_lock() {
+        skills.push((name.to_string(), std::time::Instant::now()));
+        // Keep only last 20 to prevent unbounded growth
+        if skills.len() > 20 {
+            let excess = skills.len() - 20;
+            skills.drain(..excess);
+        }
+    }
+}
+
+pub(crate) fn drain_recent_activations() -> Vec<String> {
+    let store = ACTIVATED_SKILLS.get_or_init(|| tokio::sync::Mutex::new(Vec::new()));
+    if let Ok(mut skills) = store.try_lock() {
+        let recent: Vec<String> = skills
+            .iter()
+            .filter(|(_, t)| t.elapsed() < std::time::Duration::from_secs(600)) // within 10 min
+            .map(|(n, _)| n.clone())
+            .collect();
+        skills.clear();
+        recent
+    } else {
+        Vec::new()
+    }
+}
+
 /// Skill management tool definitions.
 pub(super) fn definitions() -> Vec<super::ToolDefinition> {
     vec![
@@ -330,6 +364,8 @@ pub(super) async fn activate_skills_tool(args: &serde_json::Value) -> String {
                     skill_dir.to_string_lossy(),
                     body.trim()
                 ));
+                // Track activation for post-task skill improvement
+                record_skill_activation(name);
             }
             Err(_) => not_found.push(*name),
         }

@@ -6,21 +6,19 @@ mod system_tools;
 pub(crate) mod memory_tools;
 mod cron_tools;
 mod bot_tools;
-mod skill_tools;
-// pub(crate) mod claude_code; // REMOVED: YiYi handles coding natively
+pub(crate) mod skill_tools;
 mod task_tools;
 mod canvas_tools;
 mod spawn_tools;
 mod computer_tools;
 mod lsp_tools;
+mod git_tools;
 pub(crate) mod shell_security;
 pub(crate) mod permission_gate;
 
 // Imports used by this module and sub-modules via `super::`
 pub(self) use super::doc_tools;
 use crate::engine::infra::mcp_runtime::MCPRuntime;
-pub(self) use crate::engine::infra::python_bridge;
-// Playwright bridge: browser automation via external Node.js process
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -33,7 +31,6 @@ pub(self) use super::llm_client;
 pub(self) use super::mem::memory;
 pub(self) use super::react_agent;
 pub(self) use super::scheduler;
-pub(self) use crate::engine::infra::mcp_runtime;
 
 /// Global MCP runtime reference for tool routing.
 static MCP_RUNTIME: std::sync::OnceLock<Arc<MCPRuntime>> = std::sync::OnceLock::new();
@@ -61,6 +58,14 @@ static MEMME_STORE: std::sync::OnceLock<Arc<memme_core::MemoryStore>> = std::syn
 
 /// Shared MemMe user ID constant. All memory operations use this as the user scope.
 pub(crate) const MEMME_USER_ID: &str = "yiyi_default_user";
+
+/// Global branch lock registry for concurrent agent file coordination.
+static BRANCH_LOCKS: std::sync::OnceLock<std::sync::Mutex<crate::engine::coding::branch_lock::BranchLockRegistry>> = std::sync::OnceLock::new();
+
+/// Get or init the global branch lock registry.
+pub(crate) fn branch_lock_registry() -> &'static std::sync::Mutex<crate::engine::coding::branch_lock::BranchLockRegistry> {
+    BRANCH_LOCKS.get_or_init(|| std::sync::Mutex::new(crate::engine::coding::branch_lock::BranchLockRegistry::new()))
+}
 
 /// Readiness flag — set to true after all OnceLock statics are initialized.
 static TOOLS_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -245,7 +250,17 @@ fn resolve_path(raw_path: &str) -> PathBuf {
     } else {
         PathBuf::from(raw_path)
     };
-    expanded.canonicalize().unwrap_or(expanded)
+    expanded.canonicalize().unwrap_or_else(|_| {
+        // For non-existent paths, manually normalize to prevent traversal
+        let mut normalized = std::path::PathBuf::new();
+        for component in expanded.components() {
+            match component {
+                std::path::Component::ParentDir => { normalized.pop(); }
+                other => normalized.push(other),
+            }
+        }
+        normalized
+    })
 }
 
 /// Check if a path is authorized for the requested operation.
@@ -279,7 +294,7 @@ pub async fn access_check(raw_path: &str, needs_write: bool) -> Result<(), Strin
     // 2. Check sensitive path blocklist — ask user via permission gate
     if is_sensitive_path(&canonical).await {
         let reason = format!(
-            "Access denied: '{}' matches a sensitive file pattern. This file is protected even within authorized folders.",
+            "「{}」是敏感文件，即使在授权文件夹内也受保护。确定要访问吗？",
             raw_path
         );
         let req = permission_gate::PermissionRequest {
@@ -304,7 +319,7 @@ pub async fn access_check(raw_path: &str, needs_write: bool) -> Result<(), Strin
             if canonical.starts_with(&fc) {
                 if needs_write && folder.permission == FolderPermission::ReadOnly {
                     let reason = format!(
-                        "Access denied: '{}' is in read-only folder '{}'. Need write permission.",
+                        "「{}」在只读文件夹「{}」中，需要写入权限",
                         raw_path, folder.path.display()
                     );
                     let req = permission_gate::PermissionRequest {
@@ -329,7 +344,7 @@ pub async fn access_check(raw_path: &str, needs_write: bool) -> Result<(), Strin
     let parent_folder = permission_gate::extract_parent_folder(&canonical);
     let parent_str = parent_folder.display().to_string();
     let reason = format!(
-        "Access denied: '{}' is outside all authorized folders.",
+        "「{}」不在任何授权文件夹中，是否允许访问？",
         raw_path
     );
     let req = permission_gate::PermissionRequest {
@@ -818,17 +833,6 @@ fn strip_frontmatter(content: &str) -> &str {
     }
 }
 
-/// Check if Claude Code CLI is installed (cached after first check).
-pub(crate) async fn is_claude_cli_available() -> bool {
-    false // claude_code removed
-}
-
-/// Refresh Claude Code CLI availability cache (call after installation).
-#[allow(dead_code)]
-pub fn refresh_claude_cli_cache() {
-    // claude_code removed
-}
-
 /// Atomically write progress.json (tmp + rename) for crash recovery.
 pub fn write_progress_json(progress_dir: &std::path::Path, data: &serde_json::Value) {
     if let Ok(json) = serde_json::to_string_pretty(data) {
@@ -863,34 +867,36 @@ pub fn spawn_task_execution(
 // builtin_tools & execute_tool — the public API
 // ============================================================================
 
-/// Core tools always loaded (kept small to save tokens).
-/// These are the tools the LLM sees by default in every conversation.
-/// Core tools — always loaded. Kept minimal like Claw Code's MVP set.
-/// These 8 tools cover 90% of tasks. Everything else goes through tool_search.
+/// Core tools — always loaded. Everything else discoverable via tool_search.
 pub fn core_tools() -> Vec<ToolDefinition> {
     static CACHE: std::sync::OnceLock<Vec<ToolDefinition>> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| {
-        // Filter to ONLY the essential tools from each module
-        let all_file = file_tools::definitions();
-        let all_system = system_tools::definitions();
-
         let core_names = [
-            // File operations (the bread and butter)
+            // File operations (Claw Code MVP)
             "read_file", "write_file", "edit_file",
             "list_directory", "grep_search", "glob_search",
-            // Shell
+            // Shell (Claw Code MVP)
             "execute_shell",
             // Web
             "web_search",
+            // YiYi identity — memory and skills make YiYi who she is
+            "memory_search", "memory_add",
+            "activate_skills",
+            // Multi-step execution
+            "spawn_agents",
         ];
 
-        let mut tools: Vec<ToolDefinition> = Vec::new();
-        for def in all_file.iter().chain(all_system.iter()).chain(web_tools::definitions().iter()) {
-            if core_names.contains(&def.function.name.as_str()) {
-                tools.push(def.clone());
-            }
-        }
-        tools
+        let mut all = Vec::new();
+        all.extend(file_tools::definitions());
+        all.extend(system_tools::definitions());
+        all.extend(web_tools::definitions());
+        all.extend(memory_tools::definitions());
+        all.extend(skill_tools::definitions());
+        all.extend(spawn_tools::definitions());
+
+        all.into_iter()
+            .filter(|t| core_names.contains(&t.function.name.as_str()))
+            .collect()
     }).clone()
 }
 
@@ -903,6 +909,8 @@ pub fn deferred_tools() -> Vec<ToolDefinition> {
             "read_file", "write_file", "edit_file",
             "list_directory", "grep_search", "glob_search",
             "execute_shell", "web_search",
+            "memory_search", "memory_add",
+            "activate_skills", "spawn_agents",
         ];
 
         let mut tools = Vec::new();
@@ -920,6 +928,30 @@ pub fn deferred_tools() -> Vec<ToolDefinition> {
         tools.extend(spawn_tools::definitions());
         tools.extend(computer_tools::definitions());
         tools.extend(lsp_tools::definitions());
+        tools.extend(git_tools::definitions());
+
+        // Buddy delegate tool — consult the user's digital twin
+        tools.push(tool_def(
+            "ask_buddy",
+            "Ask the user's digital twin (buddy) a question. The buddy knows the user's preferences, \
+             work style, and decision patterns. Use this instead of asking the user directly for \
+             routine decisions like: tech stack choices, coding style preferences, quality judgments. \
+             Returns the buddy's answer and confidence level.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "The question or decision to delegate to the buddy"
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "Additional context (task description, options being considered, etc.)"
+                    }
+                },
+                "required": ["question"]
+            }),
+        ));
 
         // Remove core tools (they're already loaded)
         tools.retain(|t| !core_names.contains(&t.function.name.as_str()));
@@ -928,13 +960,24 @@ pub fn deferred_tools() -> Vec<ToolDefinition> {
 }
 
 /// All tools (core + deferred). Used by execute_tool dispatch.
+#[allow(dead_code)]
 fn all_tools() -> Vec<ToolDefinition> {
     let mut all = core_tools();
     all.extend(deferred_tools());
     all
 }
 
+/// Tag embedded in tool_search output for the agent loop to parse discovered tool names.
+pub(crate) const TOOLS_DISCOVERED_TAG: &str = "[TOOLS_DISCOVERED:";
+
+/// Count of deferred tools (cheap — no Vec clone).
+pub fn deferred_tools_count() -> usize {
+    static COUNT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *COUNT.get_or_init(|| deferred_tools().len())
+}
+
 /// Search deferred tools by name or keyword. Returns matching tool names + schemas.
+/// Appends a `[TOOLS_DISCOVERED:]` tag that the agent loop parses for dynamic injection.
 fn execute_tool_search(args: &serde_json::Value) -> String {
     let query = args["query"].as_str().unwrap_or("").trim().to_lowercase();
     let max_results = args["max_results"].as_u64().unwrap_or(5) as usize;
@@ -978,7 +1021,8 @@ fn execute_tool_search(args: &serde_json::Value) -> String {
         );
     }
 
-    // Return tool definitions so the LLM can call them
+    // Build structured response with tool names for dynamic injection
+    let tool_names: Vec<&str> = matches.iter().map(|t| t.function.name.as_str()).collect();
     let results: Vec<serde_json::Value> = matches.iter().map(|t| {
         serde_json::json!({
             "name": t.function.name,
@@ -987,11 +1031,23 @@ fn execute_tool_search(args: &serde_json::Value) -> String {
         })
     }).collect();
 
+    // The [TOOLS_DISCOVERED:...] tag is parsed by the agent loop to dynamically
+    // inject these tools into the next API call's `tools` parameter (Claw Code pattern).
     format!(
-        "Found {} tool(s). You can now call these tools directly:\n\n{}",
+        "Found {} tool(s). These tools are now available for use:\n\n{}\n\n[TOOLS_DISCOVERED:{}]",
         results.len(),
-        serde_json::to_string_pretty(&results).unwrap_or_default()
+        serde_json::to_string_pretty(&results).unwrap_or_default(),
+        tool_names.join(","),
     )
+}
+
+/// Resolve deferred tool definitions by exact names.
+/// Used by the agent loop to dynamically inject tools discovered via tool_search.
+pub fn resolve_deferred_tools(names: &[&str]) -> Vec<ToolDefinition> {
+    let deferred = deferred_tools();
+    deferred.into_iter()
+        .filter(|t| names.contains(&t.function.name.as_str()))
+        .collect()
 }
 
 /// Default tool set for conversations. Returns core tools + tool_search.
@@ -1004,7 +1060,7 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
         "Search for additional specialized tools by name or keyword. \
          Not all tools are loaded by default — use this to find tools for: \
          browser automation, bot messaging, scheduled tasks, computer control, \
-         canvas rendering, code intelligence (LSP), and more.",
+         canvas rendering, code intelligence (LSP), git operations, and more.",
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -1256,7 +1312,46 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         "pty_send_input" => system_tools::pty_send_input_tool(&args).await,
         "pty_read_output" => system_tools::pty_read_output_tool(&args).await,
         "pty_close_session" => system_tools::pty_close_session_tool(&args).await,
+        "git_commit" => git_tools::git_commit_tool(&args).await,
+        "git_create_branch" => git_tools::git_create_branch_tool(&args).await,
+        "git_diff" => git_tools::git_diff_tool(&args).await,
+        "git_log" => git_tools::git_log_tool(&args).await,
+        "git_status" => git_tools::git_status_tool(&args).await,
         "code_intelligence" => lsp_tools::code_intelligence_tool(&args).await,
+        "ask_buddy" => {
+            let question = args["question"].as_str().unwrap_or("");
+            let ctx = args["context"].as_str().unwrap_or("");
+            if question.is_empty() {
+                "Error: question is required".into()
+            } else {
+                // Resolve LLM config via APP_HANDLE
+                let cfg = if let Some(handle) = APP_HANDLE.get() {
+                    use tauri::Manager;
+                    let state = handle.state::<crate::state::AppState>();
+                    let providers = state.providers.read().await;
+                    llm_client::resolve_config_from_providers(&providers).ok()
+                } else { None };
+                match cfg {
+                    Some(cfg) => {
+                        match crate::engine::buddy_delegate::delegate(
+                            &cfg, question,
+                            crate::engine::buddy_delegate::DelegateContext::TaskDecision,
+                            ctx,
+                        ).await {
+                            Some(result) => {
+                                serde_json::json!({
+                                    "answer": result.answer,
+                                    "confidence": result.confidence,
+                                    "needs_review": result.needs_review,
+                                }).to_string()
+                            }
+                            None => "Buddy 暂时无法回答（用户画像尚未建立）。请直接询问用户。".into()
+                        }
+                    }
+                    None => "Error: no LLM configured".into()
+                }
+            }
+        }
         "tool_search" => execute_tool_search(&args),
         "computer_control" => {
             let (content, images) = computer_tools::computer_control_tool(&args).await;

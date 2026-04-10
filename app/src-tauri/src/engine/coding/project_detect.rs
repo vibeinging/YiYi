@@ -18,9 +18,11 @@ pub enum ProjectType {
 #[derive(Debug, Clone)]
 pub struct ProjectInfo {
     pub project_type: ProjectType,
+    #[allow(dead_code)]
     pub root: String,
     pub test_command: Option<String>,
     pub build_command: Option<String>,
+    #[allow(dead_code)]
     pub lint_command: Option<String>,
     pub type_check_command: Option<String>,
 }

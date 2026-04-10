@@ -17,6 +17,7 @@ pub struct TokenUsage {
 }
 
 impl TokenUsage {
+    #[allow(dead_code)]
     pub fn total_tokens(&self) -> u32 {
         self.input_tokens + self.output_tokens
     }
@@ -53,8 +54,10 @@ impl UsageTracker {
         self.turns += 1;
     }
 
+    #[allow(dead_code)]
     pub fn current_turn_usage(&self) -> TokenUsage { self.latest_turn }
     pub fn cumulative_usage(&self) -> TokenUsage { self.cumulative }
+    #[allow(dead_code)]
     pub fn turns(&self) -> u32 { self.turns }
 }
 

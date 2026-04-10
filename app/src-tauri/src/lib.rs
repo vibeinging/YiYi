@@ -522,6 +522,8 @@ pub fn run() {
             commands::buddy::save_buddy_config,
             commands::buddy::hatch_buddy,
             commands::buddy::buddy_observe,
+            commands::buddy::toggle_buddy_hosted,
+            commands::buddy::get_buddy_hosted,
             // Voice Control
             commands::voice::start_voice_session,
             commands::voice::stop_voice_session,
@@ -544,6 +546,14 @@ pub fn run() {
             // Workers
             commands::workers::list_workers,
             commands::workers::resolve_worker_trust,
+            // Usage
+            commands::usage::get_usage_summary,
+            commands::usage::get_usage_by_session,
+            commands::usage::get_usage_daily,
+            // Export
+            commands::export::export_conversations,
+            commands::export::export_memories,
+            commands::export::export_settings,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

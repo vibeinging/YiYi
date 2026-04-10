@@ -87,6 +87,7 @@ impl BranchLockRegistry {
 
     /// Check whether any other agent holds a conflicting lock on `module`
     /// within `branch`. Returns the first collision found, if any.
+    #[allow(dead_code)]
     pub fn check_collision(&self, branch: &str, module: &str) -> Option<&BranchLock> {
         self.locks.iter().find(|l| {
             l.branch == branch && modules_overlap(&l.module, module)
@@ -94,6 +95,7 @@ impl BranchLockRegistry {
     }
 
     /// Return all currently held locks.
+    #[allow(dead_code)]
     pub fn list_locks(&self) -> &[BranchLock] {
         &self.locks
     }

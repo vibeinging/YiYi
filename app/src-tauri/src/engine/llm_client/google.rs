@@ -204,6 +204,9 @@ fn parse_gemini_response(json: &serde_json::Value) -> Result<LLMResponse, String
     } else {
         Some(MessageContent::text(text_parts.join("")))
     };
+    // Parse Google usageMetadata
+    let usage = parse_google_usage(json);
+
     Ok(LLMResponse {
         message: LLMMessage {
             role: "assistant".into(),
@@ -215,6 +218,18 @@ fn parse_gemini_response(json: &serde_json::Value) -> Result<LLMResponse, String
             },
             tool_call_id: None,
         },
+        usage,
+    })
+}
+
+fn parse_google_usage(json: &serde_json::Value) -> Option<crate::engine::usage::TokenUsage> {
+    let u = &json["usageMetadata"];
+    if u.is_null() { return None; }
+    Some(crate::engine::usage::TokenUsage {
+        input_tokens: u["promptTokenCount"].as_u64().unwrap_or(0) as u32,
+        output_tokens: u["candidatesTokenCount"].as_u64().unwrap_or(0) as u32,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: u["cachedContentTokenCount"].as_u64().unwrap_or(0) as u32,
     })
 }
 
@@ -413,5 +428,5 @@ where
     } else {
         Some(tool_calls)
     };
-    Ok(build_stream_response(full_content, tool_calls_opt))
+    Ok(build_stream_response(full_content, tool_calls_opt, None))
 }

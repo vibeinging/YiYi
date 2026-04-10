@@ -295,12 +295,13 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
       recentMsgs.push(`user: ${userMessage.slice(0, 200)}`);
       useBuddyStore.getState().triggerObserve(recentMsgs).catch(() => {});
     } catch (error) {
-      console.error('Failed to send message:', error);
-      setMessages(prev => [...prev, {
-        role: 'assistant' as const,
-        content: `Error: ${String(error)}`,
-        timestamp: Date.now(),
-      }]);
+      console.error('Chat error:', error);
+      // If stream error wasn't already set by chat://error event, show it now
+      const store = useChatStreamStore.getState();
+      if (!store.errorMessage) {
+        const msg = String(error).replace(/^Error:\s*/i, '');
+        store.endStreamWithError(msg);
+      }
     } finally {
       useChatStreamStore.getState().clearStreamState();
       useChatStreamStore.getState().endStream();

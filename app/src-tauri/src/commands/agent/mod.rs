@@ -11,6 +11,7 @@ pub use helpers::{parse_skill_frontmatter, resolve_llm_config};
 
 /// Skill index entry — name + one-line description for the system prompt.
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct SkillIndexEntry {
     pub name: String,
     pub description: String,

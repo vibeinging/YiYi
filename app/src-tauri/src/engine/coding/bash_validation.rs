@@ -1,29 +1,12 @@
 //! Bash command validation — multi-layer security for shell execution.
 //!
-//! Borrowed from Claw Code's bash_validation.rs design. Provides:
-//! - Semantic classification (8 intent types)
+//! Provides:
 //! - Read-only mode enforcement (whitelist of safe commands)
 //! - Destructive command detection
 //! - Path traversal warnings
-//! - Git subcommand filtering
 
 use std::path::Path;
 use crate::engine::permission_mode::PermissionMode;
-
-// ── Command classification ──────────────────────────────────────────────
-
-/// Semantic intent of a shell command.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommandIntent {
-    ReadOnly,
-    Write,
-    Destructive,
-    Network,
-    ProcessManagement,
-    PackageManagement,
-    SystemAdmin,
-    Unknown,
-}
 
 /// Validation result.
 #[derive(Debug, Clone)]
@@ -33,6 +16,7 @@ pub enum BashValidation {
     Deny(String),
 }
 
+#[allow(dead_code)]
 impl BashValidation {
     pub fn is_denied(&self) -> bool { matches!(self, Self::Deny(_)) }
     pub fn is_warning(&self) -> bool { matches!(self, Self::Warn(_)) }
@@ -73,41 +57,6 @@ pub fn validate_bash_command(
             }
         }
     }
-}
-
-/// Classify a command's semantic intent.
-pub fn classify_command(command: &str) -> CommandIntent {
-    let first = extract_first_command(command);
-    let base = first.rsplit('/').next().unwrap_or(&first);
-
-    if READ_ONLY_COMMANDS.contains(&base) {
-        return CommandIntent::ReadOnly;
-    }
-    if DESTRUCTIVE_COMMANDS.contains(&base) {
-        return CommandIntent::Destructive;
-    }
-    if WRITE_COMMANDS.contains(&base) {
-        return CommandIntent::Write;
-    }
-    if NETWORK_COMMANDS.contains(&base) {
-        return CommandIntent::Network;
-    }
-    if PROCESS_COMMANDS.contains(&base) {
-        return CommandIntent::ProcessManagement;
-    }
-    if PACKAGE_COMMANDS.contains(&base) {
-        return CommandIntent::PackageManagement;
-    }
-    if SYSADMIN_COMMANDS.contains(&base) {
-        return CommandIntent::SystemAdmin;
-    }
-
-    // Check for git subcommands
-    if base == "git" {
-        return classify_git_subcommand(command);
-    }
-
-    CommandIntent::Unknown
 }
 
 // ── Destructive detection ───────────────────────────────────────────────
@@ -250,31 +199,8 @@ const GIT_READ_ONLY_COMMANDS: &[&str] = &[
     "for-each-ref", "count-objects", "fsck", "verify-pack",
 ];
 
-const GIT_WRITE_COMMANDS: &[&str] = &[
-    "push", "commit", "reset", "checkout", "merge", "rebase",
-    "cherry-pick", "revert", "stash drop", "stash pop", "stash apply",
-    "branch -d", "branch -D", "tag -d", "clean", "gc",
-    "filter-branch", "subtree",
-];
-
-fn classify_git_subcommand(cmd: &str) -> CommandIntent {
-    let after_git = cmd.trim_start_matches("git").trim();
-    for sub in GIT_READ_ONLY_COMMANDS {
-        if after_git.starts_with(sub) {
-            return CommandIntent::ReadOnly;
-        }
-    }
-    for sub in GIT_WRITE_COMMANDS {
-        if after_git.starts_with(sub) {
-            return CommandIntent::Write;
-        }
-    }
-    CommandIntent::Unknown
-}
-
 fn is_git_read_only(cmd: &str) -> bool {
     let after_git = cmd.trim_start_matches("git").trim();
-    // "git add" and "git stash" (without drop/pop) are allowed in read-only for inspection
     for sub in GIT_READ_ONLY_COMMANDS {
         if after_git.starts_with(sub) {
             return true;
@@ -357,42 +283,6 @@ const READ_ONLY_SAFE_LIST: &[&str] = &[
     "strings", "tree", "jq", "yq",
     "git", "gh", "id", "groups", "hostname", "arch",
     "sw_vers", "sysctl", "nproc", "lscpu", "top", "ps", "pgrep",
-];
-
-const READ_ONLY_COMMANDS: &[&str] = &[
-    "cat", "head", "tail", "less", "more", "wc", "ls", "find", "grep", "rg",
-    "awk", "echo", "printf", "which", "whoami", "pwd", "env", "printenv",
-    "date", "cal", "df", "du", "free", "uptime", "uname", "file", "stat",
-    "diff", "sort", "uniq", "tr", "cut", "paste", "test", "true", "false",
-    "type", "readlink", "realpath", "basename", "dirname", "strings", "tree",
-    "jq", "yq", "id", "groups", "hostname", "arch", "ps", "pgrep", "top",
-];
-
-const WRITE_COMMANDS: &[&str] = &[
-    "cp", "mv", "rm", "mkdir", "rmdir", "touch", "chmod", "chown", "chgrp",
-    "ln", "install", "rsync", "tar", "zip", "unzip", "gzip", "gunzip",
-    "sed", "tee", "patch", "truncate",
-];
-
-const DESTRUCTIVE_COMMANDS: &[&str] = &[
-    "mkfs", "fdisk", "parted", "wipefs", "shred",
-    "shutdown", "reboot", "halt", "poweroff", "init",
-];
-
-const NETWORK_COMMANDS: &[&str] = &[
-    "curl", "wget", "ssh", "scp", "sftp", "rsync", "nc", "ncat",
-    "telnet", "ftp", "ping", "traceroute", "dig", "nslookup", "host",
-    "netstat", "ss", "ip", "ifconfig", "iptables", "nft",
-];
-
-const PROCESS_COMMANDS: &[&str] = &[
-    "kill", "killall", "pkill", "nohup", "disown", "bg", "fg",
-    "nice", "renice", "timeout", "watch", "screen", "tmux",
-];
-
-const PACKAGE_COMMANDS: &[&str] = &[
-    "apt", "apt-get", "dpkg", "yum", "dnf", "pacman", "brew",
-    "npm", "yarn", "pnpm", "pip", "pip3", "cargo", "gem", "go",
 ];
 
 const SYSADMIN_COMMANDS: &[&str] = &[

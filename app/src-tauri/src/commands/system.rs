@@ -604,12 +604,14 @@ pub async fn install_tool(tool: String) -> Result<String, String> {
 
 /// Check if git is available on this system (backward-compatible wrapper)
 #[tauri::command]
+#[allow(dead_code)]
 pub async fn check_git_available() -> Result<bool, String> {
     check_tool_available("git".to_string()).await
 }
 
 /// Install git based on the current operating system (backward-compatible wrapper)
 #[tauri::command]
+#[allow(dead_code)]
 pub async fn install_git() -> Result<String, String> {
     install_tool("git".to_string()).await
 }
@@ -861,7 +863,7 @@ pub async fn save_memme_config(
 /// Get MemMe identity traits (inferred user personality profile).
 #[tauri::command]
 pub async fn get_identity_traits(
-    state: State<'_, AppState>,
+    _state: State<'_, AppState>,
 ) -> Result<Vec<memme_core::types::identity::IdentityTrait>, String> {
     let store = crate::engine::tools::get_memme_store()
         .ok_or("MemMe store not initialized")?;
