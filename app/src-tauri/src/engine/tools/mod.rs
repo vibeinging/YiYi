@@ -863,26 +863,134 @@ pub fn spawn_task_execution(
 // builtin_tools & execute_tool — the public API
 // ============================================================================
 
-/// Built-in tools available to the agent. Cached after first call.
-pub fn builtin_tools() -> Vec<ToolDefinition> {
+/// Core tools always loaded (kept small to save tokens).
+/// These are the tools the LLM sees by default in every conversation.
+pub fn core_tools() -> Vec<ToolDefinition> {
     static CACHE: std::sync::OnceLock<Vec<ToolDefinition>> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| {
         let mut tools = Vec::new();
-        tools.extend(system_tools::definitions());
-        tools.extend(file_tools::definitions());
-        tools.extend(web_tools::definitions());
-        tools.extend(browser_tools::definitions());
-        tools.extend(memory_tools::definitions());
-        tools.extend(cron_tools::definitions());
-        tools.extend(bot_tools::definitions());
-        tools.extend(skill_tools::definitions());
-        tools.extend(task_tools::definitions());
-        tools.extend(canvas_tools::definitions());
-        tools.extend(spawn_tools::definitions());
-        tools.extend(computer_tools::definitions());
-        tools.extend(lsp_tools::definitions());
+        tools.extend(system_tools::definitions());  // execute_shell, screenshot, etc.
+        tools.extend(file_tools::definitions());     // read/write/edit/delete/grep/glob/project_tree/undo
+        tools.extend(web_tools::definitions());      // web_search
+        tools.extend(memory_tools::definitions());   // memory_add/search
+        tools.extend(spawn_tools::definitions());    // spawn_agents
+        tools.extend(skill_tools::definitions());    // manage_skill, activate_skills
+        // Total: ~20 core tools
         tools
     }).clone()
+}
+
+/// Extended tools loaded on demand via tool_search.
+/// These are searchable but NOT sent to the LLM by default.
+pub fn deferred_tools() -> Vec<ToolDefinition> {
+    static CACHE: std::sync::OnceLock<Vec<ToolDefinition>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| {
+        let mut tools = Vec::new();
+        tools.extend(browser_tools::definitions());   // browser_use (heavy)
+        tools.extend(cron_tools::definitions());      // manage_cronjob
+        tools.extend(bot_tools::definitions());       // send_bot_message, manage_bot
+        tools.extend(task_tools::definitions());      // create_task, report_progress
+        tools.extend(canvas_tools::definitions());    // render_canvas
+        tools.extend(computer_tools::definitions());  // computer_control
+        tools.extend(lsp_tools::definitions());       // code_intelligence
+        tools
+    }).clone()
+}
+
+/// All tools (core + deferred). Used by execute_tool dispatch.
+fn all_tools() -> Vec<ToolDefinition> {
+    let mut all = core_tools();
+    all.extend(deferred_tools());
+    all
+}
+
+/// Search deferred tools by name or keyword. Returns matching tool names + schemas.
+fn execute_tool_search(args: &serde_json::Value) -> String {
+    let query = args["query"].as_str().unwrap_or("").trim().to_lowercase();
+    let max_results = args["max_results"].as_u64().unwrap_or(5) as usize;
+
+    if query.is_empty() {
+        return "Error: query is required".into();
+    }
+
+    let deferred = deferred_tools();
+
+    // Support "select:tool1,tool2" for exact name loading
+    let matches: Vec<&ToolDefinition> = if let Some(selection) = query.strip_prefix("select:") {
+        let wanted: Vec<&str> = selection.split(',').map(|s| s.trim()).collect();
+        deferred.iter().filter(|t| wanted.contains(&t.function.name.as_str())).collect()
+    } else {
+        // Score-based search
+        let mut scored: Vec<(&ToolDefinition, i32)> = deferred.iter().map(|t| {
+            let name = t.function.name.to_lowercase();
+            let desc = t.function.description.to_lowercase();
+            let mut score = 0i32;
+            if name == query { score += 8; }
+            else if name.contains(&query) { score += 4; }
+            if desc.contains(&query) { score += 2; }
+            // Check individual query words
+            for word in query.split_whitespace() {
+                if name.contains(word) { score += 3; }
+                if desc.contains(word) { score += 1; }
+            }
+            (t, score)
+        }).filter(|(_, s)| *s > 0).collect();
+        scored.sort_by(|a, b| b.1.cmp(&a.1));
+        scored.into_iter().take(max_results).map(|(t, _)| t).collect()
+    };
+
+    if matches.is_empty() {
+        let available: Vec<&str> = deferred.iter().map(|t| t.function.name.as_str()).collect();
+        return format!(
+            "No tools found for '{}'. Available deferred tools: {}",
+            query,
+            available.join(", ")
+        );
+    }
+
+    // Return tool definitions so the LLM can call them
+    let results: Vec<serde_json::Value> = matches.iter().map(|t| {
+        serde_json::json!({
+            "name": t.function.name,
+            "description": t.function.description,
+            "parameters": t.function.parameters,
+        })
+    }).collect();
+
+    format!(
+        "Found {} tool(s). You can now call these tools directly:\n\n{}",
+        results.len(),
+        serde_json::to_string_pretty(&results).unwrap_or_default()
+    )
+}
+
+/// Default tool set for conversations. Returns core tools + tool_search.
+/// LLM uses tool_search to discover and load deferred tools on demand.
+pub fn builtin_tools() -> Vec<ToolDefinition> {
+    let mut tools = core_tools();
+    // Add tool_search so LLM can discover deferred tools
+    tools.push(tool_def(
+        "tool_search",
+        "Search for additional specialized tools by name or keyword. \
+         Not all tools are loaded by default — use this to find tools for: \
+         browser automation, bot messaging, scheduled tasks, computer control, \
+         canvas rendering, code intelligence (LSP), and more.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query: tool name, keyword, or 'select:tool1,tool2' for exact names"
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum results to return. Default 5."
+                }
+            },
+            "required": ["query"]
+        }),
+    ));
+    tools
 }
 
 /// Execute a tool call and return the result
@@ -1119,6 +1227,7 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         "pty_read_output" => system_tools::pty_read_output_tool(&args).await,
         "pty_close_session" => system_tools::pty_close_session_tool(&args).await,
         "code_intelligence" => lsp_tools::code_intelligence_tool(&args).await,
+        "tool_search" => execute_tool_search(&args),
         "computer_control" => {
             let (content, images) = computer_tools::computer_control_tool(&args).await;
             return ToolResult {
