@@ -989,6 +989,8 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         "edit_file" => file_tools::edit_file_tool(&args).await,
         "append_file" => file_tools::append_file_tool(&args).await,
         "delete_file" => file_tools::delete_file_tool(&args).await,
+        "undo_edit" => file_tools::undo_edit_tool(&args).await,
+        "project_tree" => file_tools::project_tree_tool(&args).await,
         "list_directory" => file_tools::list_directory_tool(&args).await,
         "grep_search" => file_tools::grep_search_tool(&args).await,
         "glob_search" => file_tools::glob_search_tool(&args).await,
