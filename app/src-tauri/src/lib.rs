@@ -330,8 +330,9 @@ pub fn run() {
             commands::system::install_claude_code,
             commands::system::check_tool_available,
             commands::system::install_tool,
-            commands::system::check_git_available,
-            commands::system::install_git,
+            // git install commands disabled — git is optional, prompt user to install manually
+            // commands::system::check_git_available,
+            // commands::system::install_git,
             commands::system::get_app_flag,
             commands::system::set_app_flag,
             commands::system::get_growth_report,
