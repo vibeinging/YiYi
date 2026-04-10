@@ -865,34 +865,64 @@ pub fn spawn_task_execution(
 
 /// Core tools always loaded (kept small to save tokens).
 /// These are the tools the LLM sees by default in every conversation.
+/// Core tools — always loaded. Kept minimal like Claw Code's MVP set.
+/// These 8 tools cover 90% of tasks. Everything else goes through tool_search.
 pub fn core_tools() -> Vec<ToolDefinition> {
     static CACHE: std::sync::OnceLock<Vec<ToolDefinition>> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| {
-        let mut tools = Vec::new();
-        tools.extend(system_tools::definitions());  // execute_shell, screenshot, etc.
-        tools.extend(file_tools::definitions());     // read/write/edit/delete/grep/glob/project_tree/undo
-        tools.extend(web_tools::definitions());      // web_search
-        tools.extend(memory_tools::definitions());   // memory_add/search
-        tools.extend(spawn_tools::definitions());    // spawn_agents
-        tools.extend(skill_tools::definitions());    // manage_skill, activate_skills
-        // Total: ~20 core tools
+        // Filter to ONLY the essential tools from each module
+        let all_file = file_tools::definitions();
+        let all_system = system_tools::definitions();
+
+        let core_names = [
+            // File operations (the bread and butter)
+            "read_file", "write_file", "edit_file",
+            "list_directory", "grep_search", "glob_search",
+            // Shell
+            "execute_shell",
+            // Web
+            "web_search",
+        ];
+
+        let mut tools: Vec<ToolDefinition> = Vec::new();
+        for def in all_file.iter().chain(all_system.iter()).chain(web_tools::definitions().iter()) {
+            if core_names.contains(&def.function.name.as_str()) {
+                tools.push(def.clone());
+            }
+        }
         tools
     }).clone()
 }
 
 /// Extended tools loaded on demand via tool_search.
-/// These are searchable but NOT sent to the LLM by default.
+/// Includes ALL tools not in core set.
 pub fn deferred_tools() -> Vec<ToolDefinition> {
     static CACHE: std::sync::OnceLock<Vec<ToolDefinition>> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| {
+        let core_names = [
+            "read_file", "write_file", "edit_file",
+            "list_directory", "grep_search", "glob_search",
+            "execute_shell", "web_search",
+        ];
+
         let mut tools = Vec::new();
-        tools.extend(browser_tools::definitions());   // browser_use (heavy)
-        tools.extend(cron_tools::definitions());      // manage_cronjob
-        tools.extend(bot_tools::definitions());       // send_bot_message, manage_bot
-        tools.extend(task_tools::definitions());      // create_task, report_progress
-        tools.extend(canvas_tools::definitions());    // render_canvas
-        tools.extend(computer_tools::definitions());  // computer_control
-        tools.extend(lsp_tools::definitions());       // code_intelligence
+        // Collect ALL definitions from ALL modules
+        tools.extend(system_tools::definitions());
+        tools.extend(file_tools::definitions());
+        tools.extend(web_tools::definitions());
+        tools.extend(browser_tools::definitions());
+        tools.extend(memory_tools::definitions());
+        tools.extend(cron_tools::definitions());
+        tools.extend(bot_tools::definitions());
+        tools.extend(skill_tools::definitions());
+        tools.extend(task_tools::definitions());
+        tools.extend(canvas_tools::definitions());
+        tools.extend(spawn_tools::definitions());
+        tools.extend(computer_tools::definitions());
+        tools.extend(lsp_tools::definitions());
+
+        // Remove core tools (they're already loaded)
+        tools.retain(|t| !core_names.contains(&t.function.name.as_str()));
         tools
     }).clone()
 }
