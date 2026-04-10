@@ -208,6 +208,7 @@ pub fn parse_agent_md(content: &str, source: &Path) -> Option<AgentDefinition> {
 const BUILTIN_AGENTS: &[(&str, &str)] = &[
     ("explore", include_str!("../../../agents/explore/AGENT.md")),
     ("planner", include_str!("../../../agents/planner/AGENT.md")),
+    ("coder", include_str!("../../../agents/coder/AGENT.md")),
     ("desktop_operator", include_str!("../../../agents/desktop_operator/AGENT.md")),
     ("memory_curator", include_str!("../../../agents/memory_curator/AGENT.md")),
     ("bot_coordinator", include_str!("../../../agents/bot_coordinator/AGENT.md")),
