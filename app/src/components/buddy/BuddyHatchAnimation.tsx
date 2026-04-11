@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import {
-  COMPANION_COLOR,
   STAT_LABELS,
   STAT_NAMES,
   getSpeciesLabel,
@@ -9,6 +8,7 @@ import {
   type StatName,
 } from '../../utils/buddy'
 import { useBuddyStore } from '../../stores/buddyStore'
+import { OrbCore } from './OrbCore'
 
 type HatchPhase = 'idle' | 'crack' | 'personality-setup' | 'hatching' | 'reveal' | 'done'
 
@@ -20,54 +20,6 @@ const PERSONALITY_PRESETS = [
   { label: '学术派', value: '冷静理性，偶尔掉书袋引经据典，用知识分子的方式卖萌' },
   { label: '混沌邪恶', value: '喜欢搞怪和冷笑话，说话不着调，但总能让人笑出来' },
 ]
-
-/** Mini orb preview used during hatch animation */
-const OrbPreview: React.FC<{ from: string; to: string; css: string; size: number; animate?: boolean }> = ({
-  from, to, css, size, animate,
-}) => {
-  const shapeStyle: React.CSSProperties = {}
-  for (const rule of css.split(';')) {
-    const [prop, val] = rule.split(':').map(s => s.trim())
-    if (prop && val) {
-      const camel = prop.replace(/-([a-z])/g, (_, c) => c.toUpperCase())
-      ;(shapeStyle as any)[camel] = val
-    }
-  }
-  return (
-    <div className="relative" style={{ width: size, height: size }}>
-      <div
-        className="absolute inset-0"
-        style={{
-          ...shapeStyle,
-          background: `radial-gradient(circle, ${from}40 0%, transparent 70%)`,
-          transform: 'scale(1.6)',
-          filter: 'blur(6px)',
-        }}
-      />
-      <div
-        className="absolute inset-0"
-        style={{
-          ...shapeStyle,
-          background: `radial-gradient(circle at 35% 35%, ${from}, ${to})`,
-          boxShadow: `0 0 16px ${from}80`,
-          animation: animate ? 'buddy-breathe 2s ease-in-out infinite' : undefined,
-        }}
-      />
-      <div
-        className="absolute"
-        style={{
-          ...shapeStyle,
-          width: size * 0.35,
-          height: size * 0.25,
-          top: size * 0.18,
-          left: size * 0.22,
-          background: 'radial-gradient(ellipse, rgba(255,255,255,0.5) 0%, transparent 80%)',
-          filter: 'blur(1.5px)',
-        }}
-      />
-    </div>
-  )
-}
 
 export const BuddyHatchAnimation: React.FC = () => {
   const { bones, companion, config, hatching, hatch, dismissHatch, showHatchAnimation, aiName } =
@@ -151,7 +103,7 @@ export const BuddyHatchAnimation: React.FC = () => {
         {phase === 'crack' && (
           <div className="flex flex-col items-center gap-2">
             <div style={{ animation: 'buddy-hatch-wobble 0.4s ease-in-out infinite' }}>
-              <OrbPreview from={from} to={to} css={speciesConfig.css} size={64} />
+              <OrbCore from={from} to={to} css={speciesConfig.css} size={64} />
             </div>
             <div className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
               光团在凝聚...!
@@ -165,7 +117,7 @@ export const BuddyHatchAnimation: React.FC = () => {
             {/* Species reveal */}
             <div className="flex flex-col items-center gap-2">
               <div style={{ animation: 'buddy-reveal 0.6s ease-out forwards' }}>
-                <OrbPreview from={from} to={to} css={speciesConfig.css} size={56} animate />
+                <OrbCore from={from} to={to} css={speciesConfig.css} size={56} animate />
               </div>
               <div className="text-center">
                 <div className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>
@@ -270,7 +222,7 @@ export const BuddyHatchAnimation: React.FC = () => {
         {phase === 'hatching' && (
           <div className="flex flex-col items-center gap-3">
             <div style={{ animation: 'buddy-bounce 1s ease-in-out infinite' }}>
-              <OrbPreview from={from} to={to} css={speciesConfig.css} size={56} animate />
+              <OrbCore from={from} to={to} css={speciesConfig.css} size={56} animate />
             </div>
             <div className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
               {aiName} 正在苏醒...
@@ -283,7 +235,7 @@ export const BuddyHatchAnimation: React.FC = () => {
           <>
             <div className="flex flex-col items-center gap-3">
               <div style={{ animation: 'buddy-reveal 0.8s ease-out forwards' }}>
-                <OrbPreview from={from} to={to} css={speciesConfig.css} size={56} animate />
+                <OrbCore from={from} to={to} css={speciesConfig.css} size={56} animate />
               </div>
               <div className="text-center">
                 <div className="font-bold text-lg" style={{ color: 'var(--color-text)' }}>

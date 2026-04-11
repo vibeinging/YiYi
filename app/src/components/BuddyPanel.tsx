@@ -1,0 +1,606 @@
+/**
+ * BuddyPanel — Settings tab for the companion sprite (小精灵).
+ * Consolidates: profile display, behavior toggles, meditation, and memory engine config.
+ */
+
+import { useState, useEffect, useCallback } from 'react'
+import { invoke } from '@tauri-apps/api/core'
+import {
+  Brain,
+  Play,
+  FileText,
+  Loader2,
+  Eye,
+  EyeOff,
+  Search,
+  Trash2,
+  BookOpen,
+  ShieldCheck,
+} from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { useBuddyStore } from '../stores/buddyStore'
+import {
+  toggleBuddyHosted, getBuddyHosted,
+  getMemoryStats, listRecentMemories, searchMemories, deleteMemory,
+  listCorrections,
+  type MemoryEntry, type MemoryStats, type CorrectionEntry,
+} from '../api/buddy'
+import { getMemmeConfig, saveMemmeConfig, type MemmeConfig } from '../api/system'
+import { OrbCore } from './buddy/OrbCore'
+import { getSpeciesLabel, getSpeciesConfig, STAT_LABELS, STAT_NAMES } from '../utils/buddy'
+import { toast } from './Toast'
+
+// ── Toggle helper ──
+const Toggle: React.FC<{ value: boolean; onChange: (v: boolean) => void }> = ({ value, onChange }) => (
+  <button
+    onClick={() => onChange(!value)}
+    className="relative w-9 h-5 rounded-full transition-colors shrink-0"
+    style={{ background: value ? 'var(--color-success)' : 'var(--color-bg-muted)' }}
+  >
+    <div
+      className="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform"
+      style={{ transform: value ? 'translateX(18px)' : 'translateX(2px)' }}
+    />
+  </button>
+)
+
+export function BuddyPanel() {
+  const { t } = useTranslation()
+  const { companion, bones, config, setMuted, aiName } = useBuddyStore()
+
+  // Hosted mode
+  const [hostedMode, setHostedMode] = useState(false)
+
+  // Meditation state
+  const [meditationEnabled, setMeditationEnabled] = useState(false)
+  const [meditationStart, setMeditationStart] = useState('02:00')
+  const [meditationNotify, setMeditationNotify] = useState(true)
+  const [meditationLast, setMeditationLast] = useState<{
+    date: string; duration_minutes: number; summary: string; journal_path?: string
+  } | null>(null)
+  const [meditationTriggering, setMeditationTriggering] = useState(false)
+
+  // MemMe config
+  const [memmeConfig, setMemmeConfigState] = useState<MemmeConfig | null>(null)
+
+  // Memory browsing
+  const [memoryStats, setMemoryStats] = useState<MemoryStats | null>(null)
+  const [recentMemories, setRecentMemories] = useState<MemoryEntry[]>([])
+  const [memorySearch, setMemorySearch] = useState('')
+  const [searchResults, setSearchResults] = useState<MemoryEntry[] | null>(null)
+  const [searching, setSearching] = useState(false)
+
+  // Corrections
+  const [corrections, setCorrections] = useState<CorrectionEntry[]>([])
+
+  // ── Load on mount ──
+  useEffect(() => {
+    getBuddyHosted().then(setHostedMode).catch(() => {})
+    getMemoryStats().then(setMemoryStats).catch(() => {})
+    listRecentMemories(15).then(setRecentMemories).catch(() => {})
+    listCorrections().then(setCorrections).catch(() => {})
+
+    invoke('get_meditation_config').then((cfg: any) => {
+      if (cfg) {
+        setMeditationEnabled(cfg.enabled ?? false)
+        setMeditationStart(cfg.start_time ?? '02:00')
+        setMeditationNotify(cfg.notify_on_complete ?? true)
+      }
+    }).catch(() => {})
+
+    invoke('get_latest_meditation').then((s: any) => {
+      if (s) setMeditationLast(s)
+    }).catch(() => {})
+
+    getMemmeConfig().then(c => { if (c) setMemmeConfigState(c) }).catch(() => {})
+  }, [])
+
+  // ── Meditation helpers ──
+  const saveMedConfig = useCallback(async (
+    enabled = meditationEnabled, startTime = meditationStart, notifyOnComplete = meditationNotify,
+  ) => {
+    try { await invoke('save_meditation_config', { enabled, startTime, notifyOnComplete }) }
+    catch (e) { console.error('Failed to save meditation config:', e) }
+  }, [meditationEnabled, meditationStart, meditationNotify])
+
+  const handleTriggerMeditation = async () => {
+    setMeditationTriggering(true)
+    try {
+      await invoke('trigger_meditation')
+      toast.success(t('settings.meditationComplete'))
+      const session: any = await invoke('get_latest_meditation')
+      if (session) setMeditationLast(session)
+    } catch (e) {
+      toast.error(String(e))
+    } finally {
+      setMeditationTriggering(false)
+    }
+  }
+
+  // ── Memory search ──
+  const handleMemorySearch = async () => {
+    if (!memorySearch.trim()) { setSearchResults(null); return }
+    setSearching(true)
+    try {
+      const results = await searchMemories(memorySearch.trim(), 10)
+      setSearchResults(results)
+    } catch { setSearchResults([]) }
+    finally { setSearching(false) }
+  }
+
+  const handleDeleteMemory = async (id: string) => {
+    try {
+      await deleteMemory(id)
+      setRecentMemories(prev => prev.filter(m => m.id !== id))
+      if (searchResults) setSearchResults(prev => prev!.filter(m => m.id !== id))
+      if (memoryStats) setMemoryStats({ ...memoryStats, total: memoryStats.total - 1 })
+      toast.success('记忆已删除')
+    } catch { toast.error('删除失败') }
+  }
+
+  // ── MemMe helpers ──
+  const saveMemmeConfigFull = async (cfg: MemmeConfig | null) => {
+    if (!cfg) return
+    try { await saveMemmeConfig(cfg) }
+    catch (e) { console.error('Failed to save MemMe config:', e) }
+  }
+
+  const muted = config?.muted ?? false
+  const notHatched = !companion || !bones
+
+  return (
+    <div className="space-y-4">
+      {/* ── Section 1: Profile ── */}
+      <div className="p-5 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
+        {notHatched ? (
+          <div className="text-center py-6">
+            <div className="text-[13px] text-[var(--color-text-muted)] mb-1">小精灵尚未孵化</div>
+            <div className="text-[12px] text-[var(--color-text-muted)]">在聊天页面点击光团即可赋予 {aiName} 一个形象</div>
+          </div>
+        ) : (
+          <>
+            <div className="flex items-center gap-4 mb-4">
+              {/* Orb */}
+              <div className="shrink-0" style={{ animation: 'buddy-breathe 3s ease-in-out infinite' }}>
+                <OrbCore
+                  from={companion.palette.from}
+                  to={companion.palette.to}
+                  css={getSpeciesConfig(companion.species).css}
+                  glow={getSpeciesConfig(companion.species).glowSpread}
+                  size={48}
+                  shiny={companion.shiny}
+                />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-[15px]" style={{ color: 'var(--color-text)' }}>
+                    {companion.name}
+                  </span>
+                  {companion.shiny && <span className="text-xs">✨</span>}
+                </div>
+                <div className="text-[12px]" style={{ color: companion.palette.from }}>
+                  {companion.palette.name} · {getSpeciesLabel(companion.species)}
+                </div>
+                <div className="text-[11px] mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
+                  {companion.personality}
+                </div>
+              </div>
+            </div>
+
+            {/* Stats */}
+            <div className="space-y-1.5">
+              {STAT_NAMES.map(stat => (
+                <div key={stat} className="flex items-center gap-2">
+                  <span className="text-[12px] w-10 shrink-0" style={{ color: 'var(--color-text-muted)' }}>
+                    {STAT_LABELS[stat]}
+                  </span>
+                  <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--color-border)' }}>
+                    <div
+                      className="h-full rounded-full transition-all"
+                      style={{
+                        width: `${companion.stats[stat]}%`,
+                        background: `linear-gradient(90deg, ${companion.palette.from}, ${companion.palette.to})`,
+                      }}
+                    />
+                  </div>
+                  <span className="text-[11px] w-6 text-right tabular-nums" style={{ color: 'var(--color-text-muted)' }}>
+                    {companion.stats[stat]}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {companion.hatchedAt > 0 && (
+              <div className="text-[11px] mt-3" style={{ color: 'var(--color-text-muted)' }}>
+                孵化于 {new Date(companion.hatchedAt).toLocaleDateString('zh-CN')}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* ── Section 2: Behavior ── */}
+      <div className="p-5 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
+        <h2 className="font-semibold text-[14px] mb-3">行为设置</h2>
+        <div className="space-y-1">
+          {/* Hosted mode */}
+          <div className="flex items-center justify-between p-3 rounded-xl hover:bg-[var(--color-bg-subtle)] transition-colors">
+            <div>
+              <div className="text-[13px] font-medium">托管模式</div>
+              <div className="text-[12px] text-[var(--color-text-muted)]">让小精灵代替你做非关键决策</div>
+            </div>
+            <Toggle
+              value={hostedMode}
+              onChange={async (next) => {
+                try { await toggleBuddyHosted(next); setHostedMode(next) }
+                catch { toast.error('切换失败') }
+              }}
+            />
+          </div>
+          {/* Muted */}
+          <div className="flex items-center justify-between p-3 rounded-xl hover:bg-[var(--color-bg-subtle)] transition-colors">
+            <div>
+              <div className="text-[13px] font-medium">休眠模式</div>
+              <div className="text-[12px] text-[var(--color-text-muted)]">关闭动画和气泡反应，降低干扰</div>
+            </div>
+            <button
+              onClick={() => setMuted(!muted)}
+              className="p-1.5 rounded-lg transition-colors hover:bg-[var(--color-bg-subtle)]"
+            >
+              {muted
+                ? <EyeOff size={16} style={{ color: 'var(--color-text-muted)' }} />
+                : <Eye size={16} style={{ color: 'var(--color-primary)' }} />
+              }
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Section 3: Meditation ── */}
+      <div className="p-5 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
+        <div className="flex items-center gap-2 mb-1">
+          <Brain size={18} className="text-[var(--color-primary)]" />
+          <h2 className="font-semibold text-[14px]">{t('settings.meditation')}</h2>
+        </div>
+        <p className="text-[12px] text-[var(--color-text-muted)] mb-4 ml-[26px]">
+          {t('settings.meditationDesc')}
+        </p>
+
+        <div className="space-y-3">
+          {/* Enable */}
+          <div className="flex items-center justify-between p-3 rounded-xl hover:bg-[var(--color-bg-subtle)] transition-colors">
+            <div className="text-[13px] font-medium">{t('settings.meditationEnabled')}</div>
+            <Toggle
+              value={meditationEnabled}
+              onChange={(next) => {
+                setMeditationEnabled(next)
+                saveMedConfig(next, meditationStart, meditationNotify)
+              }}
+            />
+          </div>
+
+          {meditationEnabled && (
+            <>
+              {/* Start time */}
+              <div className="flex items-center justify-between p-3 rounded-xl hover:bg-[var(--color-bg-subtle)] transition-colors">
+                <div className="text-[13px] font-medium">{t('settings.meditationStartTime')}</div>
+                <input
+                  type="time"
+                  value={meditationStart}
+                  onChange={(e) => setMeditationStart(e.target.value)}
+                  onBlur={() => saveMedConfig()}
+                  className="px-3 py-1.5 rounded-lg text-[13px] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50"
+                  style={{ background: 'var(--color-bg)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+                />
+              </div>
+              {/* Notify */}
+              <div className="flex items-center justify-between p-3 rounded-xl hover:bg-[var(--color-bg-subtle)] transition-colors">
+                <div className="text-[13px] font-medium">{t('settings.meditationNotify')}</div>
+                <Toggle
+                  value={meditationNotify}
+                  onChange={(next) => {
+                    setMeditationNotify(next)
+                    saveMedConfig(meditationEnabled, meditationStart, next)
+                  }}
+                />
+              </div>
+            </>
+          )}
+
+          {/* Last session */}
+          <div className="p-3 rounded-xl" style={{ background: 'var(--color-bg-subtle)' }}>
+            <div className="text-[12px] font-medium mb-2" style={{ color: 'var(--color-text-muted)' }}>
+              {t('settings.meditationLastSession')}
+            </div>
+            {meditationLast ? (
+              <div className="space-y-1">
+                <div className="text-[13px]" style={{ color: 'var(--color-text)' }}>
+                  {meditationLast.date} &middot; {meditationLast.duration_minutes} min
+                </div>
+                <div className="text-[12px]" style={{ color: 'var(--color-text-secondary)' }}>
+                  {meditationLast.summary}
+                </div>
+                {meditationLast.journal_path && (
+                  <button
+                    className="flex items-center gap-1 mt-1 text-[12px] font-medium transition-colors"
+                    style={{ color: 'var(--color-primary)' }}
+                    onClick={() => invoke('open_path', { path: meditationLast.journal_path }).catch(() => {})}
+                  >
+                    <FileText size={12} />
+                    {t('settings.meditationJournal')}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
+                {t('settings.meditationNoSession')}
+              </div>
+            )}
+          </div>
+
+          {/* Trigger */}
+          <button
+            onClick={handleTriggerMeditation}
+            disabled={meditationTriggering}
+            className="flex items-center justify-center gap-2 w-full px-4 py-2.5 rounded-xl text-[13px] font-medium transition-colors disabled:opacity-50"
+            style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-primary)' }}
+            onMouseEnter={(e) => { if (!meditationTriggering) e.currentTarget.style.background = 'var(--color-bg-muted)' }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--color-bg-subtle)' }}
+          >
+            {meditationTriggering
+              ? <Loader2 size={14} className="animate-spin" />
+              : <Play size={14} />
+            }
+            {meditationTriggering ? t('settings.meditationRunning') : t('settings.meditationTrigger')}
+          </button>
+        </div>
+      </div>
+
+      {/* ── Section 4: Memory Engine ── */}
+      <div className="p-5 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
+        <div className="mb-4">
+          <h2 className="font-semibold text-[14px] mb-1">{t('settings.memoryTitle', '记忆引擎')}</h2>
+          <p className="text-[12px] text-[var(--color-text-muted)]">
+            {t('settings.memoryDesc', '配置 MemMe 记忆引擎的 Embedding、知识图谱和遗忘曲线参数')}
+          </p>
+        </div>
+        <div className="space-y-3">
+          {/* Embedding Provider */}
+          <div className="flex items-center justify-between">
+            <div className="text-[13px] font-medium">Embedding 提供商</div>
+            <select
+              value={memmeConfig?.embedding_provider ?? 'mock'}
+              onChange={async (e) => {
+                const next = { ...memmeConfig!, embedding_provider: e.target.value }
+                setMemmeConfigState(next)
+                await saveMemmeConfigFull(next)
+              }}
+              className="text-[13px] px-2.5 py-1.5 rounded-lg"
+              style={{ background: 'var(--color-bg-muted)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+            >
+              <option value="mock">Mock（默认，无语义搜索）</option>
+              <option value="openai">OpenAI 兼容（支持 OpenAI / Ollama / 智谱 / 硅基流动等）</option>
+            </select>
+          </div>
+
+          {memmeConfig?.embedding_provider === 'openai' && (
+            <>
+              <div className="flex items-center justify-between">
+                <div className="text-[13px] font-medium">Embedding API 地址</div>
+                <input
+                  type="text"
+                  placeholder="留空默认 https://api.openai.com/v1"
+                  value={memmeConfig?.embedding_base_url ?? ''}
+                  onChange={(e) => setMemmeConfigState({ ...memmeConfig!, embedding_base_url: e.target.value })}
+                  onBlur={() => saveMemmeConfigFull(memmeConfig)}
+                  className="text-[13px] px-2.5 py-1.5 rounded-lg w-[240px]"
+                  style={{ background: 'var(--color-bg-muted)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="text-[13px] font-medium">Embedding API Key</div>
+                <input
+                  type="password"
+                  placeholder="留空则使用当前 LLM Provider 的 Key"
+                  value={memmeConfig?.embedding_api_key ?? ''}
+                  onChange={(e) => setMemmeConfigState({ ...memmeConfig!, embedding_api_key: e.target.value })}
+                  onBlur={() => saveMemmeConfigFull(memmeConfig)}
+                  className="text-[13px] px-2.5 py-1.5 rounded-lg w-[240px]"
+                  style={{ background: 'var(--color-bg-muted)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="text-[13px] font-medium">Embedding 模型</div>
+                <input
+                  type="text"
+                  placeholder="text-embedding-3-small"
+                  value={memmeConfig?.embedding_model ?? 'text-embedding-3-small'}
+                  onChange={(e) => setMemmeConfigState({ ...memmeConfig!, embedding_model: e.target.value })}
+                  onBlur={() => saveMemmeConfigFull(memmeConfig)}
+                  className="text-[13px] px-2.5 py-1.5 rounded-lg w-[240px]"
+                  style={{ background: 'var(--color-bg-muted)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="text-[13px] font-medium">向量维度</div>
+                <input
+                  type="number"
+                  value={memmeConfig?.embedding_dims ?? 1536}
+                  onChange={(e) => setMemmeConfigState({ ...memmeConfig!, embedding_dims: parseInt(e.target.value) || 1536 })}
+                  onBlur={() => saveMemmeConfigFull(memmeConfig)}
+                  className="text-[13px] px-2.5 py-1.5 rounded-lg w-[100px]"
+                  style={{ background: 'var(--color-bg-muted)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+                />
+              </div>
+            </>
+          )}
+
+          {/* Knowledge Graph */}
+          <div className="flex items-center justify-between">
+            <div className="text-[13px] font-medium">知识图谱</div>
+            <Toggle
+              value={memmeConfig?.enable_graph ?? false}
+              onChange={async (next) => {
+                const cfg = { ...memmeConfig!, enable_graph: next }
+                setMemmeConfigState(cfg)
+                await saveMemmeConfigFull(cfg)
+              }}
+            />
+          </div>
+          {/* Forgetting Curve */}
+          <div className="flex items-center justify-between">
+            <div className="text-[13px] font-medium">遗忘曲线衰减</div>
+            <Toggle
+              value={memmeConfig?.enable_forgetting_curve ?? false}
+              onChange={async (next) => {
+                const cfg = { ...memmeConfig!, enable_forgetting_curve: next }
+                setMemmeConfigState(cfg)
+                await saveMemmeConfigFull(cfg)
+              }}
+            />
+          </div>
+          {/* Extraction Depth */}
+          <div className="flex items-center justify-between">
+            <div className="text-[13px] font-medium">提取深度</div>
+            <select
+              value={memmeConfig?.extraction_depth ?? 'standard'}
+              onChange={async (e) => {
+                const cfg = { ...memmeConfig!, extraction_depth: e.target.value }
+                setMemmeConfigState(cfg)
+                await saveMemmeConfigFull(cfg)
+              }}
+              className="text-[13px] px-2.5 py-1.5 rounded-lg"
+              style={{ background: 'var(--color-bg-muted)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+            >
+              <option value="standard">标准</option>
+              <option value="thorough">深入</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Section 5: Memory Browser ── */}
+      <div className="p-5 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
+        <div className="flex items-center gap-2 mb-1">
+          <BookOpen size={18} className="text-[var(--color-primary)]" />
+          <h2 className="font-semibold text-[14px]">记忆</h2>
+          {memoryStats && (
+            <span className="text-[11px] px-1.5 py-0.5 rounded-full" style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-muted)' }}>
+              {memoryStats.total} 条
+            </span>
+          )}
+        </div>
+        <p className="text-[12px] text-[var(--color-text-muted)] mb-3 ml-[26px]">
+          小精灵从对话中积累的知识和记忆
+        </p>
+
+        {/* Category stats */}
+        {memoryStats && memoryStats.total > 0 && (
+          <div className="flex flex-wrap gap-1.5 mb-3">
+            {Object.entries(memoryStats.by_category).map(([cat, count]) => (
+              <span key={cat} className="text-[11px] px-2 py-0.5 rounded-full" style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-muted)' }}>
+                {cat === 'fact' ? '事实' : cat === 'preference' ? '偏好' : cat === 'experience' ? '经验' : cat === 'decision' ? '决策' : cat === 'principle' ? '原则' : cat} {count}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* Search */}
+        <div className="flex gap-2 mb-3">
+          <div className="flex-1 relative">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--color-text-muted)' }} />
+            <input
+              type="text"
+              value={memorySearch}
+              onChange={e => setMemorySearch(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') handleMemorySearch() }}
+              placeholder="搜索记忆..."
+              className="w-full pl-8 pr-3 py-1.5 rounded-lg text-[13px] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50"
+              style={{ background: 'var(--color-bg)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+            />
+          </div>
+          <button
+            onClick={handleMemorySearch}
+            disabled={searching}
+            className="px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
+            style={{ background: 'var(--color-primary)', color: '#fff' }}
+          >
+            {searching ? <Loader2 size={12} className="animate-spin" /> : '搜索'}
+          </button>
+        </div>
+
+        {/* Memory list */}
+        <div className="space-y-1 max-h-[300px] overflow-y-auto">
+          {(searchResults ?? recentMemories).length === 0 ? (
+            <div className="text-center py-4 text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
+              {searchResults ? '没有找到匹配的记忆' : '暂无记忆'}
+            </div>
+          ) : (
+            (searchResults ?? recentMemories).map(m => (
+              <div key={m.id} className="group flex gap-2 p-2.5 rounded-lg hover:bg-[var(--color-bg-subtle)] transition-colors">
+                <div className="flex-1 min-w-0">
+                  <div className="text-[12px] leading-relaxed" style={{ color: 'var(--color-text)' }}>
+                    {m.content.length > 120 ? m.content.slice(0, 120) + '...' : m.content}
+                  </div>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-muted)' }}>
+                      {m.categories[0] || 'note'}
+                    </span>
+                    <span className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
+                      {m.importance >= 0.7 ? '⭐' : ''} {m.created_at.slice(0, 10)}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleDeleteMemory(m.id)}
+                  className="opacity-0 group-hover:opacity-100 p-1 rounded transition-opacity shrink-0 self-start"
+                  style={{ color: 'var(--color-error)' }}
+                  title="删除记忆"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+        {searchResults && (
+          <button
+            onClick={() => { setSearchResults(null); setMemorySearch('') }}
+            className="mt-2 text-[12px] font-medium"
+            style={{ color: 'var(--color-primary)' }}
+          >
+            清除搜索，显示最近记忆
+          </button>
+        )}
+      </div>
+
+      {/* ── Section 6: Corrections ── */}
+      {corrections.length > 0 && (
+        <div className="p-5 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
+          <div className="flex items-center gap-2 mb-1">
+            <ShieldCheck size={18} className="text-[var(--color-primary)]" />
+            <h2 className="font-semibold text-[14px]">学到的规矩</h2>
+            <span className="text-[11px] px-1.5 py-0.5 rounded-full" style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-muted)' }}>
+              {corrections.length} 条
+            </span>
+          </div>
+          <p className="text-[12px] text-[var(--color-text-muted)] mb-3 ml-[26px]">
+            从你的反馈中学到的行为准则
+          </p>
+          <div className="space-y-2">
+            {corrections.map((c, i) => (
+              <div key={i} className="p-2.5 rounded-lg" style={{ background: 'var(--color-bg-subtle)' }}>
+                <div className="text-[12px] font-medium mb-1" style={{ color: 'var(--color-text)' }}>
+                  当 {c.trigger}
+                </div>
+                <div className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+                  ✅ {c.correct_behavior}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}

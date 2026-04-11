@@ -141,16 +141,28 @@ pub async fn chat_stream_start(
     {
         let msg_lower = message.to_lowercase();
         let buddy_name = state.config.read().await.buddy.name.to_lowercase();
-        let is_buddy_mention = msg_lower.contains(&format!("@{}", buddy_name))
-            || msg_lower.contains("@小精灵")
-            || msg_lower.contains("@buddy")
-            || msg_lower.contains("你来帮我做决定")
-            || msg_lower.contains("你来决定")
-            || msg_lower.contains("交给你了")
-            || msg_lower.contains("托管模式");
-        if is_buddy_mention {
-            crate::engine::buddy_delegate::enable_session_hosted();
-            log::info!("Buddy hosted mode activated by user message");
+
+        // Disable triggers (check first — higher priority)
+        let is_disable = msg_lower.contains("我来决定")
+            || msg_lower.contains("取消托管")
+            || msg_lower.contains("不用你管")
+            || msg_lower.contains("我自己来");
+
+        if is_disable {
+            crate::engine::buddy_delegate::disable_session_hosted();
+            log::info!("Buddy hosted mode deactivated by user message");
+        } else {
+            let is_enable = msg_lower.contains(&format!("@{}", buddy_name))
+                || msg_lower.contains("@小精灵")
+                || msg_lower.contains("@buddy")
+                || msg_lower.contains("你来帮我做决定")
+                || msg_lower.contains("你来决定")
+                || msg_lower.contains("交给你了")
+                || msg_lower.contains("托管模式");
+            if is_enable {
+                crate::engine::buddy_delegate::enable_session_hosted();
+                log::info!("Buddy hosted mode activated by user message");
+            }
         }
     }
 

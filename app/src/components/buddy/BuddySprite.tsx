@@ -1,15 +1,16 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   PARTICLE_EMOJI,
-  COMPANION_COLOR,
   getSpeciesConfig,
   getSpeciesLabel,
 } from '../../utils/buddy'
 import { useBuddyStore } from '../../stores/buddyStore'
 import { toggleBuddyHosted, getBuddyHosted } from '../../api/buddy'
+import { getMorningGreeting } from '../../api/system'
 import { BuddyBubble } from './BuddyBubble'
 import { BuddyStatsCard } from './BuddyStatsCard'
 import { BuddyHatchAnimation } from './BuddyHatchAnimation'
+import { OrbCore } from './OrbCore'
 
 const IDLE_ANIMATIONS: Record<string, string> = {
   breathe: 'buddy-breathe 3s ease-in-out infinite',
@@ -17,69 +18,6 @@ const IDLE_ANIMATIONS: Record<string, string> = {
   float: 'buddy-breathe 4s ease-in-out infinite',
   sway: 'buddy-fidget 4s ease-in-out infinite',
   pulse: 'buddy-breathe 2s ease-in-out infinite',
-}
-
-/** Renders the CSS light-orb sprite for a companion */
-const OrbVisual: React.FC<{ from: string; to: string; css: string; glow: number; size: number; shiny?: boolean }> = ({
-  from, to, css, glow, size, shiny,
-}) => {
-  // Parse shape style from css string
-  const shapeStyle: React.CSSProperties = {}
-  for (const rule of css.split(';')) {
-    const [prop, val] = rule.split(':').map(s => s.trim())
-    if (prop && val) {
-      const camel = prop.replace(/-([a-z])/g, (_, c) => c.toUpperCase())
-      ;(shapeStyle as any)[camel] = val
-    }
-  }
-
-  return (
-    <div className="relative" style={{ width: size, height: size }}>
-      {/* Outer glow */}
-      <div
-        className="absolute inset-0"
-        style={{
-          ...shapeStyle,
-          background: `radial-gradient(circle, ${from}40 0%, transparent 70%)`,
-          transform: `scale(${1 + glow / size})`,
-          filter: `blur(${glow * 0.4}px)`,
-        }}
-      />
-      {/* Core orb */}
-      <div
-        className="absolute inset-0"
-        style={{
-          ...shapeStyle,
-          background: `radial-gradient(circle at 35% 35%, ${from}, ${to})`,
-          boxShadow: `0 0 ${glow}px ${from}80, inset 0 0 ${glow * 0.5}px ${from}60`,
-        }}
-      />
-      {/* Inner highlight */}
-      <div
-        className="absolute"
-        style={{
-          ...shapeStyle,
-          width: size * 0.35,
-          height: size * 0.25,
-          top: size * 0.18,
-          left: size * 0.22,
-          background: `radial-gradient(ellipse, rgba(255,255,255,0.6) 0%, transparent 80%)`,
-          filter: 'blur(2px)',
-        }}
-      />
-      {/* Shiny sparkle */}
-      {shiny && (
-        <div
-          className="absolute text-xs"
-          style={{
-            top: -2, right: -2,
-            animation: 'buddy-sparkle 2s ease-in-out infinite',
-            textShadow: `0 0 6px ${from}`,
-          }}
-        >✨</div>
-      )}
-    </div>
-  )
 }
 
 const BUDDY_POS_KEY = 'buddy-sprite-position'
@@ -104,7 +42,7 @@ function clampPosition(x: number, y: number): { x: number; y: number } {
 export const BuddySprite: React.FC = () => {
   const {
     companion, bones, config, loaded, loadBuddy,
-    bubbleText, bubbleVisible, petting, pet,
+    bubbleText, bubbleVisible, petting, pet, showBubble,
     showStats, setShowStats, showHatchAnimation,
   } = useBuddyStore()
 
@@ -180,11 +118,36 @@ export const BuddySprite: React.FC = () => {
   useEffect(() => { if (!loaded) loadBuddy() }, [loaded, loadBuddy])
   useEffect(() => { getBuddyHosted().then(setHostedMode).catch(() => {}) }, [])
 
-  // Random fidget
+  // Proactive greeting on launch
+  const greetedRef = useRef(false)
+  useEffect(() => {
+    if (!companion || config?.muted || greetedRef.current) return
+    greetedRef.current = true
+    const timer = setTimeout(() => {
+      getMorningGreeting().then(greeting => {
+        if (greeting) {
+          showBubble(greeting)
+        } else {
+          const h = new Date().getHours()
+          const timeGreet = h < 6 ? '夜深了，注意休息~' : h < 12 ? '早上好！今天也一起加油吧' : h < 18 ? '下午好~' : '晚上好！'
+          showBubble(timeGreet)
+        }
+      }).catch(() => {
+        const h = new Date().getHours()
+        const timeGreet = h < 6 ? '夜深了~' : h < 12 ? '早上好！' : h < 18 ? '下午好~' : '晚上好！'
+        showBubble(timeGreet)
+      })
+    }, 2000) // 2s delay for smooth entrance
+    return () => clearTimeout(timer)
+  }, [companion, config?.muted])
+
+  // Random fidget — MISCHIEF stat increases frequency
   useEffect(() => {
     if (!companion || config?.muted) return
+    const mischief = companion.stats.MISCHIEF ?? 50
+    const fidgetChance = 0.08 + (mischief / 100) * 0.2 // 8%~28% based on mischief
     const interval = setInterval(() => {
-      if (Math.random() < 0.15) {
+      if (Math.random() < fidgetChance) {
         setFidget(true)
         setTimeout(() => setFidget(false), 600)
       }
@@ -301,7 +264,7 @@ export const BuddySprite: React.FC = () => {
           onContextMenu={handleContext}
           title={`${companion.name} · 右键查看属性`}
         >
-          <OrbVisual
+          <OrbCore
             from={companion.palette.from}
             to={companion.palette.to}
             css={speciesConfig.css}

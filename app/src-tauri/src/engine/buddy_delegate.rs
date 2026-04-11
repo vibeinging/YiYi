@@ -70,10 +70,6 @@ pub enum DelegateContext {
     TaskDecision,
     /// Review a skill improvement before applying
     SkillReview,
-    /// Evaluate task quality ("Is this result good enough?")
-    QualityJudgment,
-    /// Respond on behalf of the user (bot messages, etc.)
-    UserProxy,
 }
 
 /// Delegate a decision to the buddy (user's digital twin).
@@ -104,14 +100,6 @@ pub async fn delegate(
         DelegateContext::SkillReview => {
             "你正在审核一个 AI 技能的改进。判断这个改动是否符合用户的使用习惯和质量标准。\
              回答 approve（批准）或 reject（拒绝）并说明理由。"
-        }
-        DelegateContext::QualityJudgment => {
-            "你正在评价一个任务的执行结果。根据用户的标准判断质量是否合格。\
-             回答 pass（合格）或 fail（不合格）并说明原因。"
-        }
-        DelegateContext::UserProxy => {
-            "你正在代替用户回复消息。用用户的语气和风格回复，要自然，像用户本人在说话。\
-             不要暴露你是 AI，也不要说「作为用户的代理」之类的话。"
         }
     };
 

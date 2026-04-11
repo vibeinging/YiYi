@@ -524,6 +524,11 @@ pub fn run() {
             commands::buddy::buddy_observe,
             commands::buddy::toggle_buddy_hosted,
             commands::buddy::get_buddy_hosted,
+            commands::buddy::get_memory_stats,
+            commands::buddy::list_recent_memories,
+            commands::buddy::search_memories,
+            commands::buddy::delete_memory,
+            commands::buddy::list_corrections,
             // Voice Control
             commands::voice::start_voice_session,
             commands::voice::stop_voice_session,

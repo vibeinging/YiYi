@@ -1,11 +1,9 @@
 import React from 'react'
 import { X, EyeOff, Eye } from 'lucide-react'
 import {
-  COMPANION_COLOR,
   STAT_LABELS,
   STAT_NAMES,
   getSpeciesLabel,
-  getSpeciesConfig,
   type Companion,
 } from '../../utils/buddy'
 import { useBuddyStore } from '../../stores/buddyStore'

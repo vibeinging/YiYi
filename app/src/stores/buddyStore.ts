@@ -56,7 +56,7 @@ interface BuddyState {
   dismissHatch: () => void
 }
 
-const OBSERVE_COOLDOWN_MS = 30_000
+const BASE_OBSERVE_COOLDOWN_MS = 30_000
 const BUBBLE_DURATION_MS = 10_000
 
 let bubbleTimer: ReturnType<typeof setTimeout> | null = null
@@ -152,7 +152,10 @@ export const useBuddyStore = create<BuddyState>((set, get) => ({
     if (bubbleVisible) return
 
     const now = Date.now()
-    if (now - lastObserveAt < OBSERVE_COOLDOWN_MS) return
+    // ENERGY stat reduces cooldown: 100 energy → 15s, 0 energy → 40s
+    const energy = companion.stats.ENERGY ?? 50
+    const cooldown = BASE_OBSERVE_COOLDOWN_MS * (1.3 - energy / 100 * 0.8)
+    if (now - lastObserveAt < cooldown) return
 
     set({ lastObserveAt: now })
 
@@ -178,11 +181,13 @@ export const useBuddyStore = create<BuddyState>((set, get) => ({
     // 2. Ask LLM for bubble reaction (async, non-blocking)
     try {
       const speciesLabel = getSpeciesLabel(bones.species)
+      const currentCompanion = get().companion ?? companion
       const reaction = await buddyObserve(
         recentMessages,
         aiName,
         speciesLabel,
-        companion.personality,
+        currentCompanion.personality,
+        currentCompanion.stats,
       )
       if (reaction) {
         get().showBubble(reaction)
@@ -217,8 +222,23 @@ export const useBuddyStore = create<BuddyState>((set, get) => ({
 
     const { companion } = get()
     if (companion) {
-      const reactions = ['嘿嘿~', '再摸摸！', '好舒服~', '❤️', '喵~', '嗯哼~', '(´▽`ʃ♡ƪ)']
-      const text = reactions[Math.floor(Math.random() * reactions.length)]
+      // Pick reaction pool based on dominant stat
+      const s = companion.stats
+      const warmReactions = ['好舒服~', '❤️', '嗯…谢谢你', '(´▽`ʃ♡ƪ)', '有你真好']
+      const sassReactions = ['够了够了！', '手拿开！', '哼，别以为这样我就开心了', '...还行吧', '你手好重']
+      const mischiefReactions = ['嘿嘿~', '再来再来！', '挠挠这里~', '嘻嘻(ᐛ)', '接下来换我摸你？']
+      const energyReactions = ['再摸摸！', '好耶！！', '摸摸=充电⚡', '元气满满！', '(ノ>ω<)ノ']
+      const witReactions = ['你知道吗，摸头能促进多巴胺分泌', '喵~', '据统计这是今天第…算了', '嗯哼~']
+
+      let pool: string[]
+      const max = Math.max(s.WARMTH, s.SASS, s.MISCHIEF, s.ENERGY, s.WIT)
+      if (max === s.SASS && s.SASS > 40) pool = sassReactions
+      else if (max === s.MISCHIEF && s.MISCHIEF > 40) pool = mischiefReactions
+      else if (max === s.ENERGY && s.ENERGY > 40) pool = energyReactions
+      else if (max === s.WIT && s.WIT > 40) pool = witReactions
+      else pool = warmReactions
+
+      const text = pool[Math.floor(Math.random() * pool.length)]
       get().showBubble(text)
     }
   },

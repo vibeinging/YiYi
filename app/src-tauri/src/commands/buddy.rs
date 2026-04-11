@@ -80,6 +80,7 @@ pub async fn buddy_observe(
     ai_name: String,
     species_label: String,
     reaction_style: String,
+    stats: std::collections::HashMap<String, i64>,
 ) -> Result<Option<String>, String> {
     let llm_config = resolve_llm(&state)
         .await
@@ -87,9 +88,22 @@ pub async fn buddy_observe(
 
     let context = recent_messages.join("\n");
 
+    // Build personality traits from stats
+    let energy = stats.get("ENERGY").copied().unwrap_or(50);
+    let warmth = stats.get("WARMTH").copied().unwrap_or(50);
+    let mischief = stats.get("MISCHIEF").copied().unwrap_or(50);
+    let wit = stats.get("WIT").copied().unwrap_or(50);
+    let sass = stats.get("SASS").copied().unwrap_or(50);
+
+    let stats_desc = format!(
+        "你的性格属性：活力{energy} 温柔{warmth} 调皮{mischief} 聪慧{wit} 犀利{sass}（满分100）。\n\
+         属性越高，对应的表达倾向越强。比如犀利高就爱吐槽，温柔高就更温暖体贴，调皮高就更搞怪。"
+    );
+
     let system_prompt = format!(
         "你是{name}，用户的 AI 伴侣。你的化身形象是一只小{species}。\n\
-         你的情绪表达风格：{style}\n\n\
+         你的情绪表达风格：{style}\n\
+         {stats_desc}\n\n\
          主对话窗口里你在认真回答问题，但你的小精灵化身可以表达更感性、更随意的反应。\n\
          这些反应出现在你的化身旁边的语音泡泡里。\n\n\
          规则：\n\
@@ -103,6 +117,7 @@ pub async fn buddy_observe(
         name = ai_name,
         species = species_label,
         style = reaction_style,
+        stats_desc = stats_desc,
     );
 
     let messages = vec![
@@ -163,4 +178,112 @@ fn extract_json(text: &str) -> Option<&str> {
     } else {
         None
     }
+}
+
+// ── Memory browsing commands ─────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+pub struct MemoryEntry {
+    pub id: String,
+    pub content: String,
+    pub categories: Vec<String>,
+    pub importance: f64,
+    pub created_at: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct MemoryStats {
+    pub total: usize,
+    pub by_category: std::collections::HashMap<String, usize>,
+}
+
+/// Get memory statistics.
+#[tauri::command]
+pub async fn get_memory_stats() -> Result<MemoryStats, String> {
+    let store = crate::engine::tools::get_memme_store()
+        .ok_or("记忆引擎未初始化")?;
+
+    let all = store.list_traces(
+        memme_core::ListOptions::new(crate::engine::tools::MEMME_USER_ID).limit(10000),
+    ).map_err(|e| format!("查询失败: {}", e))?;
+
+    let mut by_category: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for m in &all {
+        let cat = m.categories.as_ref()
+            .and_then(|c| c.first().cloned())
+            .unwrap_or_else(|| "uncategorized".into());
+        *by_category.entry(cat).or_insert(0) += 1;
+    }
+
+    Ok(MemoryStats { total: all.len(), by_category })
+}
+
+/// List recent memories.
+#[tauri::command]
+pub async fn list_recent_memories(limit: Option<usize>) -> Result<Vec<MemoryEntry>, String> {
+    let store = crate::engine::tools::get_memme_store()
+        .ok_or("记忆引擎未初始化")?;
+
+    let rows = store.list_traces(
+        memme_core::ListOptions::new(crate::engine::tools::MEMME_USER_ID)
+            .limit(limit.unwrap_or(20)),
+    ).map_err(|e| format!("查询失败: {}", e))?;
+
+    Ok(rows.iter().map(|m| MemoryEntry {
+        id: m.id.clone(),
+        content: m.content.clone(),
+        categories: m.categories.clone().unwrap_or_default(),
+        importance: m.importance.unwrap_or(0.0) as f64,
+        created_at: m.created_at.clone(),
+    }).collect())
+}
+
+/// Search memories by query.
+#[tauri::command]
+pub async fn search_memories(query: String, limit: Option<usize>) -> Result<Vec<MemoryEntry>, String> {
+    if query.trim().is_empty() {
+        return Ok(vec![]);
+    }
+
+    let store = crate::engine::tools::get_memme_store()
+        .ok_or("记忆引擎未初始化")?;
+
+    let results = store.search(
+        &query,
+        memme_core::SearchOptions::new(crate::engine::tools::MEMME_USER_ID)
+            .limit(limit.unwrap_or(10))
+            .keyword_search(true),
+    ).map_err(|e| format!("搜索失败: {}", e))?;
+
+    Ok(results.iter().map(|m| MemoryEntry {
+        id: m.id.clone(),
+        content: m.content.clone(),
+        categories: m.categories.clone().unwrap_or_default(),
+        importance: m.importance.unwrap_or(0.0) as f64,
+        created_at: m.created_at.clone(),
+    }).collect())
+}
+
+/// Delete a memory by id.
+#[tauri::command]
+pub async fn delete_memory(id: String) -> Result<(), String> {
+    let store = crate::engine::tools::get_memme_store()
+        .ok_or("记忆引擎未初始化")?;
+    store.delete_trace(&id).map_err(|e| format!("删除失败: {}", e))
+}
+
+/// List learned behavioral corrections.
+#[tauri::command]
+pub async fn list_corrections(
+    state: State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let corrections = state.db.get_all_active_corrections();
+    Ok(corrections.iter().map(|(trigger, wrong, correct, conf)| {
+        serde_json::json!({
+            "trigger": trigger,
+            "wrong_behavior": wrong,
+            "correct_behavior": correct,
+            "confidence": conf,
+        })
+    }).collect())
 }

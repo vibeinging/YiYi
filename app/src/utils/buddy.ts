@@ -84,8 +84,6 @@ export type Companion = CompanionBones & CompanionSoul & { hatchedAt: number }
 
 // ─── Display Constants ───
 
-export const COMPANION_COLOR = 'var(--color-primary)'
-
 export const PARTICLE_EMOJI: Record<Particle, string[]> = {
   none: [],
   stars: ['✦', '⋆', '·'],
@@ -225,7 +223,11 @@ export function getCompanion(
   soul: CompanionSoul & { hatchedAt: number },
 ): Companion {
   const { bones } = roll(userId)
-  return { ...soul, ...bones }
+  // If personality matches a preset, use biased stats instead of random
+  const biasedStats = soul.personality
+    ? rollStatsBiased(userId, soul.personality)
+    : bones.stats
+  return { ...soul, ...bones, stats: biasedStats }
 }
 
 // ─── Helpers ───
