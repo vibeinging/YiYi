@@ -9,6 +9,8 @@ export interface BuddyConfig {
   stats_delta: Record<string, number>
   interaction_count: number
   hosted_mode: boolean
+  pet_count: number
+  delegation_count: number
 }
 
 export async function getBuddyConfig(): Promise<BuddyConfig> {
@@ -76,6 +78,27 @@ export interface CorrectionEntry {
 
 export async function listCorrections(): Promise<CorrectionEntry[]> {
   return await invoke<CorrectionEntry[]>('list_corrections')
+}
+
+// ── Meditation sessions ──
+
+export interface MeditationSession {
+  id: string
+  started_at: number
+  finished_at: number | null
+  status: string
+  sessions_reviewed: number
+  memories_updated: number
+  principles_changed: number
+  memories_archived: number
+  journal: string | null
+  error: string | null
+  tomorrow_intentions: string | null
+  growth_synthesis: string | null
+}
+
+export async function listMeditationSessions(limit?: number): Promise<MeditationSession[]> {
+  return await invoke<MeditationSession[]>('list_meditation_sessions', { limit })
 }
 
 // ── Observe ──

@@ -16,14 +16,16 @@ import {
   Trash2,
   BookOpen,
   ShieldCheck,
+  Notebook,
+  ChevronDown,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useBuddyStore } from '../stores/buddyStore'
 import {
   toggleBuddyHosted, getBuddyHosted,
   getMemoryStats, listRecentMemories, searchMemories, deleteMemory,
-  listCorrections,
-  type MemoryEntry, type MemoryStats, type CorrectionEntry,
+  listCorrections, listMeditationSessions,
+  type MemoryEntry, type MemoryStats, type CorrectionEntry, type MeditationSession,
 } from '../api/buddy'
 import { getMemmeConfig, saveMemmeConfig, type MemmeConfig } from '../api/system'
 import { OrbCore } from './buddy/OrbCore'
@@ -73,12 +75,17 @@ export function BuddyPanel() {
   // Corrections
   const [corrections, setCorrections] = useState<CorrectionEntry[]>([])
 
+  // Meditation diary
+  const [meditationSessions, setMeditationSessions] = useState<MeditationSession[]>([])
+  const [expandedJournal, setExpandedJournal] = useState<string | null>(null)
+
   // ── Load on mount ──
   useEffect(() => {
     getBuddyHosted().then(setHostedMode).catch(() => {})
     getMemoryStats().then(setMemoryStats).catch(() => {})
     listRecentMemories(15).then(setRecentMemories).catch(() => {})
     listCorrections().then(setCorrections).catch(() => {})
+    listMeditationSessions(10).then(setMeditationSessions).catch(() => {})
 
     invoke('get_meditation_config').then((cfg: any) => {
       if (cfg) {
@@ -210,11 +217,26 @@ export function BuddyPanel() {
               ))}
             </div>
 
-            {companion.hatchedAt > 0 && (
-              <div className="text-[11px] mt-3" style={{ color: 'var(--color-text-muted)' }}>
-                孵化于 {new Date(companion.hatchedAt).toLocaleDateString('zh-CN')}
-              </div>
-            )}
+            {/* Interaction stats + hatch date */}
+            <div className="flex items-center gap-3 mt-3 text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+              {companion.hatchedAt > 0 && (
+                <span>孵化于 {new Date(companion.hatchedAt).toLocaleDateString('zh-CN')}</span>
+              )}
+              {config && (
+                <>
+                  <span>·</span>
+                  <span>摸头 {config.pet_count ?? 0} 次</span>
+                  <span>·</span>
+                  <span>对话 {config.interaction_count} 次</span>
+                  {(config.delegation_count ?? 0) > 0 && (
+                    <>
+                      <span>·</span>
+                      <span>决策 {config.delegation_count} 次</span>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
           </>
         )}
       </div>
@@ -355,6 +377,108 @@ export function BuddyPanel() {
           </button>
         </div>
       </div>
+
+      {/* ── Section 3.5: Meditation Diary ── */}
+      {meditationSessions.length > 0 && (
+        <div className="p-5 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
+          <div className="flex items-center gap-2 mb-1">
+            <Notebook size={18} className="text-[var(--color-primary)]" />
+            <h2 className="font-semibold text-[14px]">冥想日记</h2>
+            <span className="text-[11px] px-1.5 py-0.5 rounded-full" style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-muted)' }}>
+              {meditationSessions.length} 次
+            </span>
+          </div>
+          <p className="text-[12px] text-[var(--color-text-muted)] mb-3 ml-[26px]">
+            小精灵每次冥想后的反思日记
+          </p>
+
+          <div className="space-y-2 max-h-[400px] overflow-y-auto">
+            {meditationSessions.map(s => {
+              const date = new Date(s.started_at).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
+              const time = new Date(s.started_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+              const duration = s.finished_at
+                ? Math.round((s.finished_at - s.started_at) / 60000)
+                : 0
+              const isExpanded = expandedJournal === s.id
+              const ok = s.status === 'completed'
+
+              return (
+                <div key={s.id} className="rounded-lg overflow-hidden" style={{ border: '1px solid var(--color-border)' }}>
+                  {/* Header row */}
+                  <button
+                    className="w-full flex items-center gap-3 p-3 text-left transition-colors hover:bg-[var(--color-bg-subtle)]"
+                    onClick={() => setExpandedJournal(isExpanded ? null : s.id)}
+                  >
+                    <div className="shrink-0 w-2 h-2 rounded-full" style={{ background: ok ? 'var(--color-success)' : 'var(--color-error)' }} />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[13px] font-medium" style={{ color: 'var(--color-text)' }}>{date} {time}</span>
+                        {duration > 0 && (
+                          <span className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>{duration}min</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-muted)' }}>
+                          记忆 +{s.memories_updated}
+                        </span>
+                        {s.principles_changed > 0 && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-muted)' }}>
+                            原则 +{s.principles_changed}
+                          </span>
+                        )}
+                        {s.memories_archived > 0 && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-muted)' }}>
+                            归档 {s.memories_archived}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <ChevronDown
+                      size={14}
+                      className="shrink-0 transition-transform"
+                      style={{
+                        color: 'var(--color-text-muted)',
+                        transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                      }}
+                    />
+                  </button>
+
+                  {/* Expandable journal */}
+                  {isExpanded && (
+                    <div className="px-3 pb-3 space-y-2">
+                      {s.journal && (
+                        <div
+                          className="text-[12px] leading-relaxed whitespace-pre-wrap p-3 rounded-lg"
+                          style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-secondary)' }}
+                        >
+                          {s.journal}
+                        </div>
+                      )}
+                      {s.tomorrow_intentions && (
+                        <div className="text-[12px] p-2.5 rounded-lg" style={{ background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.12)' }}>
+                          <div className="text-[11px] font-medium mb-1" style={{ color: 'var(--color-primary)' }}>明日意图</div>
+                          <div style={{ color: 'var(--color-text-secondary)' }}>{s.tomorrow_intentions}</div>
+                        </div>
+                      )}
+                      {s.growth_synthesis && (
+                        <div className="text-[12px] p-2.5 rounded-lg" style={{ background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.12)' }}>
+                          <div className="text-[11px] font-medium mb-1" style={{ color: '#34D399' }}>成长洞察</div>
+                          <div style={{ color: 'var(--color-text-secondary)' }}>{s.growth_synthesis}</div>
+                        </div>
+                      )}
+                      {!ok && s.error && (
+                        <div className="text-[12px] p-2.5 rounded-lg" style={{ background: 'rgba(239,68,68,0.06)', color: 'var(--color-error)' }}>
+                          {s.error}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* ── Section 4: Memory Engine ── */}
       <div className="p-5 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">

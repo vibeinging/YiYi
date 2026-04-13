@@ -13,8 +13,11 @@ import {
   mergeStats,
   analyzeGrowth,
   applyGrowth,
+  STAT_LABELS,
+  STAT_NAMES,
   type Companion,
   type CompanionBones,
+  type StatName,
 } from '../utils/buddy'
 
 interface BuddyState {
@@ -57,6 +60,30 @@ interface BuddyState {
 }
 
 const BASE_OBSERVE_COOLDOWN_MS = 30_000
+const MILESTONES = [25, 50, 75] as const
+const MILESTONE_MESSAGES: Record<number, Record<StatName, string>> = {
+  25: {
+    ENERGY: '感觉自己变得更有活力了！',
+    WARMTH: '我好像变温柔了一点~',
+    MISCHIEF: '嘿嘿，调皮值在涨！',
+    WIT: '知识在积累中...聪慧+1！',
+    SASS: '犀利的嘴巴在成长！',
+  },
+  50: {
+    ENERGY: '活力值过半了！！感觉可以飞！',
+    WARMTH: '温柔值50了…是被你治愈的',
+    MISCHIEF: '调皮大师进化中(ᐛ)و',
+    WIT: '聪慧值过半！博学多才就是我！',
+    SASS: '犀利值50…毒舌担当确认！',
+  },
+  75: {
+    ENERGY: '活力爆棚！！！燃起来了🔥',
+    WARMTH: '温柔满溢…世界因你而温暖❤️',
+    MISCHIEF: '大调皮蛋已上线！谁也管不住我！',
+    WIT: '智者模式开启！什么都难不倒我！',
+    SASS: '毒舌王者！吐槽之力满格！',
+  },
+}
 const BUBBLE_DURATION_MS = 10_000
 
 let bubbleTimer: ReturnType<typeof setTimeout> | null = null
@@ -173,9 +200,29 @@ export const useBuddyStore = create<BuddyState>((set, get) => ({
         ...companion,
         stats: mergeStats(bones.stats, newDelta),
       }
+      // Check milestones before updating (compare old vs new)
+      const oldStats = companion.stats
+      const newStats = updatedCompanion.stats
+      let milestoneMsg: string | null = null
+      for (const stat of STAT_NAMES) {
+        for (const threshold of MILESTONES) {
+          if (oldStats[stat] < threshold && newStats[stat] >= threshold) {
+            milestoneMsg = `【${STAT_LABELS[stat]}达到${threshold}】${MILESTONE_MESSAGES[threshold][stat]}`
+            break
+          }
+        }
+        if (milestoneMsg) break
+      }
+
       set({ config: updatedConfig, companion: updatedCompanion })
       // Persist in background (fire-and-forget)
       saveBuddyConfig(updatedConfig).catch(() => {})
+
+      // Show milestone celebration (takes priority over LLM reaction)
+      if (milestoneMsg) {
+        get().showBubble(milestoneMsg)
+        return // Skip LLM observe for this round
+      }
     }
 
     // 2. Ask LLM for bubble reaction (async, non-blocking)
@@ -219,6 +266,14 @@ export const useBuddyStore = create<BuddyState>((set, get) => ({
     petTimer = setTimeout(() => {
       set({ petting: false })
     }, 2500)
+
+    // Increment pet counter
+    const { config } = get()
+    if (config) {
+      const updated = { ...config, pet_count: (config.pet_count ?? 0) + 1 }
+      set({ config: updated })
+      saveBuddyConfig(updated).catch(() => {})
+    }
 
     const { companion } = get()
     if (companion) {

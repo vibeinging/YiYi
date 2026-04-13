@@ -287,3 +287,12 @@ pub async fn list_corrections(
         })
     }).collect())
 }
+
+/// List recent meditation sessions (for diary display).
+#[tauri::command]
+pub async fn list_meditation_sessions(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<crate::engine::db::MeditationSession>, String> {
+    Ok(state.db.list_meditation_sessions(limit.unwrap_or(10)))
+}

@@ -296,6 +296,12 @@ pub struct BuddyConfig {
     /// Hosted mode: buddy auto-handles decisions, permissions, and task direction.
     #[serde(default)]
     pub hosted_mode: bool,
+    /// How many times the user has petted the buddy.
+    #[serde(default)]
+    pub pet_count: u32,
+    /// How many times the buddy has made a delegation decision.
+    #[serde(default)]
+    pub delegation_count: u32,
 }
 
 impl CliProviderConfig {

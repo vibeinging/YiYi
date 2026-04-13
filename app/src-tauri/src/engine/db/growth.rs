@@ -449,6 +449,41 @@ impl super::Database {
         .ok()?
     }
 
+    /// List recent meditation sessions (completed or failed, not running).
+    pub fn list_meditation_sessions(&self, limit: usize) -> Vec<MeditationSession> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = match conn.prepare(
+            "SELECT id, started_at, finished_at, status, sessions_reviewed,
+                    memories_updated, principles_changed, memories_archived, journal, error,
+                    depth, phases_completed, tomorrow_intentions, growth_synthesis
+             FROM meditation_sessions WHERE status != 'running'
+             ORDER BY started_at DESC LIMIT ?1",
+        ) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+        stmt.query_map(params![limit as i64], |row| {
+            Ok(MeditationSession {
+                id: row.get(0)?,
+                started_at: row.get(1)?,
+                finished_at: row.get(2)?,
+                status: row.get(3)?,
+                sessions_reviewed: row.get(4)?,
+                memories_updated: row.get(5)?,
+                principles_changed: row.get(6)?,
+                memories_archived: row.get(7)?,
+                journal: row.get(8)?,
+                error: row.get(9)?,
+                depth: row.get(10).ok().flatten(),
+                phases_completed: row.get(11).ok().flatten(),
+                tomorrow_intentions: row.get(12).ok().flatten(),
+                growth_synthesis: row.get(13).ok().flatten(),
+            })
+        })
+        .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+    }
+
     /// Get today's chat messages for meditation review: (session_id, role, content)
     pub fn get_today_sessions_messages(&self) -> Vec<(String, String, String)> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());

@@ -154,7 +154,21 @@ pub async fn delegate(
         .unwrap_or("")
         .to_string();
 
-    parse_delegate_response(&text)
+    let result = parse_delegate_response(&text);
+
+    // Increment delegation counter
+    if result.is_some() {
+        if let Some(handle) = crate::engine::tools::APP_HANDLE.get() {
+            use tauri::Manager;
+            let state: tauri::State<'_, crate::state::AppState> = handle.state();
+            if let Ok(mut cfg) = state.inner().config.try_write() {
+                cfg.buddy.delegation_count += 1;
+                let _ = cfg.save(&state.inner().working_dir);
+            }
+        }
+    }
+
+    result
 }
 
 /// Quick delegation for yes/no questions. Returns true/false.

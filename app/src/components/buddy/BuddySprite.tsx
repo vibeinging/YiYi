@@ -4,7 +4,9 @@ import {
   getSpeciesConfig,
   getSpeciesLabel,
 } from '../../utils/buddy'
+import { listen } from '@tauri-apps/api/event'
 import { useBuddyStore } from '../../stores/buddyStore'
+import { useChatStreamStore } from '../../stores/chatStreamStore'
 import { toggleBuddyHosted, getBuddyHosted } from '../../api/buddy'
 import { getMorningGreeting } from '../../api/system'
 import { BuddyBubble } from './BuddyBubble'
@@ -45,6 +47,9 @@ export const BuddySprite: React.FC = () => {
     bubbleText, bubbleVisible, petting, pet, showBubble,
     showStats, setShowStats, showHatchAnimation,
   } = useBuddyStore()
+
+  const isWorking = useChatStreamStore(s => s.loading)
+  const hasError = useChatStreamStore(s => !!s.errorMessage)
 
   const [fidget, setFidget] = useState(false)
   const [particles, setParticles] = useState<{ id: number; x: number; y: number; emoji: string }[]>([])
@@ -141,6 +146,33 @@ export const BuddySprite: React.FC = () => {
     return () => clearTimeout(timer)
   }, [companion, config?.muted])
 
+  // Event-driven notifications
+  useEffect(() => {
+    if (!companion || config?.muted) return
+    const unlisteners: (() => void)[] = []
+    const bubble = useBuddyStore.getState().showBubble
+
+    // Bot received a message
+    listen<{ platform?: string; sender?: string }>('bot://message', (e) => {
+      const p = e.payload
+      const who = p.sender || p.platform || '某人'
+      bubble(`${who} 发来了消息`)
+    }).then(u => unlisteners.push(u))
+
+    // Cron job completed
+    listen<{ name?: string }>('cronjob://result', (e) => {
+      const name = e.payload?.name || '定时任务'
+      bubble(`${name} 执行完成！`)
+    }).then(u => unlisteners.push(u))
+
+    // Growth suggestion (skill improvement)
+    listen('growth://persist_suggestion', () => {
+      bubble('发现了可以改进的技能！')
+    }).then(u => unlisteners.push(u))
+
+    return () => { unlisteners.forEach(u => u()) }
+  }, [companion, config?.muted])
+
   // Random fidget — MISCHIEF stat increases frequency
   useEffect(() => {
     if (!companion || config?.muted) return
@@ -180,17 +212,36 @@ export const BuddySprite: React.FC = () => {
   const speciesConfig = getSpeciesConfig(companion.species)
   const scale = companion.sizeScale
 
+  // Determine visual mood
+  type BuddyMood = 'muted' | 'petting' | 'talking' | 'working' | 'error' | 'fidget' | 'idle'
+  let mood: BuddyMood = 'idle'
+  if (muted) mood = 'muted'
+  else if (petting) mood = 'petting'
+  else if (bubbleVisible) mood = 'talking'
+  else if (hasError) mood = 'error'
+  else if (isWorking) mood = 'working'
+  else if (fidget) mood = 'fidget'
+
   let animStyle: React.CSSProperties
-  if (muted) {
-    animStyle = {}
-  } else if (petting) {
-    animStyle = { animation: 'buddy-fidget 0.3s ease-in-out 3' }
-  } else if (bubbleVisible) {
-    animStyle = { animation: 'buddy-bounce 1.2s ease-in-out infinite' }
-  } else if (fidget) {
-    animStyle = { animation: 'buddy-fidget 0.6s ease-in-out 1' }
-  } else {
-    animStyle = { animation: IDLE_ANIMATIONS[bones.idleStyle] || IDLE_ANIMATIONS.breathe }
+  let glowOverride: number | undefined
+  let opacityOverride: number | undefined
+  let filterOverride: string | undefined
+
+  switch (mood) {
+    case 'muted':
+      animStyle = {}; opacityOverride = 0.3; filterOverride = 'grayscale(0.6) brightness(0.5)'; break
+    case 'petting':
+      animStyle = { animation: 'buddy-fidget 0.3s ease-in-out 3' }; break
+    case 'talking':
+      animStyle = { animation: 'buddy-bounce 1.2s ease-in-out infinite' }; break
+    case 'working':
+      animStyle = { animation: 'buddy-breathe 1.2s ease-in-out infinite' }; glowOverride = speciesConfig.glowSpread * 1.5; break
+    case 'error':
+      animStyle = { animation: 'buddy-breathe 4s ease-in-out infinite' }; opacityOverride = 0.5; filterOverride = 'saturate(0.4)'; break
+    case 'fidget':
+      animStyle = { animation: 'buddy-fidget 0.6s ease-in-out 1' }; break
+    default:
+      animStyle = { animation: IDLE_ANIMATIONS[bones.idleStyle] || IDLE_ANIMATIONS.breathe }
   }
 
   // Bubble/card should flip to right side when sprite is on the left half
@@ -257,8 +308,8 @@ export const BuddySprite: React.FC = () => {
             ...animStyle,
             transform: `scale(${scale})`,
             transformOrigin: 'center bottom',
-            opacity: muted ? 0.3 : 1,
-            filter: muted ? 'grayscale(0.6) brightness(0.5)' : 'none',
+            opacity: opacityOverride ?? 1,
+            filter: filterOverride ?? 'none',
           }}
           onClick={handleClick}
           onContextMenu={handleContext}
@@ -268,7 +319,7 @@ export const BuddySprite: React.FC = () => {
             from={companion.palette.from}
             to={companion.palette.to}
             css={speciesConfig.css}
-            glow={muted ? 4 : speciesConfig.glowSpread}
+            glow={glowOverride ?? (muted ? 4 : speciesConfig.glowSpread)}
             size={36}
             shiny={!muted && companion.shiny}
           />
@@ -277,7 +328,7 @@ export const BuddySprite: React.FC = () => {
         {/* Name label */}
         <div
           className="text-center mt-0.5 text-xs font-medium truncate max-w-[80px] transition-opacity duration-300"
-          style={{ color: accentColor, cursor: 'pointer', pointerEvents: 'auto', opacity: muted ? 0.3 : 1 }}
+          style={{ color: accentColor, cursor: 'pointer', pointerEvents: 'auto', opacity: opacityOverride ?? 1 }}
           onClick={() => setShowStats(!showStats)}
         >
           {companion.name}
