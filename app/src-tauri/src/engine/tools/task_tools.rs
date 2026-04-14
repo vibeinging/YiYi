@@ -521,9 +521,10 @@ pub fn spawn_task_execution(
                             0.0
                         };
 
-                        // Update DB progress
+                        // Update DB progress + mark stage completed in plan
                         if let Some(db) = super::DATABASE.get() {
                             db.update_task_progress(&task_id_for_cb, stage, total_stages_for_cb, progress).ok();
+                            db.complete_plan_stage(&task_id_for_cb, stage);
                         }
 
                         // Emit progress event (camelCase for consistency)

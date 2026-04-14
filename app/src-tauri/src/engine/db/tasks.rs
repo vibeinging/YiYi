@@ -242,11 +242,38 @@ impl super::Database {
         let now = super::now_ts();
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
-            "UPDATE tasks SET status = ?1, error_message = ?2, updated_at = ?3 WHERE id = ?4",
+            "UPDATE tasks SET status = ?1, error_message = ?2, updated_at = ?3, last_activity_at = ?3, completed_at = ?3 WHERE id = ?4",
             params![status, error_message, now, task_id],
         )
         .map_err(|e| format!("Failed to update task error: {}", e))?;
         Ok(())
+    }
+
+    /// Mark a specific stage as completed in the plan JSON.
+    pub fn complete_plan_stage(&self, task_id: &str, stage: i32) {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        // Read current plan
+        let plan_json: Option<String> = conn
+            .query_row("SELECT plan FROM tasks WHERE id = ?1", params![task_id], |r| r.get(0))
+            .ok()
+            .flatten();
+        if let Some(json_str) = plan_json {
+            if let Ok(mut plan) = serde_json::from_str::<Vec<serde_json::Value>>(&json_str) {
+                // Mark stage as completed (0-indexed: stage 1 = index 0)
+                let idx = (stage - 1) as usize;
+                if idx < plan.len() {
+                    if let Some(obj) = plan[idx].as_object_mut() {
+                        obj.insert("status".into(), serde_json::json!("completed"));
+                    }
+                    if let Ok(updated) = serde_json::to_string(&plan) {
+                        conn.execute(
+                            "UPDATE tasks SET plan = ?1 WHERE id = ?2",
+                            params![updated, task_id],
+                        ).ok();
+                    }
+                }
+            }
+        }
     }
 
     pub fn pin_task(&self, task_id: &str, pinned: bool) -> Result<(), String> {

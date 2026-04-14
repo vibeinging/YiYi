@@ -28,6 +28,36 @@ fn default_meditation_depth() -> Option<String> {
     Some("standard".to_string())
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuddyDecision {
+    pub id: String,
+    pub question: String,
+    pub context: String,
+    pub buddy_answer: String,
+    pub buddy_confidence: f64,
+    /// "good" | "bad" | null (pending)
+    pub user_feedback: Option<String>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TrustStats {
+    pub total: u32,
+    pub good: u32,
+    pub bad: u32,
+    pub pending: u32,
+    pub accuracy: f64,
+    pub by_context: std::collections::HashMap<String, ContextTrust>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ContextTrust {
+    pub total: u32,
+    pub good: u32,
+    pub bad: u32,
+    pub accuracy: f64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CodeRegistryEntry {
     pub name: String,
@@ -559,5 +589,119 @@ impl super::Database {
             params![depth, phases_completed, tomorrow_intentions, growth_synthesis, id],
         )
         .ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // Buddy Decision Log
+    // -----------------------------------------------------------------------
+
+    /// Log a buddy delegation decision.
+    pub fn log_buddy_decision(
+        &self,
+        id: &str,
+        question: &str,
+        context: &str,
+        answer: &str,
+        confidence: f64,
+    ) {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let now = super::now_ts();
+        conn.execute(
+            "INSERT OR REPLACE INTO buddy_decisions (id, question, context, buddy_answer, buddy_confidence, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, question, context, answer, confidence, now],
+        )
+        .ok();
+    }
+
+    /// Record user feedback on a buddy decision.
+    pub fn set_decision_feedback(&self, id: &str, feedback: &str) {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE buddy_decisions SET user_feedback = ?1 WHERE id = ?2",
+            params![feedback, id],
+        )
+        .ok();
+    }
+
+    /// List recent buddy decisions.
+    pub fn list_buddy_decisions(&self, limit: usize) -> Vec<BuddyDecision> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = match conn.prepare(
+            "SELECT id, question, context, buddy_answer, buddy_confidence, user_feedback, created_at
+             FROM buddy_decisions ORDER BY created_at DESC LIMIT ?1",
+        ) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+        stmt.query_map(params![limit as i64], |row| {
+            Ok(BuddyDecision {
+                id: row.get(0)?,
+                question: row.get(1)?,
+                context: row.get(2)?,
+                buddy_answer: row.get(3)?,
+                buddy_confidence: row.get(4)?,
+                user_feedback: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })
+        .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+    }
+
+    /// Calculate trust statistics from decision history.
+    pub fn get_trust_stats(&self) -> TrustStats {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Overall counts (single query)
+        let (total, good, bad) = conn
+            .query_row(
+                "SELECT COUNT(*),
+                        SUM(CASE WHEN user_feedback = 'good' THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN user_feedback = 'bad' THEN 1 ELSE 0 END)
+                 FROM buddy_decisions",
+                [],
+                |r| Ok((r.get::<_, u32>(0)?, r.get::<_, u32>(1).unwrap_or(0), r.get::<_, u32>(2).unwrap_or(0))),
+            )
+            .unwrap_or((0, 0, 0));
+        let rated = good + bad;
+        let accuracy = if rated > 0 { good as f64 / rated as f64 } else { 0.5 };
+
+        // Per-context breakdown
+        let mut by_context = std::collections::HashMap::new();
+        if let Ok(mut stmt) = conn.prepare(
+            "SELECT context,
+                    COUNT(*) as total,
+                    SUM(CASE WHEN user_feedback = 'good' THEN 1 ELSE 0 END) as good,
+                    SUM(CASE WHEN user_feedback = 'bad' THEN 1 ELSE 0 END) as bad
+             FROM buddy_decisions GROUP BY context"
+        ) {
+            if let Ok(rows) = stmt.query_map([], |row| {
+                let ctx: String = row.get(0)?;
+                let t: u32 = row.get(1)?;
+                let g: u32 = row.get(2)?;
+                let b: u32 = row.get(3)?;
+                let r = g + b;
+                Ok((ctx, ContextTrust {
+                    total: t,
+                    good: g,
+                    bad: b,
+                    accuracy: if r > 0 { g as f64 / r as f64 } else { 0.5 },
+                }))
+            }) {
+                for row in rows.flatten() {
+                    by_context.insert(row.0, row.1);
+                }
+            }
+        }
+
+        TrustStats {
+            total,
+            good,
+            bad,
+            pending: total - good - bad,
+            accuracy,
+            by_context,
+        }
     }
 }

@@ -302,6 +302,16 @@ pub struct BuddyConfig {
     /// How many times the buddy has made a delegation decision.
     #[serde(default)]
     pub delegation_count: u32,
+    /// Per-domain trust scores (0.0-1.0). Keys: task_decision, skill_review, permission, etc.
+    #[serde(default)]
+    pub trust_scores: HashMap<String, f64>,
+    /// Overall trust score (weighted average of domain scores).
+    #[serde(default = "default_trust")]
+    pub trust_overall: f64,
+}
+
+fn default_trust() -> f64 {
+    0.5
 }
 
 impl CliProviderConfig {

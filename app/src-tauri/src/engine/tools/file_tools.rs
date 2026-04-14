@@ -228,6 +228,7 @@ pub(super) async fn read_file_tool(args: &serde_json::Value) -> String {
                 result.push_str(&format!("\n({} total lines, showing {}-{})", total, offset, end));
             }
 
+            super::file_state_mark_read(path);
             super::truncate_output(&result, 30000)
         }
         Err(e) => format!("Error reading file: {}", e),
@@ -248,6 +249,11 @@ pub(super) async fn write_file_tool(args: &serde_json::Value) -> String {
     }
     // Read original content for diff (if file exists)
     let original = tokio::fs::read_to_string(path).await.ok();
+
+    // Enforce read-before-write for existing files (new file creation is OK)
+    if original.is_some() && !super::file_state_was_read(path) {
+        return format!("Error: You must read_file '{}' before overwriting it. This ensures you have the current contents.", path);
+    }
     let is_create = original.is_none();
 
     match tokio::fs::write(path, content).await {
@@ -298,10 +304,14 @@ pub(super) async fn edit_file_tool(args: &serde_json::Value) -> String {
     let replace_all = args["replace_all"].as_bool().unwrap_or(false);
 
     if path.is_empty() || old_text.is_empty() {
-        return "Error: path and old_text are required".into();
+        return "Error: path and old_text are required. You must provide: {\"path\": \"/absolute/path\", \"old_text\": \"exact text to find\", \"new_text\": \"replacement\"}. Read the file first with read_file to get the exact text.".into();
     }
     if old_text == new_text {
         return "Error: new_text must be different from old_text".into();
+    }
+    // Enforce read-before-edit
+    if !super::file_state_was_read(path) {
+        return format!("Error: You must read_file '{}' before editing it. This ensures you have the current file contents.", path);
     }
     if let Err(e) = super::access_check(path, true).await {
         return format!("Error: {}", e);

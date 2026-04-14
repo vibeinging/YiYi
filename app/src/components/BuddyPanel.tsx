@@ -18,14 +18,19 @@ import {
   ShieldCheck,
   Notebook,
   ChevronDown,
+  ThumbsUp,
+  ThumbsDown,
+  Shield,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useBuddyStore } from '../stores/buddyStore'
 import {
-  toggleBuddyHosted, getBuddyHosted,
+  toggleBuddyHosted,
   getMemoryStats, listRecentMemories, searchMemories, deleteMemory,
   listCorrections, listMeditationSessions,
+  listBuddyDecisions, setDecisionFeedback, getTrustStats,
   type MemoryEntry, type MemoryStats, type CorrectionEntry, type MeditationSession,
+  type BuddyDecision, type TrustStats,
 } from '../api/buddy'
 import { getMemmeConfig, saveMemmeConfig, type MemmeConfig } from '../api/system'
 import { OrbCore } from './buddy/OrbCore'
@@ -48,10 +53,7 @@ const Toggle: React.FC<{ value: boolean; onChange: (v: boolean) => void }> = ({ 
 
 export function BuddyPanel() {
   const { t } = useTranslation()
-  const { companion, bones, config, setMuted, aiName } = useBuddyStore()
-
-  // Hosted mode
-  const [hostedMode, setHostedMode] = useState(false)
+  const { companion, bones, config, setMuted, aiName, hostedMode, setHostedMode } = useBuddyStore()
 
   // Meditation state
   const [meditationEnabled, setMeditationEnabled] = useState(false)
@@ -79,13 +81,18 @@ export function BuddyPanel() {
   const [meditationSessions, setMeditationSessions] = useState<MeditationSession[]>([])
   const [expandedJournal, setExpandedJournal] = useState<string | null>(null)
 
+  // Decision log & trust
+  const [decisions, setDecisions] = useState<BuddyDecision[]>([])
+  const [trustStats, setTrustStats] = useState<TrustStats | null>(null)
+
   // ── Load on mount ──
   useEffect(() => {
-    getBuddyHosted().then(setHostedMode).catch(() => {})
     getMemoryStats().then(setMemoryStats).catch(() => {})
     listRecentMemories(15).then(setRecentMemories).catch(() => {})
     listCorrections().then(setCorrections).catch(() => {})
     listMeditationSessions(10).then(setMeditationSessions).catch(() => {})
+    listBuddyDecisions(20).then(setDecisions).catch(() => {})
+    getTrustStats().then(setTrustStats).catch(() => {})
 
     invoke('get_meditation_config').then((cfg: any) => {
       if (cfg) {
@@ -122,6 +129,15 @@ export function BuddyPanel() {
     } finally {
       setMeditationTriggering(false)
     }
+  }
+
+  // ── Decision feedback ──
+  const handleFeedback = async (id: string, feedback: 'good' | 'bad') => {
+    try {
+      await setDecisionFeedback(id, feedback)
+      setDecisions(prev => prev.map(d => d.id === id ? { ...d, user_feedback: feedback } : d))
+      getTrustStats().then(setTrustStats).catch(() => {})
+    } catch { toast.error('反馈失败') }
   }
 
   // ── Memory search ──
@@ -240,6 +256,160 @@ export function BuddyPanel() {
           </>
         )}
       </div>
+
+      {/* ── Section 1.5: Trust & Decision Log ── */}
+      {(trustStats && trustStats.total > 0) && (
+        <div className="p-5 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
+          <div className="flex items-center gap-2 mb-3">
+            <Shield size={18} className="text-[var(--color-primary)]" />
+            <h2 className="font-semibold text-[14px]">信任与决策</h2>
+          </div>
+
+          {/* Trust gauge */}
+          <div className="flex items-center gap-4 mb-4 p-3 rounded-xl" style={{ background: 'var(--color-bg-subtle)' }}>
+            <div className="flex-1">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[12px] font-medium" style={{ color: 'var(--color-text)' }}>
+                  信任度 {Math.round(trustStats.accuracy * 100)}%
+                </span>
+                <span className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+                  Ring {trustStats.accuracy >= 0.7 ? '0' : trustStats.accuracy >= 0.5 ? '1' : trustStats.accuracy >= 0.3 ? '2' : '3'}
+                </span>
+              </div>
+              <div className="h-2 rounded-full overflow-hidden" style={{ background: 'var(--color-border)' }}>
+                <div
+                  className="h-full rounded-full transition-all duration-500"
+                  style={{
+                    width: `${trustStats.accuracy * 100}%`,
+                    background: trustStats.accuracy >= 0.7 ? '#34D399'
+                      : trustStats.accuracy >= 0.5 ? '#60A5FA'
+                      : trustStats.accuracy >= 0.3 ? '#FBBF24'
+                      : 'var(--color-text-muted)',
+                  }}
+                />
+              </div>
+            </div>
+            <div className="text-right shrink-0">
+              <div className="text-[18px] font-bold tabular-nums" style={{ color: 'var(--color-text)' }}>
+                {trustStats.good}/{trustStats.total}
+              </div>
+              <div className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
+                准确 / 总计
+              </div>
+            </div>
+          </div>
+
+          {/* Per-domain trust */}
+          {Object.keys(trustStats.by_context).length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-3">
+              {Object.entries(trustStats.by_context).map(([ctx, ct]) => (
+                <div key={ctx} className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px]" style={{ background: 'var(--color-bg-subtle)' }}>
+                  <span style={{ color: 'var(--color-text-muted)' }}>
+                    {ctx === 'task_decision' ? '任务决策' : ctx === 'skill_review' ? '技能审核' : ctx === 'permission' ? '权限审批' : ctx}
+                  </span>
+                  <span className="font-medium" style={{ color: ct.accuracy >= 0.7 ? '#34D399' : ct.accuracy >= 0.5 ? '#60A5FA' : '#FBBF24' }}>
+                    {Math.round(ct.accuracy * 100)}%
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Recent decisions */}
+          {decisions.length > 0 && (
+            <div className="space-y-2 max-h-[300px] overflow-y-auto">
+              <div className="text-[12px] font-medium mb-1" style={{ color: 'var(--color-text-muted)' }}>最近决策</div>
+              {decisions.slice(0, 10).map(d => {
+                const fb = d.user_feedback
+                const isGood = fb === 'good'
+                const isBad = fb === 'bad'
+                const conf = Math.round(d.buddy_confidence * 100)
+                const ctx = d.context === 'task_decision' ? '任务' : d.context === 'skill_review' ? '技能' : d.context === 'permission' ? '权限' : d.context
+
+                return (
+                  <div
+                    key={d.id}
+                    className="group rounded-xl overflow-hidden transition-all"
+                    style={{
+                      background: 'var(--color-bg-subtle)',
+                      border: fb ? `1px solid ${isGood ? 'rgba(52,211,153,0.2)' : 'rgba(239,68,68,0.2)'}` : '1px solid transparent',
+                    }}
+                  >
+                    {/* Question + context badge */}
+                    <div className="px-3 pt-2.5 pb-1">
+                      <div className="flex items-start gap-2">
+                        <span className="shrink-0 mt-0.5 text-[10px] px-1.5 py-0.5 rounded-full font-medium"
+                          style={{ background: 'var(--color-bg-muted)', color: 'var(--color-text-muted)' }}>
+                          {ctx}
+                        </span>
+                        <div className="text-[12px] leading-relaxed min-w-0" style={{ color: 'var(--color-text)' }}>
+                          {d.question.length > 100 ? d.question.slice(0, 100) + '...' : d.question}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Answer + confidence */}
+                    <div className="px-3 pb-1.5">
+                      <div className="text-[11px] pl-[calc(theme(spacing.2)+2.5rem)]" style={{ color: 'var(--color-text-muted)' }}>
+                        {d.buddy_answer.length > 80 ? d.buddy_answer.slice(0, 80) + '...' : d.buddy_answer}
+                      </div>
+                    </div>
+
+                    {/* Footer: confidence bar + feedback */}
+                    <div className="flex items-center justify-between px-3 pb-2.5">
+                      {/* Confidence indicator */}
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-16 h-1 rounded-full overflow-hidden" style={{ background: 'var(--color-border)' }}>
+                          <div className="h-full rounded-full" style={{
+                            width: `${conf}%`,
+                            background: conf >= 70 ? '#34D399' : conf >= 50 ? '#60A5FA' : '#FBBF24',
+                          }} />
+                        </div>
+                        <span className="text-[10px] tabular-nums" style={{ color: 'var(--color-text-muted)' }}>
+                          {conf}%
+                        </span>
+                      </div>
+
+                      {/* Feedback buttons / result */}
+                      {fb ? (
+                        <div
+                          className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium"
+                          style={{
+                            background: isGood ? 'rgba(52,211,153,0.08)' : 'rgba(239,68,68,0.08)',
+                            color: isGood ? '#34D399' : '#EF4444',
+                          }}
+                        >
+                          {isGood ? <ThumbsUp size={11} /> : <ThumbsDown size={11} />}
+                          {isGood ? '准确' : '偏差'}
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={() => handleFeedback(d.id, 'good')}
+                            className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium transition-all hover:scale-105 active:scale-95"
+                            style={{ background: 'rgba(52,211,153,0.08)', color: '#34D399' }}
+                          >
+                            <ThumbsUp size={11} />
+                            准确
+                          </button>
+                          <button
+                            onClick={() => handleFeedback(d.id, 'bad')}
+                            className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium transition-all hover:scale-105 active:scale-95"
+                            style={{ background: 'rgba(239,68,68,0.08)', color: '#EF4444' }}
+                          >
+                            <ThumbsDown size={11} />
+                            偏差
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Section 2: Behavior ── */}
       <div className="p-5 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">

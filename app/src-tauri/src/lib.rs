@@ -530,6 +530,9 @@ pub fn run() {
             commands::buddy::delete_memory,
             commands::buddy::list_corrections,
             commands::buddy::list_meditation_sessions,
+            commands::buddy::list_buddy_decisions,
+            commands::buddy::set_decision_feedback,
+            commands::buddy::get_trust_stats,
             // Voice Control
             commands::voice::start_voice_session,
             commands::voice::stop_voice_session,

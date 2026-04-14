@@ -11,6 +11,8 @@ export interface BuddyConfig {
   hosted_mode: boolean
   pet_count: number
   delegation_count: number
+  trust_scores: Record<string, number>
+  trust_overall: number
 }
 
 export async function getBuddyConfig(): Promise<BuddyConfig> {
@@ -78,6 +80,46 @@ export interface CorrectionEntry {
 
 export async function listCorrections(): Promise<CorrectionEntry[]> {
   return await invoke<CorrectionEntry[]>('list_corrections')
+}
+
+// ── Decision log & trust ──
+
+export interface BuddyDecision {
+  id: string
+  question: string
+  context: string
+  buddy_answer: string
+  buddy_confidence: number
+  user_feedback: string | null
+  created_at: number
+}
+
+export interface ContextTrust {
+  total: number
+  good: number
+  bad: number
+  accuracy: number
+}
+
+export interface TrustStats {
+  total: number
+  good: number
+  bad: number
+  pending: number
+  accuracy: number
+  by_context: Record<string, ContextTrust>
+}
+
+export async function listBuddyDecisions(limit?: number): Promise<BuddyDecision[]> {
+  return await invoke<BuddyDecision[]>('list_buddy_decisions', { limit })
+}
+
+export async function setDecisionFeedback(decisionId: string, feedback: 'good' | 'bad'): Promise<void> {
+  return await invoke<void>('set_decision_feedback', { decisionId, feedback })
+}
+
+export async function getTrustStats(): Promise<TrustStats> {
+  return await invoke<TrustStats>('get_trust_stats')
 }
 
 // ── Meditation sessions ──

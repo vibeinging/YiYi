@@ -5,55 +5,16 @@
  * Compact design that blends with conversation flow.
  */
 
-import { memo, useEffect, useState } from 'react';
-import {
-  CheckCircle,
-  AlertCircle,
-  Clock,
-  Loader2,
-  Pause,
-  ExternalLink,
-  ListTodo,
-} from 'lucide-react';
-import { useTaskStore } from '../stores/taskStore';
+import { memo } from 'react';
+import { ExternalLink, ListTodo } from 'lucide-react';
+import { useTaskSidebarStore } from '../stores/taskSidebarStore';
+import { TASK_STATUS_CONFIG } from '../utils/taskStatus';
 import type { TaskInfo } from '../api/tasks';
 
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                            */
-/* ------------------------------------------------------------------ */
-
-const STATUS_COLORS: Record<TaskInfo['status'], string> = {
-  running:   'var(--color-primary)',
-  completed: 'var(--color-success)',
-  failed:    'var(--color-error)',
-  paused:    'var(--color-warning)',
-  pending:   'var(--color-text-muted)',
-  cancelled: 'var(--color-text-muted)',
-};
-
-const STATUS_LABELS: Record<TaskInfo['status'], string> = {
-  running:   '执行中',
-  completed: '已完成',
-  failed:    '失败',
-  paused:    '暂停',
-  pending:   '等待中',
-  cancelled: '已取消',
-};
-
 function StatusDot({ status }: { status: TaskInfo['status'] }) {
-  if (status === 'running') {
-    return <Loader2 size={12} className="animate-spin" style={{ color: STATUS_COLORS.running }} />;
-  }
-  if (status === 'completed') {
-    return <CheckCircle size={12} style={{ color: STATUS_COLORS.completed }} />;
-  }
-  if (status === 'failed') {
-    return <AlertCircle size={12} style={{ color: STATUS_COLORS.failed }} />;
-  }
-  if (status === 'paused') {
-    return <Pause size={12} style={{ color: STATUS_COLORS.paused }} />;
-  }
-  return <Clock size={12} style={{ color: STATUS_COLORS.pending }} />;
+  const cfg = TASK_STATUS_CONFIG[status] ?? TASK_STATUS_CONFIG.pending;
+  const Icon = cfg.Icon;
+  return <Icon size={12} className={cfg.spin ? 'animate-spin' : ''} style={{ color: cfg.color }} />;
 }
 
 /* ------------------------------------------------------------------ */
@@ -65,8 +26,13 @@ interface TaskCardProps {
 }
 
 export const TaskCard = memo(function TaskCard({ taskId }: TaskCardProps) {
-  const task = useTaskStore((s) => s.tasks.find((t) => t.id === taskId));
-  const selectTask = useTaskStore((s) => s.selectTask);
+  const task = useTaskSidebarStore((s) => s.tasks.find((t) => t.id === taskId));
+
+  const handleClick = () => {
+    if (!task) return;
+    // Navigate to task session via sidebar store
+    useTaskSidebarStore.getState().navigateToSession(task.sessionId);
+  };
 
   if (!task) {
     return (
@@ -86,20 +52,23 @@ export const TaskCard = memo(function TaskCard({ taskId }: TaskCardProps) {
     );
   }
 
-  const statusColor = STATUS_COLORS[task.status];
-  const hasProgress = (task.status === 'running' || task.status === 'paused') && task.totalStages > 0;
+  const statusColor = (TASK_STATUS_CONFIG[task.status] ?? TASK_STATUS_CONFIG.pending).color;
+  const hasProgress = task.totalStages > 0 && task.progress > 0;
+  const isTerminal = task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled';
 
   return (
     <div
-      className="rounded-xl overflow-hidden"
+      className="rounded-xl overflow-hidden cursor-pointer transition-all hover:shadow-md"
       style={{
         background: 'var(--color-bg-elevated)',
         border: `1px solid ${task.status === 'running'
           ? 'color-mix(in srgb, var(--color-primary) 20%, var(--color-border))'
           : 'var(--color-border)'}`,
         maxWidth: '360px',
-        transition: 'border-color 0.3s',
+        transition: 'border-color 0.3s, box-shadow 0.2s',
       }}
+      onClick={handleClick}
+      title="点击查看任务详情"
     >
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-2">
@@ -108,6 +77,7 @@ export const TaskCard = memo(function TaskCard({ taskId }: TaskCardProps) {
         <span
           className="flex-1 truncate text-[12px] font-medium"
           style={{ color: 'var(--color-text)', fontFamily: 'var(--font-text)' }}
+          title={task.title}
         >
           {task.title}
         </span>
@@ -119,11 +89,11 @@ export const TaskCard = memo(function TaskCard({ taskId }: TaskCardProps) {
             background: `color-mix(in srgb, ${statusColor} 12%, transparent)`,
           }}
         >
-          {STATUS_LABELS[task.status]}
+          {(TASK_STATUS_CONFIG[task.status] ?? TASK_STATUS_CONFIG.pending).label}
         </span>
       </div>
 
-      {/* Progress bar */}
+      {/* Progress bar — visible for all statuses when there's progress */}
       {hasProgress && (
         <div className="px-3 pb-1.5">
           <div className="flex items-center gap-2">
@@ -135,7 +105,10 @@ export const TaskCard = memo(function TaskCard({ taskId }: TaskCardProps) {
                 className="h-full rounded-full transition-all duration-500"
                 style={{
                   width: `${Math.min(task.progress, 100)}%`,
-                  background: task.status === 'paused' ? 'var(--color-warning)' : 'var(--color-primary)',
+                  background: isTerminal
+                    ? (task.status === 'completed' ? 'var(--color-success)' : 'var(--color-error)')
+                    : (task.status === 'paused' ? 'var(--color-warning)' : 'var(--color-primary)'),
+                  opacity: isTerminal ? 0.5 : 1,
                 }}
               />
             </div>
@@ -165,16 +138,13 @@ export const TaskCard = memo(function TaskCard({ taskId }: TaskCardProps) {
         className="px-3 py-1.5 flex items-center justify-end"
         style={{ borderTop: '1px solid var(--color-border)' }}
       >
-        <button
-          onClick={() => selectTask(task.id)}
-          className="inline-flex items-center gap-1 text-[11px] font-medium rounded-md px-2 py-1 transition-colors"
+        <span
+          className="inline-flex items-center gap-1 text-[11px] font-medium"
           style={{ color: 'var(--color-primary)' }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-primary-subtle)'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
         >
           <ExternalLink size={10} />
           查看详情
-        </button>
+        </span>
       </div>
     </div>
   );

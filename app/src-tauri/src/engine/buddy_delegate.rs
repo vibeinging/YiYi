@@ -156,11 +156,27 @@ pub async fn delegate(
 
     let result = parse_delegate_response(&text);
 
-    // Increment delegation counter
-    if result.is_some() {
+    // Log decision + increment counter
+    if let Some(ref res) = result {
         if let Some(handle) = crate::engine::tools::APP_HANDLE.get() {
             use tauri::Manager;
             let state: tauri::State<'_, crate::state::AppState> = handle.state();
+
+            // Log to buddy_decisions table
+            let decision_id = uuid::Uuid::new_v4().to_string();
+            let context_str = match context {
+                DelegateContext::TaskDecision => "task_decision",
+                DelegateContext::SkillReview => "skill_review",
+            };
+            state.inner().db.log_buddy_decision(
+                &decision_id,
+                question,
+                context_str,
+                &res.answer,
+                res.confidence,
+            );
+
+            // Increment delegation counter (trust recalculation deferred to user feedback)
             if let Ok(mut cfg) = state.inner().config.try_write() {
                 cfg.buddy.delegation_count += 1;
                 let _ = cfg.save(&state.inner().working_dir);

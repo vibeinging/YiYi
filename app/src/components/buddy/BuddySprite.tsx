@@ -7,7 +7,7 @@ import {
 import { listen } from '@tauri-apps/api/event'
 import { useBuddyStore } from '../../stores/buddyStore'
 import { useChatStreamStore } from '../../stores/chatStreamStore'
-import { toggleBuddyHosted, getBuddyHosted } from '../../api/buddy'
+import { getBuddyHosted } from '../../api/buddy'
 import { getMorningGreeting } from '../../api/system'
 import { BuddyBubble } from './BuddyBubble'
 import { BuddyStatsCard } from './BuddyStatsCard'
@@ -46,6 +46,7 @@ export const BuddySprite: React.FC = () => {
     companion, bones, config, loaded, loadBuddy,
     bubbleText, bubbleVisible, petting, pet, showBubble,
     showStats, setShowStats, showHatchAnimation,
+    hostedMode, setHostedMode,
   } = useBuddyStore()
 
   const isWorking = useChatStreamStore(s => s.loading)
@@ -53,8 +54,6 @@ export const BuddySprite: React.FC = () => {
 
   const [fidget, setFidget] = useState(false)
   const [particles, setParticles] = useState<{ id: number; x: number; y: number; emoji: string }[]>([])
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
-  const [hostedMode, setHostedMode] = useState(false)
   const particleIdRef = useRef(0)
 
   // Drag state
@@ -121,7 +120,7 @@ export const BuddySprite: React.FC = () => {
   }, [])
 
   useEffect(() => { if (!loaded) loadBuddy() }, [loaded, loadBuddy])
-  useEffect(() => { getBuddyHosted().then(setHostedMode).catch(() => {}) }, [])
+  useEffect(() => { getBuddyHosted().then(h => setHostedMode(h)).catch(() => {}) }, [setHostedMode])
 
   // Proactive greeting on launch
   const greetedRef = useRef(false)
@@ -149,28 +148,22 @@ export const BuddySprite: React.FC = () => {
   // Event-driven notifications
   useEffect(() => {
     if (!companion || config?.muted) return
-    const unlisteners: (() => void)[] = []
     const bubble = useBuddyStore.getState().showBubble
 
-    // Bot received a message
-    listen<{ platform?: string; sender?: string }>('bot://message', (e) => {
-      const p = e.payload
-      const who = p.sender || p.platform || '某人'
-      bubble(`${who} 发来了消息`)
-    }).then(u => unlisteners.push(u))
+    const promises = [
+      listen<{ platform?: string; sender?: string }>('bot://message', (e) => {
+        const who = e.payload.sender || e.payload.platform || '某人'
+        bubble(`${who} 发来了消息`)
+      }),
+      listen<{ name?: string }>('cronjob://result', (e) => {
+        bubble(`${e.payload?.name || '定时任务'} 执行完成！`)
+      }),
+      listen('growth://persist_suggestion', () => {
+        bubble('发现了可以改进的技能！')
+      }),
+    ]
 
-    // Cron job completed
-    listen<{ name?: string }>('cronjob://result', (e) => {
-      const name = e.payload?.name || '定时任务'
-      bubble(`${name} 执行完成！`)
-    }).then(u => unlisteners.push(u))
-
-    // Growth suggestion (skill improvement)
-    listen('growth://persist_suggestion', () => {
-      bubble('发现了可以改进的技能！')
-    }).then(u => unlisteners.push(u))
-
-    return () => { unlisteners.forEach(u => u()) }
+    return () => { promises.forEach(p => p.then(u => u())) }
   }, [companion, config?.muted])
 
   // Random fidget — MISCHIEF stat increases frequency
@@ -255,13 +248,7 @@ export const BuddySprite: React.FC = () => {
 
   const handleContext = (e: React.MouseEvent) => {
     e.preventDefault(); e.stopPropagation()
-    setContextMenu({ x: e.clientX, y: e.clientY })
-  }
-  const closeContext = () => setContextMenu(null)
-  const handleToggleHosted = async () => {
-    const next = !hostedMode
-    try { await toggleBuddyHosted(next); setHostedMode(next) } catch {}
-    closeContext()
+    setShowStats(!showStats)
   }
 
   return (
@@ -315,6 +302,18 @@ export const BuddySprite: React.FC = () => {
           onContextMenu={handleContext}
           title={`${companion.name} · 右键查看属性`}
         >
+          {/* Hosted mode green ambient glow */}
+          {hostedMode && !muted && (
+            <div
+              className="absolute inset-0 rounded-full"
+              style={{
+                background: 'radial-gradient(circle, rgba(52,211,153,0.35) 0%, rgba(52,211,153,0.08) 60%, transparent 80%)',
+                transform: 'scale(2.2)',
+                animation: 'buddy-breathe 2.5s ease-in-out infinite',
+                pointerEvents: 'none',
+              }}
+            />
+          )}
           <OrbCore
             from={companion.palette.from}
             to={companion.palette.to}
@@ -332,39 +331,8 @@ export const BuddySprite: React.FC = () => {
           onClick={() => setShowStats(!showStats)}
         >
           {companion.name}
-          {hostedMode && <span className="ml-0.5 text-[8px] opacity-60">🤖</span>}
         </div>
 
-        {/* Context menu */}
-        {contextMenu && (
-          <>
-            <div className="fixed inset-0 z-[9998]" onClick={closeContext} onContextMenu={(e) => { e.preventDefault(); closeContext() }} />
-            <div
-              className="fixed z-[9999] py-1 rounded-lg shadow-lg min-w-[140px]"
-              style={{
-                left: contextMenu.x,
-                top: contextMenu.y,
-                background: 'var(--color-bg-elevated)',
-                border: '1px solid var(--color-border)',
-              }}
-            >
-              <button
-                className="w-full text-left px-3 py-1.5 text-[12px] transition-colors hover:bg-[var(--color-bg-subtle)]"
-                style={{ color: 'var(--color-text)' }}
-                onClick={handleToggleHosted}
-              >
-                {hostedMode ? '✅ 托管模式（已开启）' : '🤖 开启托管模式'}
-              </button>
-              <button
-                className="w-full text-left px-3 py-1.5 text-[12px] transition-colors hover:bg-[var(--color-bg-subtle)]"
-                style={{ color: 'var(--color-text)' }}
-                onClick={() => { setShowStats(!showStats); closeContext() }}
-              >
-                📊 查看属性
-              </button>
-            </div>
-          </>
-        )}
       </div>
     </div>
   )

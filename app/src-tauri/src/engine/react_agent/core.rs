@@ -395,22 +395,49 @@ where
                 return Err("cancelled".to_string());
             }
 
-            // ── Phase 2: Parallel tool execution ──
-            let futures: Vec<_> = prepared.iter().map(|p| {
-                let _is_denied = p.denied.is_some();
-                let denied_msg = p.denied.clone();
-                let eff_call = p.effective_call.clone();
-                async move {
-                    if let Some(msg) = denied_msg {
-                        // Blocked — return error without executing
-                        (msg, vec![], true)
-                    } else {
-                        let result = execute_tool(&eff_call).await;
-                        (result.content, result.images, false)
-                    }
+            // ── Phase 2: Partitioned tool execution ──
+            // Read-only tools run in parallel; write tools run sequentially after.
+            let mut concurrent_batch: Vec<(usize, &PreparedCall)> = Vec::new();
+            let mut sequential_batch: Vec<(usize, &PreparedCall)> = Vec::new();
+            for (i, p) in prepared.iter().enumerate() {
+                if p.denied.is_some() || crate::engine::tools::is_tool_concurrency_safe(&p.effective_call.function.name) {
+                    concurrent_batch.push((i, p));
+                } else {
+                    sequential_batch.push((i, p));
                 }
-            }).collect();
-            let results = futures::future::join_all(futures).await;
+            }
+
+            let mut results: Vec<(String, Vec<String>, bool)> = vec![("".into(), vec![], false); prepared.len()];
+
+            // Run concurrent-safe tools in parallel
+            if !concurrent_batch.is_empty() {
+                let futs: Vec<_> = concurrent_batch.iter().map(|(_, p)| {
+                    let denied_msg = p.denied.clone();
+                    let eff_call = p.effective_call.clone();
+                    async move {
+                        if let Some(msg) = denied_msg {
+                            (msg, vec![], true)
+                        } else {
+                            let r = execute_tool(&eff_call).await;
+                            (r.content, r.images, false)
+                        }
+                    }
+                }).collect();
+                let batch_results = futures::future::join_all(futs).await;
+                for ((idx, _), res) in concurrent_batch.iter().zip(batch_results) {
+                    results[*idx] = res;
+                }
+            }
+
+            // Run write/mutating tools sequentially
+            for (idx, p) in &sequential_batch {
+                if let Some(ref msg) = p.denied {
+                    results[*idx] = (msg.clone(), vec![], true);
+                } else {
+                    let r = execute_tool(&p.effective_call).await;
+                    results[*idx] = (r.content, r.images, false);
+                }
+            }
 
             if cancelled.map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
                 return Err("cancelled".to_string());

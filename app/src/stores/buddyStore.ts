@@ -42,6 +42,7 @@ interface BuddyState {
   petting: boolean
   showStats: boolean
   showHatchAnimation: boolean
+  hostedMode: boolean
 
   // Observer throttle
   lastObserveAt: number
@@ -56,6 +57,7 @@ interface BuddyState {
   pet: () => void
   setMuted: (muted: boolean) => Promise<void>
   setShowStats: (show: boolean) => void
+  setHostedMode: (hosted: boolean) => void
   dismissHatch: () => void
 }
 
@@ -102,6 +104,7 @@ export const useBuddyStore = create<BuddyState>((set, get) => ({
   petting: false,
   showStats: false,
   showHatchAnimation: false,
+  hostedMode: false,
   lastObserveAt: 0,
 
   loadBuddy: async () => {
@@ -312,6 +315,8 @@ export const useBuddyStore = create<BuddyState>((set, get) => ({
   },
 
   setShowStats: (show: boolean) => set({ showStats: show }),
+
+  setHostedMode: (hosted: boolean) => set({ hostedMode: hosted }),
 
   dismissHatch: () => set({ showHatchAnimation: false }),
 }))

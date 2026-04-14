@@ -165,6 +165,24 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     navigateToSession(pendingSessionId);
   }, [pendingSessionId, navigateToSession, initialized]);
 
+  // Consume pending new tab: add task session tab without switching away
+  const pendingNewTab = useTaskSidebarStore((s) => s.pendingNewTab);
+  useEffect(() => {
+    if (!pendingNewTab || !initialized) return;
+    const { id, name } = pendingNewTab;
+    useTaskSidebarStore.getState().consumePendingNewTab();
+    // Ensure the session exists in DB, then add to tab list silently
+    ensureSession(id, name, 'task').then(() => {
+      // Use setState callback to avoid stale closure
+      useSessionStore.setState((state) => {
+        if (state.chatSessions.some(s => s.id === id)) return state;
+        return {
+          chatSessions: [{ id, name, createdAt: Date.now(), updatedAt: Date.now(), source: 'task' } as any, ...state.chatSessions],
+        };
+      });
+    }).catch(() => {});
+  }, [pendingNewTab, initialized]);
+
   // --- Message loading ---
   const loadMessages = async (sessionId: string) => {
     try {

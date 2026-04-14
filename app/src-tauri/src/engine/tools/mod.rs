@@ -104,6 +104,37 @@ tokio::task_local! {
     static AGENT_TOOL_FILTER: super::react_agent::ToolFilter;
 }
 
+// Per-agent file state cache. Tracks which files the agent has read.
+// edit_file and write_file (for existing files) require a prior read_file call.
+tokio::task_local! {
+    static FILE_STATE_CACHE: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>;
+}
+
+/// Record that a file has been read by the current agent.
+pub(crate) fn file_state_mark_read(path: &str) {
+    if let Ok(cache) = FILE_STATE_CACHE.try_with(|c| c.clone()) {
+        if let Ok(mut set) = cache.lock() {
+            set.insert(path.to_string());
+        }
+    }
+}
+
+/// Check if a file has been read by the current agent.
+pub(crate) fn file_state_was_read(path: &str) -> bool {
+    FILE_STATE_CACHE.try_with(|c| {
+        c.lock().map_or(false, |set| set.contains(path))
+    }).unwrap_or(true) // If no cache (e.g., not in agent context), allow
+}
+
+/// Returns true if the tool is safe to run concurrently (read-only, no side effects).
+pub fn is_tool_concurrency_safe(name: &str) -> bool {
+    matches!(name,
+        "read_file" | "grep_search" | "glob_search" | "web_search" | "web_fetch"
+        | "memory_search" | "memory_list" | "memory_read" | "diary_read"
+        | "tool_search" | "query_tasks" | "code_intelligence"
+    )
+}
+
 /// Scope a future with a tool filter for runtime enforcement.
 pub async fn with_tool_filter<F, R>(filter: super::react_agent::ToolFilter, fut: F) -> R
 where
@@ -424,7 +455,8 @@ pub async fn with_session_id<F, R>(session_id: String, fut: F) -> R
 where
     F: std::future::Future<Output = R>,
 {
-    TASK_SESSION_ID.scope(session_id, fut).await
+    let cache = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+    TASK_SESSION_ID.scope(session_id, FILE_STATE_CACHE.scope(cache, fut)).await
 }
 
 /// Get the current task-local session ID. Returns empty string if not set.

@@ -26,7 +26,7 @@ pub use cronjobs::{ExecutionMode, CronJobRow, CronJobExecutionRow, HeartbeatRow}
 pub use workspace::{AuthorizedFolderRow, SensitivePathRow};
 pub use users::{UnifiedUserRow, UserIdentityRow};
 pub use tasks::TaskInfo;
-pub use growth::MeditationSession;
+pub use growth::{MeditationSession, BuddyDecision, TrustStats};
 pub use quick_actions::QuickActionRow;
 
 pub struct Database {
@@ -453,6 +453,22 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_token_usage_ts ON token_usage(recorded_at);",
         )
         .map_err(|e| format!("Failed to create token_usage table: {}", e))?;
+
+        // Buddy decision log — tracks every delegation decision for trust calibration
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS buddy_decisions (
+                id TEXT PRIMARY KEY,
+                question TEXT NOT NULL,
+                context TEXT NOT NULL,
+                buddy_answer TEXT NOT NULL,
+                buddy_confidence REAL NOT NULL,
+                user_feedback TEXT,
+                created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_buddy_decisions_ts ON buddy_decisions(created_at);
+            CREATE INDEX IF NOT EXISTS idx_buddy_decisions_ctx ON buddy_decisions(context);",
+        )
+        .map_err(|e| format!("Failed to create buddy_decisions table: {}", e))?;
 
         Ok(())
     }

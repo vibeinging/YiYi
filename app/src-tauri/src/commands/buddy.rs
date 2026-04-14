@@ -296,3 +296,46 @@ pub async fn list_meditation_sessions(
 ) -> Result<Vec<crate::engine::db::MeditationSession>, String> {
     Ok(state.db.list_meditation_sessions(limit.unwrap_or(10)))
 }
+
+// ── Decision log & trust ─────────────────────────────────────────────
+
+/// List recent buddy decisions.
+#[tauri::command]
+pub async fn list_buddy_decisions(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<crate::engine::db::BuddyDecision>, String> {
+    Ok(state.db.list_buddy_decisions(limit.unwrap_or(20)))
+}
+
+/// Record user feedback on a buddy decision.
+#[tauri::command]
+pub async fn set_decision_feedback(
+    state: State<'_, AppState>,
+    decision_id: String,
+    feedback: String,
+) -> Result<(), String> {
+    if feedback != "good" && feedback != "bad" {
+        return Err("feedback must be 'good' or 'bad'".into());
+    }
+    state.db.set_decision_feedback(&decision_id, &feedback);
+
+    // Recalculate trust scores
+    let stats = state.db.get_trust_stats();
+    let mut config = state.config.write().await;
+    config.buddy.trust_overall = stats.accuracy;
+    for (ctx, ct) in &stats.by_context {
+        config.buddy.trust_scores.insert(ctx.clone(), ct.accuracy);
+    }
+    config.save(&state.working_dir)?;
+
+    Ok(())
+}
+
+/// Get trust statistics.
+#[tauri::command]
+pub async fn get_trust_stats(
+    state: State<'_, AppState>,
+) -> Result<crate::engine::db::TrustStats, String> {
+    Ok(state.db.get_trust_stats())
+}

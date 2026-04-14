@@ -1,5 +1,5 @@
 import React from 'react'
-import { X, EyeOff, Eye } from 'lucide-react'
+import { X, EyeOff, Eye, Bot } from 'lucide-react'
 import {
   STAT_LABELS,
   STAT_NAMES,
@@ -7,6 +7,7 @@ import {
   type Companion,
 } from '../../utils/buddy'
 import { useBuddyStore } from '../../stores/buddyStore'
+import { toggleBuddyHosted } from '../../api/buddy'
 
 interface BuddyStatsCardProps {
   companion: Companion
@@ -16,9 +17,14 @@ interface BuddyStatsCardProps {
 }
 
 export const BuddyStatsCard: React.FC<BuddyStatsCardProps> = ({ companion, onClose, flipRight }) => {
-  const { config, setMuted, aiName } = useBuddyStore()
+  const { config, setMuted, aiName, hostedMode, setHostedMode } = useBuddyStore()
   const muted = config?.muted ?? false
   const { from, to } = companion.palette
+
+  const handleToggleHosted = async () => {
+    const next = !hostedMode
+    try { await toggleBuddyHosted(next); setHostedMode(next) } catch {}
+  }
 
   return (
     <div
@@ -70,14 +76,8 @@ export const BuddyStatsCard: React.FC<BuddyStatsCardProps> = ({ companion, onClo
 
       {/* Personality */}
       <div className="px-4 pb-2">
-        <div className="text-sm" style={{ color: 'var(--color-text-muted)' }}>
-          {aiName} 的化身 · {getSpeciesLabel(companion.species)}
-        </div>
-        <div
-          className="text-sm mt-1"
-          style={{ color: 'var(--color-text-secondary, var(--color-text-muted))' }}
-        >
-          情绪风格: {companion.personality}
+        <div className="text-xs" style={{ color: 'var(--color-text-secondary, var(--color-text-muted))' }}>
+          {companion.personality}
         </div>
       </div>
 
@@ -85,7 +85,7 @@ export const BuddyStatsCard: React.FC<BuddyStatsCardProps> = ({ companion, onClo
       <div className="px-4 pb-3 space-y-1.5">
         {STAT_NAMES.map((stat) => (
           <div key={stat} className="flex items-center gap-2">
-            <span className="text-sm w-12 shrink-0" style={{ color: 'var(--color-text-muted)' }}>
+            <span className="text-xs w-10 shrink-0" style={{ color: 'var(--color-text-muted)' }}>
               {STAT_LABELS[stat]}
             </span>
             <div
@@ -100,34 +100,53 @@ export const BuddyStatsCard: React.FC<BuddyStatsCardProps> = ({ companion, onClo
                 }}
               />
             </div>
-            <span className="text-sm w-6 text-right" style={{ color: 'var(--color-text-muted)' }}>
+            <span className="text-xs w-5 text-right tabular-nums" style={{ color: 'var(--color-text-muted)' }}>
               {companion.stats[stat]}
             </span>
           </div>
         ))}
       </div>
 
-      {/* Footer */}
+      {/* Actions */}
       <div
         className="px-4 py-2 flex items-center justify-between border-t"
         style={{ borderColor: 'var(--color-border)' }}
       >
-        <span className="text-sm" style={{ color: 'var(--color-text-muted)' }}>
-          {companion.hatchedAt > 0
-            ? `孵化于 ${new Date(companion.hatchedAt).toLocaleDateString('zh-CN')}`
-            : '未孵化'}
-        </span>
+        {/* Hosted mode */}
         <button
-          onClick={() => setMuted(!muted)}
-          className="p-1.5 rounded-lg transition-colors hover:bg-black/10 dark:hover:bg-white/10"
-          title={muted ? '唤醒精灵' : '让精灵休息'}
+          onClick={handleToggleHosted}
+          className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs transition-colors"
+          style={{
+            background: hostedMode ? 'rgba(99,102,241,0.1)' : 'transparent',
+            color: hostedMode ? 'var(--color-primary)' : 'var(--color-text-muted)',
+          }}
+          title={hostedMode ? '关闭托管模式' : '开启托管模式'}
         >
-          {muted ? (
-            <EyeOff size={14} style={{ color: 'var(--color-text-muted)' }} />
-          ) : (
-            <Eye size={14} style={{ color: 'var(--color-text-muted)' }} />
-          )}
+          <Bot size={13} />
+          <span className="font-medium">{hostedMode ? '托管中' : '托管'}</span>
         </button>
+
+        <div className="flex items-center gap-1">
+          {/* Hatch date */}
+          <span className="text-[10px] mr-1" style={{ color: 'var(--color-text-muted)' }}>
+            {companion.hatchedAt > 0
+              ? new Date(companion.hatchedAt).toLocaleDateString('zh-CN')
+              : ''}
+          </span>
+
+          {/* Mute toggle */}
+          <button
+            onClick={() => setMuted(!muted)}
+            className="p-1 rounded-lg transition-colors hover:bg-black/10 dark:hover:bg-white/10"
+            title={muted ? '唤醒精灵' : '让精灵休息'}
+          >
+            {muted ? (
+              <EyeOff size={13} style={{ color: 'var(--color-text-muted)' }} />
+            ) : (
+              <Eye size={13} style={{ color: 'var(--color-text-muted)' }} />
+            )}
+          </button>
+        </div>
       </div>
     </div>
   )
