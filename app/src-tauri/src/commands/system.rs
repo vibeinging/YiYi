@@ -796,9 +796,8 @@ pub async fn disable_correction(
 // ---------------------------------------------------------------------------
 
 /// Save meditation configuration.
-#[tauri::command]
-pub async fn save_meditation_config(
-    state: State<'_, AppState>,
+pub async fn save_meditation_config_impl(
+    state: &AppState,
     enabled: bool,
     start_time: String,
     notify_on_complete: bool,
@@ -810,27 +809,48 @@ pub async fn save_meditation_config(
     config.save(&state.working_dir)
 }
 
-/// Get current meditation configuration.
 #[tauri::command]
-pub async fn get_meditation_config(
+pub async fn save_meditation_config(
     state: State<'_, AppState>,
+    enabled: bool,
+    start_time: String,
+    notify_on_complete: bool,
+) -> Result<(), String> {
+    save_meditation_config_impl(&*state, enabled, start_time, notify_on_complete).await
+}
+
+/// Get current meditation configuration.
+pub async fn get_meditation_config_impl(
+    state: &AppState,
 ) -> Result<crate::state::config::MeditationConfig, String> {
     let config = state.config.read().await;
     Ok(config.meditation.clone())
 }
 
-/// Get the latest meditation session from the database.
 #[tauri::command]
-pub async fn get_latest_meditation(
+pub async fn get_meditation_config(
     state: State<'_, AppState>,
+) -> Result<crate::state::config::MeditationConfig, String> {
+    get_meditation_config_impl(&*state).await
+}
+
+/// Get the latest meditation session from the database.
+pub async fn get_latest_meditation_impl(
+    state: &AppState,
 ) -> Result<Option<crate::engine::db::MeditationSession>, String> {
     Ok(state.db.get_latest_meditation_session())
 }
 
-/// Manually trigger a meditation session (runs in background).
 #[tauri::command]
-pub async fn trigger_meditation(
+pub async fn get_latest_meditation(
     state: State<'_, AppState>,
+) -> Result<Option<crate::engine::db::MeditationSession>, String> {
+    get_latest_meditation_impl(&*state).await
+}
+
+/// Manually trigger a meditation session (runs in background).
+pub async fn trigger_meditation_impl(
+    state: &AppState,
 ) -> Result<(), String> {
     use crate::engine::mem::meditation::run_meditation_session;
     use crate::commands::agent::resolve_llm_config;
@@ -846,7 +866,7 @@ pub async fn trigger_meditation(
         return Err("冥想正在进行中 / A meditation session is already running".into());
     }
 
-    let config = resolve_llm_config(&state).await.map_err(|e| {
+    let config = resolve_llm_config(state).await.map_err(|e| {
         state.meditation_running.store(false, std::sync::atomic::Ordering::Relaxed);
         e
     })?;
@@ -878,11 +898,17 @@ pub async fn trigger_meditation(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn trigger_meditation(
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    trigger_meditation_impl(&*state).await
+}
+
 /// Get the current meditation status (for Chat page polling).
 /// Returns "running", "completed", or "idle".
-#[tauri::command]
-pub async fn get_meditation_status(
-    state: State<'_, AppState>,
+pub async fn get_meditation_status_impl(
+    state: &AppState,
 ) -> Result<String, String> {
     match state.db.get_latest_meditation_session() {
         Some(session) => {
@@ -913,10 +939,16 @@ pub async fn get_meditation_status(
     }
 }
 
-/// Get a summary of the latest completed meditation session.
 #[tauri::command]
-pub async fn get_meditation_summary(
+pub async fn get_meditation_status(
     state: State<'_, AppState>,
+) -> Result<String, String> {
+    get_meditation_status_impl(&*state).await
+}
+
+/// Get a summary of the latest completed meditation session.
+pub async fn get_meditation_summary_impl(
+    state: &AppState,
 ) -> Result<Option<String>, String> {
     match state.db.get_latest_completed_meditation_session() {
         Some(session) => {
@@ -943,17 +975,30 @@ pub async fn get_meditation_summary(
     }
 }
 
+#[tauri::command]
+pub async fn get_meditation_summary(
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    get_meditation_summary_impl(&*state).await
+}
+
 // ---------------------------------------------------------------------------
 // MemMe Memory Engine Configuration
 // ---------------------------------------------------------------------------
 
 /// Get current MemMe memory engine configuration.
+pub async fn get_memme_config_impl(
+    state: &AppState,
+) -> Result<crate::state::config::MemmeConfig, String> {
+    let config = state.config.read().await;
+    Ok(config.memme.clone())
+}
+
 #[tauri::command]
 pub async fn get_memme_config(
     state: State<'_, AppState>,
 ) -> Result<crate::state::config::MemmeConfig, String> {
-    let config = state.config.read().await;
-    Ok(config.memme.clone())
+    get_memme_config_impl(&*state).await
 }
 
 /// Result of saving the MemMe config — carries non-fatal warnings the UI should surface.
@@ -966,9 +1011,8 @@ pub struct SaveMemmeConfigResult {
 }
 
 /// Save MemMe memory engine configuration.
-#[tauri::command]
-pub async fn save_memme_config(
-    state: State<'_, AppState>,
+pub async fn save_memme_config_impl(
+    state: &AppState,
     config: crate::state::config::MemmeConfig,
 ) -> Result<SaveMemmeConfigResult, String> {
     {
@@ -1023,26 +1067,39 @@ pub async fn save_memme_config(
     Ok(result)
 }
 
-/// Get MemMe identity traits (inferred user personality profile).
 #[tauri::command]
-pub async fn get_identity_traits(
-    _state: State<'_, AppState>,
+pub async fn save_memme_config(
+    state: State<'_, AppState>,
+    config: crate::state::config::MemmeConfig,
+) -> Result<SaveMemmeConfigResult, String> {
+    save_memme_config_impl(&*state, config).await
+}
+
+/// Get MemMe identity traits (inferred user personality profile).
+pub async fn get_identity_traits_impl(
+    state: &AppState,
 ) -> Result<Vec<memme_core::types::identity::IdentityTrait>, String> {
-    let store = crate::engine::tools::get_memme_store()
-        .ok_or("MemMe store not initialized")?;
-    store.list_identity_traits(crate::engine::tools::MEMME_USER_ID)
+    state
+        .memme_store
+        .list_identity_traits(crate::engine::tools::MEMME_USER_ID)
         .map_err(|e| format!("Failed to list identity traits: {}", e))
 }
 
-/// Manually trigger principles consolidation.
 #[tauri::command]
-pub async fn consolidate_principles(
+pub async fn get_identity_traits(
     state: State<'_, AppState>,
+) -> Result<Vec<memme_core::types::identity::IdentityTrait>, String> {
+    get_identity_traits_impl(&*state).await
+}
+
+/// Manually trigger principles consolidation.
+pub async fn consolidate_principles_impl(
+    state: &AppState,
 ) -> Result<String, String> {
     use crate::engine::react_agent::consolidate_corrections_to_principles;
     use crate::commands::agent::resolve_llm_config;
 
-    let config = resolve_llm_config(&state).await?;
+    let config = resolve_llm_config(state).await?;
     let working_dir = state.db.get_config("working_dir")
         .map(std::path::PathBuf::from)
         .or_else(|| dirs::home_dir().map(|h| h.join(".yiyi")))
@@ -1051,22 +1108,34 @@ pub async fn consolidate_principles(
     consolidate_corrections_to_principles(&config, &state.db, &working_dir).await
 }
 
+#[tauri::command]
+pub async fn consolidate_principles(
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    consolidate_principles_impl(&*state).await
+}
+
 // ---------------------------------------------------------------------------
 // Quick Actions API
 // ---------------------------------------------------------------------------
 
 /// List all custom quick actions.
-#[tauri::command]
-pub async fn list_quick_actions(
-    state: State<'_, AppState>,
+pub async fn list_quick_actions_impl(
+    state: &AppState,
 ) -> Result<Vec<QuickActionRow>, String> {
     Ok(state.db.list_quick_actions())
 }
 
-/// Add a new custom quick action.
 #[tauri::command]
-pub async fn add_quick_action(
+pub async fn list_quick_actions(
     state: State<'_, AppState>,
+) -> Result<Vec<QuickActionRow>, String> {
+    list_quick_actions_impl(&*state).await
+}
+
+/// Add a new custom quick action.
+pub async fn add_quick_action_impl(
+    state: &AppState,
     label: String,
     description: String,
     prompt: String,
@@ -1076,10 +1145,21 @@ pub async fn add_quick_action(
     state.db.add_quick_action(&label, &description, &prompt, &icon, &color)
 }
 
-/// Update an existing custom quick action.
 #[tauri::command]
-pub async fn update_quick_action(
+pub async fn add_quick_action(
     state: State<'_, AppState>,
+    label: String,
+    description: String,
+    prompt: String,
+    icon: String,
+    color: String,
+) -> Result<String, String> {
+    add_quick_action_impl(&*state, label, description, prompt, icon, color).await
+}
+
+/// Update an existing custom quick action.
+pub async fn update_quick_action_impl(
+    state: &AppState,
     id: String,
     label: String,
     description: String,
@@ -1090,13 +1170,33 @@ pub async fn update_quick_action(
     state.db.update_quick_action(&id, &label, &description, &prompt, &icon, &color)
 }
 
+#[tauri::command]
+pub async fn update_quick_action(
+    state: State<'_, AppState>,
+    id: String,
+    label: String,
+    description: String,
+    prompt: String,
+    icon: String,
+    color: String,
+) -> Result<(), String> {
+    update_quick_action_impl(&*state, id, label, description, prompt, icon, color).await
+}
+
 /// Delete a custom quick action.
+pub async fn delete_quick_action_impl(
+    state: &AppState,
+    id: String,
+) -> Result<(), String> {
+    state.db.delete_quick_action(&id)
+}
+
 #[tauri::command]
 pub async fn delete_quick_action(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<(), String> {
-    state.db.delete_quick_action(&id)
+    delete_quick_action_impl(&*state, id).await
 }
 
 // -----------------------------------------------------------------------
@@ -1104,9 +1204,8 @@ pub async fn delete_quick_action(
 // -----------------------------------------------------------------------
 
 /// Get aggregated personality stats (time-decayed weighted sum + base 50).
-#[tauri::command]
-pub async fn get_personality_stats(
-    state: State<'_, AppState>,
+pub async fn get_personality_stats_impl(
+    state: &AppState,
 ) -> Result<Vec<serde_json::Value>, String> {
     let aggregates = state.db.get_personality_aggregates();
     let result: Vec<serde_json::Value> = aggregates.iter().map(|(trait_name, delta)| {
@@ -1120,33 +1219,57 @@ pub async fn get_personality_stats(
     Ok(result)
 }
 
-/// Get personality signal timeline for growth visualization.
 #[tauri::command]
-pub async fn get_personality_timeline(
+pub async fn get_personality_stats(
     state: State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    get_personality_stats_impl(&*state).await
+}
+
+/// Get personality signal timeline for growth visualization.
+pub async fn get_personality_timeline_impl(
+    state: &AppState,
     limit: Option<i64>,
 ) -> Result<Vec<crate::engine::db::PersonalitySignalRow>, String> {
     Ok(state.db.list_personality_signals(limit.unwrap_or(50)))
 }
 
-/// Toggle sparkling (闪光记忆 / pinned) status on a memory via MemMe.
 #[tauri::command]
-pub async fn toggle_sparkling_memory(
+pub async fn get_personality_timeline(
+    state: State<'_, AppState>,
+    limit: Option<i64>,
+) -> Result<Vec<crate::engine::db::PersonalitySignalRow>, String> {
+    get_personality_timeline_impl(&*state, limit).await
+}
+
+/// Toggle sparkling (闪光记忆 / pinned) status on a memory via MemMe.
+pub async fn toggle_sparkling_memory_impl(
+    state: &AppState,
     memory_id: String,
     sparkling: bool,
 ) -> Result<(), String> {
-    let store = crate::engine::tools::get_memme_store()
-        .ok_or_else(|| "MemMe store not initialized".to_string())?;
-    store.pin_trace(&memory_id, sparkling)
+    state
+        .memme_store
+        .pin_trace(&memory_id, sparkling)
         .map_err(|e| format!("Failed to toggle sparkling: {}", e))
 }
 
-/// List all sparkling (pinned) memories via MemMe.
 #[tauri::command]
-pub async fn list_sparkling_memories() -> Result<Vec<serde_json::Value>, String> {
-    let store = crate::engine::tools::get_memme_store()
-        .ok_or_else(|| "MemMe store not initialized".to_string())?;
-    let results = store.list_pinned_traces(crate::engine::tools::MEMME_USER_ID)
+pub async fn toggle_sparkling_memory(
+    state: State<'_, AppState>,
+    memory_id: String,
+    sparkling: bool,
+) -> Result<(), String> {
+    toggle_sparkling_memory_impl(&*state, memory_id, sparkling).await
+}
+
+/// List all sparkling (pinned) memories via MemMe.
+pub async fn list_sparkling_memories_impl(
+    state: &AppState,
+) -> Result<Vec<serde_json::Value>, String> {
+    let results = state
+        .memme_store
+        .list_pinned_traces(crate::engine::tools::MEMME_USER_ID)
         .map_err(|e| format!("Failed to list sparkling: {}", e))?;
     Ok(results.iter().map(|r| serde_json::json!({
         "id": r.id,
@@ -1156,19 +1279,27 @@ pub async fn list_sparkling_memories() -> Result<Vec<serde_json::Value>, String>
     })).collect())
 }
 
-/// Get recall candidates for "还记得那天..." bubble via MemMe's nostalgia recall.
 #[tauri::command]
-pub async fn get_recall_candidates(
+pub async fn list_sparkling_memories(
+    state: State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    list_sparkling_memories_impl(&*state).await
+}
+
+/// Get recall candidates for "还记得那天..." bubble via MemMe's nostalgia recall.
+pub async fn get_recall_candidates_impl(
+    state: &AppState,
     limit: Option<i64>,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let store = crate::engine::tools::get_memme_store()
-        .ok_or_else(|| "MemMe store not initialized".to_string())?;
-    let results = store.recall_nostalgia(
-        crate::engine::tools::MEMME_USER_ID,
-        7,    // min 7 days old
-        0.6,  // min importance
-        limit.unwrap_or(3) as usize,
-    ).map_err(|e| format!("Recall nostalgia failed: {}", e))?;
+    let results = state
+        .memme_store
+        .recall_nostalgia(
+            crate::engine::tools::MEMME_USER_ID,
+            7,    // min 7 days old
+            0.6,  // min importance
+            limit.unwrap_or(3) as usize,
+        )
+        .map_err(|e| format!("Recall nostalgia failed: {}", e))?;
     Ok(results.iter().map(|r| serde_json::json!({
         "id": r.id,
         "content": r.content,
@@ -1176,4 +1307,12 @@ pub async fn get_recall_candidates(
         "confidence": r.importance.unwrap_or(0.5),
         "created_at": r.created_at,
     })).collect())
+}
+
+#[tauri::command]
+pub async fn get_recall_candidates(
+    state: State<'_, AppState>,
+    limit: Option<i64>,
+) -> Result<Vec<serde_json::Value>, String> {
+    get_recall_candidates_impl(&*state, limit).await
 }
