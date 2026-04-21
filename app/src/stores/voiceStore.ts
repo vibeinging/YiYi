@@ -48,7 +48,12 @@ export const useVoiceStore = create<VoiceState>((set) => ({
         const updated = s.activeTools.map((t) =>
           t.name === name && t.status === 'start' ? { ...t, status: 'end' as const, preview } : t,
         )
-        // Keep only last 10 completed + all in-progress
+        // Keep only last 10 completed + all in-progress.
+        // NOTE: the 10-entry cap applies ONLY to completed entries. In-progress
+        // ('start' without matching 'end') is intentionally uncapped — in
+        // practice a single voice session does not produce unbounded starts
+        // without ends, so they self-bound per session. If that assumption
+        // breaks (e.g. a tool never emits 'end'), reconsider this cap.
         const inProgress = updated.filter((t) => t.status === 'start')
         const done = updated.filter((t) => t.status === 'end').slice(-10)
         return { activeTools: [...done, ...inProgress] }

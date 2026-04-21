@@ -75,7 +75,10 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         ? {
             ...t,
             status: status as TaskInfo['status'],
-            errorMessage: errorMessage || t.errorMessage,
+            // Distinguish "omitted" (undefined — keep prior) from "explicit clear"
+            // (empty string — overwrite). The previous `errorMessage || t.errorMessage`
+            // couldn't clear because '' is falsy.
+            errorMessage: errorMessage === undefined ? t.errorMessage : errorMessage,
             updatedAt: Date.now(),
             completedAt: ['completed', 'failed', 'cancelled'].includes(status) ? Date.now() : t.completedAt,
           }
