@@ -36,18 +36,32 @@ impl From<BotRow> for BotInfo {
     }
 }
 
-#[tauri::command]
-pub async fn bots_list(state: State<'_, AppState>) -> Result<Vec<BotInfo>, String> {
+pub async fn bots_list_impl(state: &AppState) -> Result<Vec<BotInfo>, String> {
     let rows = state.db.list_bots()?;
     Ok(rows.into_iter().map(BotInfo::from).collect())
 }
 
 #[tauri::command]
-pub async fn bots_list_platforms() -> Result<Vec<serde_json::Value>, String> {
-    Ok(platform_types()
+pub async fn bots_list(state: State<'_, AppState>) -> Result<Vec<BotInfo>, String> {
+    bots_list_impl(&*state).await
+}
+
+pub fn bots_list_platforms_impl() -> Vec<serde_json::Value> {
+    platform_types()
         .into_iter()
         .map(|(id, name)| serde_json::json!({ "id": id, "name": name }))
-        .collect())
+        .collect()
+}
+
+#[tauri::command]
+pub async fn bots_list_platforms() -> Result<Vec<serde_json::Value>, String> {
+    Ok(bots_list_platforms_impl())
+}
+
+pub async fn bots_get_impl(state: &AppState, bot_id: String) -> Result<BotInfo, String> {
+    let row = state.db.get_bot(&bot_id)?
+        .ok_or_else(|| format!("Bot '{}' not found", bot_id))?;
+    Ok(BotInfo::from(row))
 }
 
 #[tauri::command]
@@ -55,14 +69,11 @@ pub async fn bots_get(
     state: State<'_, AppState>,
     bot_id: String,
 ) -> Result<BotInfo, String> {
-    let row = state.db.get_bot(&bot_id)?
-        .ok_or_else(|| format!("Bot '{}' not found", bot_id))?;
-    Ok(BotInfo::from(row))
+    bots_get_impl(&*state, bot_id).await
 }
 
-#[tauri::command]
-pub async fn bots_create(
-    state: State<'_, AppState>,
+pub async fn bots_create_impl(
+    state: &AppState,
     name: String,
     platform: String,
     config: serde_json::Value,
@@ -91,8 +102,19 @@ pub async fn bots_create(
 }
 
 #[tauri::command]
-pub async fn bots_update(
+pub async fn bots_create(
     state: State<'_, AppState>,
+    name: String,
+    platform: String,
+    config: serde_json::Value,
+    persona: Option<String>,
+    access: Option<serde_json::Value>,
+) -> Result<BotInfo, String> {
+    bots_create_impl(&*state, name, platform, config, persona, access).await
+}
+
+pub async fn bots_update_impl(
+    state: &AppState,
     bot_id: String,
     name: Option<String>,
     enabled: Option<bool>,
@@ -127,11 +149,28 @@ pub async fn bots_update(
 }
 
 #[tauri::command]
+pub async fn bots_update(
+    state: State<'_, AppState>,
+    bot_id: String,
+    name: Option<String>,
+    enabled: Option<bool>,
+    config: Option<serde_json::Value>,
+    persona: Option<String>,
+    access: Option<serde_json::Value>,
+) -> Result<BotInfo, String> {
+    bots_update_impl(&*state, bot_id, name, enabled, config, persona, access).await
+}
+
+pub async fn bots_delete_impl(state: &AppState, bot_id: String) -> Result<(), String> {
+    state.db.delete_bot(&bot_id)
+}
+
+#[tauri::command]
 pub async fn bots_delete(
     state: State<'_, AppState>,
     bot_id: String,
 ) -> Result<(), String> {
-    state.db.delete_bot(&bot_id)
+    bots_delete_impl(&*state, bot_id).await
 }
 
 /// Send a message through a specific bot to a target
@@ -900,12 +939,16 @@ pub async fn bots_start(
     start_all_bots(&state, app_handle).await
 }
 
+pub async fn bots_stop_impl(state: &AppState) -> Result<serde_json::Value, String> {
+    state.bot_manager.stop().await;
+    Ok(serde_json::json!({ "status": "ok" }))
+}
+
 #[tauri::command]
 pub async fn bots_stop(
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    state.bot_manager.stop().await;
-    Ok(serde_json::json!({ "status": "ok" }))
+    bots_stop_impl(&*state).await
 }
 
 #[tauri::command]
@@ -917,26 +960,43 @@ pub async fn bots_start_one(
     start_one_bot(&state, &bot_id, app_handle).await
 }
 
+pub async fn bots_stop_one_impl(
+    state: &AppState,
+    bot_id: String,
+) -> Result<serde_json::Value, String> {
+    stop_one_bot(state, &bot_id).await
+}
+
 #[tauri::command]
 pub async fn bots_stop_one(
     state: State<'_, AppState>,
     bot_id: String,
 ) -> Result<serde_json::Value, String> {
-    stop_one_bot(&state, &bot_id).await
+    bots_stop_one_impl(&*state, bot_id).await
+}
+
+pub async fn bots_running_list_impl(state: &AppState) -> Result<Vec<String>, String> {
+    Ok(state.bot_manager.list_running_bot_ids().await)
 }
 
 #[tauri::command]
 pub async fn bots_running_list(
     state: State<'_, AppState>,
 ) -> Result<Vec<String>, String> {
-    Ok(state.bot_manager.list_running_bot_ids().await)
+    bots_running_list_impl(&*state).await
+}
+
+pub async fn bots_list_sessions_impl(
+    state: &AppState,
+) -> Result<Vec<crate::engine::db::ChatSession>, String> {
+    state.db.list_sessions_by_source("bot")
 }
 
 #[tauri::command]
 pub async fn bots_list_sessions(
     state: State<'_, AppState>,
 ) -> Result<Vec<crate::engine::db::ChatSession>, String> {
-    state.db.list_sessions_by_source("bot")
+    bots_list_sessions_impl(&*state).await
 }
 
 // === Test Connection Command ===
@@ -1030,9 +1090,8 @@ pub struct BotConversationInfo {
     pub created_at: i64,
 }
 
-#[tauri::command]
-pub async fn bot_conversations_list(
-    state: State<'_, AppState>,
+pub async fn bot_conversations_list_impl(
+    state: &AppState,
     bot_id: Option<String>,
 ) -> Result<Vec<BotConversationInfo>, String> {
     let convs = state.db.list_conversations(bot_id.as_deref())?;
@@ -1058,8 +1117,15 @@ pub async fn bot_conversations_list(
 }
 
 #[tauri::command]
-pub async fn bot_conversation_update_trigger(
+pub async fn bot_conversations_list(
     state: State<'_, AppState>,
+    bot_id: Option<String>,
+) -> Result<Vec<BotConversationInfo>, String> {
+    bot_conversations_list_impl(&*state, bot_id).await
+}
+
+pub async fn bot_conversation_update_trigger_impl(
+    state: &AppState,
     conversation_id: String,
     trigger_mode: String,
 ) -> Result<(), String> {
@@ -1070,8 +1136,16 @@ pub async fn bot_conversation_update_trigger(
 }
 
 #[tauri::command]
-pub async fn bot_conversation_link(
+pub async fn bot_conversation_update_trigger(
     state: State<'_, AppState>,
+    conversation_id: String,
+    trigger_mode: String,
+) -> Result<(), String> {
+    bot_conversation_update_trigger_impl(&*state, conversation_id, trigger_mode).await
+}
+
+pub async fn bot_conversation_link_impl(
+    state: &AppState,
     conversation_id: String,
     linked_session_id: Option<String>,
 ) -> Result<(), String> {
@@ -1079,8 +1153,16 @@ pub async fn bot_conversation_link(
 }
 
 #[tauri::command]
-pub async fn bot_conversation_set_agent(
+pub async fn bot_conversation_link(
     state: State<'_, AppState>,
+    conversation_id: String,
+    linked_session_id: Option<String>,
+) -> Result<(), String> {
+    bot_conversation_link_impl(&*state, conversation_id, linked_session_id).await
+}
+
+pub async fn bot_conversation_set_agent_impl(
+    state: &AppState,
     conversation_id: String,
     agent_config: Option<String>,
 ) -> Result<(), String> {
@@ -1093,16 +1175,36 @@ pub async fn bot_conversation_set_agent(
 }
 
 #[tauri::command]
-pub async fn bot_conversation_delete(
+pub async fn bot_conversation_set_agent(
     state: State<'_, AppState>,
+    conversation_id: String,
+    agent_config: Option<String>,
+) -> Result<(), String> {
+    bot_conversation_set_agent_impl(&*state, conversation_id, agent_config).await
+}
+
+pub async fn bot_conversation_delete_impl(
+    state: &AppState,
     conversation_id: String,
 ) -> Result<(), String> {
     state.db.delete_conversation(&conversation_id)
 }
 
+#[tauri::command]
+pub async fn bot_conversation_delete(
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> Result<(), String> {
+    bot_conversation_delete_impl(&*state, conversation_id).await
+}
+
 // === Bot Status Commands ===
+
+pub fn bots_get_status_impl() -> Vec<crate::engine::bots::BotStatus> {
+    crate::engine::bots::get_all_bot_statuses()
+}
 
 #[tauri::command]
 pub async fn bots_get_status() -> Result<Vec<crate::engine::bots::BotStatus>, String> {
-    Ok(crate::engine::bots::get_all_bot_statuses())
+    Ok(bots_get_status_impl())
 }
