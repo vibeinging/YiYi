@@ -54,9 +54,8 @@ fn save_env_file(state: &AppState, map: &BTreeMap<String, String>) -> Result<(),
     Ok(())
 }
 
-#[tauri::command]
-pub async fn list_envs(state: State<'_, AppState>) -> Result<Vec<EnvVar>, String> {
-    let map = load_env_file(&state);
+pub async fn list_envs_impl(state: &AppState) -> Result<Vec<EnvVar>, String> {
+    let map = load_env_file(state);
     Ok(map
         .into_iter()
         .map(|(key, value)| EnvVar { key, value })
@@ -64,8 +63,12 @@ pub async fn list_envs(state: State<'_, AppState>) -> Result<Vec<EnvVar>, String
 }
 
 #[tauri::command]
-pub async fn save_envs(
-    state: State<'_, AppState>,
+pub async fn list_envs(state: State<'_, AppState>) -> Result<Vec<EnvVar>, String> {
+    list_envs_impl(&*state).await
+}
+
+pub async fn save_envs_impl(
+    state: &AppState,
     envs: Vec<EnvVar>,
 ) -> Result<(), String> {
     let map: BTreeMap<String, String> = envs
@@ -73,7 +76,25 @@ pub async fn save_envs(
         .filter(|e| !e.key.is_empty())
         .map(|e| (e.key, e.value))
         .collect();
-    save_env_file(&state, &map)
+    save_env_file(state, &map)
+}
+
+#[tauri::command]
+pub async fn save_envs(
+    state: State<'_, AppState>,
+    envs: Vec<EnvVar>,
+) -> Result<(), String> {
+    save_envs_impl(&*state, envs).await
+}
+
+pub async fn delete_env_impl(
+    state: &AppState,
+    key: String,
+) -> Result<(), String> {
+    let mut map = load_env_file(state);
+    map.remove(&key);
+    std::env::remove_var(&key);
+    save_env_file(state, &map)
 }
 
 #[tauri::command]
@@ -81,8 +102,5 @@ pub async fn delete_env(
     state: State<'_, AppState>,
     key: String,
 ) -> Result<(), String> {
-    let mut map = load_env_file(&state);
-    map.remove(&key);
-    std::env::remove_var(&key);
-    save_env_file(&state, &map)
+    delete_env_impl(&*state, key).await
 }
