@@ -1,4 +1,4 @@
-use tauri::State;
+use tauri::{AppHandle, Runtime, State};
 
 use crate::engine::voice::VoiceStatus;
 use crate::state::AppState;
@@ -10,15 +10,27 @@ async fn resolve_api_key(state: &AppState) -> Result<String, String> {
     Ok(config.api_key)
 }
 
+/// Core logic for `start_voice_session`, generic over the Tauri runtime so
+/// tests can drive it with `AppHandle<MockRuntime>`.
+///
+/// Resolves an API key from the configured providers, then hands off to
+/// `VoiceSessionManager::start` which owns the session lifecycle.
+pub async fn start_voice_session_impl<R: Runtime>(
+    state: &AppState,
+    app: AppHandle<R>,
+) -> Result<String, String> {
+    let api_key = resolve_api_key(state).await?;
+
+    let manager = state.voice_manager.read().await;
+    manager.start(api_key, None, app).await
+}
+
 #[tauri::command]
 pub async fn start_voice_session(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let api_key = resolve_api_key(&state).await?;
-
-    let manager = state.voice_manager.read().await;
-    manager.start(api_key, None, app).await
+    start_voice_session_impl(&*state, app).await
 }
 
 pub async fn stop_voice_session_impl(
