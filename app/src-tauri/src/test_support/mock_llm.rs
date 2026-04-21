@@ -83,6 +83,81 @@ impl MockLlmServer {
             .mount(&self.server)
             .await;
     }
+
+    /// Configure a streaming SSE response: emits each chunk as a `data: {...}\n\n`
+    /// envelope with `choices[0].delta.content = chunk`, followed by `data: [DONE]\n\n`.
+    /// Matches the same `/chat/completions` path as the non-streaming mock, so tests
+    /// can switch between streaming/non-streaming on the same server.
+    pub async fn mock_chat_completion_stream(&self, chunks: &[&str]) {
+        let mut body = String::new();
+        for chunk in chunks {
+            let evt = serde_json::json!({
+                "id": "mock-id",
+                "object": "chat.completion.chunk",
+                "created": 0,
+                "model": "mock-model",
+                "choices": [{
+                    "index": 0,
+                    "delta": { "content": chunk },
+                    "finish_reason": null
+                }]
+            });
+            body.push_str(&format!("data: {}\n\n", evt));
+        }
+        // Final done chunk
+        body.push_str("data: [DONE]\n\n");
+
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(body.into_bytes(), "text/event-stream")
+                    .insert_header("content-type", "text/event-stream"),
+            )
+            .mount(&self.server)
+            .await;
+    }
+
+    /// Configure an SSE response that emits a tool_call chunk, for ReAct tests
+    /// that exercise tool dispatch.
+    pub async fn mock_chat_completion_tool_call(
+        &self,
+        tool_name: &str,
+        tool_args_json: &str,
+    ) {
+        let tool_call_evt = serde_json::json!({
+            "id": "mock-id",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "mock-model",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "call_mock_1",
+                        "type": "function",
+                        "function": {
+                            "name": tool_name,
+                            "arguments": tool_args_json,
+                        }
+                    }]
+                },
+                "finish_reason": null
+            }]
+        });
+        let body = format!("data: {}\n\ndata: [DONE]\n\n", tool_call_evt);
+
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(body.into_bytes(), "text/event-stream")
+                    .insert_header("content-type", "text/event-stream"),
+            )
+            .mount(&self.server)
+            .await;
+    }
 }
 
 /// Seed an active LLM provider in the given `AppState.providers` pointing at
@@ -155,6 +230,55 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status().as_u16(), 503);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mock_chat_completion_stream_serves_sse_chunks() {
+        let server = MockLlmServer::start().await;
+        server
+            .mock_chat_completion_stream(&["Hello", ", world"])
+            .await;
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("{}/chat/completions", server.uri()))
+            .json(&serde_json::json!({"model": "x", "messages": [], "stream": true}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+        assert!(resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .contains("text/event-stream"));
+
+        let body = resp.text().await.unwrap();
+        assert!(body.contains("\"Hello\""), "body missing first chunk: {}", body);
+        assert!(body.contains("\", world\""), "body missing second chunk: {}", body);
+        assert!(body.contains("data: [DONE]"), "body missing terminator: {}", body);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mock_chat_completion_tool_call_serves_tool_call_event() {
+        let server = MockLlmServer::start().await;
+        server
+            .mock_chat_completion_tool_call("my_tool", r#"{"x":1}"#)
+            .await;
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("{}/chat/completions", server.uri()))
+            .json(&serde_json::json!({"model": "x", "messages": []}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+        let body = resp.text().await.unwrap();
+        assert!(body.contains("my_tool"), "body missing tool name: {}", body);
+        assert!(body.contains("tool_calls"), "body missing tool_calls key: {}", body);
+        assert!(body.contains("data: [DONE]"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
