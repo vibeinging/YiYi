@@ -1,4 +1,4 @@
-mod commands;
+pub mod commands;
 pub mod engine;
 pub mod state;
 mod tray;
@@ -17,21 +17,12 @@ pub fn run() {
     // macOS GUI apps don't inherit the user's shell PATH — fix it before anything else.
     fix_path_env();
 
-    // Set PYTHONHOME so the embedded Python finds its stdlib.
-    // In dev mode: use the system Python's stdlib.
-    // In production: use the bundled python-stdlib/ in the app resources.
-    setup_python_home();
-
-    // Prevent Python from writing .pyc cache files into bundled stdlib,
-    // which would trigger Tauri dev hot-reload.
-    std::env::set_var("PYTHONDONTWRITEBYTECODE", "1");
-
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_python::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_pty::init())
         .manage(AppState::new())
         .manage(engine::worker::WorkerRegistry::new())
         .setup(|app| {
@@ -81,13 +72,7 @@ pub fn run() {
             // Store app handle for Python bridge
             python_bridge::set_app_handle(app.handle().clone());
 
-            // Bootstrap Python packages on first launch
-            {
-                let handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    bootstrap_python_packages(&handle).await;
-                });
-            }
+            // Python packages: system python3 used via subprocess (no bootstrap needed)
 
             // Seed builtin skills and default persona templates
             let state = app.state::<AppState>();
@@ -112,6 +97,23 @@ pub fn run() {
 
             // Mark tools subsystem as ready (all OnceLock statics initialized)
             engine::tools::mark_ready();
+
+            // Initialize global tool registry and register all tool sources
+            let tool_registry = engine::tool_registry_global::init_global_registry();
+            engine::tool_registry_global::register_builtin_tools(&tool_registry);
+
+            // Register plugin tools
+            {
+                let plugin_reg = state.plugin_registry.read().unwrap();
+                for plugin in plugin_reg.enabled() {
+                    let defs = plugin.tool_definitions();
+                    if !defs.is_empty() {
+                        engine::tool_registry_global::register_plugin_tools(&tool_registry, &plugin.id, defs);
+                    }
+                }
+            }
+
+            log::info!("Global tool registry: {} tools registered", tool_registry.count());
 
             // Initialize the unified task registry
             engine::task_registry::init_global_registry();
@@ -355,6 +357,12 @@ pub fn run() {
             commands::system::add_quick_action,
             commands::system::update_quick_action,
             commands::system::delete_quick_action,
+            // Personality & Growth
+            commands::system::get_personality_stats,
+            commands::system::get_personality_timeline,
+            commands::system::toggle_sparkling_memory,
+            commands::system::list_sparkling_memories,
+            commands::system::get_recall_candidates,
             // Models & Providers
             commands::models::list_providers,
             commands::models::configure_provider,
@@ -529,6 +537,7 @@ pub fn run() {
             commands::buddy::get_buddy_hosted,
             commands::buddy::get_memory_stats,
             commands::buddy::list_recent_memories,
+            commands::buddy::list_recent_episodes,
             commands::buddy::search_memories,
             commands::buddy::delete_memory,
             commands::buddy::list_corrections,
@@ -536,6 +545,9 @@ pub fn run() {
             commands::buddy::list_buddy_decisions,
             commands::buddy::set_decision_feedback,
             commands::buddy::get_trust_stats,
+            // Extensions (unified tool registry)
+            commands::extensions::list_all_tools,
+            commands::extensions::get_tool_stats,
             // Voice Control
             commands::voice::start_voice_session,
             commands::voice::stop_voice_session,
@@ -729,78 +741,9 @@ fn should_catch_up(db: &std::sync::Arc<crate::engine::db::Database>) -> bool {
     }
 }
 
-/// Bootstrap core Python packages on first launch.
-/// Checks if packages are already installed, if not installs from bundled wheels.
-async fn bootstrap_python_packages(handle: &tauri::AppHandle) {
-    use tauri_plugin_python::PythonExt;
+// Python: using system python3 via subprocess (see python_bridge.rs).
+// No embedded runtime, no bootstrap needed.
 
-    let runner = handle.runner();
-    let core_packages = r#"["pypdf","pptx","openpyxl","docx","PIL"]"#;
-
-    // Check which core packages are missing
-    match runner
-        .call_function(
-            "check_packages",
-            vec![serde_json::Value::String(core_packages.into())],
-        )
-        .await
-    {
-        Ok(result) => {
-            let result_str = result.as_str().map(|s| s.to_string()).unwrap_or_else(|| result.to_string());
-            let missing: Vec<String> =
-                serde_json::from_str(&result_str).unwrap_or_default();
-            if missing.is_empty() {
-                log::info!("All core Python packages are available");
-                return;
-            }
-            log::info!("Missing Python packages: {:?}", missing);
-
-            // Try offline install from bundled wheels
-            // In dev mode, resource_dir may not contain wheels, so fallback to source dir
-            let wheels_dir = handle
-                .path()
-                .resource_dir()
-                .ok()
-                .map(|d| d.join("wheels"))
-                .filter(|d| d.join("requirements.txt").exists() && std::fs::read_dir(d).map(|mut r| r.any(|e| e.ok().map_or(false, |e| e.path().extension().map_or(false, |ext| ext == "whl")))).unwrap_or(false))
-                .or_else(|| {
-                    // Fallback: look next to the Cargo.toml (dev mode)
-                    let dev_wheels = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("wheels");
-                    if dev_wheels.exists() { Some(dev_wheels) } else { None }
-                });
-
-            if let Some(wheels_dir) = wheels_dir {
-                let req_file = wheels_dir.join("requirements.txt");
-                log::info!("Installing from wheels: {}", wheels_dir.display());
-                match runner
-                    .call_function(
-                        "pip_install_offline",
-                        vec![
-                            serde_json::Value::String(
-                                wheels_dir.to_string_lossy().into(),
-                            ),
-                            serde_json::Value::String(
-                                req_file.to_string_lossy().into(),
-                            ),
-                        ],
-                    )
-                    .await
-                {
-                    Ok(msg) => {
-                        let msg_str = msg.as_str().unwrap_or("done");
-                        log::info!("Offline install: {}", msg_str);
-                    }
-                    Err(e) => log::warn!("Offline install failed: {}", e),
-                }
-            } else {
-                log::info!("No bundled wheels found, packages must be installed manually");
-            }
-        }
-        Err(e) => {
-            log::warn!("Failed to check Python packages: {}", e);
-        }
-    }
-}
 
 /// Recover tasks that were "running" when the app was interrupted/crashed.
 async fn recover_interrupted_tasks(
@@ -871,14 +814,9 @@ async fn recover_interrupted_tasks(
     }
 }
 
-/// Set PYTHONHOME before Python interpreter initializes.
-///
-/// Directory layout:
-///   Unix:    python-stdlib/lib/python3.X/...
-///   Windows: python-stdlib/Lib/...  (no version subdirectory)
-///
-/// PYTHONHOME should point to python-stdlib/ (the prefix).
-fn setup_python_home() {
+// setup_python_home removed — no embedded Python runtime.
+#[allow(dead_code)]
+fn _setup_python_home_removed() {
     // If PYTHONHOME is already set externally, respect it
     if std::env::var("PYTHONHOME").is_ok() {
         return;
