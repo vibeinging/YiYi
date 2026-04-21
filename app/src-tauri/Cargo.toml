@@ -8,6 +8,9 @@ repository = "https://github.com/vibeinging/YiYi"
 edition = "2021"
 rust-version = "1.77.2"
 
+[features]
+test-support = []
+
 [lib]
 name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -47,17 +50,17 @@ rust_xlsxwriter = "0.82"
 docx-rs = "0.4"
 quick-xml = "0.37"
 pdf-extract = "0.7"
-tauri-plugin-python = { version = "0.3", features = ["pyo3"] }
+# Python: via system subprocess (no embedded runtime)
 tauri-plugin-notification = "2"
-rusqlite = { version = "0.31", features = ["bundled"] }
-async_py = { version = "0.2", default-features = false, features = ["pyo3"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+# async_py removed — using system python3 subprocess
 libc = "0.2"
 rfd = "0.15"
 lazy_static = "1.4"
 portable-pty = "0.8"
-memme-core = { version = "0.1.1", default-features = false, features = ["bundled"] }
-memme-embeddings = { version = "0.1.1", default-features = false, features = ["openai"] }
-memme-llm = { version = "0.1.1", default-features = false, features = ["openai"] }
+memme-core = { path = "../../../MemMe/crates/memme-core", default-features = false }
+memme-embeddings = { path = "../../../MemMe/crates/memme-embeddings", default-features = false, features = ["onnx"] }
+memme-llm = { path = "../../../MemMe/crates/memme-llm", default-features = false, features = ["openai"] }
 strip-ansi-escapes = "0.2"
 cpal = "0.15"
 rubato = "0.16"
@@ -65,7 +68,7 @@ arboard = "3"
 serde_yaml = "0.9"
 tauri-plugin-updater = "2.10.0"
 tauri-plugin-process = "2.3.1"
-keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "linux-native"] }
+tauri-plugin-pty = "0.2.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"
@@ -77,3 +80,14 @@ core-graphics = "0.24"
 strip = true
 lto = true
 opt-level = "s"
+
+[dev-dependencies]
+mockall = "0.13"
+tempfile = "3"
+tokio-test = "0.4"
+rstest = "0.23"
+serial_test = "3"
+
+[dev-dependencies.tokio]
+version = "1"
+features = ["full", "test-util"]
