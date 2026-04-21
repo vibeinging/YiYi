@@ -133,13 +133,29 @@ pub async fn create_task(
     Ok(task)
 }
 
+pub async fn list_tasks_impl(
+    state: &AppState,
+    parent_session_id: Option<String>,
+    status: Option<String>,
+) -> Result<Vec<TaskInfo>, String> {
+    state.db.list_tasks(parent_session_id.as_deref(), status.as_deref())
+}
+
 #[tauri::command]
 pub async fn list_tasks(
     parent_session_id: Option<String>,
     status: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Vec<TaskInfo>, String> {
-    state.db.list_tasks(parent_session_id.as_deref(), status.as_deref())
+    list_tasks_impl(&*state, parent_session_id, status).await
+}
+
+pub async fn get_task_status_impl(
+    state: &AppState,
+    task_id: String,
+) -> Result<TaskInfo, String> {
+    state.db.get_task(&task_id)?
+        .ok_or_else(|| format!("Task not found: {}", task_id))
 }
 
 #[tauri::command]
@@ -147,8 +163,7 @@ pub async fn get_task_status(
     task_id: String,
     state: State<'_, AppState>,
 ) -> Result<TaskInfo, String> {
-    state.db.get_task(&task_id)?
-        .ok_or_else(|| format!("Task not found: {}", task_id))
+    get_task_status_impl(&*state, task_id).await
 }
 
 #[tauri::command]
@@ -319,19 +334,32 @@ pub async fn convert_to_long_task(
     Ok(task)
 }
 
+pub async fn get_task_by_name_impl(
+    state: &AppState,
+    name: String,
+) -> Result<Option<TaskInfo>, String> {
+    state.db.search_tasks_by_name(&name)
+}
+
 #[tauri::command]
 pub async fn get_task_by_name(
     name: String,
     state: State<'_, AppState>,
 ) -> Result<Option<TaskInfo>, String> {
-    state.db.search_tasks_by_name(&name)
+    get_task_by_name_impl(&*state, name).await
+}
+
+pub async fn list_all_tasks_brief_impl(
+    state: &AppState,
+) -> Result<Vec<TaskInfo>, String> {
+    state.db.list_tasks(None, None)
 }
 
 #[tauri::command]
 pub async fn list_all_tasks_brief(
     state: State<'_, AppState>,
 ) -> Result<Vec<TaskInfo>, String> {
-    state.db.list_tasks(None, None)
+    list_all_tasks_brief_impl(&*state).await
 }
 
 #[tauri::command]
