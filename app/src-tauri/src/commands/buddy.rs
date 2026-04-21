@@ -103,16 +103,15 @@ pub async fn get_buddy_hosted(state: State<'_, AppState>) -> Result<bool, String
 
 /// YiYi observes the conversation and decides whether to react with an emotional bubble.
 /// This is YiYi's "emotional side" — casual, expressive, in-character reactions.
-#[tauri::command]
-pub async fn buddy_observe(
-    state: State<'_, AppState>,
+pub async fn buddy_observe_impl(
+    state: &AppState,
     recent_messages: Vec<String>,
     ai_name: String,
     species_label: String,
     reaction_style: String,
     stats: std::collections::HashMap<String, i64>,
 ) -> Result<Option<String>, String> {
-    let llm_config = resolve_llm(&state)
+    let llm_config = resolve_llm(state)
         .await
         .ok_or("No LLM configured")?;
 
@@ -185,6 +184,26 @@ pub async fn buddy_observe(
     }
 
     Ok(None)
+}
+
+#[tauri::command]
+pub async fn buddy_observe(
+    state: State<'_, AppState>,
+    recent_messages: Vec<String>,
+    ai_name: String,
+    species_label: String,
+    reaction_style: String,
+    stats: std::collections::HashMap<String, i64>,
+) -> Result<Option<String>, String> {
+    buddy_observe_impl(
+        &state,
+        recent_messages,
+        ai_name,
+        species_label,
+        reaction_style,
+        stats,
+    )
+    .await
 }
 
 // ── Memory browsing commands ─────────────────────────────────────────
