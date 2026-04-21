@@ -1,1 +1,6 @@
-//! Test support utilities for integration tests (gated behind `test-support` feature or `cfg(test)`).
+//! Test-only helpers. Available when compiled with `--features test-support`
+//! or in the `cfg(test)` build profile.
+
+pub mod temp_workspace;
+
+pub use temp_workspace::TempWorkspace;
