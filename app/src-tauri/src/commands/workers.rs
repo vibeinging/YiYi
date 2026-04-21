@@ -30,8 +30,7 @@ impl From<&Worker> for WorkerSummary {
 }
 
 /// List all workers with their current state.
-#[tauri::command]
-pub fn list_workers(registry: State<'_, WorkerRegistry>) -> Vec<WorkerSummary> {
+pub fn list_workers_impl(registry: &WorkerRegistry) -> Vec<WorkerSummary> {
     registry
         .list()
         .iter()
@@ -39,12 +38,25 @@ pub fn list_workers(registry: State<'_, WorkerRegistry>) -> Vec<WorkerSummary> {
         .collect()
 }
 
+#[tauri::command]
+pub fn list_workers(registry: State<'_, WorkerRegistry>) -> Vec<WorkerSummary> {
+    list_workers_impl(&*registry)
+}
+
 /// Resolve a worker's trust prompt: approve or deny.
+pub fn resolve_worker_trust_impl(
+    registry: &WorkerRegistry,
+    worker_id: String,
+    approved: bool,
+) -> Result<(), String> {
+    registry.resolve_trust(&worker_id, approved)
+}
+
 #[tauri::command]
 pub fn resolve_worker_trust(
     registry: State<'_, WorkerRegistry>,
     worker_id: String,
     approved: bool,
 ) -> Result<(), String> {
-    registry.resolve_trust(&worker_id, approved)
+    resolve_worker_trust_impl(&*registry, worker_id, approved)
 }
