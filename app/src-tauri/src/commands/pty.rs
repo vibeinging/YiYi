@@ -40,6 +40,15 @@ pub async fn pty_write(
     state.pty_manager.write_stdin(&session_id, &bytes).await
 }
 
+pub async fn pty_resize_impl(
+    state: &AppState,
+    session_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    state.pty_manager.resize(&session_id, cols, rows).await
+}
+
 #[tauri::command]
 pub async fn pty_resize(
     session_id: String,
@@ -47,7 +56,14 @@ pub async fn pty_resize(
     rows: u16,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    state.pty_manager.resize(&session_id, cols, rows).await
+    pty_resize_impl(&*state, session_id, cols, rows).await
+}
+
+pub async fn pty_close_impl(
+    state: &AppState,
+    session_id: String,
+) -> Result<(), String> {
+    state.pty_manager.close(&session_id).await
 }
 
 #[tauri::command]
@@ -55,12 +71,16 @@ pub async fn pty_close(
     session_id: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    state.pty_manager.close(&session_id).await
+    pty_close_impl(&*state, session_id).await
+}
+
+pub async fn pty_list_impl(state: &AppState) -> Result<Vec<PtySessionInfo>, String> {
+    Ok(state.pty_manager.list().await)
 }
 
 #[tauri::command]
 pub async fn pty_list(
     state: State<'_, AppState>,
 ) -> Result<Vec<PtySessionInfo>, String> {
-    Ok(state.pty_manager.list().await)
+    pty_list_impl(&*state).await
 }

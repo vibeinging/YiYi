@@ -1,4 +1,4 @@
-use tauri::{Emitter, State};
+use tauri::{AppHandle, Emitter, Runtime, State};
 
 use crate::engine::db::TaskInfo;
 use crate::state::AppState;
@@ -31,9 +31,9 @@ fn generate_task_md(
 
 /// Shared logic for creating a task with its own session.
 /// Returns (task_id, session_id, TaskInfo).
-fn create_task_with_session(
+fn create_task_with_session<R: Runtime>(
     state: &AppState,
-    app: &tauri::AppHandle,
+    app: &AppHandle<R>,
     task_name: &str,
     description: &str,
     parent_session_id: &str,
@@ -95,14 +95,15 @@ fn create_task_with_session(
     Ok(task)
 }
 
-#[tauri::command]
-pub async fn create_task(
+/// Core logic for `create_task`, generic over the Tauri runtime so tests can
+/// pass `AppHandle<MockRuntime>` while production uses `AppHandle<Wry>`.
+pub async fn create_task_impl<R: Runtime>(
+    state: &AppState,
+    app: &AppHandle<R>,
     title: String,
     description: Option<String>,
     parent_session_id: String,
     plan: Option<Vec<String>>,
-    state: State<'_, AppState>,
-    app: tauri::AppHandle,
 ) -> Result<TaskInfo, String> {
     let task_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -134,12 +135,40 @@ pub async fn create_task(
 }
 
 #[tauri::command]
+pub async fn create_task(
+    title: String,
+    description: Option<String>,
+    parent_session_id: String,
+    plan: Option<Vec<String>>,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<TaskInfo, String> {
+    create_task_impl(&*state, &app, title, description, parent_session_id, plan).await
+}
+
+pub async fn list_tasks_impl(
+    state: &AppState,
+    parent_session_id: Option<String>,
+    status: Option<String>,
+) -> Result<Vec<TaskInfo>, String> {
+    state.db.list_tasks(parent_session_id.as_deref(), status.as_deref())
+}
+
+#[tauri::command]
 pub async fn list_tasks(
     parent_session_id: Option<String>,
     status: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Vec<TaskInfo>, String> {
-    state.db.list_tasks(parent_session_id.as_deref(), status.as_deref())
+    list_tasks_impl(&*state, parent_session_id, status).await
+}
+
+pub async fn get_task_status_impl(
+    state: &AppState,
+    task_id: String,
+) -> Result<TaskInfo, String> {
+    state.db.get_task(&task_id)?
+        .ok_or_else(|| format!("Task not found: {}", task_id))
 }
 
 #[tauri::command]
@@ -147,15 +176,15 @@ pub async fn get_task_status(
     task_id: String,
     state: State<'_, AppState>,
 ) -> Result<TaskInfo, String> {
-    state.db.get_task(&task_id)?
-        .ok_or_else(|| format!("Task not found: {}", task_id))
+    get_task_status_impl(&*state, task_id).await
 }
 
-#[tauri::command]
-pub async fn cancel_task(
+/// Core logic for `cancel_task`, generic over the Tauri runtime so tests can
+/// pass `AppHandle<MockRuntime>` while production uses `AppHandle<Wry>`.
+pub async fn cancel_task_impl<R: Runtime>(
+    state: &AppState,
+    app: &AppHandle<R>,
     task_id: String,
-    state: State<'_, AppState>,
-    app: tauri::AppHandle,
 ) -> Result<(), String> {
     let signalled = state.cancel_task_signal(&task_id);
     if !signalled {
@@ -168,10 +197,19 @@ pub async fn cancel_task(
 }
 
 #[tauri::command]
-pub async fn pause_task(
+pub async fn cancel_task(
     task_id: String,
     state: State<'_, AppState>,
     app: tauri::AppHandle,
+) -> Result<(), String> {
+    cancel_task_impl(&*state, &app, task_id).await
+}
+
+/// Core logic for `pause_task`, generic over the Tauri runtime.
+pub async fn pause_task_impl<R: Runtime>(
+    state: &AppState,
+    app: &AppHandle<R>,
+    task_id: String,
 ) -> Result<(), String> {
     let task = state.db.get_task(&task_id)?
         .ok_or_else(|| format!("Task not found: {}", task_id))?;
@@ -187,11 +225,20 @@ pub async fn pause_task(
 }
 
 #[tauri::command]
-pub async fn send_task_message(
+pub async fn pause_task(
     task_id: String,
-    message: String,
     state: State<'_, AppState>,
     app: tauri::AppHandle,
+) -> Result<(), String> {
+    pause_task_impl(&*state, &app, task_id).await
+}
+
+/// Core logic for `send_task_message`, generic over the Tauri runtime.
+pub async fn send_task_message_impl<R: Runtime>(
+    state: &AppState,
+    app: &AppHandle<R>,
+    task_id: String,
+    message: String,
 ) -> Result<(), String> {
     let task = state.db.get_task(&task_id)?
         .ok_or_else(|| format!("Task not found: {}", task_id))?;
@@ -208,14 +255,45 @@ pub async fn send_task_message(
 }
 
 #[tauri::command]
+pub async fn send_task_message(
+    task_id: String,
+    message: String,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    send_task_message_impl(&*state, &app, task_id, message).await
+}
+
+/// Core logic for `delete_task`, generic over the Tauri runtime.
+pub async fn delete_task_impl<R: Runtime>(
+    state: &AppState,
+    app: &AppHandle<R>,
+    task_id: String,
+) -> Result<(), String> {
+    state.db.delete_task(&task_id)?;
+    state.cleanup_task_signal(&task_id);
+    let _ = app.emit("task://deleted", serde_json::json!({ "taskId": task_id }));
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn delete_task(
     task_id: String,
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    state.db.delete_task(&task_id)?;
-    state.cleanup_task_signal(&task_id);
-    let _ = app.emit("task://deleted", serde_json::json!({ "taskId": task_id }));
+    delete_task_impl(&*state, &app, task_id).await
+}
+
+/// Core logic for `pin_task`, generic over the Tauri runtime.
+pub async fn pin_task_impl<R: Runtime>(
+    state: &AppState,
+    app: &AppHandle<R>,
+    task_id: String,
+    pinned: bool,
+) -> Result<(), String> {
+    state.db.pin_task(&task_id, pinned)?;
+    let _ = app.emit("task://updated", serde_json::json!({ "taskId": task_id, "pinned": pinned }));
     Ok(())
 }
 
@@ -226,23 +304,25 @@ pub async fn pin_task(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    state.db.pin_task(&task_id, pinned)?;
-    let _ = app.emit("task://updated", serde_json::json!({ "taskId": task_id, "pinned": pinned }));
-    Ok(())
+    pin_task_impl(&*state, &app, task_id, pinned).await
 }
 
-#[tauri::command]
-pub async fn confirm_background_task(
+/// Core logic for `confirm_background_task`, generic over the Tauri runtime.
+///
+/// The spawned ReAct loop is fire-and-forget via `tokio::spawn`; this function
+/// only guarantees the synchronous DB/event contract (task row inserted, both
+/// session messages pushed, `task://created` event emitted, execution spawned).
+pub async fn confirm_background_task_impl<R: Runtime>(
+    state: &AppState,
+    app: &AppHandle<R>,
     parent_session_id: String,
     task_name: String,
     original_message: String,
     context_summary: String,
     workspace_path: Option<String>,
-    state: State<'_, AppState>,
-    app: tauri::AppHandle,
 ) -> Result<TaskInfo, String> {
     let task = create_task_with_session(
-        &state, &app, &task_name, &original_message,
+        state, app, &task_name, &original_message,
         &parent_session_id, workspace_path.as_deref(), "background",
     )?;
 
@@ -274,16 +354,37 @@ pub async fn confirm_background_task(
 }
 
 #[tauri::command]
-pub async fn convert_to_long_task(
+pub async fn confirm_background_task(
     parent_session_id: String,
     task_name: String,
+    original_message: String,
     context_summary: String,
     workspace_path: Option<String>,
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<TaskInfo, String> {
+    confirm_background_task_impl(
+        &*state, &app, parent_session_id, task_name,
+        original_message, context_summary, workspace_path,
+    ).await
+}
+
+/// Core logic for `convert_to_long_task`, generic over the Tauri runtime.
+///
+/// The spawned ReAct loop is fire-and-forget via `tokio::spawn`; this function
+/// only guarantees the synchronous DB/event contract (task row inserted,
+/// context + copied history pushed, `task://created` event emitted, execution
+/// spawned).
+pub async fn convert_to_long_task_impl<R: Runtime>(
+    state: &AppState,
+    app: &AppHandle<R>,
+    parent_session_id: String,
+    task_name: String,
+    context_summary: String,
+    workspace_path: Option<String>,
+) -> Result<TaskInfo, String> {
     let task = create_task_with_session(
-        &state, &app, &task_name, &context_summary,
+        state, app, &task_name, &context_summary,
         &parent_session_id, workspace_path.as_deref(), "converted",
     )?;
 
@@ -320,18 +421,46 @@ pub async fn convert_to_long_task(
 }
 
 #[tauri::command]
+pub async fn convert_to_long_task(
+    parent_session_id: String,
+    task_name: String,
+    context_summary: String,
+    workspace_path: Option<String>,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<TaskInfo, String> {
+    convert_to_long_task_impl(
+        &*state, &app, parent_session_id, task_name,
+        context_summary, workspace_path,
+    ).await
+}
+
+pub async fn get_task_by_name_impl(
+    state: &AppState,
+    name: String,
+) -> Result<Option<TaskInfo>, String> {
+    state.db.search_tasks_by_name(&name)
+}
+
+#[tauri::command]
 pub async fn get_task_by_name(
     name: String,
     state: State<'_, AppState>,
 ) -> Result<Option<TaskInfo>, String> {
-    state.db.search_tasks_by_name(&name)
+    get_task_by_name_impl(&*state, name).await
+}
+
+pub async fn list_all_tasks_brief_impl(
+    state: &AppState,
+) -> Result<Vec<TaskInfo>, String> {
+    state.db.list_tasks(None, None)
 }
 
 #[tauri::command]
 pub async fn list_all_tasks_brief(
     state: State<'_, AppState>,
 ) -> Result<Vec<TaskInfo>, String> {
-    state.db.list_tasks(None, None)
+    list_all_tasks_brief_impl(&*state).await
 }
 
 #[tauri::command]

@@ -7,7 +7,7 @@ use realtime::RealtimeEvent;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tauri::Emitter;
+use tauri::{AppHandle, Emitter, Runtime};
 use tokio::sync::RwLock;
 
 use crate::engine::tools::{self, ToolCall, FunctionCall};
@@ -58,12 +58,13 @@ impl VoiceSessionManager {
         }
     }
 
-    /// Start a new voice session.
-    pub async fn start(
+    /// Start a new voice session. Generic over the Tauri runtime so tests can
+    /// drive it with `AppHandle<MockRuntime>` (production uses `AppHandle<Wry>`).
+    pub async fn start<R: Runtime>(
         &self,
         api_key: String,
         model: Option<String>,
-        app_handle: tauri::AppHandle,
+        app_handle: AppHandle<R>,
     ) -> Result<String, String> {
         // Stop any existing session first
         self.stop().await?;
@@ -136,12 +137,12 @@ impl VoiceSessionManager {
 
 // ── Main voice loop ─────────────────────────────────────────────────────────
 
-async fn voice_loop(
+async fn voice_loop<R: Runtime>(
     api_key: String,
     model: Option<String>,
     cancel: Arc<AtomicBool>,
     status: Arc<RwLock<VoiceStatus>>,
-    app_handle: tauri::AppHandle,
+    app_handle: AppHandle<R>,
 ) -> Result<(), String> {
     // 1. Connect to OpenAI Realtime API
     let (client, mut event_rx) = realtime::RealtimeClient::connect(
@@ -380,7 +381,7 @@ fn build_voice_instructions() -> String {
 
 // ── Event emission ──────────────────────────────────────────────────────────
 
-fn emit_status(app: &tauri::AppHandle, status: &VoiceStatus, error: Option<&str>) {
+fn emit_status<R: Runtime>(app: &AppHandle<R>, status: &VoiceStatus, error: Option<&str>) {
     let payload = serde_json::json!({
         "status": status.to_string(),
         "error": error,
@@ -388,7 +389,7 @@ fn emit_status(app: &tauri::AppHandle, status: &VoiceStatus, error: Option<&str>
     let _ = app.emit("voice://status", payload);
 }
 
-fn emit_transcript(app: &tauri::AppHandle, role: &str, text: &str, is_final: bool) {
+fn emit_transcript<R: Runtime>(app: &AppHandle<R>, role: &str, text: &str, is_final: bool) {
     let payload = serde_json::json!({
         "type": role,
         "text": text,
@@ -397,8 +398,8 @@ fn emit_transcript(app: &tauri::AppHandle, role: &str, text: &str, is_final: boo
     let _ = app.emit("voice://transcript", payload);
 }
 
-fn emit_tool_call(
-    app: &tauri::AppHandle,
+fn emit_tool_call<R: Runtime>(
+    app: &AppHandle<R>,
     name: &str,
     status: &str,
     preview: Option<&str>,

@@ -26,9 +26,8 @@ impl From<UnifiedUserRow> for UnifiedUserInfo {
     }
 }
 
-#[tauri::command]
-pub async fn unified_users_list(
-    state: State<'_, AppState>,
+pub async fn unified_users_list_impl(
+    state: &AppState,
 ) -> Result<Vec<UnifiedUserInfo>, String> {
     let users = state.db.list_unified_users()?;
     let mut result = Vec::with_capacity(users.len());
@@ -42,8 +41,14 @@ pub async fn unified_users_list(
 }
 
 #[tauri::command]
-pub async fn unified_users_create(
+pub async fn unified_users_list(
     state: State<'_, AppState>,
+) -> Result<Vec<UnifiedUserInfo>, String> {
+    unified_users_list_impl(&*state).await
+}
+
+pub async fn unified_users_create_impl(
+    state: &AppState,
     display_name: Option<String>,
 ) -> Result<UnifiedUserInfo, String> {
     let user = state.db.create_unified_user(display_name.as_deref())?;
@@ -51,8 +56,15 @@ pub async fn unified_users_create(
 }
 
 #[tauri::command]
-pub async fn unified_users_link(
+pub async fn unified_users_create(
     state: State<'_, AppState>,
+    display_name: Option<String>,
+) -> Result<UnifiedUserInfo, String> {
+    unified_users_create_impl(&*state, display_name).await
+}
+
+pub async fn unified_users_link_impl(
+    state: &AppState,
     unified_user_id: String,
     platform: String,
     platform_user_id: String,
@@ -73,11 +85,40 @@ pub async fn unified_users_link(
 }
 
 #[tauri::command]
+pub async fn unified_users_link(
+    state: State<'_, AppState>,
+    unified_user_id: String,
+    platform: String,
+    platform_user_id: String,
+    bot_id: String,
+    display_name: Option<String>,
+) -> Result<(), String> {
+    unified_users_link_impl(
+        &*state,
+        unified_user_id,
+        platform,
+        platform_user_id,
+        bot_id,
+        display_name,
+    )
+    .await
+}
+
+pub async fn unified_users_unlink_impl(
+    state: &AppState,
+    platform: String,
+    platform_user_id: String,
+    bot_id: String,
+) -> Result<(), String> {
+    state.db.unlink_identity(&platform, &platform_user_id, &bot_id)
+}
+
+#[tauri::command]
 pub async fn unified_users_unlink(
     state: State<'_, AppState>,
     platform: String,
     platform_user_id: String,
     bot_id: String,
 ) -> Result<(), String> {
-    state.db.unlink_identity(&platform, &platform_user_id, &bot_id)
+    unified_users_unlink_impl(&*state, platform, platform_user_id, bot_id).await
 }

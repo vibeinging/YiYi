@@ -69,12 +69,26 @@ export async function deleteMemory(id: string): Promise<void> {
   return await invoke<void>('delete_memory', { id })
 }
 
+export interface EpisodeEntry {
+  episode_id: string
+  title: string
+  summary: string
+  started_at: string
+  ended_at: string | null
+  significance: number
+  outcome: string | null
+}
+
+export async function listRecentEpisodes(limit?: number): Promise<EpisodeEntry[]> {
+  return await invoke<EpisodeEntry[]>('list_recent_episodes', { limit })
+}
+
 // ── Corrections ──
 
 export interface CorrectionEntry {
   trigger: string
-  wrong_behavior: string
   correct_behavior: string
+  source: string
   confidence: number
 }
 

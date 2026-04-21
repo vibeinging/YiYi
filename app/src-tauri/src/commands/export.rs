@@ -16,12 +16,8 @@ fn timestamped_name(prefix: &str, ext: &str) -> String {
     format!("{prefix}_{ts}.{ext}")
 }
 
-/// Export conversations to a file.
-///
-/// Returns the file path where data was saved.
-#[tauri::command]
-pub async fn export_conversations(
-    state: State<'_, AppState>,
+pub async fn export_conversations_impl(
+    state: &AppState,
     format: String,
     session_ids: Option<Vec<String>>,
 ) -> Result<String, String> {
@@ -35,7 +31,7 @@ pub async fn export_conversations(
         _ => sessions,
     };
 
-    let dir = export_dir(&state)?;
+    let dir = export_dir(state)?;
     let ext = if format == "markdown" { "md" } else { "json" };
     let path = dir.join(timestamped_name("conversations", ext));
     let mut file = std::fs::File::create(&path)
@@ -81,10 +77,20 @@ pub async fn export_conversations(
     Ok(path_str)
 }
 
-/// Export memories to a JSON file. Returns the file path.
+/// Export conversations to a file.
+///
+/// Returns the file path where data was saved.
 #[tauri::command]
-pub async fn export_memories(
+pub async fn export_conversations(
     state: State<'_, AppState>,
+    format: String,
+    session_ids: Option<Vec<String>>,
+) -> Result<String, String> {
+    export_conversations_impl(&*state, format, session_ids).await
+}
+
+pub async fn export_memories_impl(
+    state: &AppState,
 ) -> Result<String, String> {
     let store = crate::engine::tools::get_memme_store()
         .ok_or("MemMe store not initialized")?;
@@ -96,7 +102,7 @@ pub async fn export_memories(
         .list_traces(options)
         .map_err(|e| format!("Failed to list memories: {e}"))?;
 
-    let dir = export_dir(&state)?;
+    let dir = export_dir(state)?;
     let path = dir.join(timestamped_name("memories", "json"));
     let json = serde_json::to_string_pretty(&traces)
         .map_err(|e| format!("Serialize error: {e}"))?;
@@ -107,13 +113,16 @@ pub async fn export_memories(
     Ok(path_str)
 }
 
-/// Export app settings (WITHOUT api keys for security).
-///
-/// Includes: active model, provider list (no keys), workspace path,
-/// enabled skills, meditation config, memme config.
+/// Export memories to a JSON file. Returns the file path.
 #[tauri::command]
-pub async fn export_settings(
+pub async fn export_memories(
     state: State<'_, AppState>,
+) -> Result<String, String> {
+    export_memories_impl(&*state).await
+}
+
+pub async fn export_settings_impl(
+    state: &AppState,
 ) -> Result<String, String> {
     // Active model
     let active_llm = {
@@ -189,7 +198,7 @@ pub async fn export_settings(
         "enabled_skills": enabled_skills,
     });
 
-    let dir = export_dir(&state)?;
+    let dir = export_dir(state)?;
     let path = dir.join(timestamped_name("settings", "json"));
     let json = serde_json::to_string_pretty(&export)
         .map_err(|e| format!("Serialize error: {e}"))?;
@@ -197,4 +206,15 @@ pub async fn export_settings(
 
     log::info!("Exported settings to {}", path.display());
     Ok(path.to_string_lossy().to_string())
+}
+
+/// Export app settings (WITHOUT api keys for security).
+///
+/// Includes: active model, provider list (no keys), workspace path,
+/// enabled skills, meditation config, memme config.
+#[tauri::command]
+pub async fn export_settings(
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    export_settings_impl(&*state).await
 }

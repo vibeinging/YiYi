@@ -14,8 +14,7 @@ pub struct PluginInfo {
     pub has_hooks: bool,
 }
 
-#[tauri::command]
-pub async fn list_plugins(state: State<'_, AppState>) -> Result<Vec<PluginInfo>, String> {
+pub async fn list_plugins_impl(state: &AppState) -> Result<Vec<PluginInfo>, String> {
     let registry = state.plugin_registry.read().map_err(|e| format!("Plugin lock error: {}", e))?;
     Ok(registry.list().iter().map(|p| PluginInfo {
         id: p.id.clone(),
@@ -29,10 +28,11 @@ pub async fn list_plugins(state: State<'_, AppState>) -> Result<Vec<PluginInfo>,
 }
 
 #[tauri::command]
-pub async fn enable_plugin(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), String> {
+pub async fn list_plugins(state: State<'_, AppState>) -> Result<Vec<PluginInfo>, String> {
+    list_plugins_impl(&*state).await
+}
+
+pub async fn enable_plugin_impl(state: &AppState, id: String) -> Result<(), String> {
     let plugins_dir = state.working_dir.join("plugins");
     let mut registry = state.plugin_registry.write().map_err(|e| format!("Plugin lock error: {}", e))?;
     registry.set_enabled(&plugins_dir, &id, true);
@@ -46,10 +46,14 @@ pub async fn enable_plugin(
 }
 
 #[tauri::command]
-pub async fn disable_plugin(
+pub async fn enable_plugin(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<(), String> {
+    enable_plugin_impl(&*state, id).await
+}
+
+pub async fn disable_plugin_impl(state: &AppState, id: String) -> Result<(), String> {
     let plugins_dir = state.working_dir.join("plugins");
     let mut registry = state.plugin_registry.write().map_err(|e| format!("Plugin lock error: {}", e))?;
     // Run shutdown before disabling
@@ -63,10 +67,22 @@ pub async fn disable_plugin(
 }
 
 #[tauri::command]
-pub async fn reload_plugins(state: State<'_, AppState>) -> Result<usize, String> {
+pub async fn disable_plugin(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    disable_plugin_impl(&*state, id).await
+}
+
+pub async fn reload_plugins_impl(state: &AppState) -> Result<usize, String> {
     let plugins_dir = state.working_dir.join("plugins");
     let mut registry = state.plugin_registry.write().map_err(|e| format!("Plugin lock error: {}", e))?;
     *registry = crate::engine::plugins::PluginRegistry::load(&plugins_dir);
     registry.initialize_all();
     Ok(registry.list().len())
+}
+
+#[tauri::command]
+pub async fn reload_plugins(state: State<'_, AppState>) -> Result<usize, String> {
+    reload_plugins_impl(&*state).await
 }

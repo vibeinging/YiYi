@@ -54,9 +54,8 @@ fn config_to_info(key: &str, cfg: &MCPClientConfig) -> MCPClientInfo {
     }
 }
 
-#[tauri::command]
-pub async fn list_mcp_clients(
-    state: State<'_, AppState>,
+pub async fn list_mcp_clients_impl(
+    state: &AppState,
 ) -> Result<Vec<MCPClientInfo>, String> {
     let config = state.config.read().await;
     let clients: Vec<MCPClientInfo> = config
@@ -68,8 +67,14 @@ pub async fn list_mcp_clients(
 }
 
 #[tauri::command]
-pub async fn get_mcp_client(
+pub async fn list_mcp_clients(
     state: State<'_, AppState>,
+) -> Result<Vec<MCPClientInfo>, String> {
+    list_mcp_clients_impl(&*state).await
+}
+
+pub async fn get_mcp_client_impl(
+    state: &AppState,
     key: String,
 ) -> Result<MCPClientInfo, String> {
     let config = state.config.read().await;
@@ -81,8 +86,15 @@ pub async fn get_mcp_client(
 }
 
 #[tauri::command]
-pub async fn create_mcp_client(
+pub async fn get_mcp_client(
     state: State<'_, AppState>,
+    key: String,
+) -> Result<MCPClientInfo, String> {
+    get_mcp_client_impl(&*state, key).await
+}
+
+pub async fn create_mcp_client_impl(
+    state: &AppState,
     client_key: String,
     client: MCPClientCreateRequest,
 ) -> Result<MCPClientInfo, String> {
@@ -116,8 +128,16 @@ pub async fn create_mcp_client(
 }
 
 #[tauri::command]
-pub async fn update_mcp_client(
+pub async fn create_mcp_client(
     state: State<'_, AppState>,
+    client_key: String,
+    client: MCPClientCreateRequest,
+) -> Result<MCPClientInfo, String> {
+    create_mcp_client_impl(&*state, client_key, client).await
+}
+
+pub async fn update_mcp_client_impl(
+    state: &AppState,
     key: String,
     client: MCPClientCreateRequest,
 ) -> Result<MCPClientInfo, String> {
@@ -155,8 +175,16 @@ pub async fn update_mcp_client(
 }
 
 #[tauri::command]
-pub async fn toggle_mcp_client(
+pub async fn update_mcp_client(
     state: State<'_, AppState>,
+    key: String,
+    client: MCPClientCreateRequest,
+) -> Result<MCPClientInfo, String> {
+    update_mcp_client_impl(&*state, key, client).await
+}
+
+pub async fn toggle_mcp_client_impl(
+    state: &AppState,
     key: String,
 ) -> Result<MCPClientInfo, String> {
     let mut config = state.config.write().await;
@@ -174,8 +202,15 @@ pub async fn toggle_mcp_client(
 }
 
 #[tauri::command]
-pub async fn delete_mcp_client(
+pub async fn toggle_mcp_client(
     state: State<'_, AppState>,
+    key: String,
+) -> Result<MCPClientInfo, String> {
+    toggle_mcp_client_impl(&*state, key).await
+}
+
+pub async fn delete_mcp_client_impl(
+    state: &AppState,
     key: String,
 ) -> Result<serde_json::Value, String> {
     let mut config = state.config.write().await;
@@ -185,4 +220,12 @@ pub async fn delete_mcp_client(
     Ok(serde_json::json!({
         "message": format!("MCP client '{}' deleted", key)
     }))
+}
+
+#[tauri::command]
+pub async fn delete_mcp_client(
+    state: State<'_, AppState>,
+    key: String,
+) -> Result<serde_json::Value, String> {
+    delete_mcp_client_impl(&*state, key).await
 }

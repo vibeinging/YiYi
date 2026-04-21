@@ -57,9 +57,8 @@ fn which_binary(binary: &str) -> bool {
     }
 }
 
-#[tauri::command]
-pub async fn list_cli_providers(
-    state: State<'_, AppState>,
+pub async fn list_cli_providers_impl(
+    state: &AppState,
 ) -> Result<Vec<CliProviderInfo>, String> {
     let config = state.config.read().await;
     let providers: Vec<CliProviderInfo> = config
@@ -71,8 +70,14 @@ pub async fn list_cli_providers(
 }
 
 #[tauri::command]
-pub async fn save_cli_provider_config(
+pub async fn list_cli_providers(
     state: State<'_, AppState>,
+) -> Result<Vec<CliProviderInfo>, String> {
+    list_cli_providers_impl(&*state).await
+}
+
+pub async fn save_cli_provider_config_impl(
+    state: &AppState,
     key: String,
     config: CliProviderConfig,
 ) -> Result<CliProviderInfo, String> {
@@ -88,8 +93,16 @@ pub async fn save_cli_provider_config(
 }
 
 #[tauri::command]
-pub async fn check_cli_provider(
+pub async fn save_cli_provider_config(
     state: State<'_, AppState>,
+    key: String,
+    config: CliProviderConfig,
+) -> Result<CliProviderInfo, String> {
+    save_cli_provider_config_impl(&*state, key, config).await
+}
+
+pub async fn check_cli_provider_impl(
+    state: &AppState,
     key: String,
 ) -> Result<CliProviderInfo, String> {
     let config = state.config.read().await;
@@ -98,6 +111,14 @@ pub async fn check_cli_provider(
         .get(&key)
         .ok_or_else(|| format!("CLI provider '{}' not found", key))?;
     Ok(config_to_info(&key, cfg))
+}
+
+#[tauri::command]
+pub async fn check_cli_provider(
+    state: State<'_, AppState>,
+    key: String,
+) -> Result<CliProviderInfo, String> {
+    check_cli_provider_impl(&*state, key).await
 }
 
 #[tauri::command]
@@ -148,9 +169,8 @@ pub async fn install_cli_provider(
     }
 }
 
-#[tauri::command]
-pub async fn delete_cli_provider(
-    state: State<'_, AppState>,
+pub async fn delete_cli_provider_impl(
+    state: &AppState,
     key: String,
 ) -> Result<(), String> {
     let mut config = state.config.write().await;
@@ -160,4 +180,12 @@ pub async fn delete_cli_provider(
         .ok_or_else(|| format!("CLI provider '{}' not found", key))?;
     config.save(&state.working_dir)?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_cli_provider(
+    state: State<'_, AppState>,
+    key: String,
+) -> Result<(), String> {
+    delete_cli_provider_impl(&*state, key).await
 }

@@ -894,4 +894,58 @@ mod tests {
         assert!(out.contains("No matches found"));
         assert!(!out.contains("Exit code"));
     }
+
+    #[test]
+    fn shell_security_blocks_command_with_env_var_injection() {
+        // FOO=bar rm -rf /  — env prefix should not bypass destructive classification
+        let analysis = analyze_command("FOO=bar rm -rf /");
+        assert!(
+            matches!(analysis.security_verdict, SecurityVerdict::Block { .. }),
+            "FOO=bar prefix must not bypass destructive-command block; got {:?}",
+            analysis.security_verdict
+        );
+    }
+
+    #[test]
+    fn shell_security_detects_shell_metachar_in_quoted_paths() {
+        // Command contains a backtick — should be flagged as unknown/warn at minimum
+        let analysis = analyze_command("echo `whoami`");
+        assert!(
+            !matches!(analysis.security_verdict, SecurityVerdict::Allow),
+            "backtick-embedded command must not Allow silently; got {:?}",
+            analysis.security_verdict
+        );
+    }
+
+    #[test]
+    fn shell_security_classifies_pipe_chain_by_worst_member() {
+        // Read-only ls piped into destructive rm should NOT be treated as read-only.
+        let analysis = analyze_command("ls / | xargs rm -rf");
+        assert!(
+            !matches!(analysis.classification, CommandClass::ReadOnly),
+            "pipe chain ending in rm must not classify as ReadOnly; got {:?}",
+            analysis.classification
+        );
+    }
+
+    #[test]
+    fn shell_security_allows_plain_read_command() {
+        let analysis = analyze_command("ls -la");
+        assert!(matches!(analysis.classification, CommandClass::ReadOnly));
+        assert!(matches!(analysis.security_verdict, SecurityVerdict::Allow));
+    }
+
+    #[test]
+    fn shell_security_extracts_paths_from_cp_command() {
+        let analysis = analyze_command("cp /src/file.txt /dst/");
+        assert!(analysis.extracted_paths.iter().any(|p| p.path.contains("/src/")));
+        assert!(analysis.extracted_paths.iter().any(|p| p.path.contains("/dst")));
+    }
+
+    #[test]
+    fn shell_security_empty_command_returns_defined_verdict() {
+        let analysis = analyze_command("");
+        // Empty input should not panic; verdict is defined.
+        let _ = analysis.security_verdict;
+    }
 }

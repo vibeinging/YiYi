@@ -17,6 +17,63 @@ use super::{
 
 // --- MemMe pipeline helper (shared by streaming & non-streaming paths) ---
 
+/// Track when we last manually compacted each session, to avoid thrashing.
+/// Key: session_id, Value: unix timestamp seconds.
+static LAST_MANUAL_COMPACT: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, i64>>> = std::sync::OnceLock::new();
+
+fn last_manual_compact_map() -> &'static std::sync::Mutex<std::collections::HashMap<String, i64>> {
+    LAST_MANUAL_COMPACT.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// If the last LLM call used > 40% of typical 128k context, trigger a manual compact.
+/// This "freezes" earlier messages into episodes so they become retrievable via semantic search
+/// before they fall out of the 50-message window.
+///
+/// Has a 2-minute cooldown per session to avoid compact-thrashing when the conversation
+/// stays near the threshold.
+pub fn maybe_trigger_pressure_compact(session_id: &str, input_tokens: u64) {
+    const CONTEXT_BASELINE: u64 = 128_000;
+    const PRESSURE_RATIO: f64 = 0.4;
+    const COOLDOWN_SECS: i64 = 120;
+
+    let ratio = input_tokens as f64 / CONTEXT_BASELINE as f64;
+    if ratio < PRESSURE_RATIO {
+        return;
+    }
+
+    let now = chrono::Utc::now().timestamp();
+    {
+        let mut map = last_manual_compact_map().lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(&last) = map.get(session_id) {
+            if now - last < COOLDOWN_SECS {
+                return; // Still in cooldown
+            }
+        }
+        map.insert(session_id.to_string(), now);
+    }
+
+    let store = match crate::engine::tools::get_memme_store() {
+        Some(s) => s,
+        None => return,
+    };
+    let sid = session_id.to_string();
+    tokio::task::spawn_blocking(move || {
+        match store.compact(&sid) {
+            Ok(cr) => {
+                log::info!(
+                    "MemMe: pressure compact ({}k input tokens, ratio {:.0}%) -> episode {}",
+                    input_tokens / 1000, ratio * 100.0, cr.episode_id
+                );
+                if let Some(handle) = crate::engine::tools::get_app_handle() {
+                    use tauri::Emitter;
+                    let _ = handle.emit("buddy://compact-completed", &cr.episode_id);
+                }
+            }
+            Err(e) => log::warn!("MemMe pressure compact failed: {}", e),
+        }
+    });
+}
+
 /// Feed a user↔assistant turn into MemMe's Session pipeline in a background thread.
 fn feed_to_memme(session_id: String, user_msg: String, assistant_msg: String) {
     let store = match crate::engine::tools::get_memme_store() {
@@ -48,7 +105,13 @@ fn feed_to_memme(session_id: String, user_msg: String, assistant_msg: String) {
                 );
                 if result.compact_needed {
                     match store.compact(&result.session_id) {
-                        Ok(cr) => log::debug!("MemMe: compacted session {} -> episode {}", cr.session_id, cr.episode_id),
+                        Ok(cr) => {
+                            log::debug!("MemMe: compacted session {} -> episode {}", cr.session_id, cr.episode_id);
+                            if let Some(handle) = crate::engine::tools::get_app_handle() {
+                                use tauri::Emitter;
+                                let _ = handle.emit("buddy://compact-completed", &cr.episode_id);
+                            }
+                        }
                         Err(e) => log::warn!("MemMe compact failed: {}", e),
                     }
                 }
@@ -167,6 +230,21 @@ pub async fn chat_stream_start(
     }
 
     let ctx = prepare_chat_context(&state, &sid, &message, &attachments).await?;
+
+    // Task routing — log the route decision for observability
+    let route = crate::engine::buddy_delegate::route_task(&message);
+    if route != crate::engine::buddy_delegate::TaskRoute::Direct {
+        let route_label = match route {
+            crate::engine::buddy_delegate::TaskRoute::BackgroundTask => "background_task",
+            crate::engine::buddy_delegate::TaskRoute::DelegateCoding => "delegate_coding",
+            _ => "direct",
+        };
+        log::info!("Task route: {} for message: {}", route_label, message.chars().take(80).collect::<String>());
+        app.emit("buddy://route_suggestion", serde_json::json!({
+            "route": route_label,
+            "session_id": sid,
+        })).ok();
+    }
 
     // Auto-continue limits — the model decides via [CONTINUE] marker (see auto_continue skill)
     let max_r = max_rounds.unwrap_or(200);
@@ -323,6 +401,9 @@ pub async fn chat_stream_start(
                             estimated_cost_usd.unwrap_or(0.0),
                         );
                     }
+                    // Window-pressure compact: if input tokens are nearing context limit,
+                    // compact the session so earlier messages become searchable episodes.
+                    maybe_trigger_pressure_compact(&sid_for_event, *input_tokens as u64);
                 }
                 react_agent::AgentStreamEvent::Complete
                 | react_agent::AgentStreamEvent::Error => {}
@@ -690,16 +771,9 @@ pub async fn chat_stream_start(
                                 });
                             }
 
-                            // Auto-memory extraction: extract noteworthy info from this conversation
-                            {
-                                let config_mem = ctx.config.clone();
-                                let user_msg = ctx.augmented_message.clone();
-                                let reply_text = last_reply.clone();
-                                let sid = sid_clone.clone();
-                                tokio::spawn(async move {
-                                    react_agent::extract_memories_from_conversation(&config_mem, &user_msg, &reply_text, Some(&sid)).await;
-                                });
-                            }
+                            // Memory extraction is delegated to MemMe's meditation pipeline (runs nightly).
+                            // Short-term memory lives in the last 50 messages in the prompt.
+                            // Long-term facts get extracted during `store.meditate()`.
 
                             break;
                         }
@@ -809,9 +883,8 @@ pub async fn chat_stream_start(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn get_history(
-    state: State<'_, AppState>,
+pub async fn get_history_impl(
+    state: &AppState,
     session_id: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<ChatMessage>, String> {
@@ -927,16 +1000,28 @@ pub async fn get_history(
 }
 
 #[tauri::command]
-pub async fn chat_stream_stop(
+pub async fn get_history(
     state: State<'_, AppState>,
-) -> Result<(), String> {
+    session_id: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<ChatMessage>, String> {
+    get_history_impl(&*state, session_id, limit).await
+}
+
+pub async fn chat_stream_stop_impl(state: &AppState) -> Result<(), String> {
     state.chat_cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }
 
 #[tauri::command]
-pub async fn chat_stream_state(
+pub async fn chat_stream_stop(
     state: State<'_, AppState>,
+) -> Result<(), String> {
+    chat_stream_stop_impl(&*state).await
+}
+
+pub async fn chat_stream_state_impl(
+    state: &AppState,
     session_id: String,
 ) -> Result<Option<StreamingSnapshot>, String> {
     let ss = state.streaming_state.lock().map_err(|e| e.to_string())?;
@@ -944,8 +1029,15 @@ pub async fn chat_stream_state(
 }
 
 #[tauri::command]
-pub async fn clear_history(
+pub async fn chat_stream_state(
     state: State<'_, AppState>,
+    session_id: String,
+) -> Result<Option<StreamingSnapshot>, String> {
+    chat_stream_state_impl(&*state, session_id).await
+}
+
+pub async fn clear_history_impl(
+    state: &AppState,
     session_id: Option<String>,
 ) -> Result<(), String> {
     let sid = resolve_session_id(&session_id);
@@ -957,9 +1049,21 @@ pub async fn clear_history(
 }
 
 #[tauri::command]
+pub async fn clear_history(
+    state: State<'_, AppState>,
+    session_id: Option<String>,
+) -> Result<(), String> {
+    clear_history_impl(&*state, session_id).await
+}
+
+pub async fn delete_message_impl(state: &AppState, message_id: i64) -> Result<(), String> {
+    state.db.delete_message(message_id)
+}
+
+#[tauri::command]
 pub async fn delete_message(
     state: State<'_, AppState>,
     message_id: i64,
 ) -> Result<(), String> {
-    state.db.delete_message(message_id)
+    delete_message_impl(&*state, message_id).await
 }

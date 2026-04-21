@@ -54,15 +54,18 @@ async fn resolve_llm(state: &AppState) -> Option<LLMConfig> {
     })
 }
 
-#[tauri::command]
-pub async fn get_heartbeat_config(state: State<'_, AppState>) -> Result<HeartbeatConfig, String> {
+pub async fn get_heartbeat_config_impl(state: &AppState) -> Result<HeartbeatConfig, String> {
     let config = state.config.read().await;
     Ok(config.heartbeat.clone())
 }
 
 #[tauri::command]
-pub async fn save_heartbeat_config(
-    state: State<'_, AppState>,
+pub async fn get_heartbeat_config(state: State<'_, AppState>) -> Result<HeartbeatConfig, String> {
+    get_heartbeat_config_impl(&*state).await
+}
+
+pub async fn save_heartbeat_config_impl(
+    state: &AppState,
     config: HeartbeatConfig,
 ) -> Result<HeartbeatConfig, String> {
     let mut app_config = state.config.write().await;
@@ -72,7 +75,14 @@ pub async fn save_heartbeat_config(
 }
 
 #[tauri::command]
-pub async fn send_heartbeat(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+pub async fn save_heartbeat_config(
+    state: State<'_, AppState>,
+    config: HeartbeatConfig,
+) -> Result<HeartbeatConfig, String> {
+    save_heartbeat_config_impl(&*state, config).await
+}
+
+pub async fn send_heartbeat_impl(state: &AppState) -> Result<serde_json::Value, String> {
     let config = state.config.read().await;
     let target = config.heartbeat.target.clone();
     drop(config);
@@ -86,7 +96,7 @@ pub async fn send_heartbeat(state: State<'_, AppState>) -> Result<serde_json::Va
     };
 
     // Try to run with agent if LLM is configured
-    let (success, message) = if let Some(llm_config) = resolve_llm(&state).await {
+    let (success, message) = if let Some(llm_config) = resolve_llm(state).await {
         let prompt = react_agent::build_system_prompt(&state.working_dir, None, &[], &[], None, None, None).await;
         match tokio::time::timeout(
             std::time::Duration::from_secs(120),
@@ -118,8 +128,12 @@ pub async fn send_heartbeat(state: State<'_, AppState>) -> Result<serde_json::Va
 }
 
 #[tauri::command]
-pub async fn get_heartbeat_history(
-    state: State<'_, AppState>,
+pub async fn send_heartbeat(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    send_heartbeat_impl(&*state).await
+}
+
+pub async fn get_heartbeat_history_impl(
+    state: &AppState,
     limit: Option<usize>,
 ) -> Result<Vec<HeartbeatHistoryItem>, String> {
     let limit = limit.unwrap_or(50);
@@ -133,4 +147,12 @@ pub async fn get_heartbeat_history(
             target: r.target,
         })
         .collect())
+}
+
+#[tauri::command]
+pub async fn get_heartbeat_history(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<HeartbeatHistoryItem>, String> {
+    get_heartbeat_history_impl(&*state, limit).await
 }
