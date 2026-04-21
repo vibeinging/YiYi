@@ -5,6 +5,8 @@ use common::*;
 use app_lib::commands::cronjobs::*;
 use app_lib::engine::db::ExecutionMode;
 use serial_test::serial;
+use std::sync::{Arc, Mutex};
+use tauri::Listener;
 
 // Minimal-valid CronJobSpec builder. Uses "cron" schedule type so no scheduler
 // wiring is required — tests exercise DB behaviour only.
@@ -223,4 +225,191 @@ async fn list_cronjob_executions_returns_inserted_executions() {
     assert_eq!(execs.len(), 1);
     assert_eq!(execs[0].job_id, "with-execs");
     assert_eq!(execs[0].trigger_type, "manual");
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// AppHandle-taking commands (backfill batch)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Build a delay-type cronjob spec. `state.scheduler` is None in tests, so the
+/// re-registration branch of `resume_cronjob_impl` is skipped but the emit
+/// branch still fires.
+fn mk_delay_cronjob(id: &str, delay_minutes: u64) -> CronJobSpec {
+    CronJobSpec {
+        id: id.to_string(),
+        name: format!("delay-job-{}", id),
+        enabled: false, // will be flipped by resume
+        schedule: ScheduleSpec {
+            r#type: "delay".to_string(),
+            cron: String::new(),
+            timezone: None,
+            delay_minutes: Some(delay_minutes),
+            schedule_at: None,
+            created_at: None,
+        },
+        task_type: "notify".to_string(),
+        text: Some("delay ping".to_string()),
+        request: None,
+        // Empty dispatch targets so no OS notification fires during tests.
+        dispatch: Some(DispatchSpec { targets: vec![] }),
+        runtime: None,
+        execution_mode: ExecutionMode::Shared,
+    }
+}
+
+// === resume_cronjob ===
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn resume_cronjob_errors_on_nonexistent_id() {
+    let t = build_test_app_state().await;
+    let app = build_mock_tauri_app();
+    let handle = app.handle().clone();
+
+    let err = resume_cronjob_impl(t.state(), &handle, "ghost".to_string())
+        .await
+        .expect_err("resume on missing job should error");
+    assert!(err.contains("not found"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn resume_cronjob_flips_enabled_and_returns_restarted_false_for_cron_type() {
+    let t = build_test_app_state().await;
+    let state = t.state();
+    let app = build_mock_tauri_app();
+    let handle = app.handle().clone();
+
+    // A disabled cron job (not delay/once).
+    let mut spec = mk_cronjob("cron-job");
+    spec.enabled = false;
+    let _ = create_cronjob_impl(state, spec).await.unwrap();
+
+    let events: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let events_clone = events.clone();
+    let _id = handle.listen("cronjob://result", move |event| {
+        let payload: serde_json::Value =
+            serde_json::from_str(event.payload()).unwrap_or(serde_json::Value::Null);
+        events_clone.lock().unwrap().push(payload);
+    });
+
+    let result = resume_cronjob_impl(state, &handle, "cron-job".to_string())
+        .await
+        .unwrap();
+
+    assert_eq!(result["restarted"].as_bool(), Some(false));
+    // enabled flag flipped to true
+    let jobs = list_cronjobs_impl(state).await.unwrap();
+    let job = jobs.iter().find(|j| j.id == "cron-job").unwrap();
+    assert!(job.enabled);
+    // No event for cron type
+    let got = events.lock().unwrap();
+    assert!(got.is_empty(), "cron type should not emit cronjob://result");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn resume_cronjob_delay_type_emits_result_event_and_flips_enabled() {
+    let t = build_test_app_state().await;
+    let state = t.state();
+    let app = build_mock_tauri_app();
+    let handle = app.handle().clone();
+
+    let spec = mk_delay_cronjob("delay-a", 7);
+    let _ = create_cronjob_impl(state, spec).await.unwrap();
+
+    let events: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let events_clone = events.clone();
+    let _id = handle.listen("cronjob://result", move |event| {
+        let payload: serde_json::Value =
+            serde_json::from_str(event.payload()).unwrap_or(serde_json::Value::Null);
+        events_clone.lock().unwrap().push(payload);
+    });
+
+    let result = resume_cronjob_impl(state, &handle, "delay-a".to_string())
+        .await
+        .unwrap();
+
+    assert_eq!(result["restarted"].as_bool(), Some(true));
+    assert_eq!(result["schedule_type"].as_str(), Some("delay"));
+
+    // enabled flipped
+    let jobs = list_cronjobs_impl(state).await.unwrap();
+    let job = jobs.iter().find(|j| j.id == "delay-a").unwrap();
+    assert!(job.enabled);
+
+    // Event contains job_id, job_name, and a "7 分钟" result string.
+    let got = events.lock().unwrap();
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0]["job_id"].as_str(), Some("delay-a"));
+    assert_eq!(got[0]["job_name"].as_str(), Some("delay-job-delay-a"));
+    let msg = got[0]["result"].as_str().unwrap();
+    assert!(msg.contains("7"), "result message should include delay minutes: {}", msg);
+}
+
+// === run_cronjob ===
+//
+// Uses task_type="notify" + empty dispatch targets so the unified
+// execute_job_task path is a pure string-passthrough: no LLM, no OS
+// notification, no app-handle emit. We just assert the synchronous contract:
+// the execution row is inserted and marked success.
+
+fn mk_notify_cronjob(id: &str) -> CronJobSpec {
+    CronJobSpec {
+        id: id.to_string(),
+        name: format!("notify-{}", id),
+        enabled: true,
+        schedule: ScheduleSpec {
+            r#type: "cron".to_string(),
+            cron: "0 0 * * *".to_string(),
+            timezone: None,
+            delay_minutes: None,
+            schedule_at: None,
+            created_at: None,
+        },
+        task_type: "notify".to_string(),
+        text: Some("hello from test".to_string()),
+        request: None,
+        dispatch: Some(DispatchSpec { targets: vec![] }),
+        runtime: None,
+        execution_mode: ExecutionMode::Shared,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn run_cronjob_errors_on_nonexistent_id() {
+    let t = build_test_app_state().await;
+    let err = run_cronjob_impl(t.state(), "never-existed".to_string())
+        .await
+        .expect_err("run on missing job should error");
+    assert!(err.contains("not found"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn run_cronjob_succeeds_for_notify_type_and_records_execution() {
+    let t = build_test_app_state().await;
+    let state = t.state();
+
+    let spec = mk_notify_cronjob("notify-ok");
+    let _ = create_cronjob_impl(state, spec).await.unwrap();
+
+    run_cronjob_impl(state, "notify-ok".to_string())
+        .await
+        .expect("notify-type run should succeed");
+
+    // Execution row recorded with success status.
+    let execs = list_cronjob_executions_impl(state, "notify-ok".to_string(), None)
+        .await
+        .unwrap();
+    assert_eq!(execs.len(), 1, "exactly one execution row after one run");
+    assert_eq!(execs[0].job_id, "notify-ok");
+    assert_eq!(execs[0].trigger_type, "manual");
+    assert_eq!(
+        execs[0].status, "success",
+        "notify jobs never fail — output is just echoed back"
+    );
+    // Output is the echoed `text` field.
+    assert_eq!(execs[0].result.as_deref(), Some("hello from test"));
 }
