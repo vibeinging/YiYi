@@ -8,7 +8,7 @@ pub mod verification;
 pub use core::{run_react, run_react_with_options, run_react_with_options_persist, run_react_with_options_stream};
 pub use growth::{
     build_capability_profile, build_growth_timeline, consolidate_corrections_to_principles,
-    detect_skill_opportunity, extract_memories_from_conversation, generate_growth_report,
+    detect_skill_opportunity, generate_growth_report,
     generate_morning_reflection, improve_skill_from_experience, learn_from_feedback,
     reflect_on_task, update_user_model,
 };

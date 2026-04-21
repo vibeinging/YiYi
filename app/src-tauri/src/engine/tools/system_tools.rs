@@ -498,7 +498,7 @@ pub(super) async fn run_python_tool(args: &serde_json::Value) -> String {
     if !python_bridge::is_available() {
         return "Error: Python interpreter not available".into();
     }
-    match python_bridge::call_python("run_code", vec![code.to_string()]).await {
+    match python_bridge::run_python(code).await {
         Ok(result) => super::truncate_output(&result, 8000),
         Err(e) => format!("Python error: {}", e),
     }
@@ -522,13 +522,7 @@ pub(super) async fn run_python_script_tool(args: &serde_json::Value) -> String {
         })
         .unwrap_or_default();
 
-    let args_json = serde_json::to_string(&script_args).unwrap_or_else(|_| "[]".into());
-
-    let result = python_bridge::call_python(
-        "run_script",
-        vec![script_path.to_string(), args_json],
-    )
-    .await;
+    let result = python_bridge::run_script(script_path, &script_args).await;
 
     // Auto-track execution in code registry (match by path, then by name)
     if let Some(db) = super::DATABASE.get() {
@@ -559,9 +553,10 @@ pub(super) async fn pip_install_tool(args: &serde_json::Value) -> String {
         return "Error: Python interpreter not available".into();
     }
 
-    let packages_json = serde_json::to_string(&packages).unwrap_or_else(|_| "[]".into());
-
-    match python_bridge::call_python("pip_install", vec![packages_json]).await {
+    // Use subprocess: python3 -m pip install <packages>
+    let code = format!("import subprocess, sys; subprocess.check_call([sys.executable, '-m', 'pip', 'install'] + {})",
+        serde_json::to_string(&packages).unwrap_or_else(|_| "[]".into()));
+    match python_bridge::run_python(&code).await {
         Ok(result) => result,
         Err(e) => format!("pip install error: {}", e),
     }

@@ -1,68 +1,87 @@
-use async_py::PyRunner;
-use std::sync::OnceLock;
-use tauri_plugin_python::PythonExt;
+//! Python bridge — runs Python code via system `python3` subprocess.
+//! No embedded runtime, no dylib linking. Same approach as Claw Code.
 
-static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
+use std::process::Command;
 
-/// Store the app handle for Python bridge access from tools.
-pub fn set_app_handle(handle: tauri::AppHandle) {
-    APP_HANDLE.set(handle).ok();
-}
+static PYTHON_CMD: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
 
-/// Get the PyRunner from the stored app handle.
-fn get_runner() -> Result<&'static PyRunner, String> {
-    let handle = APP_HANDLE
-        .get()
-        .ok_or("Python bridge not initialized")?;
-    Ok(handle.runner())
-}
-
-/// Call a registered Python function by name with string arguments.
-pub async fn call_python(function: &str, args: Vec<String>) -> Result<String, String> {
-    let runner = get_runner()?;
-    let json_args: Vec<serde_json::Value> = args
-        .into_iter()
-        .map(serde_json::Value::String)
-        .collect();
-
-    let result = runner
-        .call_function(function, json_args)
-        .await
-        .map_err(|e| format!("Python call error: {}", e))?;
-
-    match result.as_str() {
-        Some(s) => Ok(s.to_string()),
-        None => Ok(result.to_string()),
+/// Detect system python3/python.
+fn detect_python() -> Option<String> {
+    for cmd in &["python3", "python"] {
+        if Command::new(cmd)
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map_or(false, |s| s.success())
+        {
+            return Some(cmd.to_string());
+        }
     }
+    None
 }
 
-/// Execute arbitrary Python code string (no return value).
-#[allow(dead_code)]
-pub async fn run_python(code: &str) -> Result<String, String> {
-    let runner = get_runner()?;
-    runner
-        .run(code)
-        .await
-        .map_err(|e| format!("Python run error: {}", e))?;
-    Ok("Ok".into())
+fn python_cmd() -> Option<&'static String> {
+    PYTHON_CMD.get_or_init(detect_python).as_ref()
 }
 
-/// Evaluate a Python expression and return its value.
-#[allow(dead_code)]
-pub async fn eval_python(expr: &str) -> Result<String, String> {
-    let runner = get_runner()?;
-    let result = runner
-        .eval(expr)
-        .await
-        .map_err(|e| format!("Python eval error: {}", e))?;
-
-    match result.as_str() {
-        Some(s) => Ok(s.to_string()),
-        None => Ok(result.to_string()),
-    }
-}
-
-/// Check if Python bridge is available.
+/// Check if a system Python is available.
 pub fn is_available() -> bool {
-    APP_HANDLE.get().is_some()
+    python_cmd().is_some()
+}
+
+/// No-op — subprocess doesn't need app handle.
+pub fn set_app_handle(_handle: tauri::AppHandle) {}
+
+/// Run Python code string via subprocess, capturing stdout.
+pub async fn run_python(code: &str) -> Result<String, String> {
+    let cmd = python_cmd().ok_or("Python not found. Install python3 to use this feature.")?;
+    let output = tokio::process::Command::new(cmd)
+        .arg("-c")
+        .arg(code)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run python: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if output.status.success() {
+        if stderr.is_empty() {
+            Ok(stdout)
+        } else {
+            Ok(format!("{}\n[stderr]: {}", stdout, stderr))
+        }
+    } else {
+        Err(format!("Python error:\n{}{}", stdout, stderr))
+    }
+}
+
+/// Run a Python script file via subprocess.
+pub async fn run_script(script_path: &str, args: &[String]) -> Result<String, String> {
+    let cmd = python_cmd().ok_or("Python not found. Install python3 to use this feature.")?;
+    let output = tokio::process::Command::new(cmd)
+        .arg(script_path)
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run script: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if output.status.success() {
+        if stderr.is_empty() {
+            Ok(stdout)
+        } else {
+            Ok(format!("{}\n[stderr]: {}", stdout, stderr))
+        }
+    } else {
+        Err(format!("Script error:\n{}{}", stdout, stderr))
+    }
+}
+
+/// Legacy compat — used by bootstrap_python_packages (now no-op).
+pub async fn call_python(_func: &str, _args: Vec<String>) -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!("Python bridge uses subprocess — no embedded runtime"))
 }

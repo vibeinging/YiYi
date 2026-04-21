@@ -182,13 +182,20 @@ where
     F: Fn(AgentStreamEvent) + Send + Clone + 'static,
 {
     let max_iter = max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS);
+
+    // Sync MCP tools into the global registry before building tool list
+    if let Some(registry) = crate::engine::tool_registry_global::global_registry() {
+        crate::engine::tool_registry_global::sync_mcp_tools(registry).await;
+    }
+
     let mut tools = if let Some(ovr) = tools_override {
         ovr
     } else {
-        let mut t = builtin_tools();
+        // Unified: get all tools from GlobalToolRegistry (built-in + plugin + MCP)
+        let mut t = crate::engine::tool_registry_global::global_registry()
+            .map(|r| r.all_definitions())
+            .unwrap_or_else(|| builtin_tools()); // startup-only fallback
         t.extend(extra_tools.iter().cloned());
-        // Inject plugin custom tools
-        t.extend(get_plugin_tool_definitions());
         t
     };
 

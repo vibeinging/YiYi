@@ -208,6 +208,122 @@ pub async fn delegate_yes_no(
     )
 }
 
+// ── Task routing ─────────────────────────────────────────────────────
+
+/// Execution route for a user request.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TaskRoute {
+    /// Handle directly in main chat (simple/conversational).
+    Direct,
+    /// Spawn as background task (medium complexity coding).
+    BackgroundTask,
+    /// Delegate to external coding agent like Claude Code (complex multi-file coding).
+    DelegateCoding,
+}
+
+/// Cached availability of external coding tools (checked once on first use).
+static EXTERNAL_CODER_AVAILABLE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+/// Check if an external coding CLI (claude, codex) is available in PATH.
+fn detect_external_coder() -> Option<String> {
+    for cmd in &["claude", "codex"] {
+        if std::process::Command::new(cmd)
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map_or(false, |s| s.success())
+        {
+            log::info!("External coding tool detected: {}", cmd);
+            return Some(cmd.to_string());
+        }
+    }
+    log::info!("No external coding tool (claude/codex) found in PATH");
+    None
+}
+
+/// Get the available external coding tool name, or None.
+pub fn external_coder() -> Option<&'static String> {
+    EXTERNAL_CODER_AVAILABLE.get_or_init(detect_external_coder).as_ref()
+}
+
+/// Heuristic signals extracted from user message for routing.
+struct RouteSignals {
+    mentions_coding: bool,
+    mentions_new_project: bool,
+    mentions_refactor: bool,
+    mentions_review: bool,
+    mentions_simple: bool,
+    estimated_file_count: u8,
+    message_length: usize,
+}
+
+/// Determine the execution route for a user message.
+/// Uses fast heuristics (no LLM call) — suitable for hot path.
+/// If no external coder is installed, DelegateCoding falls back to BackgroundTask.
+pub fn route_task(message: &str) -> TaskRoute {
+    let msg = message.to_lowercase();
+    let signals = extract_route_signals(&msg);
+    let has_external = external_coder().is_some();
+
+    // Explicit delegation requests — only if tool available
+    if msg.contains("用 claude code") || msg.contains("用 codex") || msg.contains("delegate") {
+        return if has_external { TaskRoute::DelegateCoding } else { TaskRoute::BackgroundTask };
+    }
+
+    // Simple tasks — direct execution
+    if signals.mentions_simple || signals.message_length < 50 {
+        return TaskRoute::Direct;
+    }
+
+    // Complex coding — delegate if available, otherwise background
+    if signals.mentions_new_project || (signals.mentions_refactor && signals.estimated_file_count > 3) {
+        return if has_external { TaskRoute::DelegateCoding } else { TaskRoute::BackgroundTask };
+    }
+
+    // Medium coding — background task
+    if signals.mentions_coding && (signals.estimated_file_count > 1 || signals.message_length > 300) {
+        return TaskRoute::BackgroundTask;
+    }
+
+    // Review tasks — background
+    if signals.mentions_review {
+        return TaskRoute::BackgroundTask;
+    }
+
+    // Default: direct
+    TaskRoute::Direct
+}
+
+fn extract_route_signals(msg: &str) -> RouteSignals {
+    let coding_keywords = ["写代码", "实现", "开发", "编码", "重构", "修复bug", "添加功能",
+        "implement", "build", "create", "develop", "refactor", "fix bug", "add feature",
+        "写一个", "做一个", "搭建"];
+    let new_project_keywords = ["新项目", "从零", "搭建", "new project", "bootstrap", "scaffold",
+        "创建项目", "初始化项目"];
+    let refactor_keywords = ["重构", "refactor", "重写", "rewrite", "迁移", "migrate"];
+    let review_keywords = ["review", "审查", "检查代码", "code review", "PR review"];
+    let simple_keywords = ["改一下", "修一下", "调整", "改个", "加个", "删掉", "换成",
+        "fix typo", "rename", "update config"];
+
+    let file_hints = msg.matches("文件").count()
+        + msg.matches("file").count()
+        + msg.matches(".ts").count()
+        + msg.matches(".rs").count()
+        + msg.matches(".tsx").count()
+        + msg.matches(".py").count();
+
+    RouteSignals {
+        mentions_coding: coding_keywords.iter().any(|k| msg.contains(k)),
+        mentions_new_project: new_project_keywords.iter().any(|k| msg.contains(k)),
+        mentions_refactor: refactor_keywords.iter().any(|k| msg.contains(k)),
+        mentions_review: review_keywords.iter().any(|k| msg.contains(k)),
+        mentions_simple: simple_keywords.iter().any(|k| msg.contains(k)),
+        estimated_file_count: file_hints.min(255) as u8,
+        message_length: msg.len(),
+    }
+}
+
 // ── Internal helpers ──────────────────────────────────────────────────
 
 fn load_memory_context() -> String {

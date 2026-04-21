@@ -199,50 +199,37 @@ impl AppState {
         // Initialize MemMe vector memory store
         let memme_db_path = working_dir.join("memme.duckdb").to_string_lossy().to_string();
         let memme_cfg = &config.memme;
-        let dims = memme_cfg.embedding_dims;
 
-        // Build embedder based on configuration
-        let memme_embedder: std::sync::Arc<dyn memme_embeddings::Embedder> =
-            match memme_cfg.embedding_provider.as_str() {
-                "openai" => {
-                    let api_key = if memme_cfg.embedding_api_key.is_empty() {
-                        // Fall back to first configured provider's API key
-                        providers.providers.values()
-                            .find_map(|s| s.api_key.as_deref())
-                            .unwrap_or("")
-                            .to_string()
-                    } else {
-                        memme_cfg.embedding_api_key.clone()
-                    };
-                    if api_key.is_empty() {
-                        log::warn!("MemMe: OpenAI embedding selected but no API key, falling back to Mock");
-                        std::sync::Arc::new(memme_embeddings::mock::MockEmbedder::default_mini())
-                    } else {
-                        log::info!("MemMe: Using OpenAI embedding (model={}, dims={})", memme_cfg.embedding_model, dims);
-                        let base_url = if memme_cfg.embedding_base_url.is_empty() {
-                            "https://api.openai.com/v1".to_string()
-                        } else {
-                            memme_cfg.embedding_base_url.clone()
-                        };
-                        let emb = memme_embeddings::openai::OpenAiEmbedder::new(&api_key, &base_url)
-                            .with_model(match memme_cfg.embedding_model.as_str() {
-                                "text-embedding-3-large" => memme_embeddings::openai::OpenAiModel::TextEmbedding3Large,
-                                _ => memme_embeddings::openai::OpenAiModel::TextEmbedding3Small,
-                            });
-                        std::sync::Arc::new(emb)
-                    }
-                }
-                _ => {
-                    log::info!("MemMe: Using Mock embedder (no semantic search)");
-                    std::sync::Arc::new(memme_embeddings::mock::MockEmbedder::default_mini())
-                }
-            };
+        const BGE_DIMS: usize = 512;
+        backup_db_if_dim_mismatch(&memme_db_path, BGE_DIMS);
 
-        let mut memme_config = memme_core::MemoryConfig::new(&memme_db_path, dims);
+        let models_dir = working_dir.join("models");
+        let _ = std::fs::create_dir_all(&models_dir);
+        log::info!("MemMe: Loading bge-small-zh-v1.5 (first run downloads ~100MB)");
+        let memme_embedder: std::sync::Arc<dyn memme_embeddings::Embedder> = match
+            memme_embeddings::onnx::OnnxEmbedder::with_cache_dir(
+                memme_embeddings::onnx::OnnxModel::BgeSmallZhV15,
+                models_dir,
+            )
+        {
+            Ok(emb) => {
+                log::info!("MemMe: bge-small-zh-v1.5 ready ({} dims)", BGE_DIMS);
+                std::sync::Arc::new(emb)
+            }
+            Err(e) => {
+                log::error!("FATAL: MemMe embedder init failed: {e}");
+                panic!(
+                    "MemMe embedder init failed. First-run requires network to download \
+                     bge-small-zh-v1.5. Error: {e}"
+                );
+            }
+        };
+
+        let actual_dims = memme_embedder.dimensions();
+        let mut memme_config = memme_core::MemoryConfig::new(&memme_db_path, actual_dims);
         memme_config.enable_graph = memme_cfg.enable_graph;
-        memme_config.enable_forgetting_curve = memme_cfg.enable_forgetting_curve;
-        // extraction_depth removed in MemMe dev; config field kept for backward compat
-        memme_config.custom_categories = Some(vec![
+        memme_config.tuning.enable_forgetting_curve = memme_cfg.enable_forgetting_curve;
+        memme_config.tuning.custom_categories = Some(vec![
             ("fact".into(), "Facts and knowledge about the user".into()),
             ("preference".into(), "User preferences and likes/dislikes".into()),
             ("experience".into(), "Experiences and events".into()),
@@ -275,8 +262,8 @@ impl AppState {
             },
         );
 
-        // Configure MemMe LLM from active provider (for compact/meditate/add_smart)
-        if let Some(llm) = build_memme_llm(&providers) {
+        // Configure MemMe LLM: use dedicated memory LLM if configured, else main provider
+        if let Some(llm) = build_memme_llm(&providers, memme_cfg) {
             memme_store.set_llm_provider(llm);
         }
 
@@ -374,7 +361,40 @@ fn migrate_channels_to_bots(db: &Database, config: &Config) {
 }
 
 /// Build a MemMe LLM provider from YiYi's active LLM provider configuration.
-fn build_memme_llm(providers: &ProvidersState) -> Option<std::sync::Arc<dyn memme_llm::LlmProvider>> {
+pub fn build_memme_llm(providers: &ProvidersState, memme_cfg: &crate::state::config::MemmeConfig) -> Option<std::sync::Arc<dyn memme_llm::LlmProvider>> {
+    // If user configured a dedicated memory LLM (to avoid using expensive main model), use it
+    if !memme_cfg.memory_llm_model.is_empty() {
+        let api_key = if memme_cfg.memory_llm_api_key.is_empty() {
+            providers.providers.values()
+                .find_map(|s| s.api_key.as_deref())
+                .unwrap_or("")
+                .to_string()
+        } else {
+            memme_cfg.memory_llm_api_key.clone()
+        };
+        if api_key.is_empty() {
+            log::warn!("MemMe LLM: dedicated model set but no API key available, skipping");
+            return None;
+        }
+        // Auto-append `/chat/completions` if missing — users frequently paste the API root
+        // (e.g. `https://dashscope.aliyuncs.com/compatible-mode/v1`) thinking it's "complete",
+        // mirroring the same normalization the fallback path applies to the main provider URL.
+        let trimmed = memme_cfg.memory_llm_base_url.trim().trim_end_matches('/');
+        let url = if trimmed.is_empty() {
+            "https://api.openai.com/v1/chat/completions".to_string()
+        } else if trimmed.ends_with("/chat/completions") {
+            trimmed.to_string()
+        } else {
+            format!("{}/chat/completions", trimmed)
+        };
+        log::info!("MemMe LLM: Using dedicated memory model '{}' at {}", memme_cfg.memory_llm_model, url);
+        let config = memme_llm::openai::OpenAIConfig::new(
+            &api_key, &url, &memme_cfg.memory_llm_model,
+        );
+        return Some(std::sync::Arc::new(memme_llm::openai::OpenAIProvider::new(config)));
+    }
+
+    // Fallback: use the main active LLM (may be expensive for frequent background ops)
     let slot = providers.active_llm.as_ref()?;
     let provider_settings = providers.providers.get(&slot.provider_id)?;
     let api_key = provider_settings.api_key.as_deref().unwrap_or("").to_string();
@@ -386,14 +406,67 @@ fn build_memme_llm(providers: &ProvidersState) -> Option<std::sync::Arc<dyn memm
     }
 
     let model = slot.model.clone();
-    let _provider_id = slot.provider_id.to_lowercase();
-    let url = if base_url.is_empty() { "https://api.openai.com".to_string() } else { base_url };
+    // Main provider's base_url is typically the API root (e.g. `/v1`); append chat-completions.
+    let trimmed = base_url.trim_end_matches('/');
+    let url = if trimmed.is_empty() {
+        "https://api.openai.com/v1/chat/completions".to_string()
+    } else if trimmed.ends_with("/chat/completions") {
+        trimmed.to_string()
+    } else {
+        format!("{}/chat/completions", trimmed)
+    };
 
-    log::info!("MemMe LLM: Using OpenAI-compatible provider '{}' with model '{}'", slot.provider_id, model);
+    log::info!("MemMe LLM: Falling back to main provider '{}' with model '{}' at {}", slot.provider_id, model, url);
 
-    // All YiYi providers use OpenAI-compatible chat completions API
     let config = memme_llm::openai::OpenAIConfig::new(&api_key, &url, &model);
     Some(std::sync::Arc::new(memme_llm::openai::OpenAIProvider::new(config)))
+}
+
+/// Rename `db_path` to `{db_path}.{suffix}` and remove the sibling WAL.
+/// Returns the backup path if the rename succeeded.
+fn quarantine_db(db_path: &str, suffix: &str) -> Result<String, std::io::Error> {
+    let backup_path = format!("{}.{}", db_path, suffix);
+    std::fs::rename(db_path, &backup_path)?;
+    let _ = std::fs::remove_file(format!("{}.wal", db_path));
+    Ok(backup_path)
+}
+
+fn unix_ts() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// If the existing MemMe SQLite DB was created with a different embedding
+/// dimensionality, rename it aside so the new store can initialize fresh.
+fn backup_db_if_dim_mismatch(db_path: &str, expected_dims: usize) {
+    use rusqlite::OpenFlags;
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let Ok(conn) = rusqlite::Connection::open_with_flags(db_path, flags) else {
+        return;
+    };
+    let stored_len: Option<usize> = conn
+        .query_row(
+            "SELECT length(embedding) FROM memories WHERE embedding IS NOT NULL LIMIT 1",
+            [],
+            |row| row.get::<_, i64>(0).map(|n| n as usize),
+        )
+        .ok();
+    drop(conn);
+    let Some(byte_len) = stored_len else { return };
+    let stored_dims = byte_len / 4; // f32 = 4 bytes
+    if stored_dims == expected_dims {
+        return;
+    }
+    let suffix = format!("dims{}.bak.{}", stored_dims, unix_ts());
+    match quarantine_db(db_path, &suffix) {
+        Ok(backup) => log::warn!(
+            "MemMe DB has {}-dim embeddings but BGE expects {}. Renamed to {}",
+            stored_dims, expected_dims, backup
+        ),
+        Err(e) => log::error!("Failed to quarantine dim-mismatched DB: {e}"),
+    }
 }
 
 /// Migrate a corrupt MemMe DB: rename old → create new → export/import data.
@@ -403,28 +476,21 @@ fn migrate_memme_db(
     embedder: std::sync::Arc<dyn memme_embeddings::Embedder>,
 ) -> memme_core::MemoryStore {
     let embedder_for_migrate = embedder.clone();
-    let config_copy = config.clone();
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let corrupt_path = format!("{}.corrupt.{}", db_path, ts);
+    let corrupt_path = match quarantine_db(db_path, &format!("corrupt.{}", unix_ts())) {
+        Ok(p) => {
+            log::info!("Corrupt MemMe DB moved to {p}");
+            p
+        }
+        Err(e) => {
+            log::error!("Failed to rename corrupt MemMe DB: {e}");
+            panic!("MemMe DB is corrupt and cannot be renamed. Please manually check {}", db_path);
+        }
+    };
 
-    // Step 1: Rename corrupt DB
-    if let Err(e) = std::fs::rename(db_path, &corrupt_path) {
-        log::error!("Failed to rename corrupt MemMe DB: {e}");
-        panic!("MemMe DB is corrupt and cannot be renamed. Please manually check {}", db_path);
-    }
-    let _ = std::fs::remove_file(format!("{}.wal", db_path));
-    log::info!("Corrupt MemMe DB moved to {corrupt_path}");
-
-    // Step 2: Create new empty DB
     let new_store = memme_core::MemoryStore::new(config, embedder)
         .expect("Failed to create new MemMe DB after migration");
 
-    // Step 3: Try to export data from corrupt DB and import into new store
-    let dims = config_copy.embedding_dims;
-    match migrate_via_export(&corrupt_path, &new_store, dims, &embedder_for_migrate) {
+    match migrate_via_export(&corrupt_path, &new_store, &embedder_for_migrate) {
         Ok(count) if count > 0 => {
             log::info!("Migrated {count} memories from corrupt DB");
         }
@@ -443,14 +509,13 @@ fn migrate_memme_db(
 fn migrate_via_export(
     corrupt_path: &str,
     new_store: &memme_core::MemoryStore,
-    dims: usize,
     embedder: &std::sync::Arc<dyn memme_embeddings::Embedder>,
 ) -> Result<usize, String> {
     // Remove WAL from corrupt DB before trying to open
     let _ = std::fs::remove_file(format!("{}.wal", corrupt_path));
 
     // Try to open the corrupt DB with a temporary MemMe store
-    let temp_config = memme_core::MemoryConfig::new(corrupt_path, dims);
+    let temp_config = memme_core::MemoryConfig::new(corrupt_path, embedder.dimensions());
     let temp_store = memme_core::MemoryStore::new(temp_config, embedder.clone())
         .map_err(|e| format!("Cannot open corrupt DB for export: {e}"))?;
 

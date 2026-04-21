@@ -105,3 +105,11 @@ openspec
 CLAUDE.md
 *.tmp
 app/src-tauri/libs/
+
+# Rust build outputs
+target/
+app/target/
+app/src-tauri/target/
+
+# Test coverage outputs
+app/coverage/

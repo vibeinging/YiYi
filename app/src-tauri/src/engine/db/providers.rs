@@ -22,21 +22,9 @@ pub struct CustomProviderRow {
     pub base_url: Option<String>,
 }
 
-/// Try to store the API key in the OS keychain; return the value to persist in DB.
-/// On success the sentinel is returned; on failure falls back to plaintext.
-fn prepare_key_for_db(keychain_id: &str, api_key: Option<&str>) -> Option<String> {
-    match api_key {
-        Some(key) if !key.is_empty() => {
-            if let Err(e) = crate::engine::keystore::store_key(keychain_id, key) {
-                log::warn!("Keychain store failed for '{}': {}", keychain_id, e);
-                Some(key.to_string())
-            } else {
-                Some(crate::engine::keystore::KEYCHAIN_SENTINEL.to_string())
-            }
-        }
-        Some(_) => Some(String::new()),
-        None => None,
-    }
+/// Prepare API key for DB storage (plaintext, no keychain).
+fn prepare_key_for_db(_keychain_id: &str, api_key: Option<&str>) -> Option<String> {
+    api_key.map(|k| k.to_string())
 }
 
 impl super::Database {
@@ -48,12 +36,9 @@ impl super::Database {
             .prepare("SELECT provider_id, api_key, base_url, extra_models FROM provider_settings")
             .unwrap();
         stmt.query_map([], |row| {
-            let pid: String = row.get(0)?;
-            let db_key: Option<String> = row.get(1)?;
             Ok(ProviderSettingRow {
-                provider_id: pid.clone(),
-                // Resolve keychain sentinel to real key
-                api_key: crate::engine::keystore::resolve_key(&pid, db_key.as_deref()),
+                provider_id: row.get(0)?,
+                api_key: row.get(1)?,
                 base_url: row.get(2)?,
                 extra_models_json: row.get(3)?,
             })
@@ -122,7 +107,7 @@ impl super::Database {
                 api_key_prefix: row.get(3)?,
                 models_json: row.get(4)?,
                 is_local: row.get(5)?,
-                api_key: crate::engine::keystore::resolve_key(&keychain_id, db_key.as_deref()),
+                api_key: db_key,
                 base_url: row.get(7)?,
             })
         })

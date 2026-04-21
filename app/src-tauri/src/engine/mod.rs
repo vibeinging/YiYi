@@ -37,6 +37,7 @@ pub mod infra;
 pub mod task_registry;
 pub mod keystore;
 pub mod buddy_delegate;
+pub mod tool_registry_global;
 
 // ── Voice control ──
 pub mod voice;

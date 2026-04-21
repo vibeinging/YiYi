@@ -1,6 +1,16 @@
 use super::{SignalType, GROWTH_LLM_SEMAPHORE};
 use crate::engine::llm_client::{chat_completion, LLMConfig, LLMMessage, MessageContent};
 
+/// Shared capability category keywords used by both reflect_on_task and build_capability_profile.
+const CAPABILITY_CATEGORIES: &[(&str, &[&str])] = &[
+    ("coding", &["代码", "编程", "code", "programming", "编写", "函数", "bug", "refactor", "实现", "feature"]),
+    ("documents", &["文档", "报告", "文件", "document", "report", "writing", "docx", "pdf", "pptx"]),
+    ("data_analysis", &["数据", "分析", "统计", "data", "analysis", "csv", "excel", "表格"]),
+    ("web_automation", &["浏览器", "网页", "browser", "web", "scrape", "自动化"]),
+    ("system_ops", &["shell", "命令", "安装", "部署", "deploy", "系统", "terminal", "服务器"]),
+    ("scheduling", &["定时", "提醒", "cron", "schedule", "reminder", "任务"]),
+];
+
 /// Strip markdown code fences (```json ... ```) from LLM responses.
 fn strip_code_fence(s: &str) -> &str {
     let trimmed = s.trim();
@@ -16,137 +26,11 @@ fn strip_code_fence(s: &str) -> &str {
 }
 
 // ---------------------------------------------------------------------------
-// Auto-memory extraction — extract noteworthy info from conversations
+// Memory extraction: delegated to MemMe's meditation pipeline (runs nightly).
+// Short-term memory lives in the last 50 messages in the prompt.
+// Long-term facts get extracted during `store.meditate()`.
+// Removed: extract_memories_from_conversation (was duplicating MemMe's work).
 // ---------------------------------------------------------------------------
-
-/// Extract memories from a conversation turn using LLM.
-/// Called after the assistant finishes replying.
-/// Runs in the background so it doesn't block the user.
-pub async fn extract_memories_from_conversation(
-    config: &LLMConfig,
-    user_message: &str,
-    assistant_reply: &str,
-    session_id: Option<&str>,
-) {
-    // Skip very short conversations (greetings, etc.)
-    if user_message.len() < 20 && assistant_reply.len() < 50 {
-        return;
-    }
-
-    // Truncate to avoid sending huge texts to LLM
-    let user_preview: String = user_message.chars().take(2000).collect();
-    let assistant_preview: String = assistant_reply.chars().take(2000).collect();
-
-    let extraction_prompt = format!(
-        r#"Analyze the following conversation and extract any information worth remembering for future conversations.
-Focus on:
-- User preferences (likes, dislikes, habits)
-- Important facts about the user (name, occupation, projects, etc.)
-- Decisions made during the conversation
-- Key experiences or lessons learned
-- Important notes or context
-
-For each memory, provide a category from: fact, preference, experience, decision, note
-
-Respond ONLY with a JSON array. Each element should be an object with "content" (string) and "category" (string).
-If there is nothing worth remembering, respond with an empty array: []
-
-Conversation:
-User: {user_preview}
-Assistant: {assistant_preview}
-
-Extract memories (JSON array only):"#
-    );
-
-    let messages = vec![LLMMessage {
-        role: "user".into(),
-        content: Some(MessageContent::text(extraction_prompt)),
-        tool_calls: None,
-        tool_call_id: None,
-    }];
-
-    let result = match chat_completion(config, &messages, &[]).await {
-        Ok(resp) => resp.message.content.map(|c| c.into_text()).unwrap_or_default(),
-        Err(e) => {
-            log::warn!("Memory extraction LLM call failed: {}", e);
-            return;
-        }
-    };
-
-    let json_str = strip_code_fence(&result);
-
-    #[derive(serde::Deserialize)]
-    struct ExtractedMemory {
-        content: String,
-        category: String,
-    }
-
-    let memories: Vec<ExtractedMemory> = match serde_json::from_str(json_str) {
-        Ok(m) => m,
-        Err(e) => {
-            log::debug!(
-                "Memory extraction parse error: {} (response: {})",
-                e,
-                &result[..result.len().min(200)]
-            );
-            return;
-        }
-    };
-
-    if memories.is_empty() {
-        return;
-    }
-
-    let valid_categories = ["fact", "preference", "experience", "decision", "note"];
-    let mut added = 0;
-    for mem in &memories {
-        let cat = if valid_categories.contains(&mem.category.as_str()) {
-            &mem.category
-        } else {
-            "note"
-        };
-        if !mem.content.is_empty() {
-            // Write to MemMe (single source of truth)
-            if let Some(store) = crate::engine::tools::get_memme_store() {
-                let importance: f32 = match cat {
-                    "fact" | "preference" | "principle" => 0.8,
-                    _ => 0.6,
-                };
-                let mut opts = crate::engine::tools::memory_tools::memme_add_opts(cat, importance);
-                if let Some(sid) = session_id {
-                    opts = opts.session_id(sid.to_string());
-                }
-                if store.add(&mem.content, opts).is_ok() {
-                    added += 1;
-                    // Sync HOT tier to files
-                    if matches!(cat, "fact" | "preference" | "principle") {
-                        if let Some(working_dir) = crate::engine::tools::get_working_dir() {
-                            if let Err(e) = crate::engine::mem::tiered_memory::sync_hot_to_files(&working_dir) {
-                                log::warn!("Failed to sync hot-tier to files: {}", e);
-                            }
-                        }
-                    }
-                }
-            }
-            // Also write to diary (diary is separate from tiered memory)
-            if let Some(working_dir) = crate::engine::tools::get_working_dir() {
-                let _ = crate::engine::mem::memory::append_diary(&working_dir, &mem.content, Some(cat));
-            }
-        }
-    }
-
-    if added > 0 {
-        log::info!("Auto-extracted {} memories from conversation", added);
-    }
-
-    // Periodically update the structured USER.md profile
-    let cfg = config.clone();
-    let um = user_message.to_string();
-    let ar = assistant_reply.to_string();
-    tokio::spawn(async move {
-        update_user_model(&cfg, &um, &ar).await;
-    });
-}
 
 // ---------------------------------------------------------------------------
 // Growth System — Post-task reflection
@@ -296,6 +180,20 @@ JSON only:"#
         signal_type.as_str(), signal_type.base_confidence(),
     ) {
         log::info!("Reflection saved: {} (outcome: {}, signal: {})", ref_id, outcome, signal_type.as_str());
+    }
+
+    // "第一次" detection: detect capability category and emit event for first-time achievement
+    if was_successful {
+        let summary_lower = summary.to_lowercase();
+        for (cat, keywords) in CAPABILITY_CATEGORIES {
+            if keywords.iter().any(|kw| summary_lower.contains(kw)) {
+                if let Some(handle) = crate::engine::tools::APP_HANDLE.get() {
+                    use tauri::Emitter;
+                    let _ = handle.emit("growth://new_capability", serde_json::json!({ "category": cat }));
+                }
+                break;
+            }
+        }
     }
 
     // Notify frontend immediately when a persist-worthy opportunity is detected
@@ -830,16 +728,6 @@ pub fn build_capability_profile(db: &crate::engine::db::Database) -> Vec<Capabil
         return Vec::new();
     }
 
-    // Categorize by keywords in summary
-    let categories = [
-        ("coding", &["代码", "编程", "code", "programming", "编写", "函数", "bug", "refactor", "实现", "feature"][..]),
-        ("documents", &["文档", "报告", "文件", "document", "report", "writing", "docx", "pdf", "pptx"]),
-        ("data_analysis", &["数据", "分析", "统计", "data", "analysis", "csv", "excel", "表格"]),
-        ("web_automation", &["浏览器", "网页", "browser", "web", "scrape", "自动化"]),
-        ("system_ops", &["shell", "命令", "安装", "部署", "deploy", "系统", "terminal", "服务器"]),
-        ("scheduling", &["定时", "提醒", "cron", "schedule", "reminder", "任务"]),
-    ];
-
     let mut category_stats: std::collections::HashMap<&str, (usize, usize)> = std::collections::HashMap::new();
 
     for (outcome, summary) in &rows {
@@ -847,7 +735,7 @@ pub fn build_capability_profile(db: &crate::engine::db::Database) -> Vec<Capabil
         let is_success = outcome == "success";
 
         let mut matched = false;
-        for (cat_name, keywords) in &categories {
+        for (cat_name, keywords) in CAPABILITY_CATEGORIES {
             if keywords.iter().any(|kw| summary_lower.contains(kw)) {
                 let entry = category_stats.entry(cat_name).or_insert((0, 0));
                 entry.0 += 1; // total

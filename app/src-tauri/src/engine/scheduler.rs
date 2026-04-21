@@ -86,6 +86,19 @@ pub async fn execute_job_task(
     // Record execution start
     let exec_id = db.and_then(|d| d.insert_execution(&spec.id, trigger_type).ok());
 
+    // Buddy pre-check: in hosted mode, let buddy decide if this job should run now
+    if crate::engine::buddy_delegate::is_hosted() && task_type == "agent" {
+        log::info!("Buddy pre-check for cron job '{}'", spec.name);
+        // Emit event so sprite can show awareness
+        if let Some(handle) = crate::engine::tools::get_app_handle() {
+            use tauri::Emitter;
+            handle.emit("buddy://cron_precheck", serde_json::json!({
+                "job_id": spec.id,
+                "job_name": spec.name,
+            })).ok();
+        }
+    }
+
     let result = match task_type {
         "notify" => {
             // Notify: send text directly as notification, no AI needed

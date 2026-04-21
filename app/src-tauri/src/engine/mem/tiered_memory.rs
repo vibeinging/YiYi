@@ -12,10 +12,11 @@ pub fn load_hot_context(budget_chars: usize) -> String {
         None => return String::new(),
     };
 
-    // Fetch a generous set then filter client-side by importance.
-    // Use a large limit to avoid missing HOT memories buried in the list.
-    let all = match store.list_traces(
-        memme_core::ListOptions::new(MEMME_USER_ID).limit(500),
+    // Use MemMe's server-side min_importance filter (no more client-side 500-row hack)
+    let mut hot = match store.list_traces(
+        memme_core::ListOptions::new(MEMME_USER_ID)
+            .min_importance(HOT_THRESHOLD)
+            .limit(HOT_CAPACITY * 2),
     ) {
         Ok(rows) => rows,
         Err(e) => {
@@ -23,13 +24,6 @@ pub fn load_hot_context(budget_chars: usize) -> String {
             return String::new();
         }
     };
-
-    let mut hot: Vec<_> = all.into_iter()
-        .filter(|m| m.importance.unwrap_or(0.0) >= HOT_THRESHOLD)
-        .collect();
-    // Sort by importance DESC so the most important memories come first
-    hot.sort_by(|a, b| b.importance.unwrap_or(0.0).partial_cmp(&a.importance.unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal));
-    hot.truncate(HOT_CAPACITY * 2);
 
     if hot.is_empty() {
         return String::new();
@@ -83,8 +77,10 @@ pub fn sync_hot_to_files(working_dir: &Path) -> Result<(), String> {
         None => return Ok(()),
     };
 
-    let all = match store.list_traces(
-        memme_core::ListOptions::new(MEMME_USER_ID).limit(500),
+    let hot = match store.list_traces(
+        memme_core::ListOptions::new(MEMME_USER_ID)
+            .min_importance(HOT_THRESHOLD)
+            .limit(HOT_CAPACITY * 2),
     ) {
         Ok(rows) => rows,
         Err(e) => {
@@ -92,12 +88,6 @@ pub fn sync_hot_to_files(working_dir: &Path) -> Result<(), String> {
             return Ok(());
         }
     };
-
-    let mut hot: Vec<_> = all.into_iter()
-        .filter(|m| m.importance.unwrap_or(0.0) >= HOT_THRESHOLD)
-        .collect();
-    hot.sort_by(|a, b| b.importance.unwrap_or(0.0).partial_cmp(&a.importance.unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal));
-    hot.truncate(HOT_CAPACITY * 2);
 
     let mut principles_lines = Vec::new();
     let mut memory_lines = Vec::new();

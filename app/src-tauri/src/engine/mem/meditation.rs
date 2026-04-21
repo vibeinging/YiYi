@@ -10,6 +10,15 @@ use super::memory;
 use crate::engine::react_agent;
 use super::tiered_memory;
 
+/// Truncate a string to at most `max_bytes` bytes, snapping to the nearest UTF-8
+/// char boundary. Avoids panic when slicing inside a multi-byte character (e.g. Chinese).
+fn truncate_bytes(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes { return s; }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) { end -= 1; }
+    &s[..end]
+}
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -34,6 +43,8 @@ struct MeditationContext {
     messages: Vec<(String, String, String)>,
     corrections: Vec<(String, Option<String>, String, String, i64)>,
     corrections_count: usize,
+    /// Cached identity traits section (fetched once, reused across phases).
+    identity_section: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -109,11 +120,73 @@ async fn run_phases(
     let corrections_count = corrections.len();
     let sessions_reviewed = count_unique_sessions(&messages);
 
+    // Fetch identity traits once for all phases
+    let identity_section = match crate::engine::tools::get_memme_store() {
+        Some(store) => match store.list_identity_traits(crate::engine::tools::MEMME_USER_ID) {
+            Ok(traits) if !traits.is_empty() => {
+                let lines: Vec<String> = traits.iter()
+                    .take(10)
+                    .map(|t| format!("- [{}] {} (confidence: {:.0}%)", t.trait_type.as_str(), t.content, t.confidence * 100.0))
+                    .collect();
+                format!("Identity traits:\n{}", lines.join("\n"))
+            }
+            _ => String::new(),
+        },
+        None => String::new(),
+    };
+
     let ctx = MeditationContext {
         messages,
         corrections_count,
         corrections,
+        identity_section,
     };
+
+    // ── Phase A0: Pre-compact all sessions with uncompacted events ──
+    // meditate() only extracts memories from episodes; sessions that never hit the
+    // pressure-compact threshold would otherwise never be processed. Force-compact
+    // here so short conversations still become retrievable memories.
+    if let Some(store) = crate::engine::tools::get_memme_store() {
+        info!("pre-meditation: listing sessions...");
+        match store.list_sessions(
+            memme_core::ListSessionsOptions::new(crate::engine::tools::MEMME_USER_ID).limit(500),
+        ) {
+            Ok(sessions) => {
+                info!("pre-meditation: found {} sessions to check", sessions.len());
+                let mut compacted = 0usize;
+                for s in &sessions {
+                    if s.event_count == 0 { continue; }
+                    info!("pre-meditation: compacting session {} ({} events)...", s.session_id, s.event_count);
+                    let sid = s.session_id.clone();
+                    let store_clone = store.clone();
+                    // Run the blocking compact in a dedicated thread with a 90s timeout.
+                    // If compact hangs (LLM/embedding stall), we bail instead of blocking meditation forever.
+                    let result = tokio::time::timeout(
+                        std::time::Duration::from_secs(90),
+                        tokio::task::spawn_blocking(move || store_clone.compact(&sid)),
+                    ).await;
+                    match result {
+                        Ok(Ok(Ok(cr))) if !cr.episode_id.is_empty() => {
+                            compacted += 1;
+                            info!("pre-meditation: compacted session {} -> episode {}", s.session_id, cr.episode_id);
+                        }
+                        Ok(Ok(Ok(_))) => {} // already compacted, no-op
+                        Ok(Ok(Err(e))) => log::warn!("pre-meditation compact failed for {}: {}", s.session_id, e),
+                        Ok(Err(join_err)) => log::warn!("pre-meditation compact join failed: {}", join_err),
+                        Err(_) => {
+                            log::warn!("pre-meditation compact timeout (>90s) for session {}, skipping", s.session_id);
+                        }
+                    }
+                }
+                if compacted > 0 {
+                    log::info!("pre-meditation: compacted {} sessions into new episodes", compacted);
+                } else {
+                    info!("pre-meditation: no sessions needed compacting");
+                }
+            }
+            Err(e) => log::warn!("pre-meditation list_sessions failed: {}", e),
+        }
+    }
 
     // ── Phase A: MemMe native meditate() ──
     // Replaces old Phase 0 (triage), Phase 1 (consolidate corrections),
@@ -173,8 +246,12 @@ async fn run_phases(
         check_cancel(cancel)?;
     }
 
-    // ── Phase C: Growth Analysis (YiYi-specific) ──
+    // ── Phase C: Growth Analysis + Personality Evolution (YiYi-specific) ──
     let (growth_synthesis, tomorrow_intentions) = phase_growth(config, db, &ctx).await?;
+    // Phase C-bis: Extract personality signals from recent interactions
+    if let Err(e) = phase_personality_evolution(config, db, &ctx).await {
+        log::warn!("Phase C personality evolution failed (non-blocking): {}", e);
+    }
     check_cancel(cancel)?;
 
     // ── Phase D: Journal (MemMe reflect + YiYi journal) ──
@@ -197,7 +274,12 @@ async fn run_phases(
     .await?;
 
     // ── Phase E: Morning Preparation (YiYi-specific) ──
-    phase_morning_prep(working_dir, &journal, &tomorrow_intentions, db);
+    phase_morning_prep(working_dir, &journal, &tomorrow_intentions, db, &ctx);
+
+    // ── Phase F: "She Noticed" — Proactive Care (YiYi-specific) ──
+    if let Err(e) = phase_proactive_care(config, db, &ctx, &journal).await {
+        log::warn!("Phase F proactive care failed (non-blocking): {}", e);
+    }
 
     Ok(MeditationResult {
         depth: "memme".to_string(),
@@ -308,19 +390,11 @@ async fn phase_growth(
         "No corrections received.".to_string()
     };
 
-    // Optionally enrich with MemMe identity traits
-    let identity_section = match crate::engine::tools::get_memme_store() {
-        Some(store) => match store.list_identity_traits(crate::engine::tools::MEMME_USER_ID) {
-            Ok(traits) if !traits.is_empty() => {
-                let lines: Vec<String> = traits.iter()
-                    .take(10)
-                    .map(|t| format!("- [{}] {} (confidence: {:.0}%)", t.trait_type.as_str(), t.content, t.confidence * 100.0))
-                    .collect();
-                format!("Identity traits:\n{}", lines.join("\n"))
-            }
-            _ => "No identity traits inferred yet.".to_string(),
-        },
-        None => "MemMe store not available.".to_string(),
+    // Use cached identity traits from context (fetched once in run_phases)
+    let identity_section = if ctx.identity_section.is_empty() {
+        "No identity traits inferred yet.".to_string()
+    } else {
+        ctx.identity_section.clone()
     };
 
     let prompt = format!(
@@ -446,20 +520,8 @@ async fn phase_journal(
         format!("Growth insights:\n{}", growth_synthesis)
     };
 
-    // Enrich with MemMe identity traits
-    let identity_section = match crate::engine::tools::get_memme_store() {
-        Some(store) => match store.list_identity_traits(crate::engine::tools::MEMME_USER_ID) {
-            Ok(traits) if !traits.is_empty() => {
-                let lines: Vec<String> = traits.iter()
-                    .take(10)
-                    .map(|t| format!("- [{}] {}", t.trait_type.as_str(), t.content))
-                    .collect();
-                format!("Identity insights:\n{}", lines.join("\n"))
-            }
-            _ => String::new(),
-        },
-        None => String::new(),
-    };
+    // Use cached identity traits from context
+    let identity_section = ctx.identity_section.clone();
 
     // MemMe reflection section
     let reflection_section = match memme_reflection {
@@ -532,6 +594,7 @@ fn phase_morning_prep(
     journal: &str,
     tomorrow_intentions: &str,
     db: &Database,
+    ctx: &MeditationContext,
 ) {
     let capability = react_agent::build_capability_profile(db);
     let skill_suggestion = react_agent::detect_skill_opportunity(db);
@@ -546,20 +609,8 @@ fn phase_morning_prep(
 
     let journal_summary: String = journal.chars().take(200).collect();
 
-    // Enrich with MemMe identity traits
-    let identity_summary = match crate::engine::tools::get_memme_store() {
-        Some(store) => match store.list_identity_traits(crate::engine::tools::MEMME_USER_ID) {
-            Ok(traits) if !traits.is_empty() => {
-                traits.iter()
-                    .take(5)
-                    .map(|t| format!("- {}: {}", t.trait_type.as_str(), t.content))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }
-            _ => String::new(),
-        },
-        None => String::new(),
-    };
+    // Use cached identity traits (take first 5 lines for morning summary)
+    let identity_summary = ctx.identity_section.lines().take(6).collect::<Vec<_>>().join("\n");
 
     let morning_context = serde_json::json!({
         "journal_summary": journal_summary,
@@ -594,4 +645,248 @@ fn check_cancel(cancel: &Arc<AtomicBool>) -> Result<(), String> {
     } else {
         Ok(())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Phase C-bis: Personality Evolution
+// ---------------------------------------------------------------------------
+
+/// Analyze recent interactions and extract personality signals.
+/// Uses LLM to determine how interactions should shift Buddy's 5 traits.
+async fn phase_personality_evolution(
+    config: &LLMConfig,
+    db: &Database,
+    ctx: &MeditationContext,
+) -> Result<(), String> {
+    if ctx.messages.is_empty() {
+        info!("Phase C-bis: No messages to analyze for personality evolution");
+        return Ok(());
+    }
+
+    // Throttle to once per 7 days — personality should shift slowly, not after every meditation.
+    let recent = db.list_personality_signals(1);
+    if let Some(latest) = recent.first() {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&latest.created_at) {
+            let age = chrono::Utc::now() - dt.with_timezone(&chrono::Utc);
+            if age.num_days() < 7 {
+                info!(
+                    "Phase C-bis: skipped — last personality update was {} days ago (<7d window)",
+                    age.num_days()
+                );
+                return Ok(());
+            }
+        }
+    }
+
+    // Build conversation summary for analysis (last 20 messages max)
+    let recent_messages: Vec<String> = ctx.messages.iter()
+        .rev().take(20).rev()
+        .map(|(_sid, role, content)| format!("[{}]: {}", role, truncate_bytes(content, 200)))
+        .collect();
+
+    let conversation_summary = recent_messages.join("\n");
+
+    let prompt = format!(
+        "你是 YiYi 的人格分析系统。分析以下最近的对话，判断这些互动对 Buddy 五个性格属性的影响。\n\n\
+         五个属性：\n\
+         - energy（活力）：用户交流的活跃度、热情程度\n\
+         - warmth（温柔）：互动中的温暖、关心、情感深度\n\
+         - mischief（调皮）：幽默、玩闹、轻松的互动\n\
+         - wit（聪慧）：深度讨论、技术探索、思考性对话\n\
+         - sass（犀利）：直接、犀利、有态度的交流\n\n\
+         最近对话：\n{}\n\n\
+         分析这些对话对性格的影响，输出 JSON 格式：\n\
+         {{\"signals\": [\n\
+           {{\"trait\": \"属性名\", \"delta\": 浮点数, \"evidence\": \"一句话说明原因\"}}\n\
+         ]}}\n\n\
+         规则：\n\
+         - 每个属性最多出现一次\n\
+         - delta 的 **绝对值必须 ≥ 0.3**，否则不要输出该信号（即：要么明显变化，要么不输出）\n\
+         - delta 范围 -1.0 到 1.0，正数增强、负数减弱\n\
+         - 必须有**多处具体证据**支持，单条对话不足以产生信号\n\
+         - 如果对话很短、很中性、或者没有明显倾向，**输出空数组 signals: []**\n\
+         - 最多 3 个 signals\n\
+         - 只输出 JSON，不要其他文字",
+        conversation_summary
+    );
+
+    let messages = vec![LLMMessage {
+        role: "user".into(),
+        content: Some(MessageContent::text(prompt)),
+        tool_calls: None,
+        tool_call_id: None,
+    }];
+
+    let response = chat_completion(config, &messages, &[])
+        .await
+        .map_err(|e| format!("Personality analysis LLM call failed: {}", e))?;
+
+    let text = response.message.content
+        .map(|c| c.into_text())
+        .unwrap_or_default();
+
+    let json_str = extract_json_from_response(&text);
+    let parsed: serde_json::Value = serde_json::from_str(&json_str)
+        .map_err(|e| format!("Failed to parse personality signals JSON: {} (raw: {})", e, truncate_bytes(&text, 200)))?;
+
+    let signals_arr = parsed.get("signals")
+        .and_then(|v| v.as_array())
+        .ok_or("Missing 'signals' array in response")?;
+
+    let signals: Vec<crate::engine::db::PersonalitySignal> = signals_arr.iter()
+        .filter_map(|s| {
+            let trait_name = s.get("trait")?.as_str()?.to_string();
+            let delta = s.get("delta")?.as_f64()?;
+            let evidence = s.get("evidence")?.as_str()?.to_string();
+            // Validate trait name
+            if !["energy", "warmth", "mischief", "wit", "sass"].contains(&trait_name.as_str()) {
+                return None;
+            }
+            // Clamp delta
+            let delta = delta.clamp(-1.0, 1.0);
+            Some(crate::engine::db::PersonalitySignal {
+                trait_name,
+                delta,
+                evidence,
+                memory_id: None,
+            })
+        })
+        .take(3) // Max 3 signals per meditation
+        .collect();
+
+    if signals.is_empty() {
+        info!("Phase C-bis: No personality signals extracted");
+        return Ok(());
+    }
+
+    info!("Phase C-bis: Extracted {} personality signals", signals.len());
+    db.add_personality_signals(&signals, None)?;
+    Ok(())
+}
+
+/// Extract JSON object from LLM response (handles markdown code blocks).
+/// Returns the JSON string, or the full trimmed input if no JSON found.
+pub(crate) fn extract_json_from_response(text: &str) -> String {
+    // Try to find JSON in code blocks first
+    if let Some(start) = text.find("```json") {
+        let after = &text[start + 7..];
+        if let Some(end) = after.find("```") {
+            return after[..end].trim().to_string();
+        }
+    }
+    if let Some(start) = text.find("```") {
+        let after = &text[start + 3..];
+        if let Some(end) = after.find("```") {
+            return after[..end].trim().to_string();
+        }
+    }
+    // Try to find JSON object directly
+    if let Some(start) = text.find('{') {
+        if let Some(end) = text.rfind('}') {
+            return text[start..=end].to_string();
+        }
+    }
+    text.trim().to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Phase F: "She Noticed" — Proactive Care
+// ---------------------------------------------------------------------------
+
+/// After meditation, analyze if there's something worth reaching out about.
+/// If so, emit a Tauri event that the frontend can use to trigger a bot message.
+async fn phase_proactive_care(
+    config: &LLMConfig,
+    db: &Database,
+    ctx: &MeditationContext,
+    journal: &str,
+) -> Result<(), String> {
+    if ctx.messages.is_empty() {
+        info!("Phase F: No messages to analyze for proactive care");
+        return Ok(());
+    }
+
+    // Build a concise summary of today's interactions
+    let message_summary: Vec<String> = ctx.messages.iter()
+        .rev().take(10).rev()
+        .filter(|(_, role, _)| role == "user")
+        .map(|(_, _, content)| truncate_bytes(content, 150).to_string())
+        .collect();
+
+    if message_summary.is_empty() {
+        return Ok(());
+    }
+
+    let prompt = format!(
+        "你是 YiYi，一个关心用户的 AI 伙伴。分析以下用户最近的对话和冥想日记，判断是否有值得主动关心的事。\n\n\
+         用户最近说的话：\n{}\n\n\
+         今日冥想日记摘要：\n{}\n\n\
+         判断：用户是否有情绪波动、压力增大、值得鼓励的成就、或需要关心的情况？\n\n\
+         如果值得主动关心，输出 JSON：\n\
+         {{\"should_reach_out\": true, \"message\": \"一句温暖的关心话（不超过50字）\", \"reason\": \"为什么需要关心\"}}\n\
+         如果不需要，输出：\n\
+         {{\"should_reach_out\": false}}\n\n\
+         注意：只有真正值得关心时才 should_reach_out=true。不要过度关心。只输出 JSON。",
+        message_summary.join("\n"),
+        truncate_bytes(journal, 300)
+    );
+
+    let messages = vec![LLMMessage {
+        role: "user".into(),
+        content: Some(MessageContent::text(prompt)),
+        tool_calls: None,
+        tool_call_id: None,
+    }];
+
+    let response = chat_completion(config, &messages, &[])
+        .await
+        .map_err(|e| format!("Proactive care LLM call failed: {}", e))?;
+
+    let text = response.message.content
+        .map(|c| c.into_text())
+        .unwrap_or_default();
+
+    let json_str = extract_json_from_response(&text);
+    let parsed: serde_json::Value = serde_json::from_str(&json_str)
+        .map_err(|e| format!("Failed to parse proactive care JSON: {}", e))?;
+
+    let should_reach_out = parsed.get("should_reach_out")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if should_reach_out {
+        let message = parsed.get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("我在想你，一切还好吗？")
+            .to_string();
+        let reason = parsed.get("reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        info!("Phase F: Proactive care triggered — reason: {}", reason);
+
+        // Store as a special memory for future reference
+        let _ = db.add_personality_signals(&[
+            crate::engine::db::PersonalitySignal {
+                trait_name: "warmth".to_string(),
+                delta: 0.2,
+                evidence: format!("主动关心用户：{}", reason),
+                memory_id: None,
+            }
+        ], None);
+
+        // Emit Tauri event for frontend to handle (show bubble or send via bot)
+        if let Some(app_handle) = crate::engine::tools::get_app_handle() {
+            use tauri::Emitter;
+            let _ = app_handle.emit("buddy://proactive_care", serde_json::json!({
+                "message": message,
+                "reason": reason,
+            }));
+        }
+    } else {
+        info!("Phase F: No proactive care needed");
+    }
+
+    Ok(())
 }

@@ -26,7 +26,7 @@ pub use cronjobs::{ExecutionMode, CronJobRow, CronJobExecutionRow, HeartbeatRow}
 pub use workspace::{AuthorizedFolderRow, SensitivePathRow};
 pub use users::{UnifiedUserRow, UserIdentityRow};
 pub use tasks::TaskInfo;
-pub use growth::{MeditationSession, BuddyDecision, TrustStats};
+pub use growth::{MeditationSession, BuddyDecision, TrustStats, PersonalitySignal, PersonalitySignalRow, SparklingMemory, RecallCandidate, PERSONALITY_BASE_STAT, invalidate_personality_cache};
 pub use quick_actions::QuickActionRow;
 
 pub struct Database {
@@ -226,6 +226,19 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id);
             CREATE INDEX IF NOT EXISTS idx_memories_updated ON memories(updated_at);
             -- tier/confidence indexes are created in migrate_tables() after ALTER TABLE
+
+            -- Personality signals: tracks Buddy personality evolution from interactions
+            CREATE TABLE IF NOT EXISTS personality_signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trait TEXT NOT NULL,
+                delta REAL NOT NULL,
+                evidence TEXT NOT NULL,
+                memory_id TEXT,
+                meditation_session_id TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_psignals_trait ON personality_signals(trait);
+            CREATE INDEX IF NOT EXISTS idx_psignals_created ON personality_signals(created_at);
 
             -- Unified users: cross-platform identity linkage
             CREATE TABLE IF NOT EXISTS unified_users (
@@ -617,6 +630,17 @@ impl Database {
                 "ALTER TABLE bot_conversations ADD COLUMN agent_config_json TEXT DEFAULT NULL;"
             ).map_err(|e| format!("Migration error (bot_conversations agent_config_json): {}", e))?;
             log::info!("Migrated bot_conversations table: added agent_config_json column");
+        }
+
+        // Buddy: add is_sparkling (闪光记忆) to memories table
+        let has_sparkling: bool = conn
+            .prepare("SELECT is_sparkling FROM memories LIMIT 0")
+            .is_ok();
+        if !has_sparkling {
+            conn.execute_batch(
+                "ALTER TABLE memories ADD COLUMN is_sparkling INTEGER NOT NULL DEFAULT 0;"
+            ).map_err(|e| format!("Migration error (memories is_sparkling): {}", e))?;
+            log::info!("Migrated memories table: added is_sparkling column (闪光记忆)");
         }
 
         // Quick actions table -- user-defined quick action shortcuts

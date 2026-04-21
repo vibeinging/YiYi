@@ -33,7 +33,7 @@ pub(self) use super::react_agent;
 pub(self) use super::scheduler;
 
 /// Global MCP runtime reference for tool routing.
-static MCP_RUNTIME: std::sync::OnceLock<Arc<MCPRuntime>> = std::sync::OnceLock::new();
+pub(crate) static MCP_RUNTIME: std::sync::OnceLock<Arc<MCPRuntime>> = std::sync::OnceLock::new();
 
 /// Global working directory for memory_search and other tools.
 static WORKING_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
@@ -1394,28 +1394,67 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
             };
         }
         _ => {
-            // Try plugin tools first (format: plugin__<id>__<tool_name>)
-            if call.function.name.starts_with("plugin__") {
-                if let Some(handle) = APP_HANDLE.get() {
-                    use tauri::Manager;
-                    let state: tauri::State<'_, crate::state::AppState> = handle.state();
-                    let registry = state.plugin_registry.read().unwrap();
-                    match registry.execute_tool(&call.function.name, &args) {
-                        Ok(result) => result,
-                        Err(e) => format!("Plugin tool error: {e}"),
+            // Unified dispatch: look up in GlobalToolRegistry first
+            if let Some(registry) = crate::engine::tool_registry_global::global_registry() {
+                let tool_name = &call.function.name;
+                // Check registry for dispatch routing
+                if let Some(entry) = registry.get(tool_name) {
+                    match &entry.source {
+                        crate::engine::tool_registry_global::ToolSource::Plugin { .. } => {
+                            // Route to plugin executor using dispatch_name (may have plugin__ prefix)
+                            if let Some(handle) = APP_HANDLE.get() {
+                                use tauri::Manager;
+                                let state: tauri::State<'_, crate::state::AppState> = handle.state();
+                                let plugin_reg = state.plugin_registry.read().unwrap();
+                                match plugin_reg.execute_tool(&entry.dispatch_name, &args) {
+                                    Ok(result) => result,
+                                    Err(e) => format!("Plugin tool error: {e}"),
+                                }
+                            } else {
+                                format!("Plugin tool unavailable: no app handle")
+                            }
+                        }
+                        crate::engine::tool_registry_global::ToolSource::Mcp { .. } => {
+                            // Route to MCP runtime
+                            if let Some(runtime) = MCP_RUNTIME.get() {
+                                match try_mcp_tool(runtime, &entry.dispatch_name, &args).await {
+                                    Some(result) => result,
+                                    None => format!("MCP tool '{}' failed", tool_name),
+                                }
+                            } else {
+                                format!("MCP runtime not available")
+                            }
+                        }
+                        crate::engine::tool_registry_global::ToolSource::BuiltIn => {
+                            // Shouldn't reach here (built-ins handled above), but fallback
+                            format!("Unknown built-in tool: {}", tool_name)
+                        }
+                    }
+                }
+                // Legacy fallback: try prefix-based routing for backward compat
+                else if call.function.name.starts_with("plugin__") {
+                    if let Some(handle) = APP_HANDLE.get() {
+                        use tauri::Manager;
+                        let state: tauri::State<'_, crate::state::AppState> = handle.state();
+                        let plugin_reg = state.plugin_registry.read().unwrap();
+                        match plugin_reg.execute_tool(&call.function.name, &args) {
+                            Ok(result) => result,
+                            Err(e) => format!("Plugin tool error: {e}"),
+                        }
+                    } else {
+                        format!("Plugin tool unavailable")
+                    }
+                }
+                else if let Some(runtime) = MCP_RUNTIME.get() {
+                    match try_mcp_tool(runtime, &call.function.name, &args).await {
+                        Some(result) => result,
+                        None => format!("Unknown tool: {}", call.function.name),
                     }
                 } else {
-                    format!("Plugin tool unavailable: no app handle")
-                }
-            }
-            // Try MCP runtime for unknown tools
-            else if let Some(runtime) = MCP_RUNTIME.get() {
-                match try_mcp_tool(runtime, &call.function.name, &args).await {
-                    Some(result) => result,
-                    None => format!("Unknown tool: {}", call.function.name),
+                    format!("Unknown tool: {}", call.function.name)
                 }
             } else {
-                format!("Unknown tool: {}", call.function.name)
+                format!("Tool registry not initialized: {}", call.function.name)
             }
         }
     };

@@ -78,6 +78,8 @@ fn build_body(config: &LLMConfig, messages_value: serde_json::Value, stream: boo
     }
     if stream {
         body["stream"] = serde_json::json!(true);
+        // Request usage data in stream (OpenAI / compatible providers)
+        body["stream_options"] = serde_json::json!({ "include_usage": true });
     }
     body
 }
@@ -230,11 +232,13 @@ where
     let mut finish_reason = "stop".to_string();
     let mut tool_call_acc: std::collections::BTreeMap<u32, (String, String, String)> =
         std::collections::BTreeMap::new();
+    let mut stream_usage: Option<crate::engine::usage::TokenUsage> = None;
 
     {
         let fc = &mut full_content;
         let fr = &mut finish_reason;
         let tca = &mut tool_call_acc;
+        let su = &mut stream_usage;
 
         process_sse_stream(resp, cancelled, |data| {
             let json = match serde_json::from_str::<serde_json::Value>(data) {
@@ -250,6 +254,10 @@ where
                     log::error!("OpenAI mid-stream error: {}", msg);
                     *fr = format!("error: {}", msg);
                     return false;
+                }
+                // Capture usage from stream (usually in last chunk)
+                if !json["usage"].is_null() {
+                    *su = parse_openai_usage(&json["usage"]);
                 }
                 let choice = &json["choices"][0];
                 if let Some(f) = choice["finish_reason"].as_str() {
@@ -331,8 +339,8 @@ where
         log::warn!("LLM stream completed with no content and no tool calls (finish_reason: {})", finish_reason);
     }
 
-    // OpenAI streaming doesn't reliably include usage in SSE chunks
-    Ok(build_stream_response(full_content, tool_calls, None))
+    // Usage captured from stream chunks (last chunk usually has it)
+    Ok(build_stream_response(full_content, tool_calls, stream_usage))
 }
 
 /// Parse tool_calls array from OpenAI response JSON

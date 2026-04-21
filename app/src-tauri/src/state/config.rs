@@ -183,21 +183,26 @@ impl Default for MeditationConfig {
 }
 
 /// MemMe memory engine configuration.
+///
+/// The embedder is hard-coded to bge-small-zh-v1.5 (local ONNX, 512 dims) in
+/// `app_state.rs`. The five `embedding_*` fields below are kept for
+/// config-file back-compat and inspection only — they are not read by the
+/// runtime.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemmeConfig {
-    /// Embedding provider: "mock" (default) | "openai"
+    /// (Unused) Embedding provider identifier, always "local-bge-zh".
     #[serde(default = "memme_default_provider")]
     pub embedding_provider: String,
-    /// Embedding model name (e.g. "text-embedding-3-small")
+    /// (Unused) Embedding model name, always "bge-small-zh-v1.5".
     #[serde(default = "memme_default_model")]
     pub embedding_model: String,
-    /// API key for embedding provider. Empty = use active LLM provider's key.
+    /// (Unused) Legacy API key field.
     #[serde(default)]
     pub embedding_api_key: String,
-    /// Base URL override for embedding API. Empty = use provider default.
+    /// (Unused) Legacy base URL field.
     #[serde(default)]
     pub embedding_base_url: String,
-    /// Embedding vector dimensions. Must match model output.
+    /// (Unused) Embedding vector dimensions, always 512.
     #[serde(default = "memme_default_dims")]
     pub embedding_dims: usize,
     /// Enable MemMe knowledge graph (entity extraction + relations).
@@ -209,11 +214,21 @@ pub struct MemmeConfig {
     /// Fact extraction depth: "standard" | "thorough".
     #[serde(default = "memme_default_depth")]
     pub extraction_depth: String,
+
+    /// Optional LLM override for memory operations (compact/meditate/extract).
+    /// If empty, falls back to the active main LLM provider.
+    /// Use case: main model is expensive, use a cheap one for background memory ops.
+    #[serde(default)]
+    pub memory_llm_base_url: String,
+    #[serde(default)]
+    pub memory_llm_api_key: String,
+    #[serde(default)]
+    pub memory_llm_model: String,
 }
 
-fn memme_default_provider() -> String { "mock".to_string() }
-fn memme_default_model() -> String { "text-embedding-3-small".to_string() }
-fn memme_default_dims() -> usize { 384 }
+fn memme_default_provider() -> String { "local-bge-zh".to_string() }
+fn memme_default_model() -> String { "bge-small-zh-v1.5".to_string() }
+fn memme_default_dims() -> usize { 512 }
 fn memme_default_depth() -> String { "standard".to_string() }
 
 impl Default for MemmeConfig {
@@ -227,6 +242,9 @@ impl Default for MemmeConfig {
             enable_graph: true,
             enable_forgetting_curve: true,
             extraction_depth: memme_default_depth(),
+            memory_llm_base_url: String::new(),
+            memory_llm_api_key: String::new(),
+            memory_llm_model: String::new(),
         }
     }
 }

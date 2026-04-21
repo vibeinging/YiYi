@@ -445,6 +445,33 @@ When setting up bots, open the developer console:
         }
     }
 
+    // Personality context injection (from personality_signals, time-decayed)
+    if let Some(db) = crate::engine::tools::get_database() {
+        let aggregates = db.get_personality_aggregates();
+        let has_signals = aggregates.iter().any(|(_, delta)| delta.abs() > 0.1);
+        if has_signals {
+            prompt.push_str("\n\n## 你的性格倾向\n");
+            let base = crate::engine::db::PERSONALITY_BASE_STAT;
+            let base_stats = [
+                ("energy", "活力", base),
+                ("warmth", "温柔", base),
+                ("mischief", "调皮", base),
+                ("wit", "聪慧", base),
+                ("sass", "犀利", base),
+            ];
+            for (trait_key, trait_cn, base) in &base_stats {
+                let delta = aggregates.iter()
+                    .find(|(t, _)| t == trait_key)
+                    .map(|(_, d)| *d)
+                    .unwrap_or(0.0);
+                let value = (base + delta).clamp(0.0, 100.0) as i32;
+                let level = if value >= 70 { "较高" } else if value <= 30 { "较低" } else { "适中" };
+                prompt.push_str(&format!("- {}：{}/100（{}）\n", trait_cn, value, level));
+            }
+            prompt.push_str("你的回应风格应自然反映这些倾向，不需要刻意表演。\n");
+        }
+    }
+
     // Capability growth guidance + pending suggestions
     {
         prompt.push_str("\n\n## Capability Growth\n\
@@ -590,6 +617,24 @@ When setting up bots, open the developer console:
                 prompt.push_str(&format!("- {}\n", line));
             }
         }
+    }
+
+    // Task routing guidance
+    {
+        let external_hint = if let Some(name) = crate::engine::buddy_delegate::external_coder() {
+            format!("- **复杂任务**（新项目搭建、大规模重构）：可通过 `execute_shell` 调用 `{}` 委派深度编码\n", name)
+        } else {
+            "- **复杂任务**（新项目搭建、大规模重构）：使用 `create_task` 创建后台任务，拆分为多个子步骤\n".into()
+        };
+        prompt.push_str(&format!(
+            "\n\n## 任务执行策略\n\
+            根据任务复杂度选择执行方式：\n\
+            - **简单任务**（单文件修改、配置调整、问答）：直接在当前对话中完成\n\
+            - **中等任务**（多文件编码、功能开发）：使用 `create_task` 创建后台任务执行\n\
+            {}\
+            判断依据：涉及文件数量、改动范围、是否需要反复调试\n",
+            external_hint
+        ));
     }
 
     prompt

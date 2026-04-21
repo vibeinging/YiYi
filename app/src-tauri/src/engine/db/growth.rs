@@ -71,6 +71,58 @@ pub struct CodeRegistryEntry {
     pub last_error: Option<String>,
 }
 
+/// Base stat value for all personality traits (before signals are applied).
+pub const PERSONALITY_BASE_STAT: f64 = 50.0;
+
+/// Cached personality aggregates. Invalidated when new signals are added.
+static PERSONALITY_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<(std::time::Instant, Vec<(String, f64)>)>>> = std::sync::OnceLock::new();
+
+fn get_personality_cache() -> &'static std::sync::Mutex<Option<(std::time::Instant, Vec<(String, f64)>)>> {
+    PERSONALITY_CACHE.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Invalidate personality cache (call after adding new signals).
+pub fn invalidate_personality_cache() {
+    if let Ok(mut guard) = get_personality_cache().lock() {
+        *guard = None;
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersonalitySignal {
+    pub trait_name: String,
+    pub delta: f64,
+    pub evidence: String,
+    pub memory_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PersonalitySignalRow {
+    pub id: i64,
+    pub trait_name: String,
+    pub delta: f64,
+    pub evidence: String,
+    pub memory_id: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SparklingMemory {
+    pub id: String,
+    pub content: String,
+    pub category: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RecallCandidate {
+    pub id: String,
+    pub content: String,
+    pub category: String,
+    pub confidence: f64,
+    pub created_at: i64,
+}
+
 impl super::Database {
     // -----------------------------------------------------------------------
     // Reflections & Corrections (Growth System)
@@ -703,5 +755,179 @@ impl super::Database {
             accuracy,
             by_context,
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Personality Signals (Buddy personality evolution)
+    // -----------------------------------------------------------------------
+
+    pub fn add_personality_signals(
+        &self,
+        signals: &[PersonalitySignal],
+        meditation_session_id: Option<&str>,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let now = chrono::Utc::now().to_rfc3339();
+        let tx = conn.unchecked_transaction()
+            .map_err(|e| format!("Failed to start transaction: {}", e))?;
+        for sig in signals {
+            tx.execute(
+                "INSERT INTO personality_signals (trait, delta, evidence, memory_id, meditation_session_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![sig.trait_name, sig.delta, sig.evidence, sig.memory_id, meditation_session_id, now],
+            ).map_err(|e| format!("Failed to insert personality_signal: {}", e))?;
+        }
+        tx.commit().map_err(|e| format!("Failed to commit signals: {}", e))?;
+        invalidate_personality_cache();
+        Ok(())
+    }
+
+    /// Aggregate personality stats using time-decayed weighted sum (single query, cached).
+    /// Cache expires after 60 seconds or when invalidated by `invalidate_personality_cache()`.
+    pub fn get_personality_aggregates(&self) -> Vec<(String, f64)> {
+        // Check cache first (avoids DB query on every prompt build)
+        if let Ok(guard) = get_personality_cache().lock() {
+            if let Some((ts, cached)) = guard.as_ref() {
+                if ts.elapsed().as_secs() < 60 {
+                    return cached.clone();
+                }
+            }
+        }
+
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let now = chrono::Utc::now();
+
+        // Single query for all traits
+        let mut stmt = match conn.prepare(
+            "SELECT trait, delta, created_at FROM personality_signals ORDER BY created_at ASC"
+        ) {
+            Ok(s) => s,
+            Err(_) => {
+                return ["energy", "warmth", "mischief", "wit", "sass"]
+                    .iter().map(|t| (t.to_string(), 0.0)).collect();
+            }
+        };
+
+        let rows: Vec<(String, f64, String)> = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?, row.get::<_, String>(2)?))
+            })
+            .ok()
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default();
+
+        // Group by trait and compute time-decayed weighted sum
+        let mut sums: std::collections::HashMap<&str, f64> = std::collections::HashMap::new();
+        for (trait_name, delta, created_at_str) in &rows {
+            let days_ago = if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(created_at_str) {
+                (now - dt.with_timezone(&chrono::Utc)).num_days() as f64
+            } else {
+                0.0
+            };
+            // Half-life of 30 days: signals from 30 days ago have half weight
+            let weight = (0.5_f64).powf(days_ago / 30.0);
+            *sums.entry(trait_name.as_str()).or_insert(0.0) += delta * weight;
+        }
+
+        let result: Vec<(String, f64)> = ["energy", "warmth", "mischief", "wit", "sass"]
+            .iter()
+            .map(|t| (t.to_string(), sums.get(t).copied().unwrap_or(0.0).clamp(-50.0, 50.0)))
+            .collect();
+
+        // Store in cache
+        if let Ok(mut guard) = get_personality_cache().lock() {
+            *guard = Some((std::time::Instant::now(), result.clone()));
+        }
+
+        result
+    }
+
+    /// Get recent personality signals for timeline display.
+    pub fn list_personality_signals(&self, limit: i64) -> Vec<PersonalitySignalRow> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = match conn.prepare(
+            "SELECT id, trait, delta, evidence, memory_id, created_at
+             FROM personality_signals ORDER BY created_at DESC LIMIT ?1"
+        ) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+
+        stmt.query_map(params![limit], |row| {
+            Ok(PersonalitySignalRow {
+                id: row.get(0)?,
+                trait_name: row.get(1)?,
+                delta: row.get(2)?,
+                evidence: row.get(3)?,
+                memory_id: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })
+        .ok()
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
+    }
+
+    // -----------------------------------------------------------------------
+    // 闪光记忆 (Sparkling Memories)
+    // -----------------------------------------------------------------------
+
+    pub fn toggle_sparkling_memory(&self, memory_id: &str, sparkling: bool) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE memories SET is_sparkling = ?1 WHERE id = ?2",
+            params![sparkling as i32, memory_id],
+        ).map_err(|e| format!("Failed to toggle sparkling: {}", e))?;
+        Ok(())
+    }
+
+    pub fn list_sparkling_memories(&self) -> Vec<SparklingMemory> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = match conn.prepare(
+            "SELECT id, content, category, created_at FROM memories WHERE is_sparkling = 1 ORDER BY created_at DESC"
+        ) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+
+        stmt.query_map([], |row| {
+            Ok(SparklingMemory {
+                id: row.get(0)?,
+                content: row.get(1)?,
+                category: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        })
+        .ok()
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
+    }
+
+    /// Get stale memories eligible for recall bubble ("还记得那天...").
+    /// Returns memories older than 7 days with importance >= 0.6.
+    pub fn get_recall_candidates(&self, limit: i64) -> Vec<RecallCandidate> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let seven_days_ago = chrono::Utc::now().timestamp() - (7 * 24 * 3600);
+        let mut stmt = match conn.prepare(
+            "SELECT id, content, category, confidence, created_at FROM memories
+             WHERE created_at < ?1 AND confidence >= 0.6
+             ORDER BY RANDOM() LIMIT ?2"
+        ) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+
+        stmt.query_map(params![seven_days_ago, limit], |row| {
+            Ok(RecallCandidate {
+                id: row.get(0)?,
+                content: row.get(1)?,
+                category: row.get(2)?,
+                confidence: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })
+        .ok()
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
     }
 }
