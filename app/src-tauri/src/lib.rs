@@ -1,7 +1,10 @@
 mod commands;
-mod engine;
-mod state;
+pub mod engine;
+pub mod state;
 mod tray;
+
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 
 use engine::infra::config_watcher::ConfigWatcher;
 use engine::infra::python_bridge;
