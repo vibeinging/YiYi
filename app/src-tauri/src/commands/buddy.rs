@@ -10,15 +10,18 @@ async fn resolve_llm(state: &AppState) -> Option<llm_client::LLMConfig> {
     llm_client::resolve_config_from_providers(&providers).ok()
 }
 
-#[tauri::command]
-pub async fn get_buddy_config(state: State<'_, AppState>) -> Result<BuddyConfig, String> {
+pub async fn get_buddy_config_impl(state: &AppState) -> Result<BuddyConfig, String> {
     let config = state.config.read().await;
     Ok(config.buddy.clone())
 }
 
 #[tauri::command]
-pub async fn save_buddy_config(
-    state: State<'_, AppState>,
+pub async fn get_buddy_config(state: State<'_, AppState>) -> Result<BuddyConfig, String> {
+    get_buddy_config_impl(&state).await
+}
+
+pub async fn save_buddy_config_impl(
+    state: &AppState,
     config: BuddyConfig,
 ) -> Result<BuddyConfig, String> {
     let mut app_config = state.config.write().await;
@@ -27,12 +30,19 @@ pub async fn save_buddy_config(
     Ok(config)
 }
 
+#[tauri::command]
+pub async fn save_buddy_config(
+    state: State<'_, AppState>,
+    config: BuddyConfig,
+) -> Result<BuddyConfig, String> {
+    save_buddy_config_impl(&state, config).await
+}
+
 /// Hatch the buddy avatar for YiYi.
 /// No LLM call needed — the name comes from SOUL.md and the personality (reaction style)
 /// is chosen by the user in the UI.
-#[tauri::command]
-pub async fn hatch_buddy(
-    state: State<'_, AppState>,
+pub async fn hatch_buddy_impl(
+    state: &AppState,
     name: String,
     personality: String,
 ) -> Result<BuddyConfig, String> {
@@ -50,10 +60,18 @@ pub async fn hatch_buddy(
     Ok(app_config.buddy.clone())
 }
 
-/// Toggle buddy hosted mode (global).
 #[tauri::command]
-pub async fn toggle_buddy_hosted(
+pub async fn hatch_buddy(
     state: State<'_, AppState>,
+    name: String,
+    personality: String,
+) -> Result<BuddyConfig, String> {
+    hatch_buddy_impl(&state, name, personality).await
+}
+
+/// Toggle buddy hosted mode (global).
+pub async fn toggle_buddy_hosted_impl(
+    state: &AppState,
     enabled: bool,
 ) -> Result<bool, String> {
     let mut config = state.config.write().await;
@@ -64,11 +82,23 @@ pub async fn toggle_buddy_hosted(
     Ok(enabled)
 }
 
-/// Get current hosted mode status.
 #[tauri::command]
-pub async fn get_buddy_hosted(state: State<'_, AppState>) -> Result<bool, String> {
+pub async fn toggle_buddy_hosted(
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<bool, String> {
+    toggle_buddy_hosted_impl(&state, enabled).await
+}
+
+/// Get current hosted mode status.
+pub async fn get_buddy_hosted_impl(state: &AppState) -> Result<bool, String> {
     let config = state.config.read().await;
     Ok(config.buddy.hosted_mode)
+}
+
+#[tauri::command]
+pub async fn get_buddy_hosted(state: State<'_, AppState>) -> Result<bool, String> {
+    get_buddy_hosted_impl(&state).await
 }
 
 /// YiYi observes the conversation and decides whether to react with an emotional bubble.
@@ -144,9 +174,9 @@ pub async fn buddy_observe(
     .map_err(|e| format!("LLM error: {}", e))?;
 
     let text = response.message.content.as_ref().and_then(|c| c.as_text()).unwrap_or("").to_string();
-    let json_str = extract_json(&text).unwrap_or(&text);
+    let json_str = crate::engine::mem::meditation::extract_json_from_response(&text);
 
-    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json_str) {
         if parsed["react"].as_bool().unwrap_or(false) {
             if let Some(reaction) = parsed["text"].as_str() {
                 return Ok(Some(reaction.to_string()));
@@ -155,29 +185,6 @@ pub async fn buddy_observe(
     }
 
     Ok(None)
-}
-
-/// Extract JSON object from text that may contain markdown fences.
-fn extract_json(text: &str) -> Option<&str> {
-    if let Some(start) = text.find("```json") {
-        let after = &text[start + 7..];
-        if let Some(end) = after.find("```") {
-            return Some(after[..end].trim());
-        }
-    }
-    if let Some(start) = text.find("```") {
-        let after = &text[start + 3..];
-        if let Some(end) = after.find("```") {
-            return Some(after[..end].trim());
-        }
-    }
-    let start = text.find('{')?;
-    let end = text.rfind('}')?;
-    if end > start {
-        Some(&text[start..=end])
-    } else {
-        None
-    }
 }
 
 // ── Memory browsing commands ─────────────────────────────────────────
@@ -216,6 +223,38 @@ pub async fn get_memory_stats() -> Result<MemoryStats, String> {
     }
 
     Ok(MemoryStats { total: all.len(), by_category })
+}
+
+#[derive(serde::Serialize)]
+pub struct EpisodeEntry {
+    pub episode_id: String,
+    pub title: String,
+    pub summary: String,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub significance: f64,
+    pub outcome: Option<String>,
+}
+
+/// List recent episodes (compacted conversation summaries).
+#[tauri::command]
+pub async fn list_recent_episodes(limit: Option<usize>) -> Result<Vec<EpisodeEntry>, String> {
+    let store = crate::engine::tools::get_memme_store()
+        .ok_or("记忆引擎未初始化")?;
+
+    let opts = memme_core::ListEpisodesOptions::new(crate::engine::tools::MEMME_USER_ID)
+        .limit(limit.unwrap_or(15));
+    let rows = store.list_episodes(opts).map_err(|e| format!("查询失败: {}", e))?;
+
+    Ok(rows.iter().map(|e| EpisodeEntry {
+        episode_id: e.episode_id.clone(),
+        title: e.title.clone(),
+        summary: e.summary.clone(),
+        started_at: e.started_at.clone(),
+        ended_at: e.ended_at.clone(),
+        significance: e.significance as f64,
+        outcome: e.outcome.clone(),
+    }).collect())
 }
 
 /// List recent memories.
@@ -273,9 +312,8 @@ pub async fn delete_memory(id: String) -> Result<(), String> {
 }
 
 /// List learned behavioral corrections.
-#[tauri::command]
-pub async fn list_corrections(
-    state: State<'_, AppState>,
+pub async fn list_corrections_impl(
+    state: &AppState,
 ) -> Result<Vec<serde_json::Value>, String> {
     let corrections = state.db.get_all_active_corrections();
     Ok(corrections.iter().map(|(trigger, wrong, correct, conf)| {
@@ -288,30 +326,50 @@ pub async fn list_corrections(
     }).collect())
 }
 
-/// List recent meditation sessions (for diary display).
 #[tauri::command]
-pub async fn list_meditation_sessions(
+pub async fn list_corrections(
     state: State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    list_corrections_impl(&state).await
+}
+
+/// List recent meditation sessions (for diary display).
+pub async fn list_meditation_sessions_impl(
+    state: &AppState,
     limit: Option<usize>,
 ) -> Result<Vec<crate::engine::db::MeditationSession>, String> {
     Ok(state.db.list_meditation_sessions(limit.unwrap_or(10)))
 }
 
+#[tauri::command]
+pub async fn list_meditation_sessions(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<crate::engine::db::MeditationSession>, String> {
+    list_meditation_sessions_impl(&state, limit).await
+}
+
 // ── Decision log & trust ─────────────────────────────────────────────
 
 /// List recent buddy decisions.
-#[tauri::command]
-pub async fn list_buddy_decisions(
-    state: State<'_, AppState>,
+pub async fn list_buddy_decisions_impl(
+    state: &AppState,
     limit: Option<usize>,
 ) -> Result<Vec<crate::engine::db::BuddyDecision>, String> {
     Ok(state.db.list_buddy_decisions(limit.unwrap_or(20)))
 }
 
-/// Record user feedback on a buddy decision.
 #[tauri::command]
-pub async fn set_decision_feedback(
+pub async fn list_buddy_decisions(
     state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<crate::engine::db::BuddyDecision>, String> {
+    list_buddy_decisions_impl(&state, limit).await
+}
+
+/// Record user feedback on a buddy decision.
+pub async fn set_decision_feedback_impl(
+    state: &AppState,
     decision_id: String,
     feedback: String,
 ) -> Result<(), String> {
@@ -332,10 +390,25 @@ pub async fn set_decision_feedback(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn set_decision_feedback(
+    state: State<'_, AppState>,
+    decision_id: String,
+    feedback: String,
+) -> Result<(), String> {
+    set_decision_feedback_impl(&state, decision_id, feedback).await
+}
+
 /// Get trust statistics.
+pub async fn get_trust_stats_impl(
+    state: &AppState,
+) -> Result<crate::engine::db::TrustStats, String> {
+    Ok(state.db.get_trust_stats())
+}
+
 #[tauri::command]
 pub async fn get_trust_stats(
     state: State<'_, AppState>,
 ) -> Result<crate::engine::db::TrustStats, String> {
-    Ok(state.db.get_trust_stats())
+    get_trust_stats_impl(&state).await
 }
