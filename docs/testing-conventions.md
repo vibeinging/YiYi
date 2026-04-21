@@ -123,6 +123,61 @@ async fn foo_emits_expected_event() {
 - 触碰 SQLite 的仍需 `#[serial]`，和其他集成测试一致。
 - 参考实现：`app/src-tauri/tests/commands_apphandle_pilot.rs`（`cancel_task_impl`）。
 
+### LLM-dependent commands
+
+某些命令会通过 `engine::llm_client::chat_completion[_stream]` 发 HTTP 请求到 LLM
+端点（OpenAI 兼容接口）。测试这些命令时，用 `MockLlmServer`（基于 `wiremock`）
+起一个本地 mock server，再用 `seed_mock_llm_provider` 把 `state.providers` 指向
+mock URL。真实 HTTP 路径会被完整走一遍（reqwest → mock → 解析），但不碰网络。
+
+#### 基本用法
+
+```rust
+use app_lib::test_support::{MockLlmServer, seed_mock_llm_provider};
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn foo_calls_llm() {
+    // 1. 启动 mock，配置它对 POST /chat/completions 返回一段固定的 assistant content
+    let mock = MockLlmServer::start().await;
+    mock.mock_chat_completion_response("mocked reply").await;
+
+    // 2. 构造测试 state，把 openai provider base_url 指向 mock，active_llm 设为该 provider
+    let t = build_test_app_state().await;
+    seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
+
+    // 3. 调用命令的 _impl；内部的 chat_completion 会命中 mock
+    let out = foo_impl(t.state(), args).await.unwrap();
+    assert!(out.contains("mocked reply"));
+}
+```
+
+#### 错误路径
+
+- `mock.mock_chat_completion_error(401)` → `AuthError`（非 retry），**立即**返回错误。
+- `mock.mock_chat_completion_error(5xx)` → `Transient`，retry engine 会重试 3 次并
+  退避 1–32 秒。错误路径测试**优先选 401**，避免测试耗时。
+- 若被测命令本身把 LLM 失败降级为 `Ok(None)`（如 `get_morning_greeting`），用
+  success-path mock 验证"接入后有返回"即可；降级路径的既有测试不需要重复。
+
+#### 适用范围
+
+该模式适用于所有通过 `resolve_config_from_providers` → `chat_completion[_stream]`
+发 HTTP 请求的命令。非流式命令（如 `buddy_observe`）可立即套用。流式命令
+（如 `chat_stream_start`）需要额外处理 SSE 响应，`MockLlmServer` 本身够用但
+mock body 需要 SSE 格式（`data: {...}\n\n`）。
+
+#### 关键点
+
+- `MockLlmServer` 使用 tokio runtime，与 `#[tokio::test(flavor = "multi_thread")]` 兼容。
+- 每个测试 `MockServer::start()` 会占用一个 ephemeral port——默认并发隔离，无需 `#[serial]`，
+  但因为我们改 `ProvidersState`（底层 SQLite），目前仍加 `#[serial]`。
+- `seed_mock_llm_provider` 覆写内置 `openai` provider——测试里不要期待真实的 OpenAI 默认
+  base_url。如果被测命令有别的 provider 检测逻辑，新增一个 helper 对应即可。
+- 参考实现：`app/src-tauri/tests/commands_mock_llm_pilot.rs`（pilot: `buddy_observe_impl` +
+  `get_morning_greeting_impl`）。
+- 实现细节：`app/src-tauri/src/test_support/mock_llm.rs`。
+
 ## CI
 
 - `.github/workflows/test.yml`：push/PR 触发 `cargo test --features test-support`，同时生成 LCOV 上传 artifact
