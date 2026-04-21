@@ -1,11 +1,13 @@
 //! Test-only helpers. Available when compiled with `--features test-support`
 //! or in the `cfg(test)` build profile.
 
+pub mod app_state;
 pub mod fake_embedder;
 pub mod mocks;
 pub mod temp_db;
 pub mod temp_workspace;
 
+pub use app_state::{build_test_app_state, TestAppState};
 pub use fake_embedder::FakeEmbedder;
 pub use mocks::MockLlmProvider;
 pub use temp_db::TempDb;
