@@ -36,15 +36,19 @@ fn safe_path(base: &std::path::Path, name: &str) -> Result<std::path::PathBuf, S
     Ok(path)
 }
 
-#[tauri::command]
-pub async fn list_workspace_files(
-    state: State<'_, AppState>,
-) -> Result<Vec<WorkspaceFile>, String> {
+pub async fn list_workspace_files_impl(state: &AppState) -> Result<Vec<WorkspaceFile>, String> {
     let dir = state.user_workspace();
     let mut files = Vec::new();
     walk_dir(&dir, &dir, &mut files).await?;
     files.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name)));
     Ok(files)
+}
+
+#[tauri::command]
+pub async fn list_workspace_files(
+    state: State<'_, AppState>,
+) -> Result<Vec<WorkspaceFile>, String> {
+    list_workspace_files_impl(&*state).await
 }
 
 /// Recursively walk a directory, collecting files with relative paths.
@@ -93,9 +97,8 @@ async fn walk_dir(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn load_workspace_file(
-    state: State<'_, AppState>,
+pub async fn load_workspace_file_impl(
+    state: &AppState,
     filename: String,
 ) -> Result<String, String> {
     let path = safe_path(&state.user_workspace(), &filename)?;
@@ -105,8 +108,15 @@ pub async fn load_workspace_file(
 }
 
 #[tauri::command]
-pub async fn save_workspace_file(
+pub async fn load_workspace_file(
     state: State<'_, AppState>,
+    filename: String,
+) -> Result<String, String> {
+    load_workspace_file_impl(&*state, filename).await
+}
+
+pub async fn save_workspace_file_impl(
+    state: &AppState,
     filename: String,
     content: String,
 ) -> Result<(), String> {
@@ -120,8 +130,16 @@ pub async fn save_workspace_file(
 }
 
 #[tauri::command]
-pub async fn delete_workspace_file(
+pub async fn save_workspace_file(
     state: State<'_, AppState>,
+    filename: String,
+    content: String,
+) -> Result<(), String> {
+    save_workspace_file_impl(&*state, filename, content).await
+}
+
+pub async fn delete_workspace_file_impl(
+    state: &AppState,
     filename: String,
 ) -> Result<(), String> {
     let path = safe_path(&state.user_workspace(), &filename)?;
@@ -137,8 +155,15 @@ pub async fn delete_workspace_file(
 }
 
 #[tauri::command]
-pub async fn create_workspace_file(
+pub async fn delete_workspace_file(
     state: State<'_, AppState>,
+    filename: String,
+) -> Result<(), String> {
+    delete_workspace_file_impl(&*state, filename).await
+}
+
+pub async fn create_workspace_file_impl(
+    state: &AppState,
     filename: String,
     content: String,
 ) -> Result<(), String> {
@@ -155,8 +180,16 @@ pub async fn create_workspace_file(
 }
 
 #[tauri::command]
-pub async fn create_workspace_dir(
+pub async fn create_workspace_file(
     state: State<'_, AppState>,
+    filename: String,
+    content: String,
+) -> Result<(), String> {
+    create_workspace_file_impl(&*state, filename, content).await
+}
+
+pub async fn create_workspace_dir_impl(
+    state: &AppState,
     dirname: String,
 ) -> Result<(), String> {
     let path = safe_path(&state.user_workspace(), &dirname)?;
@@ -169,8 +202,15 @@ pub async fn create_workspace_dir(
 }
 
 #[tauri::command]
-pub async fn load_workspace_file_binary(
+pub async fn create_workspace_dir(
     state: State<'_, AppState>,
+    dirname: String,
+) -> Result<(), String> {
+    create_workspace_dir_impl(&*state, dirname).await
+}
+
+pub async fn load_workspace_file_binary_impl(
+    state: &AppState,
     filename: String,
 ) -> Result<Vec<u8>, String> {
     let path = safe_path(&state.user_workspace(), &filename)?;
@@ -180,8 +220,15 @@ pub async fn load_workspace_file_binary(
 }
 
 #[tauri::command]
-pub async fn upload_workspace(
+pub async fn load_workspace_file_binary(
     state: State<'_, AppState>,
+    filename: String,
+) -> Result<Vec<u8>, String> {
+    load_workspace_file_binary_impl(&*state, filename).await
+}
+
+pub async fn upload_workspace_impl(
+    state: &AppState,
     data: Vec<u8>,
     filename: String,
 ) -> Result<serde_json::Value, String> {
@@ -229,7 +276,15 @@ pub async fn upload_workspace(
 }
 
 #[tauri::command]
-pub async fn download_workspace(state: State<'_, AppState>) -> Result<Vec<u8>, String> {
+pub async fn upload_workspace(
+    state: State<'_, AppState>,
+    data: Vec<u8>,
+    filename: String,
+) -> Result<serde_json::Value, String> {
+    upload_workspace_impl(&*state, data, filename).await
+}
+
+pub async fn download_workspace_impl(state: &AppState) -> Result<Vec<u8>, String> {
     let working_dir = state.user_workspace();
     tokio::task::spawn_blocking(move || {
         let mut buf = Vec::new();
@@ -283,17 +338,32 @@ pub async fn download_workspace(state: State<'_, AppState>) -> Result<Vec<u8>, S
 }
 
 #[tauri::command]
-pub async fn get_workspace_path(state: State<'_, AppState>) -> Result<String, String> {
+pub async fn download_workspace(state: State<'_, AppState>) -> Result<Vec<u8>, String> {
+    download_workspace_impl(&*state).await
+}
+
+pub async fn get_workspace_path_impl(state: &AppState) -> Result<String, String> {
     Ok(state.user_workspace().to_string_lossy().to_string())
 }
 
+#[tauri::command]
+pub async fn get_workspace_path(state: State<'_, AppState>) -> Result<String, String> {
+    get_workspace_path_impl(&*state).await
+}
+
 // --- Workspace authorization ---
+
+pub async fn list_authorized_folders_impl(
+    state: &AppState,
+) -> Result<Vec<AuthorizedFolderRow>, String> {
+    Ok(state.db.list_authorized_folders())
+}
 
 #[tauri::command]
 pub async fn list_authorized_folders(
     state: State<'_, AppState>,
 ) -> Result<Vec<AuthorizedFolderRow>, String> {
-    Ok(state.db.list_authorized_folders())
+    list_authorized_folders_impl(&*state).await
 }
 
 /// Shared helper: create and persist a new authorized folder, refresh in-memory cache.
@@ -324,9 +394,8 @@ async fn upsert_and_refresh_folder(
     Ok(folder)
 }
 
-#[tauri::command]
-pub async fn add_authorized_folder(
-    state: State<'_, AppState>,
+pub async fn add_authorized_folder_impl(
+    state: &AppState,
     path: String,
     label: Option<String>,
     permission: Option<String>,
@@ -337,6 +406,16 @@ pub async fn add_authorized_folder(
         label,
         &permission.unwrap_or_else(|| "read_write".into()),
     ).await
+}
+
+#[tauri::command]
+pub async fn add_authorized_folder(
+    state: State<'_, AppState>,
+    path: String,
+    label: Option<String>,
+    permission: Option<String>,
+) -> Result<AuthorizedFolderRow, String> {
+    add_authorized_folder_impl(&*state, path, label, permission).await
 }
 
 #[tauri::command]
@@ -372,9 +451,8 @@ pub async fn respond_permission_request(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn update_authorized_folder(
-    state: State<'_, AppState>,
+pub async fn update_authorized_folder_impl(
+    state: &AppState,
     id: String,
     label: Option<String>,
     permission: Option<String>,
@@ -391,8 +469,17 @@ pub async fn update_authorized_folder(
 }
 
 #[tauri::command]
-pub async fn remove_authorized_folder(
+pub async fn update_authorized_folder(
     state: State<'_, AppState>,
+    id: String,
+    label: Option<String>,
+    permission: Option<String>,
+) -> Result<(), String> {
+    update_authorized_folder_impl(&*state, id, label, permission).await
+}
+
+pub async fn remove_authorized_folder_impl(
+    state: &AppState,
     id: String,
 ) -> Result<(), String> {
     let folders = state.db.list_authorized_folders();
@@ -408,15 +495,28 @@ pub async fn remove_authorized_folder(
 }
 
 #[tauri::command]
-pub async fn list_sensitive_patterns(
+pub async fn remove_authorized_folder(
     state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    remove_authorized_folder_impl(&*state, id).await
+}
+
+pub async fn list_sensitive_patterns_impl(
+    state: &AppState,
 ) -> Result<Vec<SensitivePathRow>, String> {
     Ok(state.db.list_sensitive_paths())
 }
 
 #[tauri::command]
-pub async fn add_sensitive_pattern(
+pub async fn list_sensitive_patterns(
     state: State<'_, AppState>,
+) -> Result<Vec<SensitivePathRow>, String> {
+    list_sensitive_patterns_impl(&*state).await
+}
+
+pub async fn add_sensitive_pattern_impl(
+    state: &AppState,
     pattern: String,
 ) -> Result<SensitivePathRow, String> {
     let now = chrono::Utc::now().timestamp();
@@ -434,8 +534,15 @@ pub async fn add_sensitive_pattern(
 }
 
 #[tauri::command]
-pub async fn toggle_sensitive_pattern(
+pub async fn add_sensitive_pattern(
     state: State<'_, AppState>,
+    pattern: String,
+) -> Result<SensitivePathRow, String> {
+    add_sensitive_pattern_impl(&*state, pattern).await
+}
+
+pub async fn toggle_sensitive_pattern_impl(
+    state: &AppState,
     id: String,
     enabled: bool,
 ) -> Result<(), String> {
@@ -446,14 +553,30 @@ pub async fn toggle_sensitive_pattern(
 }
 
 #[tauri::command]
-pub async fn remove_sensitive_pattern(
+pub async fn toggle_sensitive_pattern(
     state: State<'_, AppState>,
+    id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    toggle_sensitive_pattern_impl(&*state, id, enabled).await
+}
+
+pub async fn remove_sensitive_pattern_impl(
+    state: &AppState,
     id: String,
 ) -> Result<(), String> {
     state.db.remove_sensitive_path(&id)?;
     let all = state.db.list_sensitive_paths();
     crate::engine::tools::refresh_sensitive_patterns(all).await;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn remove_sensitive_pattern(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    remove_sensitive_pattern_impl(&*state, id).await
 }
 
 #[tauri::command]
@@ -465,9 +588,8 @@ pub async fn pick_folder() -> Result<Option<String>, String> {
     Ok(handle.map(|h| h.path().to_string_lossy().to_string()))
 }
 
-#[tauri::command]
-pub async fn list_folder_files(
-    state: State<'_, AppState>,
+pub async fn list_folder_files_impl(
+    state: &AppState,
     folder_path: String,
 ) -> Result<Vec<WorkspaceFile>, String> {
     let folders = state.db.list_authorized_folders();
@@ -484,6 +606,14 @@ pub async fn list_folder_files(
         return Err("Path is not in any authorized folder".into());
     }
     walk_workspace_files(&canonical).await
+}
+
+#[tauri::command]
+pub async fn list_folder_files(
+    state: State<'_, AppState>,
+    folder_path: String,
+) -> Result<Vec<WorkspaceFile>, String> {
+    list_folder_files_impl(&*state, folder_path).await
 }
 
 /// Walk a directory and return a flat list of files, reusing the same logic as list_workspace_files.
@@ -530,14 +660,17 @@ async fn list_subdir_md_files(
     files
 }
 
-#[tauri::command]
-pub async fn list_agent_files(state: State<'_, AppState>) -> Result<Vec<WorkspaceFile>, String> {
+pub async fn list_agent_files_impl(state: &AppState) -> Result<Vec<WorkspaceFile>, String> {
     Ok(list_subdir_md_files(&state.working_dir, ".").await)
 }
 
 #[tauri::command]
-pub async fn read_agent_file(
-    state: State<'_, AppState>,
+pub async fn list_agent_files(state: State<'_, AppState>) -> Result<Vec<WorkspaceFile>, String> {
+    list_agent_files_impl(&*state).await
+}
+
+pub async fn read_agent_file_impl(
+    state: &AppState,
     md_name: String,
 ) -> Result<String, String> {
     let path = safe_path(&state.working_dir, &md_name)?;
@@ -547,8 +680,15 @@ pub async fn read_agent_file(
 }
 
 #[tauri::command]
-pub async fn write_agent_file(
+pub async fn read_agent_file(
     state: State<'_, AppState>,
+    md_name: String,
+) -> Result<String, String> {
+    read_agent_file_impl(&*state, md_name).await
+}
+
+pub async fn write_agent_file_impl(
+    state: &AppState,
     md_name: String,
     content: String,
 ) -> Result<(), String> {
@@ -559,13 +699,25 @@ pub async fn write_agent_file(
 }
 
 #[tauri::command]
-pub async fn list_memory_files(state: State<'_, AppState>) -> Result<Vec<WorkspaceFile>, String> {
+pub async fn write_agent_file(
+    state: State<'_, AppState>,
+    md_name: String,
+    content: String,
+) -> Result<(), String> {
+    write_agent_file_impl(&*state, md_name, content).await
+}
+
+pub async fn list_memory_files_impl(state: &AppState) -> Result<Vec<WorkspaceFile>, String> {
     Ok(list_subdir_md_files(&state.working_dir, "memory").await)
 }
 
 #[tauri::command]
-pub async fn read_memory_file(
-    state: State<'_, AppState>,
+pub async fn list_memory_files(state: State<'_, AppState>) -> Result<Vec<WorkspaceFile>, String> {
+    list_memory_files_impl(&*state).await
+}
+
+pub async fn read_memory_file_impl(
+    state: &AppState,
     md_name: String,
 ) -> Result<String, String> {
     validate_filename(&md_name)?;
@@ -580,8 +732,15 @@ pub async fn read_memory_file(
 }
 
 #[tauri::command]
-pub async fn write_memory_file(
+pub async fn read_memory_file(
     state: State<'_, AppState>,
+    md_name: String,
+) -> Result<String, String> {
+    read_memory_file_impl(&*state, md_name).await
+}
+
+pub async fn write_memory_file_impl(
+    state: &AppState,
     md_name: String,
     content: String,
 ) -> Result<(), String> {
@@ -628,4 +787,13 @@ pub async fn write_memory_file(
     }
 
     Ok(())
+}
+
+#[tauri::command]
+pub async fn write_memory_file(
+    state: State<'_, AppState>,
+    md_name: String,
+    content: String,
+) -> Result<(), String> {
+    write_memory_file_impl(&*state, md_name, content).await
 }
