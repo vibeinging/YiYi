@@ -209,6 +209,13 @@ describe("taskStore", () => {
       expect(useTaskStore.getState().tasks[0].errorMessage).toBe("prior");
     });
 
+    it("clears prior errorMessage when explicit empty string is passed", () => {
+      const t = makeTask({ id: "a", errorMessage: "prior" });
+      useTaskStore.setState({ tasks: [t] });
+      useTaskStore.getState().updateTaskStatus("a", "running", "");
+      expect(useTaskStore.getState().tasks[0].errorMessage).toBe("");
+    });
+
     it("is a no-op when the task id does not exist", () => {
       const t = makeTask({ id: "a" });
       useTaskStore.setState({ tasks: [t] });
