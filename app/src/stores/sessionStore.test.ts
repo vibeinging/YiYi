@@ -265,6 +265,9 @@ describe("sessionStore", () => {
       const id = await useSessionStore.getState().createNewChat();
       expect(id).toBe("empty");
       expect(useSessionStore.getState().chatSessions).toHaveLength(1);
+      // Reused path must also persist the active id so localStorage stays
+      // symmetric with the create-fresh branch.
+      expect(localStorage.getItem(STORAGE_KEY)).toBe("empty");
     });
 
     it("returns empty string and does not mutate on backend failure", async () => {

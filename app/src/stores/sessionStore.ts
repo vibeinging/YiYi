@@ -109,6 +109,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   initialize: async () => {
     const state = get();
     if (state.initialized) return;
+    // Guard against React StrictMode double-invocation: reuse the in-flight promise
+    if ((state as any)._initPromise) return (state as any)._initPromise;
+    const promise = (async () => {
 
     // Load first page of sessions
     await state.loadChatSessions();
@@ -136,10 +139,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
 
     get()._persistActive();
+    })();
+    set({ _initPromise: promise } as any);
+    try { await promise; } finally { set({ _initPromise: null } as any); }
   },
 
   createNewChat: async () => {
     try {
+      // If the current active session is still an empty "New Chat", reuse it instead of creating another.
+      const { activeSessionId, chatSessions } = get();
+      const current = chatSessions.find(s => s.id === activeSessionId);
+      if (current && current.name === 'New Chat') {
+        // Persist on the reused path too so localStorage stays symmetric with
+        // the create-fresh branch below.
+        get()._persistActive();
+        return current.id;
+      }
       const session = await createSession('New Chat');
       set({
         chatSessions: [session, ...get().chatSessions],
