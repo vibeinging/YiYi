@@ -283,7 +283,19 @@ pub async fn get_skill_content_impl(
     };
 
     let target = match file_path {
-        Some(fp) => skill_dir.join(fp),
+        Some(fp) => {
+            let fp_path = std::path::Path::new(&fp);
+            // `Path::starts_with` does NOT resolve `..` segments, so reject any
+            // parent-dir component (or absolute path) up front to prevent escape.
+            if fp_path.is_absolute()
+                || fp_path
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+            {
+                return Err("Path traversal not allowed".to_string());
+            }
+            skill_dir.join(fp_path)
+        }
         None => skill_dir.join("SKILL.md"),
     };
 
