@@ -137,15 +137,18 @@ impl CronJobSpec {
     }
 }
 
-#[tauri::command]
-pub async fn list_cronjobs(state: State<'_, AppState>) -> Result<Vec<CronJobSpec>, String> {
+pub async fn list_cronjobs_impl(state: &AppState) -> Result<Vec<CronJobSpec>, String> {
     let rows = state.db.list_cronjobs()?;
     Ok(rows.iter().map(CronJobSpec::from_row).collect())
 }
 
 #[tauri::command]
-pub async fn create_cronjob(
-    state: State<'_, AppState>,
+pub async fn list_cronjobs(state: State<'_, AppState>) -> Result<Vec<CronJobSpec>, String> {
+    list_cronjobs_impl(&*state).await
+}
+
+pub async fn create_cronjob_impl(
+    state: &AppState,
     spec: CronJobSpec,
 ) -> Result<CronJobSpec, String> {
     let mut new_spec = spec;
@@ -157,8 +160,15 @@ pub async fn create_cronjob(
 }
 
 #[tauri::command]
-pub async fn update_cronjob(
+pub async fn create_cronjob(
     state: State<'_, AppState>,
+    spec: CronJobSpec,
+) -> Result<CronJobSpec, String> {
+    create_cronjob_impl(&*state, spec).await
+}
+
+pub async fn update_cronjob_impl(
+    state: &AppState,
     id: String,
     spec: CronJobSpec,
 ) -> Result<CronJobSpec, String> {
@@ -171,8 +181,16 @@ pub async fn update_cronjob(
 }
 
 #[tauri::command]
-pub async fn delete_cronjob(
+pub async fn update_cronjob(
     state: State<'_, AppState>,
+    id: String,
+    spec: CronJobSpec,
+) -> Result<CronJobSpec, String> {
+    update_cronjob_impl(&*state, id, spec).await
+}
+
+pub async fn delete_cronjob_impl(
+    state: &AppState,
     id: String,
 ) -> Result<(), String> {
     // Remove from scheduler first (cancel running timer)
@@ -187,8 +205,15 @@ pub async fn delete_cronjob(
 }
 
 #[tauri::command]
-pub async fn pause_cronjob(
+pub async fn delete_cronjob(
     state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    delete_cronjob_impl(&*state, id).await
+}
+
+pub async fn pause_cronjob_impl(
+    state: &AppState,
     id: String,
 ) -> Result<(), String> {
     state.db.get_cronjob(&id)?
@@ -202,6 +227,14 @@ pub async fn pause_cronjob(
     drop(scheduler_lock);
 
     state.db.set_cronjob_enabled(&id, false)
+}
+
+#[tauri::command]
+pub async fn pause_cronjob(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    pause_cronjob_impl(&*state, id).await
 }
 
 #[tauri::command]
@@ -290,9 +323,8 @@ pub async fn run_cronjob(
     result.map(|_| ())
 }
 
-#[tauri::command]
-pub async fn get_cronjob_state(
-    state: State<'_, AppState>,
+pub async fn get_cronjob_state_impl(
+    state: &AppState,
     id: String,
 ) -> Result<serde_json::Value, String> {
     let row = state.db.get_cronjob(&id)?
@@ -308,10 +340,26 @@ pub async fn get_cronjob_state(
 }
 
 #[tauri::command]
+pub async fn get_cronjob_state(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<serde_json::Value, String> {
+    get_cronjob_state_impl(&*state, id).await
+}
+
+pub async fn list_cronjob_executions_impl(
+    state: &AppState,
+    job_id: String,
+    limit: Option<usize>,
+) -> Result<Vec<CronJobExecutionRow>, String> {
+    state.db.list_executions(&job_id, limit.unwrap_or(20))
+}
+
+#[tauri::command]
 pub async fn list_cronjob_executions(
     state: State<'_, AppState>,
     job_id: String,
     limit: Option<usize>,
 ) -> Result<Vec<CronJobExecutionRow>, String> {
-    state.db.list_executions(&job_id, limit.unwrap_or(20))
+    list_cronjob_executions_impl(&*state, job_id, limit).await
 }
