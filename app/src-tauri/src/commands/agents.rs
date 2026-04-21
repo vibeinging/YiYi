@@ -3,15 +3,18 @@ use tauri::State;
 use crate::engine::agents::AgentSummary;
 use crate::state::AppState;
 
-#[tauri::command]
-pub async fn list_agents(state: State<'_, AppState>) -> Result<Vec<AgentSummary>, String> {
+pub async fn list_agents_impl(state: &AppState) -> Result<Vec<AgentSummary>, String> {
     let registry = state.agent_registry.read().await;
     Ok(registry.list().iter().map(AgentSummary::from).collect())
 }
 
 #[tauri::command]
-pub async fn get_agent(
-    state: State<'_, AppState>,
+pub async fn list_agents(state: State<'_, AppState>) -> Result<Vec<AgentSummary>, String> {
+    list_agents_impl(&*state).await
+}
+
+pub async fn get_agent_impl(
+    state: &AppState,
     name: String,
 ) -> Result<Option<crate::engine::agents::AgentDefinition>, String> {
     let registry = state.agent_registry.read().await;
@@ -19,10 +22,14 @@ pub async fn get_agent(
 }
 
 #[tauri::command]
-pub async fn save_agent(
+pub async fn get_agent(
     state: State<'_, AppState>,
-    content: String,
-) -> Result<(), String> {
+    name: String,
+) -> Result<Option<crate::engine::agents::AgentDefinition>, String> {
+    get_agent_impl(&*state, name).await
+}
+
+pub async fn save_agent_impl(state: &AppState, content: String) -> Result<(), String> {
     // Validate by parsing with the shared parser
     let def = crate::engine::agents::parse_agent_md(&content, &std::path::PathBuf::from("new"))
         .ok_or("Invalid AGENT.md format: check YAML frontmatter (must have name field)")?;
@@ -51,10 +58,14 @@ pub async fn save_agent(
 }
 
 #[tauri::command]
-pub async fn delete_agent(
+pub async fn save_agent(
     state: State<'_, AppState>,
-    name: String,
+    content: String,
 ) -> Result<(), String> {
+    save_agent_impl(&*state, content).await
+}
+
+pub async fn delete_agent_impl(state: &AppState, name: String) -> Result<(), String> {
     if name.contains('/') || name.contains('\\') || name.contains("..") {
         return Err("Agent name must not contain path separators or '..'".into());
     }
@@ -69,4 +80,12 @@ pub async fn delete_agent(
     registry.reload(&state.working_dir, None);
 
     Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_agent(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<(), String> {
+    delete_agent_impl(&*state, name).await
 }
