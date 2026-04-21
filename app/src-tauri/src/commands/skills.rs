@@ -165,9 +165,8 @@ fn build_dir_tree(dir: &Path) -> Option<serde_json::Value> {
     }
 }
 
-#[tauri::command]
-pub async fn list_skills(
-    state: State<'_, AppState>,
+pub async fn list_skills_impl(
+    state: &AppState,
     source: Option<String>,
     _enabled_only: Option<bool>,
 ) -> Result<Vec<Skill>, String> {
@@ -199,6 +198,15 @@ pub async fn list_skills(
     }
 
     Ok(all_skills)
+}
+
+#[tauri::command]
+pub async fn list_skills(
+    state: State<'_, AppState>,
+    source: Option<String>,
+    _enabled_only: Option<bool>,
+) -> Result<Vec<Skill>, String> {
+    list_skills_impl(&state, source, _enabled_only).await
 }
 
 /// List all builtin skills, marking each as enabled/disabled based on active_skills presence
@@ -245,9 +253,8 @@ fn builtin_skills_with_status(active_dir: &Path) -> Vec<Skill> {
         .collect()
 }
 
-#[tauri::command]
-pub async fn get_skill(state: State<'_, AppState>, name: String) -> Result<Skill, String> {
-    let skills = list_skills(state, None, None).await?;
+pub async fn get_skill_impl(state: &AppState, name: String) -> Result<Skill, String> {
+    let skills = list_skills_impl(state, None, None).await?;
     skills
         .into_iter()
         .find(|s| s.name == name)
@@ -255,8 +262,12 @@ pub async fn get_skill(state: State<'_, AppState>, name: String) -> Result<Skill
 }
 
 #[tauri::command]
-pub async fn get_skill_content(
-    state: State<'_, AppState>,
+pub async fn get_skill(state: State<'_, AppState>, name: String) -> Result<Skill, String> {
+    get_skill_impl(&state, name).await
+}
+
+pub async fn get_skill_content_impl(
+    state: &AppState,
     name: String,
     file_path: Option<String>,
 ) -> Result<String, String> {
@@ -284,8 +295,16 @@ pub async fn get_skill_content(
 }
 
 #[tauri::command]
-pub async fn enable_skill(
+pub async fn get_skill_content(
     state: State<'_, AppState>,
+    name: String,
+    file_path: Option<String>,
+) -> Result<String, String> {
+    get_skill_content_impl(&state, name, file_path).await
+}
+
+pub async fn enable_skill_impl(
+    state: &AppState,
     name: String,
 ) -> Result<serde_json::Value, String> {
     let custom_dir = skills_dir(&state.working_dir, "customized");
@@ -311,8 +330,15 @@ pub async fn enable_skill(
 }
 
 #[tauri::command]
-pub async fn disable_skill(
+pub async fn enable_skill(
     state: State<'_, AppState>,
+    name: String,
+) -> Result<serde_json::Value, String> {
+    enable_skill_impl(&state, name).await
+}
+
+pub async fn disable_skill_impl(
+    state: &AppState,
     name: String,
 ) -> Result<serde_json::Value, String> {
     if is_system_skill(&name) {
@@ -330,8 +356,15 @@ pub async fn disable_skill(
 }
 
 #[tauri::command]
-pub async fn update_skill(
+pub async fn disable_skill(
     state: State<'_, AppState>,
+    name: String,
+) -> Result<serde_json::Value, String> {
+    disable_skill_impl(&state, name).await
+}
+
+pub async fn update_skill_impl(
+    state: &AppState,
     name: String,
     content: String,
 ) -> Result<serde_json::Value, String> {
@@ -374,8 +407,16 @@ pub async fn update_skill(
 }
 
 #[tauri::command]
-pub async fn create_skill(
+pub async fn update_skill(
     state: State<'_, AppState>,
+    name: String,
+    content: String,
+) -> Result<serde_json::Value, String> {
+    update_skill_impl(&state, name, content).await
+}
+
+pub async fn create_skill_impl(
+    state: &AppState,
     name: String,
     content: String,
     _references: Option<HashMap<String, serde_json::Value>>,
@@ -400,8 +441,18 @@ pub async fn create_skill(
 }
 
 #[tauri::command]
-pub async fn delete_skill(
+pub async fn create_skill(
     state: State<'_, AppState>,
+    name: String,
+    content: String,
+    _references: Option<HashMap<String, serde_json::Value>>,
+    _scripts: Option<HashMap<String, serde_json::Value>>,
+) -> Result<serde_json::Value, String> {
+    create_skill_impl(&state, name, content, _references, _scripts).await
+}
+
+pub async fn delete_skill_impl(
+    state: &AppState,
     name: String,
 ) -> Result<serde_json::Value, String> {
     if is_system_skill(&name) {
@@ -423,6 +474,14 @@ pub async fn delete_skill(
     }
 
     Ok(serde_json::json!({ "status": "ok", "message": format!("Skill '{}' deleted", name) }))
+}
+
+#[tauri::command]
+pub async fn delete_skill(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<serde_json::Value, String> {
+    delete_skill_impl(&state, name).await
 }
 
 #[tauri::command]
@@ -498,9 +557,8 @@ pub async fn import_skill(
     }))
 }
 
-#[tauri::command]
-pub async fn reload_skills(
-    state: State<'_, AppState>,
+pub async fn reload_skills_impl(
+    state: &AppState,
 ) -> Result<serde_json::Value, String> {
     let active_dir = skills_dir(&state.working_dir, "active");
     let custom_dir = skills_dir(&state.working_dir, "customized");
@@ -523,6 +581,13 @@ pub async fn reload_skills(
 
     let count = discover_skills(&active_dir, "active").len();
     Ok(serde_json::json!({ "status": "ok", "count": count }))
+}
+
+#[tauri::command]
+pub async fn reload_skills(
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    reload_skills_impl(&state).await
 }
 
 fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), String> {
@@ -687,16 +752,15 @@ pub async fn hub_install_skill(
 }
 
 /// Batch enable skills
-#[tauri::command]
-pub async fn batch_enable_skills(
-    state: State<'_, AppState>,
+pub async fn batch_enable_skills_impl(
+    state: &AppState,
     names: Vec<String>,
 ) -> Result<serde_json::Value, String> {
     let mut enabled = Vec::new();
     let mut failed = Vec::new();
 
     for name in names {
-        match enable_skill(state.clone(), name.clone()).await {
+        match enable_skill_impl(state, name.clone()).await {
             Ok(_) => enabled.push(name),
             Err(e) => failed.push(format!("{}: {}", name, e)),
         }
@@ -709,17 +773,24 @@ pub async fn batch_enable_skills(
     }))
 }
 
-/// Batch disable skills
 #[tauri::command]
-pub async fn batch_disable_skills(
+pub async fn batch_enable_skills(
     state: State<'_, AppState>,
+    names: Vec<String>,
+) -> Result<serde_json::Value, String> {
+    batch_enable_skills_impl(&state, names).await
+}
+
+/// Batch disable skills
+pub async fn batch_disable_skills_impl(
+    state: &AppState,
     names: Vec<String>,
 ) -> Result<serde_json::Value, String> {
     let mut disabled = Vec::new();
     let mut failed = Vec::new();
 
     for name in names {
-        match disable_skill(state.clone(), name.clone()).await {
+        match disable_skill_impl(state, name.clone()).await {
             Ok(_) => disabled.push(name),
             Err(e) => failed.push(format!("{}: {}", name, e)),
         }
@@ -730,6 +801,14 @@ pub async fn batch_disable_skills(
         "failed": failed,
         "total": disabled.len() + failed.len(),
     }))
+}
+
+#[tauri::command]
+pub async fn batch_disable_skills(
+    state: State<'_, AppState>,
+    names: Vec<String>,
+) -> Result<serde_json::Value, String> {
+    batch_disable_skills_impl(&state, names).await
 }
 
 /// List skills from hub with sorting/pagination (ClawHub browse)
@@ -760,7 +839,11 @@ pub async fn hub_list_skills(
 }
 
 /// Get hub configuration
+pub fn get_hub_config_impl() -> Result<HubConfig, String> {
+    Ok(skills_hub::get_default_hub_config())
+}
+
 #[tauri::command]
 pub fn get_hub_config() -> Result<HubConfig, String> {
-    Ok(skills_hub::get_default_hub_config())
+    get_hub_config_impl()
 }
