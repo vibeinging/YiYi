@@ -183,7 +183,60 @@ mock body 需要 SSE 格式（`data: {...}\n\n`）。
 - `.github/workflows/test.yml`：push/PR 触发 `cargo test --features test-support`，同时生成 LCOV 上传 artifact
 - 新 Tauri command 或 api wrapper 必须附测试（第一轮补课完成后启用 coverage-gate）
 
+## Frontend（Vitest + testing-library）
+
+### 组织
+- Vitest 配置在 `app/vite.config.ts` 的 `test` 字段（jsdom + globals + v8 coverage）
+- 入口 setup：`app/src/test-utils/setup.ts` —— 全局 mock `@tauri-apps/api/core` 的 `invoke`（未显式配置时 throw），mock `@tauri-apps/api/event` 的 `listen`/`emit`/`once`，`beforeEach` 自动 `clearAllMocks`
+- 测试文件紧挨源文件：`Foo.tsx` + `Foo.test.tsx` 同目录
+- `app/src/test-utils/mockTauri.ts` 提供 `mockInvoke({cmd: handler})` 和 `expectInvokedWith(cmd, args)`
+
+### 运行
+```bash
+cd app
+npm test                 # 单次跑
+npm run test:watch       # watch 模式
+npm run test:coverage    # 带 v8 coverage（html + lcov）
+npm test -- src/api      # 只跑某路径
+```
+
+### 核心原则
+- **未显式 mock 的 `invoke` 会 throw**（`setup.ts` 默认行为）—— 保证没有沉默的 undefined
+- API wrapper 测试必测：命令名（snake_case，Tauri 注册的 string）、arg 结构（**camelCase**，前端到 Rust 过 serde 自动转）、返回值解包、error 传播
+- UI 测试用 `@testing-library/react` + `user-event`；避免断言 implementation details
+- 覆盖率目标：`src/api/**` ≥ 90%，核心 stores/pages/components ≥ 60%
+
+### Page 测试常见坑（从 UI batches 总结）
+
+1. **i18n 不自动初始化** —— page test 文件顶部加 `import "../i18n";`，否则翻译 key 原样输出
+2. **Toast + confirm 依赖 `ToastProvider`** —— 用 `<ToastProvider>` 包裹使用 `toast.*` / `confirm` 的 page，否则 confirm 返回 false 导致 delete flows 沉默失败
+3. **jsdom 缺 `scrollIntoView`** —— 需要时在测试文件顶部 `Element.prototype.scrollIntoView = vi.fn();`
+4. **Zustand 存储种子更干净** —— 页面 mount 调 store `initialize()` 时，直接 `useSomeStore.setState({ initialized: true, ... })` 跳过整个 bootstrap 链
+5. **Lucide 图标类名** —— 数字后缀**无连字符**：`.lucide-trash2`、`.lucide-check2`（不是 `trash-2`）
+6. **MemoryRouter** 包裹使用 `useNavigate`/`useParams` 的组件
+7. **Fake timers** —— 页面有 `setTimeout` 动画（如 SetupWizard 的 280ms 切步过渡）时，用 `vi.useFakeTimers()` + `userEvent.setup({ advanceTimers: vi.advanceTimersByTime })` + `await act(async () => { await vi.runAllTimersAsync(); })` 加速
+8. **Vitest mock 对动态 import 生效** —— `import('@tauri-apps/api/core')` 也会走 mock（hoisted、module-scoped）
+
+### test_support helpers（前端）
+
+| Helper | 用途 |
+|---|---|
+| `mockInvoke(routes)` | 按命令名配置 `invoke` 返回值，未配置的继续 throw |
+| `expectInvokedWith(cmd, args)` | 断言 `invoke` 被正确命令+参数调用 |
+| `setup.ts` 里的 `listen`/`emit` mock | 事件订阅返回 no-op unsubscribe |
+
+### 参考实现
+- `src/api/heartbeat.test.ts` — API wrapper 测试模板（最小且涵盖所有 pattern）
+- `src/stores/chatStreamStore.test.ts` — Zustand store 测试
+- `src/pages/Chat.test.tsx` — 页面 + store 交互
+- `src/pages/SetupWizard.test.tsx` — fake timers + 多步 flow
+- `src/components/BuddyPanel.test.tsx` — 大型 component 的 bootstrap 测试
+
+### CI
+- `.github/workflows/test.yml` 的 `frontend` job：`ubuntu-latest` + Node 20 + `npm ci` + `npm run test:coverage`，LCOV 上传为 artifact
+
 ## 参考
 
 - 测试框架总设计：`docs/superpowers/specs/2026-04-20-testing-framework-design.md`
 - Plan A1 实施计划：`docs/superpowers/plans/2026-04-20-plan-a1-rust-test-infra.md`
+- Plan B 实施计划：`docs/superpowers/plans/2026-04-21-plan-b-frontend-tests.md`
