@@ -362,9 +362,11 @@ describe("sessionStore", () => {
       expect(s.activeSessionId).toBe("fresh");
     });
 
-    it("alerts on backend failure and does not mutate sessions list", async () => {
+    it("surfaces a toast on backend failure and does not mutate sessions list", async () => {
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
+      const toastMod = await import("../components/Toast");
+      const toastErrorSpy = vi.spyOn(toastMod.toast, "error");
       const a = makeSession({ id: "a" });
       useSessionStore.setState({ chatSessions: [a], activeSessionId: "a" });
       mockInvoke({
@@ -374,9 +376,12 @@ describe("sessionStore", () => {
       });
       await useSessionStore.getState().deleteSession("a");
       expect(useSessionStore.getState().chatSessions).toHaveLength(1);
-      expect(alertSpy).toHaveBeenCalled();
+      // Should now route through the shared toast system, not window.alert.
+      expect(toastErrorSpy).toHaveBeenCalled();
+      expect(alertSpy).not.toHaveBeenCalled();
       errSpy.mockRestore();
       alertSpy.mockRestore();
+      toastErrorSpy.mockRestore();
     });
   });
 

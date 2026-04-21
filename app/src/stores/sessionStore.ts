@@ -13,6 +13,7 @@ import {
   deleteSession as apiDeleteSession,
   type ChatSession,
 } from '../api/agent';
+import { toast } from '../components/Toast';
 
 const STORAGE_KEY = 'yiyi_last_active_session';
 const PAGE_SIZE = 30;
@@ -195,8 +196,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       get()._persistActive();
     } catch (err) {
       console.error('Failed to delete session:', err);
-      // Surface error so user knows something went wrong
-      alert(`删除失败: ${err}`);
+      // Surface error via the global toast (imperative API, safe outside React).
+      // Falls back to a no-op if the ToastProvider hasn't mounted yet.
+      toast.error(`删除失败: ${err}`);
     }
   },
 
