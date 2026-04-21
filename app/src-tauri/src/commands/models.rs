@@ -139,15 +139,22 @@ pub struct ActiveModelsInfo {
     pub model: Option<String>,
 }
 
-#[tauri::command]
-pub async fn list_providers(state: State<'_, AppState>) -> Result<Vec<ProviderInfo>, String> {
+// ── list_providers ──────────────────────────────────────────────────
+
+pub async fn list_providers_impl(state: &AppState) -> Result<Vec<ProviderInfo>, String> {
     let providers = state.providers.read().await;
     Ok(providers.get_all_providers())
 }
 
 #[tauri::command]
-pub async fn configure_provider(
-    state: State<'_, AppState>,
+pub async fn list_providers(state: State<'_, AppState>) -> Result<Vec<ProviderInfo>, String> {
+    list_providers_impl(&state).await
+}
+
+// ── configure_provider ──────────────────────────────────────────────
+
+pub async fn configure_provider_impl(
+    state: &AppState,
     provider_id: String,
     api_key: Option<String>,
     base_url: Option<String>,
@@ -185,8 +192,19 @@ pub async fn configure_provider(
 }
 
 #[tauri::command]
-pub async fn test_provider(
+pub async fn configure_provider(
     state: State<'_, AppState>,
+    provider_id: String,
+    api_key: Option<String>,
+    base_url: Option<String>,
+) -> Result<ProviderInfo, String> {
+    configure_provider_impl(&state, provider_id, api_key, base_url).await
+}
+
+// ── test_provider ───────────────────────────────────────────────────
+
+pub async fn test_provider_impl(
+    state: &AppState,
     provider_id: String,
     api_key: Option<String>,
     base_url: Option<String>,
@@ -284,8 +302,20 @@ pub async fn test_provider(
 }
 
 #[tauri::command]
-pub async fn create_custom_provider(
+pub async fn test_provider(
     state: State<'_, AppState>,
+    provider_id: String,
+    api_key: Option<String>,
+    base_url: Option<String>,
+    model_id: Option<String>,
+) -> Result<TestConnectionResponse, String> {
+    test_provider_impl(&state, provider_id, api_key, base_url, model_id).await
+}
+
+// ── create_custom_provider ──────────────────────────────────────────
+
+pub async fn create_custom_provider_impl(
+    state: &AppState,
     id: String,
     name: String,
     default_base_url: String,
@@ -322,8 +352,21 @@ pub async fn create_custom_provider(
 }
 
 #[tauri::command]
-pub async fn delete_custom_provider(
+pub async fn create_custom_provider(
     state: State<'_, AppState>,
+    id: String,
+    name: String,
+    default_base_url: String,
+    api_key_prefix: String,
+    models: Vec<ModelInfo>,
+) -> Result<ProviderInfo, String> {
+    create_custom_provider_impl(&state, id, name, default_base_url, api_key_prefix, models).await
+}
+
+// ── delete_custom_provider ──────────────────────────────────────────
+
+pub async fn delete_custom_provider_impl(
+    state: &AppState,
     provider_id: String,
 ) -> Result<Vec<ProviderInfo>, String> {
     let mut providers = state.providers.write().await;
@@ -334,8 +377,17 @@ pub async fn delete_custom_provider(
 }
 
 #[tauri::command]
-pub async fn add_model(
+pub async fn delete_custom_provider(
     state: State<'_, AppState>,
+    provider_id: String,
+) -> Result<Vec<ProviderInfo>, String> {
+    delete_custom_provider_impl(&state, provider_id).await
+}
+
+// ── add_model ───────────────────────────────────────────────────────
+
+pub async fn add_model_impl(
+    state: &AppState,
     provider_id: String,
     model_id: String,
     model_name: String,
@@ -366,8 +418,19 @@ pub async fn add_model(
 }
 
 #[tauri::command]
-pub async fn remove_model(
+pub async fn add_model(
     state: State<'_, AppState>,
+    provider_id: String,
+    model_id: String,
+    model_name: String,
+) -> Result<ProviderInfo, String> {
+    add_model_impl(&state, provider_id, model_id, model_name).await
+}
+
+// ── remove_model ────────────────────────────────────────────────────
+
+pub async fn remove_model_impl(
+    state: &AppState,
     provider_id: String,
     model_id: String,
 ) -> Result<ProviderInfo, String> {
@@ -388,8 +451,18 @@ pub async fn remove_model(
 }
 
 #[tauri::command]
-pub async fn test_model(
+pub async fn remove_model(
     state: State<'_, AppState>,
+    provider_id: String,
+    model_id: String,
+) -> Result<ProviderInfo, String> {
+    remove_model_impl(&state, provider_id, model_id).await
+}
+
+// ── test_model ──────────────────────────────────────────────────────
+
+pub async fn test_model_impl(
+    state: &AppState,
     provider_id: String,
     model_id: String,
 ) -> Result<TestConnectionResponse, String> {
@@ -410,10 +483,11 @@ pub async fn test_model(
         .or_else(|| std::env::var(&provider.api_key_prefix).ok())
         .ok_or("No API key configured")?;
 
+    // Capture URL before dropping the read-lock (borrows from `provider`).
+    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     drop(providers);
 
     let client = reqwest::Client::new();
-    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let api_key_opt = Some(api_key);
 
     let result = send_test_request(&client, &url, &model_id, &api_key_opt, None).await;
@@ -429,7 +503,17 @@ pub async fn test_model(
 }
 
 #[tauri::command]
-pub async fn get_active_llm(state: State<'_, AppState>) -> Result<ActiveModelsInfo, String> {
+pub async fn test_model(
+    state: State<'_, AppState>,
+    provider_id: String,
+    model_id: String,
+) -> Result<TestConnectionResponse, String> {
+    test_model_impl(&state, provider_id, model_id).await
+}
+
+// ── get_active_llm ──────────────────────────────────────────────────
+
+pub async fn get_active_llm_impl(state: &AppState) -> Result<ActiveModelsInfo, String> {
     let providers = state.providers.read().await;
     match &providers.active_llm {
         Some(slot) => Ok(ActiveModelsInfo {
@@ -444,8 +528,14 @@ pub async fn get_active_llm(state: State<'_, AppState>) -> Result<ActiveModelsIn
 }
 
 #[tauri::command]
-pub async fn set_active_llm(
-    state: State<'_, AppState>,
+pub async fn get_active_llm(state: State<'_, AppState>) -> Result<ActiveModelsInfo, String> {
+    get_active_llm_impl(&state).await
+}
+
+// ── set_active_llm ──────────────────────────────────────────────────
+
+pub async fn set_active_llm_impl(
+    state: &AppState,
     provider_id: String,
     model: String,
 ) -> Result<ActiveModelsInfo, String> {
@@ -462,16 +552,30 @@ pub async fn set_active_llm(
     })
 }
 
+#[tauri::command]
+pub async fn set_active_llm(
+    state: State<'_, AppState>,
+    provider_id: String,
+    model: String,
+) -> Result<ActiveModelsInfo, String> {
+    set_active_llm_impl(&state, provider_id, model).await
+}
+
 // ── Provider Plugin Commands ────────────────────────────────────────
 
-#[tauri::command]
-pub async fn list_provider_templates() -> Result<Vec<ProviderTemplate>, String> {
-    Ok(crate::state::providers::builtin_templates())
+pub fn list_provider_templates_impl() -> Vec<ProviderTemplate> {
+    crate::state::providers::builtin_templates()
 }
 
 #[tauri::command]
-pub async fn import_provider_plugin(
-    state: State<'_, AppState>,
+pub async fn list_provider_templates() -> Result<Vec<ProviderTemplate>, String> {
+    Ok(list_provider_templates_impl())
+}
+
+// ── import_provider_plugin ──────────────────────────────────────────
+
+pub async fn import_provider_plugin_impl(
+    state: &AppState,
     plugin: ProviderPlugin,
 ) -> Result<ProviderInfo, String> {
     let mut providers = state.providers.write().await;
@@ -479,8 +583,17 @@ pub async fn import_provider_plugin(
 }
 
 #[tauri::command]
-pub async fn export_provider_config(
+pub async fn import_provider_plugin(
     state: State<'_, AppState>,
+    plugin: ProviderPlugin,
+) -> Result<ProviderInfo, String> {
+    import_provider_plugin_impl(&state, plugin).await
+}
+
+// ── export_provider_config ──────────────────────────────────────────
+
+pub async fn export_provider_config_impl(
+    state: &AppState,
     provider_id: String,
 ) -> Result<ProviderPlugin, String> {
     let providers = state.providers.read().await;
@@ -521,17 +634,32 @@ pub async fn export_provider_config(
 }
 
 #[tauri::command]
-pub async fn scan_provider_plugins(
+pub async fn export_provider_config(
     state: State<'_, AppState>,
-) -> Result<Vec<ProviderInfo>, String> {
+    provider_id: String,
+) -> Result<ProviderPlugin, String> {
+    export_provider_config_impl(&state, provider_id).await
+}
+
+// ── scan_provider_plugins ───────────────────────────────────────────
+
+pub async fn scan_provider_plugins_impl(state: &AppState) -> Result<Vec<ProviderInfo>, String> {
     let mut providers = state.providers.write().await;
     providers.load_plugins(&state.working_dir);
     Ok(providers.get_all_providers())
 }
 
 #[tauri::command]
-pub async fn import_provider_from_template(
+pub async fn scan_provider_plugins(
     state: State<'_, AppState>,
+) -> Result<Vec<ProviderInfo>, String> {
+    scan_provider_plugins_impl(&state).await
+}
+
+// ── import_provider_from_template ───────────────────────────────────
+
+pub async fn import_provider_from_template_impl(
+    state: &AppState,
     template_id: String,
 ) -> Result<ProviderInfo, String> {
     let templates = crate::state::providers::builtin_templates();
@@ -542,4 +670,12 @@ pub async fn import_provider_from_template(
 
     let mut providers = state.providers.write().await;
     providers.import_plugin(&state.working_dir, template.plugin.clone())
+}
+
+#[tauri::command]
+pub async fn import_provider_from_template(
+    state: State<'_, AppState>,
+    template_id: String,
+) -> Result<ProviderInfo, String> {
+    import_provider_from_template_impl(&state, template_id).await
 }
