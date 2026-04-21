@@ -165,7 +165,7 @@ describe("BuddyPanel", () => {
 
   it("fires bootstrap commands on mount and renders the memory total", async () => {
     renderPanel();
-    // Every happy-path command should be invoked.
+    // Every happy-path command should be invoked (matching the actual source useEffect).
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("get_memory_stats");
       expect(invokeMock).toHaveBeenCalledWith("list_recent_memories", { limit: 15 });
@@ -175,20 +175,16 @@ describe("BuddyPanel", () => {
       expect(invokeMock).toHaveBeenCalledWith("get_trust_stats");
       expect(invokeMock).toHaveBeenCalledWith("get_meditation_config");
       expect(invokeMock).toHaveBeenCalledWith("get_latest_meditation");
-      expect(invokeMock).toHaveBeenCalledWith("get_personality_stats");
     });
-    // get_memory_stats.total = 42 appears twice: once in SectionTitle `count`,
-    // and once in the "全部 <42>" category-filter button. Both count as proof
-    // the bootstrap data rendered.
-    const occurrences = await screen.findAllByText("42");
-    expect(occurrences.length).toBeGreaterThanOrEqual(2);
+    // Memory total ("42 条") renders in the SectionTitle pill.
+    expect(await screen.findByText("42 条")).toBeInTheDocument();
   });
 
-  it("renders the trust accuracy pill in the hero meta block", async () => {
+  it("renders the trust accuracy info when trust stats are present", async () => {
     renderPanel();
-    // trustStats.accuracy = 0.8 → rounded to 80%. The main digits sit in their own span.
-    expect(await screen.findByText("80")).toBeInTheDocument();
-    expect(await screen.findByText("信任")).toBeInTheDocument();
+    // trustStats.accuracy = 0.8 → rounded to 80%. Source renders "信任度 80%" as a single span.
+    expect(await screen.findByText(/信任度 80%/)).toBeInTheDocument();
+    expect(await screen.findByText("信任与决策")).toBeInTheDocument();
   });
 
   it("invokes search_memories with the typed query when the search button is clicked", async () => {
@@ -205,19 +201,14 @@ describe("BuddyPanel", () => {
     });
   });
 
-  it("triggers meditation via the store action when '开始冥想' is clicked", async () => {
+  it("invokes trigger_meditation when '开始冥想' button is clicked", async () => {
     const user = userEvent.setup();
-    const triggerSpy = vi.fn(async () => undefined);
-    // Override just the action so we don't go through the real polling loop.
-    useMeditationStore.setState({
-      ...MEDITATION_PRISTINE,
-      isRunning: false,
-      triggerMeditation: triggerSpy,
-    });
     renderPanel();
     const btn = await screen.findByRole("button", { name: /开始冥想/ });
     await user.click(btn);
-    expect(triggerSpy).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("trigger_meditation");
+    });
   });
 
   it("renders correction rows with 'correct_behavior' text from list_corrections", async () => {
@@ -242,9 +233,9 @@ describe("BuddyPanel", () => {
       list_recent_memories: () => [],
       get_trust_stats: () => ({ total: 0, good: 0, bad: 0, pending: 0, accuracy: 0, by_context: {} }),
     });
-    // The empty-state guidance renders YiYi's intro sentence.
-    expect(await screen.findByText(/还没有记忆/)).toBeInTheDocument();
-    // No search input when the memory section is in the empty branch.
-    expect(screen.queryByPlaceholderText("搜索记忆...")).not.toBeInTheDocument();
+    // Source renders "暂无记忆" in the memory list when both recent + search are empty.
+    expect(await screen.findByText("暂无记忆")).toBeInTheDocument();
+    // The "0 条" counter pill proves the bootstrap data arrived.
+    expect(await screen.findByText("0 条")).toBeInTheDocument();
   });
 });

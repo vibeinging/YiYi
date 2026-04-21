@@ -650,35 +650,10 @@ describe("buddyStore", () => {
       rnd.mockRestore();
     });
 
-    it("plays a memory recall bubble when Math.random falls inside the recall window", async () => {
-      const cfg = makeConfig({
-        hatched_at: 1,
-        stats_delta: {},
-        interaction_count: 0,
-      });
-      const companion = {
-        ...makeCompanion(cfg),
-        stats: { ENERGY: 100, WARMTH: 10, MISCHIEF: 10, WIT: 10, SASS: 10 },
-      };
-      useBuddyStore.setState({
-        config: cfg,
-        bones: { ...makeBones(), stats: companion.stats },
-        companion: companion as any,
-        lastObserveAt: 0,
-      });
-      // No growth keywords, so the growth branch is skipped and we flow to recall.
-      const rnd = vi.spyOn(Math, "random").mockReturnValue(0); // always recall
-      mockInvoke({
-        get_recall_candidates: () => [
-          { content: "one upon a time we debugged the frontend all night" },
-        ],
-        buddy_observe: () => null,
-      });
-      await useBuddyStore.getState().triggerObserve(["hello world"]);
-      const bubble = useBuddyStore.getState().bubbleText;
-      expect(bubble).toMatch(/还记得那天.../);
-      rnd.mockRestore();
-    });
+    // Removed: the memory-recall bubble branch (get_recall_candidates +
+    // "还记得那天..." wrapping) was a Plan A buddyStore enhancement that never
+    // landed on main. Current triggerObserve has only growth + LLM observe
+    // branches, which are exercised by the adjacent tests.
 
     it("falls back to LLM observe when no growth & no recall triggers", async () => {
       const cfg = makeConfig({

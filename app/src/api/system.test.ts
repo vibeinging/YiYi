@@ -34,7 +34,6 @@ import {
   type GrowthData,
   type CustomQuickAction,
   type MemmeConfig,
-  type SaveMemmeConfigResult,
   type IdentityTrait,
 } from "./system";
 import type { ModelInfo, ShellResult } from "./types";
@@ -125,9 +124,6 @@ describe("system api", () => {
     enable_graph: true,
     enable_forgetting_curve: false,
     extraction_depth: "standard",
-    memory_llm_base_url: "",
-    memory_llm_api_key: "",
-    memory_llm_model: "",
   };
 
   const sampleTrait: IdentityTrait = {
@@ -666,14 +662,9 @@ describe("system api", () => {
   });
 
   describe("saveMemmeConfig", () => {
-    it("invokes save_memme_config with { config } and returns the result", async () => {
-      const saveResult: SaveMemmeConfigResult = {
-        llm_hot_swapped: true,
-        warning: null,
-      };
-      mockInvoke({ save_memme_config: () => saveResult });
-      const result = await saveMemmeConfig(sampleMemmeConfig);
-      expect(result).toEqual(saveResult);
+    it("invokes save_memme_config with { config }", async () => {
+      mockInvoke({ save_memme_config: () => undefined });
+      await saveMemmeConfig(sampleMemmeConfig);
       expect(invokeMock).toHaveBeenCalledWith("save_memme_config", {
         config: sampleMemmeConfig,
       });

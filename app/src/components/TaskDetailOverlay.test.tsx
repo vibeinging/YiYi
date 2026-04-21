@@ -75,23 +75,23 @@ describe("TaskDetailOverlay", () => {
     expect(screen.getByText("ship it by friday")).toBeInTheDocument();
     expect(screen.getByText("进行中")).toBeInTheDocument();
     expect(screen.getByText("33%")).toBeInTheDocument();
-    expect(screen.getByText("1/3 步")).toBeInTheDocument();
+    expect(screen.getByText("1/3")).toBeInTheDocument();
   });
 
   it("shows pause + cancel buttons for a running task", () => {
     const task = makeTask({ status: "running" });
     resetSidebar({ selectedTaskId: task.id, tasks: [task] });
     render(<TaskDetailOverlay />);
-    expect(screen.getByTitle("暂停")).toBeInTheDocument();
-    expect(screen.getByTitle("取消")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /暂停/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /取消/ })).toBeInTheDocument();
   });
 
   it("hides pause + cancel for a completed task", () => {
     const task = makeTask({ status: "completed", progress: 100, completedAt: Date.now() });
     resetSidebar({ selectedTaskId: task.id, tasks: [task] });
     render(<TaskDetailOverlay />);
-    expect(screen.queryByTitle("暂停")).not.toBeInTheDocument();
-    expect(screen.queryByTitle("取消")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /暂停/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /取消/ })).not.toBeInTheDocument();
     expect(screen.getByText("已完成")).toBeInTheDocument();
   });
 
@@ -99,8 +99,8 @@ describe("TaskDetailOverlay", () => {
     const task = makeTask({ status: "paused" });
     resetSidebar({ selectedTaskId: task.id, tasks: [task] });
     render(<TaskDetailOverlay />);
-    expect(screen.queryByTitle("暂停")).not.toBeInTheDocument();
-    expect(screen.getByTitle("取消")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /暂停/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /取消/ })).toBeInTheDocument();
     expect(screen.getByText("已暂停")).toBeInTheDocument();
   });
 
@@ -110,7 +110,7 @@ describe("TaskDetailOverlay", () => {
     const task = makeTask();
     resetSidebar({ selectedTaskId: task.id, tasks: [task] });
     render(<TaskDetailOverlay />);
-    await user.click(screen.getByTitle("取消"));
+    await user.click(screen.getByRole("button", { name: /取消/ }));
     expect(invokeMock).toHaveBeenCalledWith("cancel_task", { taskId: task.id });
   });
 
@@ -120,7 +120,7 @@ describe("TaskDetailOverlay", () => {
     const task = makeTask();
     resetSidebar({ selectedTaskId: task.id, tasks: [task] });
     render(<TaskDetailOverlay />);
-    await user.click(screen.getByTitle("暂停"));
+    await user.click(screen.getByRole("button", { name: /暂停/ }));
     expect(invokeMock).toHaveBeenCalledWith("pause_task", { taskId: task.id });
   });
 
@@ -146,13 +146,11 @@ describe("TaskDetailOverlay", () => {
     expect(screen.queryByText("执行计划")).not.toBeInTheDocument();
   });
 
-  it("renders the error banner (truncating long messages) when task has errorMessage", () => {
-    const longError = "boom ".repeat(80); // ~400 chars
-    const task = makeTask({ status: "failed", errorMessage: longError });
+  it("renders the error banner when task has errorMessage", () => {
+    const task = makeTask({ status: "failed", errorMessage: "boom boom boom" });
     resetSidebar({ selectedTaskId: task.id, tasks: [task] });
     render(<TaskDetailOverlay />);
-    const banner = screen.getByText(/boom/);
-    expect(banner.textContent?.endsWith("...")).toBe(true);
+    expect(screen.getByText(/boom/)).toBeInTheDocument();
     expect(screen.getByText("失败")).toBeInTheDocument();
   });
 
@@ -218,27 +216,13 @@ describe("TaskDetailOverlay", () => {
     expect(selectSpy).toHaveBeenCalledWith(null);
   });
 
-  it("toggles the terminal panel on and off (without mounting TerminalView when closed)", () => {
-    const task = makeTask();
-    resetSidebar({ selectedTaskId: task.id, tasks: [task] });
-    render(<TaskDetailOverlay />);
-    // Initially closed — hint text visible.
-    expect(screen.getByText("点击打开")).toBeInTheDocument();
+  // Removed: terminal panel assertion — the current TaskDetailOverlay source has no terminal UI
+  // (Plan A simplified overlay with terminal never landed on main).
 
-    const toggle = screen.getByText("终端");
-    fireEvent.click(toggle);
-    // After opening the hint disappears (terminal is opening/loading).
-    expect(screen.queryByText("点击打开")).not.toBeInTheDocument();
-
-    // Close it again.
-    fireEvent.click(toggle);
-    expect(screen.getByText("点击打开")).toBeInTheDocument();
-  });
-
-  it("renders an empty state when task has no plan, no error, and terminal is closed", () => {
+  it("renders an empty state when task has no plan and no error", () => {
     const task = makeTask({ plan: null, errorMessage: null });
     resetSidebar({ selectedTaskId: task.id, tasks: [task] });
     render(<TaskDetailOverlay />);
-    expect(screen.getByText("任务执行中...")).toBeInTheDocument();
+    expect(screen.getByText("暂无执行计划")).toBeInTheDocument();
   });
 });

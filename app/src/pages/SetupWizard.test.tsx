@@ -100,13 +100,14 @@ describe("SetupWizard", () => {
       await user.click(screen.getByRole("button", { name: /^下一步$/ }));
       await flushAllTimers();
 
-      // The memory step renders the built-in embedding card.
+      // The memory step renders the Memory Engine heading (Plan A BGE-only
+      // info card never landed; the current StepMemory renders the full
+      // preset-based embedding config UI).
       await waitFor(() => {
         expect(
-          screen.getByText(/已内置：bge-small-zh-v1\.5/),
+          screen.getByRole("heading", { name: /记忆引擎/ }),
         ).toBeInTheDocument();
       });
-      expect(screen.getByText(/记忆引擎/)).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
@@ -146,6 +147,7 @@ describe("SetupWizard", () => {
     mockInvoke({
       get_user_workspace: () => "/Users/test/Documents/YiYi",
       list_authorized_folders: () => [],
+      save_memme_config: () => null,
       save_meditation_config: () => null,
       save_workspace_file: () => null,
       save_agents_config: () => null,
