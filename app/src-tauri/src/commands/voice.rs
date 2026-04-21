@@ -21,18 +21,30 @@ pub async fn start_voice_session(
     manager.start(api_key, None, app).await
 }
 
-#[tauri::command]
-pub async fn stop_voice_session(
-    state: State<'_, AppState>,
+pub async fn stop_voice_session_impl(
+    state: &AppState,
 ) -> Result<(), String> {
     let manager = state.voice_manager.read().await;
     manager.stop().await
 }
 
 #[tauri::command]
-pub async fn get_voice_status(
+pub async fn stop_voice_session(
     state: State<'_, AppState>,
+) -> Result<(), String> {
+    stop_voice_session_impl(&*state).await
+}
+
+pub async fn get_voice_status_impl(
+    state: &AppState,
 ) -> Result<VoiceStatus, String> {
     let manager = state.voice_manager.read().await;
     Ok(manager.status().await)
+}
+
+#[tauri::command]
+pub async fn get_voice_status(
+    state: State<'_, AppState>,
+) -> Result<VoiceStatus, String> {
+    get_voice_status_impl(&*state).await
 }
