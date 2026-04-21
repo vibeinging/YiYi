@@ -27,6 +27,7 @@ function resetStore() {
     hostedMode: false,
     hatching: false,
     loaded: false,
+    loadError: null,
     lastObserveAt: 0,
     aiName: "YiYi",
     inspirationSeed: 0,
@@ -83,6 +84,7 @@ describe("buddyStore", () => {
       expect(s.bones).toBeNull();
       expect(s.companion).toBeNull();
       expect(s.loaded).toBe(false);
+      expect(s.loadError).toBeNull();
       expect(s.hatching).toBe(false);
       expect(s.aiName).toBe("YiYi");
       expect(s.bubbleText).toBeNull();
@@ -218,7 +220,7 @@ describe("buddyStore", () => {
       expect(s.config?.buddy_user_id).toBe(savedWith?.buddy_user_id);
     });
 
-    it("swallows backend errors and still flips loaded=true", async () => {
+    it("on backend error keeps loaded=false and records loadError for the UI", async () => {
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       mockInvoke({
         get_buddy_config: () => {
@@ -226,8 +228,13 @@ describe("buddyStore", () => {
         },
       });
       await useBuddyStore.getState().loadBuddy();
-      expect(useBuddyStore.getState().loaded).toBe(true);
-      expect(useBuddyStore.getState().config).toBeNull();
+      const s = useBuddyStore.getState();
+      // loaded stays false so UI can distinguish "load failed" from
+      // "loaded successfully with empty config".
+      expect(s.loaded).toBe(false);
+      expect(s.config).toBeNull();
+      expect(s.loadError).toBeTruthy();
+      expect(s.loadError).toMatch(/db offline/);
       expect(errSpy).toHaveBeenCalled();
       errSpy.mockRestore();
     });

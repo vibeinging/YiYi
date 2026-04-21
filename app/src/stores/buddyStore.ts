@@ -24,6 +24,8 @@ interface BuddyState {
   // Persisted config (from backend)
   config: BuddyConfig | null
   loaded: boolean
+  /** Populated when loadBuddy fails; UI can branch: loaded===false + loadError → show error. */
+  loadError: string | null
 
   // Deterministic bones (regenerated from userId)
   bones: CompanionBones | null
@@ -94,6 +96,7 @@ let petTimer: ReturnType<typeof setTimeout> | null = null
 export const useBuddyStore = create<BuddyState>((set, get) => ({
   config: null,
   loaded: false,
+  loadError: null,
   bones: null,
   inspirationSeed: 0,
   companion: null,
@@ -135,6 +138,7 @@ export const useBuddyStore = create<BuddyState>((set, get) => ({
       set({
         config,
         loaded: true,
+        loadError: null,
         bones,
         inspirationSeed,
         companion,
@@ -142,7 +146,9 @@ export const useBuddyStore = create<BuddyState>((set, get) => ({
       })
     } catch (err) {
       console.error('Failed to load buddy:', err)
-      set({ loaded: true })
+      // Keep loaded=false so UI can distinguish "load failed" from
+      // "loaded successfully with empty config".
+      set({ loaded: false, loadError: String(err) })
     }
   },
 
