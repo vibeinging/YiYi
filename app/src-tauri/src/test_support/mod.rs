@@ -4,11 +4,13 @@
 pub mod app_state;
 pub mod fake_embedder;
 pub mod mocks;
+pub mod tauri_app;
 pub mod temp_db;
 pub mod temp_workspace;
 
 pub use app_state::{build_test_app_state, TestAppState};
 pub use fake_embedder::FakeEmbedder;
 pub use mocks::MockLlmProvider;
+pub use tauri_app::build_mock_tauri_app;
 pub use temp_db::TempDb;
 pub use temp_workspace::TempWorkspace;

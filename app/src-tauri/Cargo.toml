@@ -16,6 +16,7 @@ test-support = [
     "dep:serial_test",
     "dep:tokio-test",
     "tokio/test-util",
+    "tauri/test",
 ]
 
 [lib]

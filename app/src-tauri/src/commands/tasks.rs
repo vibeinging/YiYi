@@ -1,4 +1,4 @@
-use tauri::{Emitter, State};
+use tauri::{AppHandle, Emitter, Runtime, State};
 
 use crate::engine::db::TaskInfo;
 use crate::state::AppState;
@@ -166,11 +166,12 @@ pub async fn get_task_status(
     get_task_status_impl(&*state, task_id).await
 }
 
-#[tauri::command]
-pub async fn cancel_task(
+/// Core logic for `cancel_task`, generic over the Tauri runtime so tests can
+/// pass `AppHandle<MockRuntime>` while production uses `AppHandle<Wry>`.
+pub async fn cancel_task_impl<R: Runtime>(
+    state: &AppState,
+    app: &AppHandle<R>,
     task_id: String,
-    state: State<'_, AppState>,
-    app: tauri::AppHandle,
 ) -> Result<(), String> {
     let signalled = state.cancel_task_signal(&task_id);
     if !signalled {
@@ -180,6 +181,15 @@ pub async fn cancel_task(
     state.cleanup_task_signal(&task_id);
     let _ = app.emit("task://cancelled", serde_json::json!({ "taskId": task_id }));
     Ok(())
+}
+
+#[tauri::command]
+pub async fn cancel_task(
+    task_id: String,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    cancel_task_impl(&*state, &app, task_id).await
 }
 
 #[tauri::command]
