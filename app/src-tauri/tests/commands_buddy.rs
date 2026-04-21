@@ -1,12 +1,10 @@
 //! Integration tests for `commands/buddy.rs` thin-layer `_impl` functions.
 //!
-//! Covers the simple `State<AppState>`-only commands. Defers:
-//! - `buddy_observe` (requires LLM provider wiring — needs mock LLM pilot)
-//! - `get_memory_stats`, `list_recent_episodes`, `list_recent_memories`,
-//!   `search_memories`, `delete_memory` (access the process-wide
-//!   `OnceLock<MemoryStore>` via `crate::engine::tools::get_memme_store()` —
-//!   no test-injection hook; singleton commands pilot is future work
-//!   tracked in `memory/project_test_isolation_debt.md`).
+//! Covers the simple `State<AppState>`-only commands plus the memme-store
+//! commands (migrated to `state.memme_store` in this A2 cleanup batch).
+//! Defers:
+//! - `buddy_observe` (requires LLM provider wiring — covered by
+//!   `tests/commands_mock_llm_pilot.rs`).
 
 mod common;
 
@@ -497,6 +495,238 @@ async fn get_trust_stats_reflects_feedback_across_contexts() {
         .expect("permission context should exist");
     assert_eq!(perm.good, 1);
     assert_eq!(perm.bad, 0);
+}
+
+// ============================================================================
+// Memme-backed commands (migrated from OnceLock singleton to state.memme_store)
+// ============================================================================
+
+const TEST_USER_ID: &str = "yiyi_default_user";
+
+/// Seed a memory into the test store and return the generated id.
+fn seed_memory(
+    t: &TestAppState,
+    content: &str,
+    categories: Vec<&str>,
+    importance: Option<f32>,
+) -> String {
+    let mut opts = memme_core::AddOptions::new(TEST_USER_ID)
+        .categories(categories.iter().map(|s| s.to_string()).collect());
+    if let Some(imp) = importance {
+        opts = opts.importance(imp);
+    }
+    t.state()
+        .memme_store
+        .add(content, opts)
+        .expect("add memory")
+        .id
+}
+
+fn seed_episode(
+    t: &TestAppState,
+    title: &str,
+    summary: &str,
+    started_at: &str,
+) -> String {
+    let opts = memme_core::CreateEpisodeOptions::new(
+        title,
+        summary,
+        TEST_USER_ID,
+        started_at,
+    );
+    t.state()
+        .memme_store
+        .create_episode(opts)
+        .expect("create episode")
+        .episode_id
+}
+
+// === get_memory_stats ===================================================
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn get_memory_stats_returns_zero_totals_for_fresh_store() {
+    let t = build_test_app_state().await;
+    let got = get_memory_stats_impl(t.state()).await.unwrap();
+    assert_eq!(got.total, 0);
+    assert!(got.by_category.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn get_memory_stats_tallies_seeded_memories_by_first_category() {
+    let t = build_test_app_state().await;
+
+    seed_memory(&t, "learn rust", vec!["study"], Some(0.5));
+    seed_memory(&t, "write tests", vec!["work", "study"], Some(0.7));
+    // memory with no categories falls into "uncategorized"
+    let opts = memme_core::AddOptions::new(TEST_USER_ID);
+    t.state()
+        .memme_store
+        .add("random thought", opts)
+        .expect("add memory");
+
+    let got = get_memory_stats_impl(t.state()).await.unwrap();
+    assert_eq!(got.total, 3);
+    // Two traces have first-category "study" and "work"; one goes to "uncategorized".
+    assert_eq!(got.by_category.get("study").copied().unwrap_or(0), 1);
+    assert_eq!(got.by_category.get("work").copied().unwrap_or(0), 1);
+    assert_eq!(
+        got.by_category.get("uncategorized").copied().unwrap_or(0),
+        1
+    );
+}
+
+// === list_recent_episodes ===============================================
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn list_recent_episodes_returns_empty_for_fresh_store() {
+    let t = build_test_app_state().await;
+    let got = list_recent_episodes_impl(t.state(), None).await.unwrap();
+    assert!(got.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn list_recent_episodes_returns_seeded_rows_respecting_limit() {
+    let t = build_test_app_state().await;
+
+    for i in 0..3 {
+        seed_episode(
+            &t,
+            &format!("episode-{}", i),
+            &format!("summary-{}", i),
+            "2026-04-20T00:00:00",
+        );
+    }
+
+    let all = list_recent_episodes_impl(t.state(), None).await.unwrap();
+    assert_eq!(all.len(), 3);
+    for row in &all {
+        assert!(!row.episode_id.is_empty());
+        assert!(row.title.starts_with("episode-"));
+        assert!(row.summary.starts_with("summary-"));
+    }
+
+    let limited = list_recent_episodes_impl(t.state(), Some(1))
+        .await
+        .unwrap();
+    assert_eq!(limited.len(), 1);
+}
+
+// === list_recent_memories ===============================================
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn list_recent_memories_returns_empty_for_fresh_store() {
+    let t = build_test_app_state().await;
+    let got = list_recent_memories_impl(t.state(), None).await.unwrap();
+    assert!(got.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn list_recent_memories_returns_seeded_rows_with_expected_shape() {
+    let t = build_test_app_state().await;
+
+    let id_a = seed_memory(&t, "first", vec!["cat-a"], Some(0.4));
+    let id_b = seed_memory(&t, "second", vec!["cat-b"], Some(0.8));
+
+    let rows = list_recent_memories_impl(t.state(), Some(10))
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().any(|r| r.id == id_a && r.content == "first"));
+    assert!(rows.iter().any(|r| r.id == id_b && r.content == "second"));
+
+    let row_b = rows.iter().find(|r| r.id == id_b).unwrap();
+    assert_eq!(row_b.categories, vec!["cat-b".to_string()]);
+    assert!((row_b.importance - 0.8).abs() < 1e-4);
+    assert!(!row_b.created_at.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn list_recent_memories_honors_explicit_limit() {
+    let t = build_test_app_state().await;
+    for i in 0..5 {
+        seed_memory(&t, &format!("m-{}", i), vec!["x"], None);
+    }
+    let rows = list_recent_memories_impl(t.state(), Some(2))
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+}
+
+// === search_memories ====================================================
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn search_memories_with_blank_query_short_circuits_to_empty() {
+    let t = build_test_app_state().await;
+    seed_memory(&t, "hello world", vec!["greeting"], None);
+
+    // Blank query returns empty without hitting the store.
+    let got = search_memories_impl(t.state(), "   ".into(), None)
+        .await
+        .unwrap();
+    assert!(got.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn search_memories_finds_seeded_content_via_keyword_search() {
+    let t = build_test_app_state().await;
+
+    let id_match = seed_memory(&t, "rust programming language", vec!["code"], None);
+    let _id_other = seed_memory(&t, "cats are fluffy", vec!["pets"], None);
+
+    let got = search_memories_impl(t.state(), "rust".into(), Some(10))
+        .await
+        .unwrap();
+
+    // FakeEmbedder may produce noisy vector matches, but keyword_search=true
+    // ensures the FTS-matched row is included. Assert presence — not
+    // exclusivity — so the test stays robust to additional recall hits.
+    assert!(
+        got.iter().any(|r| r.id == id_match),
+        "expected the matching row to surface, got {:?}",
+        got.iter().map(|r| &r.content).collect::<Vec<_>>()
+    );
+}
+
+// === delete_memory ======================================================
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn delete_memory_removes_seeded_row() {
+    let t = build_test_app_state().await;
+
+    let id = seed_memory(&t, "to be deleted", vec!["temp"], None);
+    // Verify it's there first.
+    let before = list_recent_memories_impl(t.state(), None).await.unwrap();
+    assert!(before.iter().any(|r| r.id == id));
+
+    delete_memory_impl(t.state(), id.clone()).await.unwrap();
+
+    let after = list_recent_memories_impl(t.state(), None).await.unwrap();
+    assert!(!after.iter().any(|r| r.id == id), "deleted row should be gone");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn delete_memory_on_unknown_id_surfaces_not_found_error() {
+    // memme_core's `delete_trace` returns `NotFound` for unknown ids, and
+    // the command wraps it with a "删除失败" prefix.
+    let t = build_test_app_state().await;
+    let err = delete_memory_impl(t.state(), "does-not-exist".into())
+        .await
+        .unwrap_err();
+    assert!(
+        err.contains("删除失败") && err.contains("not found"),
+        "expected not-found error with Chinese prefix, got: {err}"
+    );
 }
 
 // Avoid `HashMap` import warning on nightly.

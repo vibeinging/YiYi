@@ -1,9 +1,9 @@
 //! Integration tests for `commands/skills.rs` thin-layer `_impl` functions.
 //!
-//! Covers simple `State<AppState>` FS-only commands. Defers:
-//! - `import_skill` (HTTP reqwest to GitHub/raw URL — real network)
+//! Covers simple `State<AppState>` FS-only commands plus hub/HTTP commands
+//! driven by a `wiremock` server (see the "Hub / HTTP" section at the bottom).
+//! Defers:
 //! - `generate_skill_ai` (AppHandle + LLM provider streaming — needs mock LLM + emit harness)
-//! - `hub_search_skills`, `hub_install_skill`, `hub_list_skills` (real Hub HTTP calls)
 
 mod common;
 
@@ -570,4 +570,275 @@ async fn get_hub_config_is_stable_across_calls() {
     let b = get_hub_config_impl().unwrap();
     assert_eq!(a.base_url, b.base_url);
     assert_eq!(a.search_path, b.search_path);
+}
+
+// ============================================================================
+// Hub / HTTP commands — driven by a local wiremock server.
+//
+// Strategy: stand up a `wiremock::MockServer` on an ephemeral port and pass
+// its URI as `hub_url` to the `_impl` functions, which threads it into
+// `HubConfig.base_url`. For `import_skill_impl` (which doesn't accept a
+// base-URL override), we pass a direct `http://127.0.0.1:port/...` URL that
+// the impl appends `/SKILL.md` to.
+// ============================================================================
+
+use wiremock::matchers::{method, path, query_param};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+// === hub_search_skills ==================================================
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn hub_search_skills_returns_parsed_results_from_mocked_hub() {
+    let server = MockServer::start().await;
+
+    // Mimic ClawHub v1 search response shape.
+    let body = serde_json::json!({
+        "results": [
+            {
+                "slug": "pdf",
+                "displayName": "PDF Tools",
+                "summary": "Read and write PDFs",
+                "version": "1.0.0",
+                "tags": ["office"],
+            },
+            {
+                "slug": "weather",
+                "displayName": "Weather",
+                "summary": "Get forecast",
+                "version": "0.2.1",
+            },
+        ]
+    });
+    Mock::given(method("GET"))
+        .and(path("/api/v1/search"))
+        .and(query_param("q", "pdf"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .mount(&server)
+        .await;
+
+    let results = hub_search_skills_impl("pdf".into(), Some(5), Some(server.uri()))
+        .await
+        .expect("search should succeed");
+
+    assert_eq!(results.len(), 2);
+    let pdf = results.iter().find(|s| s.slug == "pdf").unwrap();
+    assert_eq!(pdf.name, "PDF Tools");
+    assert_eq!(pdf.description, "Read and write PDFs");
+    assert_eq!(pdf.version.as_deref(), Some("1.0.0"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn hub_search_skills_propagates_http_error_from_hub() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/search"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let err = hub_search_skills_impl("anything".into(), None, Some(server.uri()))
+        .await
+        .unwrap_err();
+    assert!(
+        err.contains("HTTP 500") || err.contains("Hub search failed"),
+        "expected hub error message, got: {err}"
+    );
+}
+
+// === hub_list_skills ====================================================
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn hub_list_skills_returns_items_and_next_cursor_from_mocked_hub() {
+    let server = MockServer::start().await;
+
+    let body = serde_json::json!({
+        "items": [
+            {
+                "slug": "docx",
+                "displayName": "DOCX",
+                "summary": "Word docs",
+                "latestVersion": {"version": "2.0.0"},
+                "owner": {"username": "yiyi-team"},
+                "tags": ["office", "write"],
+            },
+        ],
+        "nextCursor": "cursor-page-2",
+    });
+    Mock::given(method("GET"))
+        .and(path("/api/v1/skills"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .mount(&server)
+        .await;
+
+    let resp = hub_list_skills_impl(Some(10), None, Some("updated".into()), Some(server.uri()))
+        .await
+        .expect("list should succeed");
+
+    let items = resp["items"].as_array().expect("items array");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["slug"], "docx");
+    assert_eq!(items[0]["name"], "DOCX");
+    assert_eq!(items[0]["version"], "2.0.0");
+    assert_eq!(resp["nextCursor"], "cursor-page-2");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn hub_list_skills_propagates_http_error_from_hub() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/skills"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+
+    let err = hub_list_skills_impl(None, None, None, Some(server.uri()))
+        .await
+        .unwrap_err();
+    assert!(
+        err.contains("HTTP 503") || err.contains("Hub list failed"),
+        "expected hub error message, got: {err}"
+    );
+}
+
+// === hub_install_skill ==================================================
+//
+// `install_skill_from_url` routes by URL: github.com / skills.sh / clawhub /
+// direct bundle. Easiest path to mock end-to-end is a *direct bundle URL* —
+// the impl calls `fetch_bundle_direct`, which just expects a JSON body with
+// `skill.name`, `content`, and optional `files`.
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn hub_install_skill_from_direct_bundle_writes_to_disk() {
+    let server = MockServer::start().await;
+
+    let skill_md = minimal_skill_md("mock-skill", "installed from mock");
+    Mock::given(method("GET"))
+        .and(path("/bundle/mock-skill"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "skill": {"name": "mock-skill"},
+            "content": skill_md,
+        })))
+        .mount(&server)
+        .await;
+
+    let t = build_test_app_state().await;
+
+    // URL that doesn't match github/skills.sh/clawhub → routes to direct.
+    // IMPORTANT: don't pass `hub_url` pointing at the same mock — the
+    // routing logic checks `url.contains(&config.base_url)`, so a matching
+    // hub_url would force the ClawHub path. Leaving `hub_url=None` keeps
+    // the built-in default (https://clawhub.ai), which doesn't collide
+    // with the mock URI, so the direct-bundle branch is taken.
+    let bundle_url = format!("{}/bundle/mock-skill", server.uri());
+    let result = hub_install_skill_impl(
+        t.state(),
+        bundle_url.clone(),
+        None,
+        Some(true),
+        Some(true),
+        None,
+    )
+    .await
+    .expect("install should succeed");
+
+    assert_eq!(result.name, "mock-skill");
+    assert!(result.enabled);
+    assert_eq!(result.source_url, bundle_url);
+
+    // Verify the skill actually landed on disk under customized_skills/.
+    let skill_dir = t
+        .state()
+        .working_dir
+        .join("customized_skills")
+        .join("mock-skill");
+    assert!(skill_dir.join("SKILL.md").exists(), "SKILL.md not written");
+    let on_disk = std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
+    assert!(on_disk.contains("mock-skill"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn hub_install_skill_fails_fast_on_invalid_url_scheme() {
+    let t = build_test_app_state().await;
+    let err = hub_install_skill_impl(
+        t.state(),
+        "not-a-url".into(),
+        None,
+        Some(false),
+        Some(false),
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        err.to_lowercase().contains("invalid url"),
+        "expected invalid-url rejection, got: {err}"
+    );
+}
+
+// === import_skill =======================================================
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn import_skill_fetches_skill_md_from_raw_url_and_writes_it() {
+    let server = MockServer::start().await;
+
+    let skill_md = minimal_skill_md("imported", "via import_skill");
+    // The impl appends `/SKILL.md` when the URL doesn't already end with it,
+    // so we serve the file at `/my-skill/SKILL.md`.
+    Mock::given(method("GET"))
+        .and(path("/my-skill/SKILL.md"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(skill_md.clone()))
+        .mount(&server)
+        .await;
+
+    let t = build_test_app_state().await;
+    // URL contains no "github.com" so the impl doesn't rewrite to raw.
+    let url = format!("{}/my-skill", server.uri());
+    let resp = import_skill_impl(t.state(), url).await.expect("import should succeed");
+
+    assert_eq!(resp["status"], "ok");
+    // Skill name is derived from the last URL segment when the URL doesn't end in SKILL.md.
+    assert_eq!(resp["skill"]["name"], "my-skill");
+
+    // File landed in both customized_skills/ and active_skills/.
+    let custom = t
+        .state()
+        .working_dir
+        .join("customized_skills")
+        .join("my-skill")
+        .join("SKILL.md");
+    assert!(custom.exists(), "customized SKILL.md missing");
+    let active = t
+        .state()
+        .working_dir
+        .join("active_skills")
+        .join("my-skill")
+        .join("SKILL.md");
+    assert!(active.exists(), "active SKILL.md missing");
+    assert_eq!(std::fs::read_to_string(&custom).unwrap(), skill_md);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn import_skill_propagates_http_error_when_download_fails() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/missing/SKILL.md"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    let t = build_test_app_state().await;
+    let url = format!("{}/missing", server.uri());
+    let err = import_skill_impl(t.state(), url).await.unwrap_err();
+    assert!(
+        err.contains("404") || err.contains("Failed to download"),
+        "expected 404 error, got: {err}"
+    );
 }
