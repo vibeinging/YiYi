@@ -35,6 +35,15 @@ fn to_response(s: crate::engine::db::usage::UsageSummary) -> UsageSummaryRespons
     }
 }
 
+pub fn get_usage_summary_impl(
+    state: &AppState,
+    since: Option<i64>,
+    until: Option<i64>,
+) -> Result<UsageSummaryResponse, String> {
+    let summary = state.db.get_usage_summary(since, until);
+    Ok(to_response(summary))
+}
+
 /// Get global usage summary, optionally filtered by time range (millis).
 #[tauri::command]
 pub fn get_usage_summary(
@@ -42,8 +51,18 @@ pub fn get_usage_summary(
     since: Option<i64>,
     until: Option<i64>,
 ) -> Result<UsageSummaryResponse, String> {
-    let summary = state.db.get_usage_summary(since, until);
-    Ok(to_response(summary))
+    get_usage_summary_impl(&*state, since, until)
+}
+
+pub fn get_usage_by_session_impl(
+    state: &AppState,
+    limit: Option<usize>,
+) -> Result<Vec<SessionUsageResponse>, String> {
+    let rows = state.db.get_usage_by_session(limit.unwrap_or(20));
+    Ok(rows.into_iter().map(|(sid, s)| SessionUsageResponse {
+        session_id: sid,
+        summary: to_response(s),
+    }).collect())
 }
 
 /// Get per-session usage breakdown (top N by cost).
@@ -52,9 +71,16 @@ pub fn get_usage_by_session(
     state: State<'_, AppState>,
     limit: Option<usize>,
 ) -> Result<Vec<SessionUsageResponse>, String> {
-    let rows = state.db.get_usage_by_session(limit.unwrap_or(20));
-    Ok(rows.into_iter().map(|(sid, s)| SessionUsageResponse {
-        session_id: sid,
+    get_usage_by_session_impl(&*state, limit)
+}
+
+pub fn get_usage_daily_impl(
+    state: &AppState,
+    days: Option<i64>,
+) -> Result<Vec<DailyUsageResponse>, String> {
+    let rows = state.db.get_usage_daily(days.unwrap_or(30));
+    Ok(rows.into_iter().map(|(date, s)| DailyUsageResponse {
+        date,
         summary: to_response(s),
     }).collect())
 }
@@ -65,9 +91,5 @@ pub fn get_usage_daily(
     state: State<'_, AppState>,
     days: Option<i64>,
 ) -> Result<Vec<DailyUsageResponse>, String> {
-    let rows = state.db.get_usage_daily(days.unwrap_or(30));
-    Ok(rows.into_iter().map(|(date, s)| DailyUsageResponse {
-        date,
-        summary: to_response(s),
-    }).collect())
+    get_usage_daily_impl(&*state, days)
 }
