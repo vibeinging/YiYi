@@ -376,11 +376,11 @@ pub async fn list_corrections_impl(
     state: &AppState,
 ) -> Result<Vec<serde_json::Value>, String> {
     let corrections = state.db.get_all_active_corrections();
-    Ok(corrections.iter().map(|(trigger, wrong, correct, conf)| {
+    Ok(corrections.iter().map(|(trigger, correct, source, conf)| {
         serde_json::json!({
             "trigger": trigger,
-            "wrong_behavior": wrong,
             "correct_behavior": correct,
+            "source": source,
             "confidence": conf,
         })
     }).collect())

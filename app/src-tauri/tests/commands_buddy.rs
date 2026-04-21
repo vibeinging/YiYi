@@ -245,25 +245,17 @@ async fn list_corrections_returns_seeded_active_rows_with_expected_shape() {
     // Each row is a JSON object with the four expected fields.
     for row in &got {
         assert!(row.get("trigger").is_some());
-        assert!(row.get("wrong_behavior").is_some());
         assert!(row.get("correct_behavior").is_some());
+        assert!(row.get("source").is_some());
         assert!(row.get("confidence").is_some());
     }
 
-    // Find the pattern-a row. CAVEAT / API SURPRISE:
-    // `db.get_all_active_corrections` returns tuples in the order
-    // `(trigger_pattern, correct_behavior, source, confidence)`, but
-    // `list_corrections_impl` destructures them as `(trigger, wrong, correct, conf)`
-    // — so the JSON field `wrong_behavior` actually contains the DB's
-    // `correct_behavior`, and `correct_behavior` actually contains `source`.
-    // This is a latent bug in the command; the test pins the current behavior
-    // and the refactor is scoped only to `_impl` extraction (not semantics).
     let row_a = got
         .iter()
         .find(|r| r["trigger"] == "pattern-a")
         .expect("pattern-a should be present");
-    assert_eq!(row_a["wrong_behavior"], "correct-a"); // actually correct_behavior from DB
-    assert_eq!(row_a["correct_behavior"], "user"); // actually source from DB
+    assert_eq!(row_a["correct_behavior"], "correct-a");
+    assert_eq!(row_a["source"], "user");
     assert!((row_a["confidence"].as_f64().unwrap() - 0.9).abs() < f64::EPSILON);
 }
 
