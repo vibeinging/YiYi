@@ -12,8 +12,7 @@ pub struct HealthResponse {
     pub methods: Vec<String>,
 }
 
-#[tauri::command]
-pub async fn health_check() -> Result<HealthResponse, String> {
+pub async fn health_check_impl() -> Result<HealthResponse, String> {
     Ok(HealthResponse {
         status: "ok".to_string(),
         version: "0.1.0".to_string(),
@@ -34,7 +33,11 @@ pub async fn health_check() -> Result<HealthResponse, String> {
 }
 
 #[tauri::command]
-pub async fn list_models(state: State<'_, AppState>) -> Result<Vec<ModelInfo>, String> {
+pub async fn health_check() -> Result<HealthResponse, String> {
+    health_check_impl().await
+}
+
+pub async fn list_models_impl(state: &AppState) -> Result<Vec<ModelInfo>, String> {
     let providers = state.providers.read().await;
     let all = providers.get_all_providers();
     let models: Vec<ModelInfo> = all
@@ -45,8 +48,12 @@ pub async fn list_models(state: State<'_, AppState>) -> Result<Vec<ModelInfo>, S
 }
 
 #[tauri::command]
-pub async fn set_model(
-    state: State<'_, AppState>,
+pub async fn list_models(state: State<'_, AppState>) -> Result<Vec<ModelInfo>, String> {
+    list_models_impl(&*state).await
+}
+
+pub async fn set_model_impl(
+    state: &AppState,
     model_name: String,
 ) -> Result<serde_json::Value, String> {
     // Find the provider that has this model
@@ -71,8 +78,15 @@ pub async fn set_model(
 }
 
 #[tauri::command]
-pub async fn get_current_model(
+pub async fn set_model(
     state: State<'_, AppState>,
+    model_name: String,
+) -> Result<serde_json::Value, String> {
+    set_model_impl(&*state, model_name).await
+}
+
+pub async fn get_current_model_impl(
+    state: &AppState,
 ) -> Result<serde_json::Value, String> {
     let providers = state.providers.read().await;
     match &providers.active_llm {
@@ -88,10 +102,16 @@ pub async fn get_current_model(
     }
 }
 
-/// Save agents config (language, max_iterations, etc.)
 #[tauri::command]
-pub async fn save_agents_config(
+pub async fn get_current_model(
     state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    get_current_model_impl(&*state).await
+}
+
+/// Save agents config (language, max_iterations, etc.)
+pub async fn save_agents_config_impl(
+    state: &AppState,
     language: Option<String>,
     max_iterations: Option<usize>,
 ) -> Result<(), String> {
@@ -105,16 +125,28 @@ pub async fn save_agents_config(
     config.save(&state.working_dir)
 }
 
-/// Get user workspace path
 #[tauri::command]
-pub async fn get_user_workspace(state: State<'_, AppState>) -> Result<String, String> {
+pub async fn save_agents_config(
+    state: State<'_, AppState>,
+    language: Option<String>,
+    max_iterations: Option<usize>,
+) -> Result<(), String> {
+    save_agents_config_impl(&*state, language, max_iterations).await
+}
+
+/// Get user workspace path
+pub async fn get_user_workspace_impl(state: &AppState) -> Result<String, String> {
     Ok(state.user_workspace().to_string_lossy().to_string())
 }
 
-/// Set user workspace path (persisted in config)
 #[tauri::command]
-pub async fn set_user_workspace(
-    state: State<'_, AppState>,
+pub async fn get_user_workspace(state: State<'_, AppState>) -> Result<String, String> {
+    get_user_workspace_impl(&*state).await
+}
+
+/// Set user workspace path (persisted in config)
+pub async fn set_user_workspace_impl(
+    state: &AppState,
     path: String,
 ) -> Result<(), String> {
     let p = std::path::PathBuf::from(&path);
@@ -132,21 +164,37 @@ pub async fn set_user_workspace(
     config.save(&state.working_dir)
 }
 
-/// Check if the initial setup wizard has been completed
 #[tauri::command]
-pub async fn is_setup_complete(state: State<'_, AppState>) -> Result<bool, String> {
+pub async fn set_user_workspace(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<(), String> {
+    set_user_workspace_impl(&*state, path).await
+}
+
+/// Check if the initial setup wizard has been completed
+pub async fn is_setup_complete_impl(state: &AppState) -> Result<bool, String> {
     Ok(state.db.get_config("setup_complete").is_some())
 }
 
-/// Mark the initial setup as complete
 #[tauri::command]
-pub async fn complete_setup(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn is_setup_complete(state: State<'_, AppState>) -> Result<bool, String> {
+    is_setup_complete_impl(&*state).await
+}
+
+/// Mark the initial setup as complete
+pub async fn complete_setup_impl(state: &AppState) -> Result<(), String> {
     state.db.set_config("setup_complete", "true")?;
     // Also create .bootstrap_completed flag to prevent BOOTSTRAP.md from being
     // injected into system prompt — SetupWizard already collected persona info.
     let flag = state.working_dir.join(".bootstrap_completed");
     std::fs::write(&flag, "done").map_err(|e| format!("Failed to write bootstrap flag: {}", e))?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn complete_setup(state: State<'_, AppState>) -> Result<(), String> {
+    complete_setup_impl(&*state).await
 }
 
 /// Check if `claude` CLI is reachable. Falls back to common install paths
@@ -385,8 +433,7 @@ fn check_command(cmd: &str, args: &[&str]) -> bool {
 }
 
 /// Check if a tool is available on the system.
-#[tauri::command]
-pub async fn check_tool_available(tool: String) -> Result<bool, String> {
+pub async fn check_tool_available_impl(tool: String) -> Result<bool, String> {
     let result = match tool.as_str() {
         "git" => check_command("git", &["--version"]),
         "python" | "python3" => {
@@ -408,6 +455,11 @@ pub async fn check_tool_available(tool: String) -> Result<bool, String> {
         }
     };
     Ok(result)
+}
+
+#[tauri::command]
+pub async fn check_tool_available(tool: String) -> Result<bool, String> {
+    check_tool_available_impl(tool).await
 }
 
 /// Try to install a package via Homebrew. Returns Some(message) on success.
@@ -497,7 +549,7 @@ fn try_command_install(cmd: &str, args: &[&str]) -> Option<String> {
 #[tauri::command]
 pub async fn install_tool(tool: String) -> Result<String, String> {
     // Check if already installed
-    let available = check_tool_available(tool.clone()).await?;
+    let available = check_tool_available_impl(tool.clone()).await?;
     if available {
         return Ok(format!("{} is already installed", tool));
     }
@@ -603,10 +655,15 @@ pub async fn install_tool(tool: String) -> Result<String, String> {
 }
 
 /// Check if git is available on this system (backward-compatible wrapper)
+#[allow(dead_code)]
+pub async fn check_git_available_impl() -> Result<bool, String> {
+    check_tool_available_impl("git".to_string()).await
+}
+
 #[tauri::command]
 #[allow(dead_code)]
 pub async fn check_git_available() -> Result<bool, String> {
-    check_tool_available("git".to_string()).await
+    check_git_available_impl().await
 }
 
 /// Install git based on the current operating system (backward-compatible wrapper)
@@ -617,24 +674,39 @@ pub async fn install_git() -> Result<String, String> {
 }
 
 /// Get a persistent app flag from the database
-#[tauri::command]
-pub async fn get_app_flag(
-    state: State<'_, AppState>,
+pub async fn get_app_flag_impl(
+    state: &AppState,
     key: String,
 ) -> Result<Option<String>, String> {
     validate_flag_key(&key)?;
     Ok(state.db.get_config(&key))
 }
 
+#[tauri::command]
+pub async fn get_app_flag(
+    state: State<'_, AppState>,
+    key: String,
+) -> Result<Option<String>, String> {
+    get_app_flag_impl(&*state, key).await
+}
+
 /// Set a persistent app flag in the database
+pub async fn set_app_flag_impl(
+    state: &AppState,
+    key: String,
+    value: String,
+) -> Result<(), String> {
+    validate_flag_key(&key)?;
+    state.db.set_config(&key, &value)
+}
+
 #[tauri::command]
 pub async fn set_app_flag(
     state: State<'_, AppState>,
     key: String,
     value: String,
 ) -> Result<(), String> {
-    validate_flag_key(&key)?;
-    state.db.set_config(&key, &value)
+    set_app_flag_impl(&*state, key, value).await
 }
 
 fn validate_flag_key(key: &str) -> Result<(), String> {
@@ -653,9 +725,8 @@ fn validate_flag_key(key: &str) -> Result<(), String> {
 // Growth System API
 // ---------------------------------------------------------------------------
 
-#[tauri::command]
-pub async fn get_growth_report(
-    state: State<'_, AppState>,
+pub async fn get_growth_report_impl(
+    state: &AppState,
 ) -> Result<serde_json::Value, String> {
     use crate::engine::react_agent::{
         generate_growth_report, detect_skill_opportunity,
@@ -675,15 +746,21 @@ pub async fn get_growth_report(
     }))
 }
 
-/// Get a morning greeting with proactive suggestions (called once per day).
 #[tauri::command]
-pub async fn get_morning_greeting(
+pub async fn get_growth_report(
     state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    get_growth_report_impl(&*state).await
+}
+
+/// Get a morning greeting with proactive suggestions (called once per day).
+pub async fn get_morning_greeting_impl(
+    state: &AppState,
 ) -> Result<Option<String>, String> {
     use crate::engine::react_agent::generate_morning_reflection;
     use crate::commands::agent::resolve_llm_config;
 
-    let config = match resolve_llm_config(&state).await {
+    let config = match resolve_llm_config(state).await {
         Ok(c) => c,
         Err(_) => return Ok(None), // No model configured, skip
     };
@@ -691,13 +768,27 @@ pub async fn get_morning_greeting(
     Ok(generate_morning_reflection(&config, &state.db).await)
 }
 
+#[tauri::command]
+pub async fn get_morning_greeting(
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    get_morning_greeting_impl(&*state).await
+}
+
 /// Disable a correction rule by id.
+pub async fn disable_correction_impl(
+    state: &AppState,
+    correction_id: String,
+) -> Result<(), String> {
+    state.db.disable_correction(&correction_id)
+}
+
 #[tauri::command]
 pub async fn disable_correction(
     state: State<'_, AppState>,
     correction_id: String,
 ) -> Result<(), String> {
-    state.db.disable_correction(&correction_id)
+    disable_correction_impl(&*state, correction_id).await
 }
 
 // ---------------------------------------------------------------------------
@@ -765,6 +856,15 @@ pub async fn trigger_meditation(
     let meditation_guard = state.meditation_running.clone();
 
     tauri::async_runtime::spawn(async move {
+        // Drop guard: reset meditation_running on *any* exit path, including panic.
+        struct ResetOnDrop(std::sync::Arc<AtomicBool>);
+        impl Drop for ResetOnDrop {
+            fn drop(&mut self) {
+                self.0.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        let _reset = ResetOnDrop(meditation_guard);
+
         match run_meditation_session(&config, &db, &working_dir, cancel).await {
             Ok(r) => log::info!(
                 "Manual meditation completed: {} sessions reviewed, journal len={}",
@@ -773,7 +873,6 @@ pub async fn trigger_meditation(
             ),
             Err(e) => log::error!("Manual meditation failed: {}", e),
         }
-        meditation_guard.store(false, std::sync::atomic::Ordering::Relaxed);
     });
 
     Ok(())
@@ -788,6 +887,14 @@ pub async fn get_meditation_status(
     match state.db.get_latest_meditation_session() {
         Some(session) => {
             if session.status == "running" {
+                // Stale-detection: if the process has been "running" for > 10 minutes
+                // AND the in-process flag says nothing is running, treat as crashed → idle.
+                let now = chrono::Utc::now().timestamp_millis();
+                let age_ms = now - session.started_at;
+                let flag_running = state.meditation_running.load(std::sync::atomic::Ordering::Relaxed);
+                if age_ms > 10 * 60 * 1000 && !flag_running {
+                    return Ok("idle".to_string());
+                }
                 Ok("running".to_string())
             } else if session.status == "completed" {
                 // Show "completed" only if finished within the last 5 minutes
@@ -849,15 +956,71 @@ pub async fn get_memme_config(
     Ok(config.memme.clone())
 }
 
+/// Result of saving the MemMe config — carries non-fatal warnings the UI should surface.
+#[derive(Serialize, Default)]
+pub struct SaveMemmeConfigResult {
+    /// True iff the LLM provider on the live store was rebuilt with the new config.
+    pub llm_hot_swapped: bool,
+    /// Optional warning message for the user (e.g. "no API key, LLM not active").
+    pub warning: Option<String>,
+}
+
 /// Save MemMe memory engine configuration.
 #[tauri::command]
 pub async fn save_memme_config(
     state: State<'_, AppState>,
     config: crate::state::config::MemmeConfig,
-) -> Result<(), String> {
-    let mut cfg = state.config.write().await;
-    cfg.memme = config;
-    cfg.save(&state.working_dir)
+) -> Result<SaveMemmeConfigResult, String> {
+    {
+        let mut cfg = state.config.write().await;
+        cfg.memme = config.clone();
+        cfg.save(&state.working_dir)?;
+    }
+
+    let mut result = SaveMemmeConfigResult::default();
+
+    // Rebuild MemMe LLM provider so new URL/model/key take effect without app restart.
+    let new_llm: Option<std::sync::Arc<dyn memme_llm::LlmProvider>> = {
+        let providers = state.providers.read().await;
+        crate::state::app_state::build_memme_llm(&providers, &config)
+    };
+    let store = crate::engine::tools::get_memme_store();
+
+    match (store, new_llm) {
+        (Some(store), Some(llm)) => {
+            let store_clone = store.clone();
+            // `set_llm_provider` drops the old provider, which owns a `reqwest::blocking::Client`
+            // that internally carries a tokio runtime. Dropping that runtime from ANY tokio-managed
+            // thread (including `spawn_blocking`) panics with "Cannot drop a runtime in a context
+            // where blocking is not allowed". We need a plain OS thread that tokio knows nothing about.
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            std::thread::spawn(move || {
+                store_clone.set_llm_provider(llm);
+                let _ = tx.send(());
+            });
+            let _ = rx.await;
+            log::info!("MemMe LLM provider reloaded after config save");
+            result.llm_hot_swapped = true;
+        }
+        (Some(_), None) => {
+            // Either user cleared dedicated config but main provider has no API key,
+            // or dedicated config itself is missing an API key. Either way the live
+            // store still holds the previous LLM — make this visible to the user.
+            log::warn!(
+                "MemMe LLM not rebuilt (no usable provider). Old LLM remains active until restart or main provider gains an API key."
+            );
+            result.warning = Some(
+                "记忆 LLM 未能切换：未找到可用的 API Key。请在「模型」标签页配置主模型 API Key，或在记忆模型卡片填写 API Key。".to_string(),
+            );
+        }
+        (None, _) => {
+            // Store not initialized yet (first-run before MemMe boot). Config is persisted,
+            // store will pick it up on next init — no warning needed.
+            log::info!("MemMe store not initialized; config persisted, will apply on next init");
+        }
+    }
+
+    Ok(result)
 }
 
 /// Get MemMe identity traits (inferred user personality profile).
@@ -934,4 +1097,83 @@ pub async fn delete_quick_action(
     id: String,
 ) -> Result<(), String> {
     state.db.delete_quick_action(&id)
+}
+
+// -----------------------------------------------------------------------
+// Personality & Growth (Buddy personality evolution)
+// -----------------------------------------------------------------------
+
+/// Get aggregated personality stats (time-decayed weighted sum + base 50).
+#[tauri::command]
+pub async fn get_personality_stats(
+    state: State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let aggregates = state.db.get_personality_aggregates();
+    let result: Vec<serde_json::Value> = aggregates.iter().map(|(trait_name, delta)| {
+        let value = (crate::engine::db::PERSONALITY_BASE_STAT + delta).clamp(0.0, 100.0);
+        serde_json::json!({
+            "trait": trait_name,
+            "value": value as i32,
+            "delta": *delta,
+        })
+    }).collect();
+    Ok(result)
+}
+
+/// Get personality signal timeline for growth visualization.
+#[tauri::command]
+pub async fn get_personality_timeline(
+    state: State<'_, AppState>,
+    limit: Option<i64>,
+) -> Result<Vec<crate::engine::db::PersonalitySignalRow>, String> {
+    Ok(state.db.list_personality_signals(limit.unwrap_or(50)))
+}
+
+/// Toggle sparkling (闪光记忆 / pinned) status on a memory via MemMe.
+#[tauri::command]
+pub async fn toggle_sparkling_memory(
+    memory_id: String,
+    sparkling: bool,
+) -> Result<(), String> {
+    let store = crate::engine::tools::get_memme_store()
+        .ok_or_else(|| "MemMe store not initialized".to_string())?;
+    store.pin_trace(&memory_id, sparkling)
+        .map_err(|e| format!("Failed to toggle sparkling: {}", e))
+}
+
+/// List all sparkling (pinned) memories via MemMe.
+#[tauri::command]
+pub async fn list_sparkling_memories() -> Result<Vec<serde_json::Value>, String> {
+    let store = crate::engine::tools::get_memme_store()
+        .ok_or_else(|| "MemMe store not initialized".to_string())?;
+    let results = store.list_pinned_traces(crate::engine::tools::MEMME_USER_ID)
+        .map_err(|e| format!("Failed to list sparkling: {}", e))?;
+    Ok(results.iter().map(|r| serde_json::json!({
+        "id": r.id,
+        "content": r.content,
+        "category": r.categories.as_ref().and_then(|c| c.first()).cloned().unwrap_or_default(),
+        "created_at": r.created_at,
+    })).collect())
+}
+
+/// Get recall candidates for "还记得那天..." bubble via MemMe's nostalgia recall.
+#[tauri::command]
+pub async fn get_recall_candidates(
+    limit: Option<i64>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let store = crate::engine::tools::get_memme_store()
+        .ok_or_else(|| "MemMe store not initialized".to_string())?;
+    let results = store.recall_nostalgia(
+        crate::engine::tools::MEMME_USER_ID,
+        7,    // min 7 days old
+        0.6,  // min importance
+        limit.unwrap_or(3) as usize,
+    ).map_err(|e| format!("Recall nostalgia failed: {}", e))?;
+    Ok(results.iter().map(|r| serde_json::json!({
+        "id": r.id,
+        "content": r.content,
+        "category": r.categories.as_ref().and_then(|c| c.first()).cloned().unwrap_or_default(),
+        "confidence": r.importance.unwrap_or(0.5),
+        "created_at": r.created_at,
+    })).collect())
 }
