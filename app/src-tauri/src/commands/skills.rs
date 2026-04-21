@@ -484,9 +484,8 @@ pub async fn delete_skill(
     delete_skill_impl(&state, name).await
 }
 
-#[tauri::command]
-pub async fn import_skill(
-    state: State<'_, AppState>,
+pub async fn import_skill_impl(
+    state: &AppState,
     url: String,
 ) -> Result<serde_json::Value, String> {
     let client = reqwest::Client::new();
@@ -555,6 +554,14 @@ pub async fn import_skill(
         "message": format!("Skill '{}' imported", name),
         "skill": skill
     }))
+}
+
+#[tauri::command]
+pub async fn import_skill(
+    state: State<'_, AppState>,
+    url: String,
+) -> Result<serde_json::Value, String> {
+    import_skill_impl(&state, url).await
 }
 
 pub async fn reload_skills_impl(
@@ -711,8 +718,7 @@ pub async fn generate_skill_ai(
 use crate::engine::skills_hub::{self, HubConfig, HubSkill, InstallResult};
 
 /// Search skills from hub
-#[tauri::command]
-pub async fn hub_search_skills(
+pub async fn hub_search_skills_impl(
     query: String,
     limit: Option<usize>,
     hub_url: Option<String>,
@@ -725,10 +731,18 @@ pub async fn hub_search_skills(
     skills_hub::search_hub_skills(&query, limit.unwrap_or(20), &config).await
 }
 
-/// Install skill from URL (supports ClawHub, skills.sh, GitHub, direct bundle)
 #[tauri::command]
-pub async fn hub_install_skill(
-    state: State<'_, AppState>,
+pub async fn hub_search_skills(
+    query: String,
+    limit: Option<usize>,
+    hub_url: Option<String>,
+) -> Result<Vec<HubSkill>, String> {
+    hub_search_skills_impl(query, limit, hub_url).await
+}
+
+/// Install skill from URL (supports ClawHub, skills.sh, GitHub, direct bundle)
+pub async fn hub_install_skill_impl(
+    state: &AppState,
     url: String,
     version: Option<String>,
     enable: Option<bool>,
@@ -749,6 +763,18 @@ pub async fn hub_install_skill(
         &config,
     )
     .await
+}
+
+#[tauri::command]
+pub async fn hub_install_skill(
+    state: State<'_, AppState>,
+    url: String,
+    version: Option<String>,
+    enable: Option<bool>,
+    overwrite: Option<bool>,
+    hub_url: Option<String>,
+) -> Result<InstallResult, String> {
+    hub_install_skill_impl(&state, url, version, enable, overwrite, hub_url).await
 }
 
 /// Batch enable skills
@@ -812,8 +838,7 @@ pub async fn batch_disable_skills(
 }
 
 /// List skills from hub with sorting/pagination (ClawHub browse)
-#[tauri::command]
-pub async fn hub_list_skills(
+pub async fn hub_list_skills_impl(
     limit: Option<usize>,
     cursor: Option<String>,
     sort: Option<String>,
@@ -836,6 +861,16 @@ pub async fn hub_list_skills(
         "items": skills,
         "nextCursor": next_cursor,
     }))
+}
+
+#[tauri::command]
+pub async fn hub_list_skills(
+    limit: Option<usize>,
+    cursor: Option<String>,
+    sort: Option<String>,
+    hub_url: Option<String>,
+) -> Result<serde_json::Value, String> {
+    hub_list_skills_impl(limit, cursor, sort, hub_url).await
 }
 
 /// Get hub configuration
