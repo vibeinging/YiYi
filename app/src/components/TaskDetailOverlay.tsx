@@ -183,20 +183,23 @@ export function TaskDetailOverlay() {
         onClick={() => selectTask(null)}
       />
 
-      {/* Panel */}
+      {/* Panel — centered modal */}
       <div
-        className="fixed top-0 bottom-0 z-50 flex flex-col"
-        style={{
-          left: 'var(--sidebar-width, 220px)',
-          width: '440px',
-          maxWidth: 'calc(100vw - var(--sidebar-width, 220px) - 40px)',
-          background: 'var(--color-bg-elevated)',
-          borderRight: '1px solid var(--color-border)',
-          boxShadow: '6px 0 40px rgba(0,0,0,0.35)',
-          transform: visible ? 'translateX(0)' : 'translateX(-100%)',
-          transition: visible ? 'transform 280ms cubic-bezier(0.22, 1, 0.36, 1)' : 'transform 180ms ease-in',
-        }}
+        className="fixed inset-0 z-50 flex items-center justify-center p-5 pointer-events-none"
       >
+        <div
+          className="flex flex-col pointer-events-auto rounded-2xl overflow-hidden"
+          style={{
+            width: 'min(560px, 100%)',
+            maxHeight: 'min(720px, calc(100vh - 60px))',
+            background: 'var(--color-bg-elevated)',
+            border: '1px solid var(--color-border)',
+            boxShadow: '0 24px 64px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.04)',
+            opacity: visible ? 1 : 0,
+            transform: visible ? 'scale(1) translateY(0)' : 'scale(0.96) translateY(8px)',
+            transition: 'opacity 200ms ease, transform 240ms cubic-bezier(0.22, 1, 0.36, 1)',
+          }}
+        >
         {/* ── Header ── */}
         <div className="relative shrink-0 px-5 pt-4 pb-5" style={{ borderBottom: '1px solid var(--color-border)' }}>
           <button
@@ -396,6 +399,7 @@ export function TaskDetailOverlay() {
               <Send size={14} />
             </button>
           )}
+        </div>
         </div>
       </div>
     </>
