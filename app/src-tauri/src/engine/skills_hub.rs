@@ -1135,3 +1135,287 @@ pub fn get_default_hub_config() -> HubConfig {
             .unwrap_or_else(|_| "/api/v1/skills".into()),
     }
 }
+
+// ============================================================================
+// Unit tests for private helpers (pure logic — no HTTP / no filesystem).
+// HTTP-driven coverage lives in tests/engine_skills_hub.rs.
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ---- HubConfig defaults ------------------------------------------------
+
+    #[test]
+    fn hub_config_default_uses_clawhub_base_url_and_v1_paths() {
+        let cfg = HubConfig::default();
+        assert_eq!(cfg.base_url, "https://clawhub.ai");
+        assert_eq!(cfg.search_path, "/api/v1/search");
+        assert_eq!(cfg.list_path, "/api/v1/skills");
+        assert_eq!(cfg.detail_path, "/api/v1/skills/{slug}");
+        assert_eq!(cfg.file_path, "/api/v1/skills/{slug}/file");
+        assert_eq!(cfg.download_path, "/api/v1/download");
+    }
+
+    // ---- normalize_search_items -------------------------------------------
+
+    #[test]
+    fn normalize_search_items_handles_top_level_array() {
+        let data = json!([{"slug": "a"}, {"slug": "b"}]);
+        let items = normalize_search_items(&data);
+        assert_eq!(items.len(), 2);
+    }
+
+    #[test]
+    fn normalize_search_items_unwraps_results_key() {
+        let data = json!({ "results": [{"slug": "a"}] });
+        assert_eq!(normalize_search_items(&data).len(), 1);
+    }
+
+    #[test]
+    fn normalize_search_items_unwraps_items_and_skills_and_data_keys() {
+        for key in ["items", "skills", "data"] {
+            let data = json!({ key: [{"slug": "a"}] });
+            assert_eq!(normalize_search_items(&data).len(), 1, "failed for key {key}");
+        }
+    }
+
+    #[test]
+    fn normalize_search_items_wraps_single_skill_object() {
+        let data = json!({"slug": "solo", "name": "Solo"});
+        let items = normalize_search_items(&data);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["slug"], "solo");
+    }
+
+    #[test]
+    fn normalize_search_items_returns_empty_for_unknown_shape() {
+        let data = json!({"unexpected": "shape"});
+        assert!(normalize_search_items(&data).is_empty());
+    }
+
+    // ---- parse_hub_requires ------------------------------------------------
+
+    #[test]
+    fn parse_hub_requires_reads_top_level_requires_block() {
+        let item = json!({
+            "requires": {"env": ["API_KEY"], "bins": ["curl", "git"]}
+        });
+        let req = parse_hub_requires(&item).expect("should parse");
+        assert_eq!(req.env.as_deref(), Some(&["API_KEY".to_string()][..]));
+        assert_eq!(req.bins.as_deref(), Some(&["curl".to_string(), "git".to_string()][..]));
+    }
+
+    #[test]
+    fn parse_hub_requires_reads_metadata_openclaw_nested_requires() {
+        let item = json!({
+            "metadata": { "openclaw": { "requires": { "env": ["TOKEN"] } } }
+        });
+        let req = parse_hub_requires(&item).expect("should parse");
+        assert_eq!(req.env.as_deref(), Some(&["TOKEN".to_string()][..]));
+        assert!(req.bins.is_none());
+    }
+
+    #[test]
+    fn parse_hub_requires_returns_none_when_no_requires_anywhere() {
+        assert!(parse_hub_requires(&json!({"slug": "x"})).is_none());
+    }
+
+    #[test]
+    fn parse_hub_requires_returns_none_when_requires_is_empty() {
+        // requires block present but has neither env nor bins → treated as None.
+        let item = json!({ "requires": {} });
+        assert!(parse_hub_requires(&item).is_none());
+    }
+
+    // ---- extract_skill_name ------------------------------------------------
+
+    #[test]
+    fn extract_skill_name_reads_name_from_yaml_frontmatter() {
+        let content = "---\nname: my-skill\ndescription: foo\n---\n\nbody";
+        assert_eq!(extract_skill_name(content).as_deref(), Some("my-skill"));
+    }
+
+    #[test]
+    fn extract_skill_name_strips_surrounding_quotes() {
+        let content = "---\nname: \"quoted-skill\"\n---\nbody";
+        assert_eq!(extract_skill_name(content).as_deref(), Some("quoted-skill"));
+    }
+
+    #[test]
+    fn extract_skill_name_returns_none_when_no_frontmatter() {
+        assert!(extract_skill_name("# Just markdown").is_none());
+    }
+
+    #[test]
+    fn extract_skill_name_returns_none_when_name_missing() {
+        let content = "---\ndescription: foo\n---\nbody";
+        assert!(extract_skill_name(content).is_none());
+    }
+
+    // ---- extract_clawhub_slug ----------------------------------------------
+
+    #[test]
+    fn extract_clawhub_slug_parses_standard_skills_url() {
+        assert_eq!(
+            extract_clawhub_slug("https://clawhub.ai/skills/pdf-tools"),
+            "pdf-tools"
+        );
+    }
+
+    #[test]
+    fn extract_clawhub_slug_falls_back_to_last_segment_for_owner_style_urls() {
+        assert_eq!(
+            extract_clawhub_slug("https://clawhub.ai/owner/my-skill"),
+            "my-skill"
+        );
+    }
+
+    #[test]
+    fn extract_clawhub_slug_returns_empty_for_bare_domain() {
+        assert_eq!(extract_clawhub_slug("https://clawhub.ai"), "");
+    }
+
+    // ---- extract_metadata_field / extract_metadata_array -------------------
+
+    #[test]
+    fn extract_metadata_field_reads_quoted_json_style_value() {
+        let fm = "metadata:\n  openclaw:\n    \"emoji\": \"🎨\"\n";
+        assert_eq!(extract_metadata_field(fm, "emoji").as_deref(), Some("🎨"));
+    }
+
+    #[test]
+    fn extract_metadata_field_reads_plain_yaml_value() {
+        let fm = "metadata:\n  openclaw:\n    emoji: art\n";
+        assert_eq!(extract_metadata_field(fm, "emoji").as_deref(), Some("art"));
+    }
+
+    #[test]
+    fn extract_metadata_field_returns_none_when_absent() {
+        assert!(extract_metadata_field("name: foo", "emoji").is_none());
+    }
+
+    #[test]
+    fn extract_metadata_array_reads_inline_bracket_list() {
+        let fm = "requires:\n  env: [API_KEY, TOKEN]\n";
+        assert_eq!(
+            extract_metadata_array(fm, "env"),
+            vec!["API_KEY".to_string(), "TOKEN".to_string()]
+        );
+    }
+
+    #[test]
+    fn extract_metadata_array_reads_yaml_dash_list() {
+        let fm = "requires:\n  env:\n    - VAR1\n    - VAR2\n";
+        assert_eq!(
+            extract_metadata_array(fm, "env"),
+            vec!["VAR1".to_string(), "VAR2".to_string()]
+        );
+    }
+
+    #[test]
+    fn extract_metadata_array_empty_when_field_missing() {
+        assert!(extract_metadata_array("name: foo", "env").is_empty());
+    }
+
+    // ---- convert_openclaw_to_yiyi -----------------------------------------
+
+    #[test]
+    fn convert_openclaw_to_yiyi_noop_when_no_frontmatter() {
+        let content = "# just markdown, no yaml\n";
+        assert_eq!(convert_openclaw_to_yiyi(content), content);
+    }
+
+    #[test]
+    fn convert_openclaw_to_yiyi_noop_when_yiyi_metadata_already_present() {
+        let content = "---\nname: foo\nmetadata:\n  yiyi:\n    emoji: X\n---\nbody";
+        assert_eq!(convert_openclaw_to_yiyi(content), content);
+    }
+
+    #[test]
+    fn convert_openclaw_to_yiyi_noop_when_no_openclaw_metadata() {
+        // No openclaw/clawdbot/clawdis keys → leave content alone.
+        let content = "---\nname: foo\ndescription: bar\n---\nbody";
+        assert_eq!(convert_openclaw_to_yiyi(content), content);
+    }
+
+    #[test]
+    fn convert_openclaw_to_yiyi_adds_yiyi_block_when_openclaw_present() {
+        let content = "---\nname: foo\nmetadata:\n  openclaw:\n    emoji: \"🚀\"\n    requires:\n      env: [API_KEY]\n      bins: [curl]\n---\nbody\n";
+        let out = convert_openclaw_to_yiyi(content);
+        assert!(out.contains("\"yiyi\""), "missing yiyi block: {out}");
+        assert!(out.contains("\"API_KEY\""), "missing env passthrough: {out}");
+        assert!(out.contains("\"curl\""), "missing bins passthrough: {out}");
+        // Body preserved.
+        assert!(out.ends_with("body\n"));
+    }
+
+    #[test]
+    fn convert_openclaw_to_yiyi_recognizes_clawdbot_alias() {
+        let content = "---\nname: foo\nmetadata:\n  clawdbot:\n    emoji: zz\n---\nbody";
+        let out = convert_openclaw_to_yiyi(content);
+        assert!(out.contains("\"yiyi\""));
+    }
+
+    // ---- get_default_hub_config -------------------------------------------
+
+    #[test]
+    fn get_default_hub_config_returns_defaults_without_env_overrides() {
+        // We can't safely mutate env (races with other tests), so assert that,
+        // in the absence of an override, the base URL matches the documented
+        // production default. This holds when the env var is unset in CI.
+        let had_override = std::env::var("YIYI_SKILLS_HUB_BASE_URL").is_ok()
+            || std::env::var("YIYICLAW_SKILLS_HUB_BASE_URL").is_ok();
+        let cfg = get_default_hub_config();
+        if !had_override {
+            assert_eq!(cfg.base_url, "https://clawhub.ai");
+        }
+        // These paths never come from env in CI, so they should always match
+        // defaults unless the test env explicitly sets them.
+        if std::env::var("YIYI_SKILLS_HUB_SEARCH_PATH").is_err()
+            && std::env::var("YIYICLAW_SKILLS_HUB_SEARCH_PATH").is_err()
+        {
+            assert_eq!(cfg.search_path, "/api/v1/search");
+        }
+    }
+
+    // ---- create_skill_from_bundle (pure FS, no network) -------------------
+
+    #[test]
+    fn create_skill_from_bundle_writes_skill_md_and_routes_flat_files_to_references() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut files = HashMap::new();
+        files.insert("SKILL.md".to_string(), "---\nname: b\n---\nbody".to_string());
+        files.insert("utils.py".to_string(), "print('hi')".to_string());
+        files.insert("scripts/run.sh".to_string(), "#!/bin/sh".to_string());
+        files.insert(".gitignore".to_string(), "*.log".to_string()); // hidden, must be skipped
+
+        let bundle = SkillBundle {
+            name: "bundletest".into(),
+            files,
+        };
+        create_skill_from_bundle(&bundle, false, tmp.path()).unwrap();
+
+        let skill_dir = tmp.path().join("customized_skills").join("bundletest");
+        assert!(skill_dir.join("SKILL.md").exists());
+        assert!(skill_dir.join("references/utils.py").exists(), "flat file should go under references/");
+        assert!(skill_dir.join("scripts/run.sh").exists());
+        assert!(!skill_dir.join(".gitignore").exists(), "hidden files must be skipped");
+    }
+
+    #[test]
+    fn create_skill_from_bundle_refuses_to_overwrite_existing_without_flag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let existing = tmp.path().join("customized_skills").join("dupe");
+        std::fs::create_dir_all(&existing).unwrap();
+
+        let mut files = HashMap::new();
+        files.insert("SKILL.md".into(), "---\nname: dupe\n---\n".into());
+        let bundle = SkillBundle { name: "dupe".into(), files };
+
+        let err = create_skill_from_bundle(&bundle, false, tmp.path()).unwrap_err();
+        assert!(err.contains("already exists"), "expected overwrite rejection, got: {err}");
+    }
+}
