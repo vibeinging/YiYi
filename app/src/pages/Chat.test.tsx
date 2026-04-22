@@ -44,14 +44,11 @@ function seedSessionStore(activeId = "sess-1") {
 function seedSidebarStore() {
   useTaskSidebarStore.setState({
     ...SIDEBAR_PRISTINE,
-    tasks: [],
-    cronJobs: [],
-    selectedTaskId: null,
     pendingNewTab: null,
     pendingSessionId: null,
     pendingTabNotify: null,
-    newlyCreatedTaskIds: new Set(),
-  });
+    sidebarCollapsed: false,
+  }, true);
 }
 
 function seedStreamStore() {

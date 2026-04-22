@@ -33,7 +33,7 @@ import { CanvasRenderer } from '../canvas/CanvasRenderer';
 import type { CanvasActionHandler } from '../../api/canvas';
 import { CronJobSessionView } from '../CronJobSessionView';
 import { useChatStreamStore } from '../../stores/chatStreamStore';
-import { useTaskSidebarStore } from '../../stores/taskSidebarStore';
+import { useTaskStore } from '../../stores/taskStore';
 import { cancelTask, pauseTask, openTaskFolder } from '../../api/tasks';
 import type { ChatMessage, Attachment } from '../../api/agent';
 
@@ -270,10 +270,10 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
   const canvases = useChatStreamStore((s) => s.canvases);
 
   // Task-specific streaming
-  const sidebarTasks = useTaskSidebarStore((s) => s.tasks);
+  const allTasks = useTaskStore((s) => s.tasks);
   const currentTask = useMemo(
-    () => isTaskSession ? sidebarTasks.find(t => t.sessionId === currentSessionId) : undefined,
-    [sidebarTasks, currentSessionId, isTaskSession],
+    () => isTaskSession ? allTasks.find(t => t.sessionId === currentSessionId) : undefined,
+    [allTasks, currentSessionId, isTaskSession],
   );
   const currentTaskStream = currentTask ? taskStreams.get(currentTask.id) : undefined;
   const taskIsActive = currentTask?.status === 'running' || currentTask?.status === 'pending';

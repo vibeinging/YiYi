@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { TaskCard } from './TaskCard';
-import { useTaskSidebarStore } from '../stores/taskSidebarStore';
+import { useTaskStore } from '../stores/taskStore';
 import type { TaskInfo } from '../api/tasks';
 
 function makeTask(over: Partial<TaskInfo> = {}): TaskInfo {
@@ -28,11 +28,11 @@ function makeTask(over: Partial<TaskInfo> = {}): TaskInfo {
   };
 }
 
-const pristine = useTaskSidebarStore.getState();
+const pristine = useTaskStore.getState();
 
 describe('TaskCard', () => {
   beforeEach(() => {
-    useTaskSidebarStore.setState({ ...pristine, tasks: [] }, true);
+    useTaskStore.setState({ ...pristine, tasks: [], selectedTaskId: null, drawerOpen: false }, true);
   });
 
   it('renders fallback when task missing', () => {
@@ -41,7 +41,7 @@ describe('TaskCard', () => {
   });
 
   it('renders running task with title + progress', () => {
-    useTaskSidebarStore.setState({ tasks: [makeTask()] });
+    useTaskStore.setState({ tasks: [makeTask()] });
     render(<TaskCard taskId="task-123" />);
     expect(screen.getByText('Build feature')).toBeInTheDocument();
     expect(screen.getByText('33%')).toBeInTheDocument();
@@ -49,7 +49,7 @@ describe('TaskCard', () => {
   });
 
   it('renders error message for failed task', () => {
-    useTaskSidebarStore.setState({
+    useTaskStore.setState({
       tasks: [makeTask({ status: 'failed', errorMessage: 'Boom', progress: 0, totalStages: 0 })],
     });
     render(<TaskCard taskId="task-123" />);
@@ -57,16 +57,17 @@ describe('TaskCard', () => {
     expect(screen.getByText('失败')).toBeInTheDocument();
   });
 
-  it('click navigates to session via store', () => {
-    useTaskSidebarStore.setState({ tasks: [makeTask()] });
+  it('click opens the task detail overlay', () => {
+    useTaskStore.setState({ tasks: [makeTask()] });
     render(<TaskCard taskId="task-123" />);
     fireEvent.click(screen.getByText('Build feature'));
-    expect(useTaskSidebarStore.getState().pendingSessionId).toBe('sess-1');
+    expect(useTaskStore.getState().selectedTaskId).toBe('task-123');
+    expect(useTaskStore.getState().drawerOpen).toBe(true);
   });
 
   it('truncates long error messages to 120 chars', () => {
     const longErr = 'x'.repeat(150);
-    useTaskSidebarStore.setState({
+    useTaskStore.setState({
       tasks: [makeTask({ status: 'failed', errorMessage: longErr })],
     });
     render(<TaskCard taskId="task-123" />);

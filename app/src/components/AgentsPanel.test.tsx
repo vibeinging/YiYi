@@ -45,7 +45,7 @@ function mount() {
 }
 
 describe('AgentsPanel', () => {
-  let confirmSpy: ReturnType<typeof vi.spyOn>;
+  let confirmSpy: any;
 
   beforeEach(() => {
     mockInvoke({});

@@ -5,26 +5,22 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Mock } from "vitest";
 import { mockInvoke } from "../test-utils/mockTauri";
 import { TaskDetailOverlay } from "./TaskDetailOverlay";
-import { useTaskSidebarStore } from "../stores/taskSidebarStore";
+import { useTaskStore } from "../stores/taskStore";
 import type { TaskInfo } from "../api/tasks";
 
 const invokeMock = invoke as unknown as Mock;
 
 // Snapshot the sidebar-store's pristine state so we can reset between tests.
-const SIDEBAR_PRISTINE = useTaskSidebarStore.getState();
+const SIDEBAR_PRISTINE = useTaskStore.getState();
 
 function resetSidebar(partial: Partial<typeof SIDEBAR_PRISTINE> = {}) {
-  useTaskSidebarStore.setState({
+  useTaskStore.setState({
     ...SIDEBAR_PRISTINE,
     tasks: [],
     selectedTaskId: null,
-    cronJobs: [],
-    pendingNewTab: null,
-    pendingSessionId: null,
-    pendingTabNotify: null,
-    newlyCreatedTaskIds: new Set(),
+    drawerOpen: false,
     ...partial,
-  });
+  }, true);
 }
 
 function makeTask(overrides: Partial<TaskInfo> = {}): TaskInfo {

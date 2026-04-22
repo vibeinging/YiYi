@@ -7,7 +7,7 @@
 
 import { memo } from 'react';
 import { ExternalLink, ListTodo } from 'lucide-react';
-import { useTaskSidebarStore } from '../stores/taskSidebarStore';
+import { useTaskStore } from '../stores/taskStore';
 import { TASK_STATUS_CONFIG } from '../utils/taskStatus';
 import type { TaskInfo } from '../api/tasks';
 
@@ -26,12 +26,12 @@ interface TaskCardProps {
 }
 
 export const TaskCard = memo(function TaskCard({ taskId }: TaskCardProps) {
-  const task = useTaskSidebarStore((s) => s.tasks.find((t) => t.id === taskId));
+  const task = useTaskStore((s) => s.tasks.find((t) => t.id === taskId));
 
   const handleClick = () => {
     if (!task) return;
-    // Navigate to task session via sidebar store
-    useTaskSidebarStore.getState().navigateToSession(task.sessionId);
+    // Open the task detail overlay
+    useTaskStore.getState().selectTask(taskId);
   };
 
   if (!task) {

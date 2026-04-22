@@ -27,6 +27,7 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { useChatStreamStore } from '../stores/chatStreamStore';
 import { useTaskSidebarStore } from '../stores/taskSidebarStore';
+import { useTaskStore } from '../stores/taskStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useDragRegion } from '../hooks/useDragRegion';
 import { toast } from '../components/Toast';
@@ -107,7 +108,6 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   }, []);
 
   // --- Session / tab management ---
-  const cronJobs = useTaskSidebarStore((s) => s.cronJobs);
   const pendingSessionId = useTaskSidebarStore((s) => s.pendingSessionId);
 
   const navigateToSession = useCallback(async (targetSessionId: string) => {
@@ -117,9 +117,9 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
 
       let displayName: string;
       if (isCron) {
-        displayName = useTaskSidebarStore.getState().cronJobs.find((j) => j.id === jobId)?.name ?? jobId;
+        displayName = jobId;
       } else {
-        const matchedTask = useTaskSidebarStore.getState().tasks.find((t) => t.sessionId === targetSessionId);
+        const matchedTask = useTaskStore.getState().tasks.find((t) => t.sessionId === targetSessionId);
         displayName = matchedTask?.title ?? targetSessionId;
       }
 
@@ -459,10 +459,10 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
 
   const isCronSession = activeSessionId.startsWith('cron:');
   const cronJobId = isCronSession ? activeSessionId.slice(5) : '';
-  const sidebarTasks = useTaskSidebarStore((s) => s.tasks);
+  const allTasks = useTaskStore((s) => s.tasks);
   const isTaskSession = useMemo(
-    () => sidebarTasks.some(t => t.sessionId === activeSessionId),
-    [sidebarTasks, activeSessionId],
+    () => allTasks.some(t => t.sessionId === activeSessionId),
+    [allTasks, activeSessionId],
   );
   // Determine if current session is a chat session (not task/cron)
   const isChatSession = !isTaskSession && !isCronSession;

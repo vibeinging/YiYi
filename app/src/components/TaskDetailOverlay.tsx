@@ -9,7 +9,7 @@ import {
   ChevronLeft, AlertCircle,
   Pause, Timer, ListTodo, Send, X,
 } from 'lucide-react';
-import { useTaskSidebarStore } from '../stores/taskSidebarStore';
+import { useTaskStore } from '../stores/taskStore';
 import { cancelTask, pauseTask, sendTaskMessage, type TaskStage } from '../api/tasks';
 import { TASK_STATUS_CONFIG, formatDuration } from '../utils/taskStatus';
 
@@ -57,9 +57,9 @@ function PlanTimeline({ plan }: { plan: TaskStage[] }) {
 }
 
 export function TaskDetailOverlay() {
-  const selectedTaskId = useTaskSidebarStore((s) => s.selectedTaskId);
-  const tasks = useTaskSidebarStore((s) => s.tasks);
-  const selectTask = useTaskSidebarStore((s) => s.selectTask);
+  const selectedTaskId = useTaskStore((s) => s.selectedTaskId);
+  const tasks = useTaskStore((s) => s.tasks);
+  const selectTask = useTaskStore((s) => s.selectTask);
   const task = tasks.find((t) => t.id === selectedTaskId);
   const [inputValue, setInputValue] = useState('');
   const [sending, setSending] = useState(false);

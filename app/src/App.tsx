@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import { FileDown, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-shell';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { healthCheck, isSetupComplete } from './api/system';
@@ -29,6 +29,7 @@ import { useGrowthEventBridge } from './hooks/useGrowthEventBridge';
 import { TaskSidebar } from './components/TaskSidebar';
 import { TaskDetailOverlay } from './components/TaskDetailOverlay';
 import { useTaskSidebarStore } from './stores/taskSidebarStore';
+import { useTaskStore } from './stores/taskStore';
 export type Page = 'chat' | 'skills' | 'cronjobs' | 'workspace' | 'mcp' | 'heartbeat' | 'growth' | 'bots' | 'terminal' | 'settings';
 
 function App() {
@@ -66,25 +67,13 @@ function MainApp() {
 
   // Task sidebar store
   const sidebarCollapsed = useTaskSidebarStore((s) => s.sidebarCollapsed);
-  const selectedTaskId = useTaskSidebarStore((s) => s.selectedTaskId);
+  const selectedTaskId = useTaskStore((s) => s.selectedTaskId);
 
-  // Auto-expand sidebar when tasks appear
-  const taskCount = useTaskSidebarStore((s) => s.tasks.length);
-  const prevTaskCountRef = useRef(taskCount);
-  useEffect(() => {
-    if (prevTaskCountRef.current === 0 && taskCount > 0 && sidebarCollapsed) {
-      toggleSidebar(false);
-    }
-    prevTaskCountRef.current = taskCount;
-  }, [taskCount, sidebarCollapsed, toggleSidebar]);
-
-  // Load tasks and cron jobs on mount
-  const loadTasks = useTaskSidebarStore((s) => s.loadTasks);
-  const loadCronJobs = useTaskSidebarStore((s) => s.loadCronJobs);
+  // Load tasks on mount (data feeds inline TaskCards in the chat stream)
+  const loadTasks = useTaskStore((s) => s.loadTasks);
   useEffect(() => {
     loadTasks();
-    loadCronJobs();
-  }, [loadTasks, loadCronJobs]);
+  }, [loadTasks]);
 
   // File notifications from agent send_file_to_user tool
   const [fileNotification, setFileNotification] = useState<{
@@ -185,13 +174,8 @@ function MainApp() {
     };
   }, [applyNotifContext]);
 
-  // Listen for cron job changes to refresh sidebar
-  useEffect(() => {
-    const unlisten = listen('cronjob://refresh', () => {
-      loadCronJobs();
-    });
-    return () => { unlisten.then(fn => fn()); };
-  }, [loadCronJobs]);
+  // cron jobs no longer appear in the sidebar; reloading is owned by the
+  // cronjobs page when it mounts.
 
   /** Render the active page */
   const renderPage = () => {
