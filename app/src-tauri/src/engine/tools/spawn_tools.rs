@@ -23,6 +23,11 @@ struct AgentSpec {
     /// When set, overrides read_only and skills with the agent definition's config.
     #[serde(default)]
     agent_type: Option<String>,
+    /// Optional wall-clock timeout (seconds). `None` means no timeout — only
+    /// `max_iterations` will bail the agent out. Use this for agents that
+    /// might spin on a slow LLM or misbehaving tool.
+    #[serde(default)]
+    timeout_secs: Option<u64>,
 }
 
 /// Spawn agents tool definitions.
@@ -50,6 +55,11 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
                                 "agent_type": {
                                     "type": "string",
                                     "description": "Named agent type: 'explore' (fast read-only search), 'planner' (structured planning), 'desktop_operator' (GUI automation), 'memory_curator' (memory management), 'bot_coordinator' (bot operations). Overrides read_only and skills."
+                                },
+                                "timeout_secs": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "description": "Optional wall-clock timeout in seconds. If the agent is still running after this many seconds it is cancelled and a timeout error is returned. Omit for no timeout."
                                 }
                             },
                             "required": ["name", "task"]
@@ -299,7 +309,9 @@ fn spawn_agents_background(
                 };
                 let system_prompt = agent_identity;
 
-                let result = if let Some(ref handle) = handle_for_agent {
+                let timeout_secs = spec.timeout_secs;
+                let run_future = async {
+                if let Some(ref handle) = handle_for_agent {
                     let h = handle.clone();
                     let name_for_cb = agent_name.clone();
                     let sid_for_cb = sid_for_agent.clone();
@@ -390,12 +402,44 @@ fn spawn_agents_background(
                             )
                         )
                     )).await
+                }
+                };
+
+                // Apply optional wall-clock timeout. When the future elapses,
+                // flatten Elapsed into a synthetic Err so the downstream error
+                // handling path (worker/task registry, snapshot, event emit)
+                // treats it uniformly.
+                let (result, timed_out) = match timeout_secs {
+                    Some(secs) => match tokio::time::timeout(
+                        std::time::Duration::from_secs(secs),
+                        run_future,
+                    ).await {
+                        Ok(r) => (r, false),
+                        Err(_) => (
+                            Err(format!("Agent '{}' timed out after {}s", agent_name, secs)),
+                            true,
+                        ),
+                    },
+                    None => (run_future.await, false),
                 };
 
                 let (agent_result_text, is_error) = match result {
                     Ok(reply) => (super::truncate_output(&reply, 12000), false),
                     Err(e) => (e, true),
                 };
+
+                // On timeout, emit a dedicated error event so the frontend can
+                // surface it distinctly from ordinary agent errors.
+                if timed_out {
+                    if let Some(ref handle) = handle_for_agent {
+                        handle.emit("chat://spawn_agent_error", serde_json::json!({
+                            "agent_name": agent_name,
+                            "reason": "timeout",
+                            "message": agent_result_text,
+                            "session_id": sid_for_agent,
+                        })).ok();
+                    }
+                }
 
                 // Transition worker state
                 if let (Some(ref wid), Some(handle)) = (&worker_id, super::APP_HANDLE.get()) {
@@ -436,12 +480,18 @@ fn spawn_agents_background(
                     })).ok();
                 }
 
-                // Update streaming snapshot: mark spawn agent as complete
+                // Update streaming snapshot: mark spawn agent as complete/failed/timeout
                 if let Some(ss_arc) = super::STREAMING_STATE.get() {
                     if let Ok(mut ss) = ss_arc.lock() {
                         if let Some(snap) = ss.get_mut(&sid_for_agent) {
                             if let Some(agent) = snap.spawn_agents.iter_mut().find(|a| a.name == agent_name) {
-                                agent.status = "complete".into();
+                                agent.status = if timed_out {
+                                    "timeout".into()
+                                } else if is_error {
+                                    "failed".into()
+                                } else {
+                                    "complete".into()
+                                };
                                 agent.content = agent_result_text.clone();
                             }
                         }
