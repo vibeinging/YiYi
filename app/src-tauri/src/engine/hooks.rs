@@ -459,3 +459,172 @@ pub fn merge_hook_feedback(hook_messages: &[String], output: String, _is_error: 
     let feedback = hook_messages.join("\n");
     format!("{output}\n\n[Hook feedback]\n{feedback}")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_as_str_matches_snake_case() {
+        assert_eq!(HookEvent::PreToolUse.as_str(), "pre_tool_use");
+        assert_eq!(HookEvent::PostToolUse.as_str(), "post_tool_use");
+        assert_eq!(HookEvent::PostToolUseFailure.as_str(), "post_tool_use_failure");
+    }
+
+    #[test]
+    fn hook_config_empty_is_empty() {
+        let cfg = HookConfig::default();
+        assert!(cfg.is_empty());
+    }
+
+    #[test]
+    fn hook_config_with_commands_is_not_empty() {
+        let cfg = HookConfig {
+            pre_tool_use: vec!["echo x".into()],
+            ..Default::default()
+        };
+        assert!(!cfg.is_empty());
+    }
+
+    #[test]
+    fn abort_signal_starts_inactive() {
+        let sig = HookAbortSignal::new();
+        assert!(!sig.is_aborted());
+    }
+
+    #[test]
+    fn abort_signal_flips_to_aborted() {
+        let sig = HookAbortSignal::new();
+        sig.abort();
+        assert!(sig.is_aborted());
+    }
+
+    #[test]
+    fn hook_run_result_allow_is_not_blocked() {
+        let r = HookRunResult::allow(vec!["ok".into()]);
+        assert!(!r.is_denied());
+        assert!(!r.is_blocked());
+        assert_eq!(r.messages(), &["ok".to_string()]);
+    }
+
+    #[test]
+    fn hook_run_result_deny_is_blocked() {
+        let r = HookRunResult::deny(vec!["nope".into()]);
+        assert!(r.is_denied());
+        assert!(r.is_blocked());
+    }
+
+    #[test]
+    fn hook_run_result_fail_is_blocked() {
+        let r = HookRunResult::fail(vec!["bad".into()]);
+        assert!(r.is_failed());
+        assert!(r.is_blocked());
+    }
+
+    #[test]
+    fn hook_run_result_cancel_is_blocked() {
+        let r = HookRunResult::cancel("aborted".into());
+        assert!(r.is_cancelled());
+        assert!(r.is_blocked());
+    }
+
+    #[test]
+    fn runner_with_empty_config_allows_everything() {
+        let runner = HookRunner::new(HookConfig::default());
+        let r = runner.run_pre_tool_use("x", "{}", None);
+        assert!(!r.is_blocked());
+        assert!(!runner.has_hooks());
+    }
+
+    #[test]
+    fn runner_with_config_has_hooks() {
+        let runner = HookRunner::new(HookConfig {
+            post_tool_use: vec!["echo x".into()],
+            ..Default::default()
+        });
+        assert!(runner.has_hooks());
+    }
+
+    #[test]
+    fn build_payload_shape_is_correct() {
+        let payload = build_payload(
+            HookEvent::PreToolUse,
+            "read_file",
+            "{\"path\":\"x\"}",
+            None,
+            false,
+        );
+        let v: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(v["hook_event_name"], "pre_tool_use");
+        assert_eq!(v["tool_name"], "read_file");
+        assert!(v.get("tool_output").is_none());
+        assert!(v.get("tool_result_is_error").is_none());
+    }
+
+    #[test]
+    fn build_payload_includes_output_and_error_flag() {
+        let payload = build_payload(
+            HookEvent::PostToolUse,
+            "x",
+            "in",
+            Some("out"),
+            true,
+        );
+        let v: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(v["tool_output"], "out");
+        assert_eq!(v["tool_result_is_error"], true);
+    }
+
+    #[test]
+    fn parse_hook_output_reads_reason_message() {
+        let parsed = parse_hook_output(r#"{"reason":"blocked by policy"}"#);
+        assert_eq!(parsed.messages, vec!["blocked by policy"]);
+    }
+
+    #[test]
+    fn parse_hook_output_reads_permission_decision() {
+        let parsed = parse_hook_output(r#"{
+            "hookSpecificOutput": {
+                "permissionDecision": "allow",
+                "permissionDecisionReason": "trusted",
+                "updatedInput": "new-in",
+                "additionalContext": "extra info"
+            }
+        }"#);
+        assert_eq!(parsed.permission_override, Some(PermissionOverride::Allow));
+        assert_eq!(parsed.permission_reason.as_deref(), Some("trusted"));
+        assert_eq!(parsed.updated_input.as_deref(), Some("new-in"));
+        assert!(parsed.messages.iter().any(|m| m == "extra info"));
+    }
+
+    #[test]
+    fn parse_hook_output_non_json_becomes_plain_message() {
+        let parsed = parse_hook_output("plain text output");
+        assert_eq!(parsed.messages, vec!["plain text output"]);
+    }
+
+    #[test]
+    fn parse_hook_output_handles_deny_decision() {
+        let parsed = parse_hook_output(r#"{"hookSpecificOutput":{"permissionDecision":"deny"}}"#);
+        assert_eq!(parsed.permission_override, Some(PermissionOverride::Deny));
+    }
+
+    #[test]
+    fn merge_hook_feedback_appends_section() {
+        let merged = merge_hook_feedback(
+            &["msg A".into(), "msg B".into()],
+            "original output".into(),
+            false,
+        );
+        assert!(merged.contains("original output"));
+        assert!(merged.contains("[Hook feedback]"));
+        assert!(merged.contains("msg A"));
+        assert!(merged.contains("msg B"));
+    }
+
+    #[test]
+    fn merge_hook_feedback_returns_output_unchanged_when_no_messages() {
+        let merged = merge_hook_feedback(&[], "original".into(), false);
+        assert_eq!(merged, "original");
+    }
+}

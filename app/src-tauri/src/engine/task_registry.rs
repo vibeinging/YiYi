@@ -298,3 +298,168 @@ pub fn init_global_registry() -> &'static TaskRegistry {
 pub fn global_registry() -> Option<&'static TaskRegistry> {
     GLOBAL_REGISTRY.get()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn task_status_is_terminal_recognizes_terminal_states() {
+        assert!(!TaskStatus::Pending.is_terminal());
+        assert!(!TaskStatus::Running.is_terminal());
+        assert!(TaskStatus::Completed.is_terminal());
+        assert!(TaskStatus::Failed.is_terminal());
+        assert!(TaskStatus::Killed.is_terminal());
+    }
+
+    #[test]
+    fn next_id_generates_monotonic_ids() {
+        let reg = TaskRegistry::new();
+        let a = reg.next_id();
+        let b = reg.next_id();
+        assert_eq!(a, "task_1");
+        assert_eq!(b, "task_2");
+    }
+
+    #[test]
+    fn register_and_get_roundtrip() {
+        let reg = TaskRegistry::new();
+        let entry = TaskEntry::new("t1", TaskKind::CronJob {
+            job_id: "j1".into(),
+            schedule: "*".into(),
+        }, "desc");
+        reg.register(entry);
+        let fetched = reg.get("t1").unwrap();
+        assert_eq!(fetched.id, "t1");
+        assert_eq!(fetched.status, TaskStatus::Pending); // normalized on register
+    }
+
+    #[test]
+    fn lifecycle_transitions_start_complete_fail() {
+        let reg = TaskRegistry::new();
+        reg.register(TaskEntry::new("t1", TaskKind::CronJob {
+            job_id: "j".into(), schedule: "*".into()
+        }, "x"));
+
+        assert!(reg.start("t1"));
+        assert_eq!(reg.get("t1").unwrap().status, TaskStatus::Running);
+
+        assert!(reg.complete("t1"));
+        assert_eq!(reg.get("t1").unwrap().status, TaskStatus::Completed);
+
+        reg.register(TaskEntry::new("t2", TaskKind::CronJob {
+            job_id: "j".into(), schedule: "*".into()
+        }, "x"));
+        assert!(reg.fail("t2", "boom"));
+        let t2 = reg.get("t2").unwrap();
+        assert_eq!(t2.status, TaskStatus::Failed);
+        assert_eq!(t2.error.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn update_and_start_return_false_for_unknown_task() {
+        let reg = TaskRegistry::new();
+        assert!(!reg.start("missing"));
+        assert!(!reg.complete("missing"));
+        assert!(!reg.fail("missing", "e"));
+        assert!(!reg.update_status("missing", TaskStatus::Running));
+    }
+
+    #[test]
+    fn kill_sets_cancel_flag_and_status() {
+        let reg = TaskRegistry::new();
+        let flag = Arc::new(AtomicBool::new(false));
+        let entry = TaskEntry::new(
+            "t1",
+            TaskKind::AgentTask { session_id: "s1".into(), task_name: "n".into() },
+            "desc",
+        ).with_cancel_flag(flag.clone());
+        reg.register(entry);
+        reg.start("t1");
+        assert!(reg.kill("t1"));
+        assert!(flag.load(std::sync::atomic::Ordering::Relaxed));
+        assert_eq!(reg.get("t1").unwrap().status, TaskStatus::Killed);
+    }
+
+    #[test]
+    fn kill_refuses_terminal_tasks() {
+        let reg = TaskRegistry::new();
+        reg.register(TaskEntry::new("t1", TaskKind::CronJob {
+            job_id: "j".into(), schedule: "*".into()
+        }, "x"));
+        reg.complete("t1");
+        assert!(!reg.kill("t1"));
+    }
+
+    #[test]
+    fn list_filter_by_status() {
+        let reg = TaskRegistry::new();
+        reg.register(TaskEntry::new("t1", TaskKind::CronJob {
+            job_id: "j".into(), schedule: "*".into()
+        }, "x"));
+        reg.register(TaskEntry::new("t2", TaskKind::CronJob {
+            job_id: "j".into(), schedule: "*".into()
+        }, "y"));
+        reg.start("t1");
+        assert_eq!(reg.list(Some(TaskStatus::Running)).len(), 1);
+        assert_eq!(reg.list(Some(TaskStatus::Pending)).len(), 1);
+        assert_eq!(reg.list(None).len(), 2);
+    }
+
+    #[test]
+    fn running_for_session_filters_by_session_id() {
+        let reg = TaskRegistry::new();
+        reg.register(TaskEntry::new("t1", TaskKind::AgentTask {
+            session_id: "sA".into(), task_name: "n".into()
+        }, "x"));
+        reg.register(TaskEntry::new("t2", TaskKind::AgentTask {
+            session_id: "sB".into(), task_name: "n".into()
+        }, "y"));
+        reg.start("t1");
+        reg.start("t2");
+        assert_eq!(reg.running_for_session("sA").len(), 1);
+        assert_eq!(reg.running_for_session("sB").len(), 1);
+        assert_eq!(reg.running_for_session("sC").len(), 0);
+    }
+
+    #[test]
+    fn evict_terminal_removes_old_finished_tasks_but_keeps_running() {
+        let reg = TaskRegistry::new();
+        reg.register(TaskEntry::new("t1", TaskKind::CronJob {
+            job_id: "j".into(), schedule: "*".into()
+        }, "x"));
+        reg.register(TaskEntry::new("t2", TaskKind::CronJob {
+            job_id: "j".into(), schedule: "*".into()
+        }, "y"));
+        reg.complete("t1");
+        reg.start("t2");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let evicted = reg.evict_terminal(std::time::Duration::from_millis(1));
+        assert_eq!(evicted, 1);
+        assert!(reg.get("t1").is_none());
+        assert!(reg.get("t2").is_some());
+    }
+
+    #[test]
+    fn kill_all_for_session_terminates_all_matching() {
+        let reg = TaskRegistry::new();
+        reg.register(TaskEntry::new("t1", TaskKind::AgentTask {
+            session_id: "sA".into(), task_name: "n".into()
+        }, "x"));
+        reg.register(TaskEntry::new("t2", TaskKind::SpawnAgent {
+            agent_name: "a".into(), parent_session_id: "sA".into()
+        }, "y"));
+        reg.register(TaskEntry::new("t3", TaskKind::AgentTask {
+            session_id: "sB".into(), task_name: "n".into()
+        }, "z"));
+        reg.start("t1");
+        reg.start("t2");
+        reg.start("t3");
+        let killed = reg.kill_all_for_session("sA");
+        assert_eq!(killed, 2);
+        assert_eq!(reg.get("t1").unwrap().status, TaskStatus::Killed);
+        assert_eq!(reg.get("t2").unwrap().status, TaskStatus::Killed);
+        assert_eq!(reg.get("t3").unwrap().status, TaskStatus::Running);
+    }
+}

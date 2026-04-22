@@ -180,3 +180,92 @@ impl PermissionOutcome {
         matches!(self, Self::Allow)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mode_ordering_preserves_permissiveness() {
+        assert!(PermissionMode::ReadOnly < PermissionMode::Standard);
+        assert!(PermissionMode::Standard < PermissionMode::Full);
+    }
+
+    #[test]
+    fn mode_as_str_is_snake_case() {
+        assert_eq!(PermissionMode::ReadOnly.as_str(), "read_only");
+        assert_eq!(PermissionMode::Standard.as_str(), "standard");
+        assert_eq!(PermissionMode::Full.as_str(), "full");
+    }
+
+    #[test]
+    fn mode_from_str_accepts_aliases() {
+        assert_eq!(PermissionMode::from_str("read_only"), PermissionMode::ReadOnly);
+        assert_eq!(PermissionMode::from_str("readonly"), PermissionMode::ReadOnly);
+        assert_eq!(PermissionMode::from_str("full"), PermissionMode::Full);
+        assert_eq!(PermissionMode::from_str("danger"), PermissionMode::Full);
+        assert_eq!(PermissionMode::from_str("danger_full_access"), PermissionMode::Full);
+        // Unknown value falls back to Standard
+        assert_eq!(PermissionMode::from_str("xyz"), PermissionMode::Standard);
+    }
+
+    #[test]
+    fn default_mode_is_standard() {
+        assert_eq!(PermissionMode::default(), PermissionMode::Standard);
+    }
+
+    #[test]
+    fn readonly_tool_allowed_in_all_modes() {
+        for mode in [PermissionMode::ReadOnly, PermissionMode::Standard, PermissionMode::Full] {
+            let policy = PermissionPolicy::new(mode);
+            assert!(policy.is_allowed("read_file").is_allowed());
+        }
+    }
+
+    #[test]
+    fn standard_tool_denied_in_readonly_mode() {
+        let policy = PermissionPolicy::new(PermissionMode::ReadOnly);
+        let outcome = policy.is_allowed("write_file");
+        assert!(matches!(outcome, PermissionOutcome::Deny { .. }));
+    }
+
+    #[test]
+    fn full_tool_needs_confirmation_in_standard_mode() {
+        let policy = PermissionPolicy::new(PermissionMode::Standard);
+        let outcome = policy.is_allowed("execute_shell");
+        assert!(matches!(outcome, PermissionOutcome::NeedsConfirmation { .. }));
+    }
+
+    #[test]
+    fn full_tool_allowed_in_full_mode() {
+        let policy = PermissionPolicy::new(PermissionMode::Full);
+        assert!(policy.is_allowed("execute_shell").is_allowed());
+    }
+
+    #[test]
+    fn unknown_tool_defaults_to_standard_requirement() {
+        let policy = PermissionPolicy::new(PermissionMode::ReadOnly);
+        let out = policy.is_allowed("some_unknown_tool_xyz");
+        // Standard required + ReadOnly active → Deny (not NeedsConfirmation)
+        assert!(matches!(out, PermissionOutcome::Deny { .. }));
+        assert_eq!(
+            policy.required_mode_for("some_unknown_tool_xyz"),
+            PermissionMode::Standard
+        );
+    }
+
+    #[test]
+    fn active_mode_accessor_returns_configured_mode() {
+        let policy = PermissionPolicy::new(PermissionMode::Full);
+        assert_eq!(policy.active_mode(), PermissionMode::Full);
+    }
+
+    #[test]
+    fn tool_permission_requirements_covers_key_tools() {
+        let reqs = tool_permission_requirements();
+        let names: Vec<_> = reqs.iter().map(|r| r.tool_name.as_str()).collect();
+        for tool in ["read_file", "write_file", "execute_shell", "claude_code"] {
+            assert!(names.contains(&tool), "missing tool: {tool}");
+        }
+    }
+}
