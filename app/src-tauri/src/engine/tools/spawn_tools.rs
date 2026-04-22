@@ -1,5 +1,7 @@
 use serde::Deserialize;
-use tauri::{Emitter, Manager};
+use tauri::Manager;
+
+use crate::engine::emitter::Emitter;
 
 // Depth counter for spawn_agents to prevent infinite recursion.
 tokio::task_local! {
@@ -113,9 +115,7 @@ pub(super) async fn spawn_agents_tool(args: serde_json::Value) -> String {
             .iter()
             .map(|s| serde_json::json!({ "name": s.name, "task": s.task }))
             .collect();
-        handle
-            .emit("chat://spawn_start", serde_json::json!({ "agents": agents_info, "session_id": session_id }))
-            .ok();
+        emit_spawn_start(handle, &session_id, &agents_info);
     }
 
     // Update streaming snapshot with spawn agent entries
@@ -321,10 +321,7 @@ fn spawn_agents_background(
                     let on_event = move |evt: super::react_agent::AgentStreamEvent| {
                         match &evt {
                             super::react_agent::AgentStreamEvent::Token(text) => {
-                                h.emit("chat://spawn_agent_chunk", serde_json::json!({
-                                    "agent_name": name_for_cb, "content": text,
-                                    "session_id": sid_for_cb,
-                                })).ok();
+                                emit_spawn_agent_chunk(&h, &sid_for_cb, &name_for_cb, text);
                                 // Update streaming snapshot
                                 if let Some(ss_arc) = super::STREAMING_STATE.get() {
                                     if let Ok(mut ss) = ss_arc.lock() {
@@ -337,11 +334,7 @@ fn spawn_agents_background(
                                 }
                             }
                             super::react_agent::AgentStreamEvent::ToolStart { name, args_preview } => {
-                                h.emit("chat://spawn_agent_tool", serde_json::json!({
-                                    "agent_name": name_for_cb, "type": "start",
-                                    "tool_name": name, "preview": args_preview,
-                                    "session_id": sid_for_cb,
-                                })).ok();
+                                emit_spawn_agent_tool(&h, &sid_for_cb, &name_for_cb, "start", name, args_preview);
                                 if let Some(ss_arc) = super::STREAMING_STATE.get() {
                                     if let Ok(mut ss) = ss_arc.lock() {
                                         if let Some(snap) = ss.get_mut(&sid_for_cb) {
@@ -357,11 +350,7 @@ fn spawn_agents_background(
                                 }
                             }
                             super::react_agent::AgentStreamEvent::ToolEnd { name, result_preview } => {
-                                h.emit("chat://spawn_agent_tool", serde_json::json!({
-                                    "agent_name": name_for_cb, "type": "end",
-                                    "tool_name": name, "preview": result_preview,
-                                    "session_id": sid_for_cb,
-                                })).ok();
+                                emit_spawn_agent_tool(&h, &sid_for_cb, &name_for_cb, "end", name, result_preview);
                                 if let Some(ss_arc) = super::STREAMING_STATE.get() {
                                     if let Ok(mut ss) = ss_arc.lock() {
                                         if let Some(snap) = ss.get_mut(&sid_for_cb) {
@@ -448,28 +437,14 @@ fn spawn_agents_background(
                 // information it needs without having to query the DB.
                 if timed_out {
                     if let Some(ref handle) = handle_for_agent {
-                        handle.emit("chat://spawn_agent_error", serde_json::json!({
-                            "agent_name": agent_name,
-                            "reason": "timeout",
-                            "preview": preview_text,
-                            "full": full_text,
-                            "message": full_text, // legacy alias — keep for existing listeners
-                            "session_id": sid_for_agent,
-                        })).ok();
+                        emit_spawn_agent_error(handle, &sid_for_agent, &agent_name, "timeout", &preview_text, &full_text);
                     }
                 } else if is_error {
                     // Non-timeout runtime errors also get a dedicated event
                     // so the UI doesn't have to reach into spawn_agent_complete
                     // to distinguish success from failure.
                     if let Some(ref handle) = handle_for_agent {
-                        handle.emit("chat://spawn_agent_error", serde_json::json!({
-                            "agent_name": agent_name,
-                            "reason": "runtime_error",
-                            "preview": preview_text,
-                            "full": full_text,
-                            "message": full_text,
-                            "session_id": sid_for_agent,
-                        })).ok();
+                        emit_spawn_agent_error(handle, &sid_for_agent, &agent_name, "runtime_error", &preview_text, &full_text);
                     }
                 }
 
@@ -515,16 +490,13 @@ fn spawn_agents_background(
                 if let Some(ref handle) = handle_for_agent {
                     // Emit the structured result so the frontend can render
                     // success/failure/timeout without guessing from text.
-                    handle.emit("chat://spawn_agent_complete", serde_json::json!({
-                        "agent_name": agent_name,
-                        "result": full_text,        // legacy: full output
-                        "success": !is_error,
-                        "status": if timed_out { "timeout" }
-                                  else if is_error { "failed" }
-                                  else { "complete" },
-                        "duration_ms": duration_ms,
-                        "session_id": sid_for_agent,
-                    })).ok();
+                    let status = if timed_out { "timeout" }
+                                 else if is_error { "failed" }
+                                 else { "complete" };
+                    emit_spawn_agent_complete(
+                        handle, &sid_for_agent, &agent_name,
+                        !is_error, status, duration_ms, &full_text,
+                    );
                 }
 
                 // Update streaming snapshot: mark spawn agent as complete/failed/timeout
@@ -610,10 +582,7 @@ fn spawn_agents_background(
         }
 
         if let Some(ref handle) = app_handle {
-            handle.emit("chat://spawn_complete", serde_json::json!({
-                "results": structured_results,
-                "session_id": session_id,
-            })).ok();
+            emit_spawn_complete(handle, &session_id, &structured_results);
         }
     }));
 
@@ -686,12 +655,243 @@ async fn load_cached_skills(
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// Emit helpers — one per event channel, typed parameters.
+//
+// Keep these as thin wrappers around serde_json::json! so production
+// behavior is byte-identical to the previous inline calls. Tests drive
+// them with MockEmitter to pin the payload shape.
+// ═══════════════════════════════════════════════════════════════════════
+
+pub(super) fn emit_spawn_start<E: Emitter + ?Sized>(
+    emitter: &E,
+    session_id: &str,
+    agents: &[serde_json::Value],
+) {
+    let payload = serde_json::json!({
+        "agents": agents,
+        "session_id": session_id,
+    });
+    emitter.emit("chat://spawn_start", &payload);
+}
+
+pub(super) fn emit_spawn_agent_chunk<E: Emitter + ?Sized>(
+    emitter: &E,
+    session_id: &str,
+    agent_name: &str,
+    content: &str,
+) {
+    let payload = serde_json::json!({
+        "agent_name": agent_name,
+        "content": content,
+        "session_id": session_id,
+    });
+    emitter.emit("chat://spawn_agent_chunk", &payload);
+}
+
+pub(super) fn emit_spawn_agent_tool<E: Emitter + ?Sized>(
+    emitter: &E,
+    session_id: &str,
+    agent_name: &str,
+    kind: &str, // "start" | "end"
+    tool_name: &str,
+    preview: &str,
+) {
+    let payload = serde_json::json!({
+        "agent_name": agent_name,
+        "type": kind,
+        "tool_name": tool_name,
+        "preview": preview,
+        "session_id": session_id,
+    });
+    emitter.emit("chat://spawn_agent_tool", &payload);
+}
+
+pub(super) fn emit_spawn_agent_error<E: Emitter + ?Sized>(
+    emitter: &E,
+    session_id: &str,
+    agent_name: &str,
+    reason: &str, // "timeout" | "runtime_error" | "cancelled"
+    preview: &str,
+    full: &str,
+) {
+    let payload = serde_json::json!({
+        "agent_name": agent_name,
+        "reason": reason,
+        "preview": preview,
+        "full": full,
+        "message": full, // legacy alias — keep for existing listeners
+        "session_id": session_id,
+    });
+    emitter.emit("chat://spawn_agent_error", &payload);
+}
+
+pub(super) fn emit_spawn_agent_complete<E: Emitter + ?Sized>(
+    emitter: &E,
+    session_id: &str,
+    agent_name: &str,
+    success: bool,
+    status: &str,
+    duration_ms: u64,
+    result: &str,
+) {
+    let payload = serde_json::json!({
+        "agent_name": agent_name,
+        "result": result,
+        "success": success,
+        "status": status,
+        "duration_ms": duration_ms,
+        "session_id": session_id,
+    });
+    emitter.emit("chat://spawn_agent_complete", &payload);
+}
+
+pub(super) fn emit_spawn_complete<E: Emitter + ?Sized>(
+    emitter: &E,
+    session_id: &str,
+    results: &[crate::state::app_state::SpawnAgentResult],
+) {
+    let payload = serde_json::json!({
+        "results": results,
+        "session_id": session_id,
+    });
+    emitter.emit("chat://spawn_complete", &payload);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // Tests
 // ═══════════════════════════════════════════════════════════════════════
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::MockEmitter;
+
+    // ── Emit helpers ────────────────────────────────────────────────────
+
+    #[test]
+    fn emit_spawn_start_payload_shape() {
+        let emitter = MockEmitter::new();
+        let agents = vec![
+            serde_json::json!({ "name": "r", "task": "read" }),
+            serde_json::json!({ "name": "w", "task": "write" }),
+        ];
+        emit_spawn_start(&*emitter, "sess42", &agents);
+        let events = emitter.captured();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, "chat://spawn_start");
+        let p = &events[0].1;
+        assert_eq!(p["session_id"], "sess42");
+        assert_eq!(p["agents"].as_array().unwrap().len(), 2);
+        assert_eq!(p["agents"][0]["name"], "r");
+    }
+
+    #[test]
+    fn emit_spawn_agent_chunk_payload_shape() {
+        let emitter = MockEmitter::new();
+        emit_spawn_agent_chunk(&*emitter, "sess", "worker", "hello");
+        let p = emitter.first_on_channel("chat://spawn_agent_chunk").unwrap();
+        assert_eq!(p["session_id"], "sess");
+        assert_eq!(p["agent_name"], "worker");
+        assert_eq!(p["content"], "hello");
+    }
+
+    #[test]
+    fn emit_spawn_agent_tool_start_payload_shape() {
+        let emitter = MockEmitter::new();
+        emit_spawn_agent_tool(&*emitter, "sess", "worker", "start", "bash", "ls -la");
+        let p = emitter.first_on_channel("chat://spawn_agent_tool").unwrap();
+        assert_eq!(p["session_id"], "sess");
+        assert_eq!(p["agent_name"], "worker");
+        assert_eq!(p["type"], "start");
+        assert_eq!(p["tool_name"], "bash");
+        assert_eq!(p["preview"], "ls -la");
+    }
+
+    #[test]
+    fn emit_spawn_agent_tool_end_payload_shape() {
+        let emitter = MockEmitter::new();
+        emit_spawn_agent_tool(&*emitter, "sess", "worker", "end", "bash", "ok");
+        let p = emitter.first_on_channel("chat://spawn_agent_tool").unwrap();
+        assert_eq!(p["type"], "end");
+        assert_eq!(p["preview"], "ok");
+    }
+
+    #[test]
+    fn emit_spawn_agent_error_has_timeout_reason() {
+        let emitter = MockEmitter::new();
+        emit_spawn_agent_error(
+            &*emitter, "sess", "slow", "timeout",
+            "short err", "Long full error text with lots of detail",
+        );
+        let p = emitter.first_on_channel("chat://spawn_agent_error").unwrap();
+        assert_eq!(p["session_id"], "sess");
+        assert_eq!(p["agent_name"], "slow");
+        assert_eq!(p["reason"], "timeout");
+        assert_eq!(p["preview"], "short err");
+        assert!(p["full"].as_str().unwrap().contains("Long full error text"));
+        // legacy alias — previous code put full_text in `message`
+        assert_eq!(p["message"], "Long full error text with lots of detail");
+    }
+
+    #[test]
+    fn emit_spawn_agent_error_has_runtime_error_reason() {
+        let emitter = MockEmitter::new();
+        emit_spawn_agent_error(&*emitter, "sess", "a", "runtime_error", "pre", "full");
+        let p = emitter.first_on_channel("chat://spawn_agent_error").unwrap();
+        assert_eq!(p["reason"], "runtime_error");
+    }
+
+    #[test]
+    fn emit_spawn_agent_complete_has_expected_payload_shape() {
+        let emitter = MockEmitter::new();
+        emit_spawn_agent_complete(
+            &*emitter, "sess1", "worker", true, "complete", 42, "hi",
+        );
+        let events = emitter.captured();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, "chat://spawn_agent_complete");
+        let p = &events[0].1;
+        assert_eq!(p["session_id"], "sess1");
+        assert_eq!(p["agent_name"], "worker");
+        assert_eq!(p["success"], true);
+        assert_eq!(p["status"], "complete");
+        assert_eq!(p["duration_ms"], 42);
+        assert_eq!(p["result"], "hi");
+    }
+
+    #[test]
+    fn emit_spawn_agent_complete_failed_status() {
+        let emitter = MockEmitter::new();
+        emit_spawn_agent_complete(&*emitter, "s", "a", false, "failed", 10, "boom");
+        let p = emitter.first_on_channel("chat://spawn_agent_complete").unwrap();
+        assert_eq!(p["success"], false);
+        assert_eq!(p["status"], "failed");
+    }
+
+    #[test]
+    fn emit_spawn_complete_payload_shape() {
+        let emitter = MockEmitter::new();
+        let results = vec![
+            crate::state::app_state::SpawnAgentResult::build("a", "out", false, false, 100),
+        ];
+        emit_spawn_complete(&*emitter, "sess", &results);
+        let p = emitter.first_on_channel("chat://spawn_complete").unwrap();
+        assert_eq!(p["session_id"], "sess");
+        assert_eq!(p["results"].as_array().unwrap().len(), 1);
+        assert_eq!(p["results"][0]["name"], "a");
+    }
+
+    #[test]
+    fn mock_emitter_count_channel_works() {
+        let emitter = MockEmitter::new();
+        emit_spawn_agent_chunk(&*emitter, "s", "a", "x");
+        emit_spawn_agent_chunk(&*emitter, "s", "a", "y");
+        emit_spawn_agent_chunk(&*emitter, "s", "a", "z");
+        assert_eq!(emitter.count_channel("chat://spawn_agent_chunk"), 3);
+        assert_eq!(emitter.count_channel("chat://spawn_start"), 0);
+    }
+
+    // ── Schema / deserialization ───────────────────────────────────────
 
     /// The LLM-facing JSON schema must advertise `timeout_secs` with
     /// `type: integer, minimum: 1` on every agent spec. Without it, an LLM
