@@ -126,7 +126,10 @@ export function processMessages(messages: ChatMessage[]): ProcessedMsg[] {
               name: tc.name,
               status: 'done' as const,
               preview: tc.arguments.length > 100 ? tc.arguments.slice(0, 100) + '...' : tc.arguments,
-              resultPreview: toolMsg?.content?.slice(0, 200),
+              // 2000 chars: enough to keep small structured JSON payloads intact
+              // (create_task / pty_spawn_interactive etc. produce ~260-byte JSON
+              // blobs that must round-trip through JSON.parse for inline cards).
+              resultPreview: toolMsg?.content?.slice(0, 2000),
             });
           }
           j++;
