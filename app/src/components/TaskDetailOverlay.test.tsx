@@ -215,10 +215,19 @@ describe("TaskDetailOverlay", () => {
   // Removed: terminal panel assertion — the current TaskDetailOverlay source has no terminal UI
   // (Plan A simplified overlay with terminal never landed on main).
 
-  it("renders an empty state when task has no plan and no error", () => {
-    const task = makeTask({ plan: null, errorMessage: null });
+  it("renders an empty state when task has no plan, no error, and no workspace", () => {
+    const task = makeTask({ plan: null, errorMessage: null, workspacePath: undefined });
     resetSidebar({ selectedTaskId: task.id, tasks: [task] });
     render(<TaskDetailOverlay />);
     expect(screen.getByText("暂无详细执行计划")).toBeInTheDocument();
+  });
+
+  it("renders the 任务成果 folder button when workspacePath is set", () => {
+    const task = makeTask({ plan: null, errorMessage: null, workspacePath: "/tmp/ws" });
+    resetSidebar({ selectedTaskId: task.id, tasks: [task] });
+    render(<TaskDetailOverlay />);
+    expect(screen.getByText("任务成果")).toBeInTheDocument();
+    expect(screen.getByText("打开任务文件夹")).toBeInTheDocument();
+    expect(screen.getByText("/tmp/ws")).toBeInTheDocument();
   });
 });

@@ -609,7 +609,41 @@ pub fn spawn_task_execution(
                 if let Some(db) = super::DATABASE.get() {
                     db.update_task_status(&task_id, "completed").ok();
                     db.update_task_progress(&task_id, total_stages, total_stages, 100.0).ok();
+                    // Ensure every remaining pending/running stage is marked done
+                    // so the UI stage timeline reflects the final state even when
+                    // the agent didn't emit explicit [STAGE_COMPLETE] markers.
+                    db.mark_remaining_plan_stages(&task_id, "completed");
                     db.push_message(&session_id, "assistant", reply).ok();
+
+                    // Nudge the parent (main chat) session: drop a short
+                    // assistant message so the user sees a live "task done" cue.
+                    if let Ok(Some(info)) = db.get_task(&task_id) {
+                        if let Some(parent_sid) = info.parent_session_id.as_deref() {
+                            if !parent_sid.is_empty() && parent_sid != session_id {
+                                let notice = format!(
+                                    "✅ 后台任务「{}」已完成，要看看吗？点击上方任务卡片查看成果。",
+                                    title,
+                                );
+                                db.push_message(parent_sid, "assistant", &notice).ok();
+
+                                // Simulate a short stream so it renders live if
+                                // the user happens to be viewing the parent.
+                                if let Some(ref handle) = app_handle {
+                                    let _ = handle.emit("chat://bot_stream_start", serde_json::json!({
+                                        "session_id": parent_sid,
+                                    }));
+                                    let _ = handle.emit("chat://chunk", serde_json::json!({
+                                        "text": notice,
+                                        "session_id": parent_sid,
+                                    }));
+                                    let _ = handle.emit("chat://complete", serde_json::json!({
+                                        "text": notice,
+                                        "session_id": parent_sid,
+                                    }));
+                                }
+                            }
+                        }
+                    }
                 }
 
                 if let Some(ref handle) = app_handle {
@@ -723,6 +757,9 @@ pub(super) fn fail_task(task_id: &str, session_id: &str, error_message: &str) {
 fn fail_task_with_status(task_id: &str, session_id: &str, error_message: &str, status: &str) {
     if let Some(db) = super::DATABASE.get() {
         db.update_task_error(task_id, status, error_message).ok();
+        // Mirror stage timeline to the terminal outcome so UI stops showing
+        // "pending" clocks for stages that never actually ran.
+        db.mark_remaining_plan_stages(task_id, status);
     }
 
     if let Some(app) = super::APP_HANDLE.get() {

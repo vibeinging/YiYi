@@ -276,6 +276,36 @@ impl super::Database {
         }
     }
 
+    /// Mark every pending/running stage in the plan as the given status.
+    /// Used when the task concludes (completed / failed / cancelled) to ensure
+    /// the stage timeline reflects the final outcome even if the agent never
+    /// emitted explicit [STAGE_COMPLETE: N] markers for each stage.
+    pub fn mark_remaining_plan_stages(&self, task_id: &str, final_status: &str) {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let plan_json: Option<String> = conn
+            .query_row("SELECT plan FROM tasks WHERE id = ?1", params![task_id], |r| r.get(0))
+            .ok()
+            .flatten();
+        if let Some(json_str) = plan_json {
+            if let Ok(mut plan) = serde_json::from_str::<Vec<serde_json::Value>>(&json_str) {
+                for stage in plan.iter_mut() {
+                    if let Some(obj) = stage.as_object_mut() {
+                        let cur = obj.get("status").and_then(|v| v.as_str()).unwrap_or("pending");
+                        if cur == "pending" || cur == "running" {
+                            obj.insert("status".into(), serde_json::json!(final_status));
+                        }
+                    }
+                }
+                if let Ok(updated) = serde_json::to_string(&plan) {
+                    conn.execute(
+                        "UPDATE tasks SET plan = ?1 WHERE id = ?2",
+                        params![updated, task_id],
+                    ).ok();
+                }
+            }
+        }
+    }
+
     pub fn pin_task(&self, task_id: &str, pinned: bool) -> Result<(), String> {
         let now = super::now_ts();
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());

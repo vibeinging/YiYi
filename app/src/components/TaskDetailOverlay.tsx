@@ -5,7 +5,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
-  AlertCircle, Pause, Timer, ListTodo, Send, X, Calendar,
+  AlertCircle, Pause, Timer, ListTodo, Send, X, Calendar, FolderOpen, ExternalLink,
 } from 'lucide-react';
 import { useTaskStore } from '../stores/taskStore';
 import { cancelTask, pauseTask, sendTaskMessage, type TaskStage } from '../api/tasks';
@@ -339,6 +339,47 @@ export function TaskDetailOverlay() {
             </div>
           )}
 
+          {task.workspacePath && (
+            <div className="px-5 pt-4">
+              <h3 className="text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--color-text-muted)' }}>
+                任务成果
+              </h3>
+              <button
+                onClick={async () => {
+                  try {
+                    const { open } = await import('@tauri-apps/plugin-shell');
+                    await open(task.workspacePath!);
+                  } catch (err) {
+                    console.error('Failed to open workspace folder:', err);
+                  }
+                }}
+                className="group w-full flex items-center gap-3 p-3 rounded-xl transition-all"
+                style={{
+                  background: 'color-mix(in srgb, var(--color-primary) 8%, var(--color-bg-subtle))',
+                  border: '1px solid color-mix(in srgb, var(--color-primary) 22%, transparent)',
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'color-mix(in srgb, var(--color-primary) 14%, var(--color-bg-subtle))'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'color-mix(in srgb, var(--color-primary) 8%, var(--color-bg-subtle))'; }}
+              >
+                <div
+                  className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+                  style={{ background: 'color-mix(in srgb, var(--color-primary) 16%, transparent)' }}
+                >
+                  <FolderOpen size={16} style={{ color: 'var(--color-primary)' }} />
+                </div>
+                <div className="flex-1 min-w-0 text-left">
+                  <div className="text-[13px] font-semibold" style={{ color: 'var(--color-text)' }}>
+                    打开任务文件夹
+                  </div>
+                  <div className="text-[11px] truncate mt-0.5" style={{ color: 'var(--color-text-muted)' }} title={task.workspacePath}>
+                    {task.workspacePath}
+                  </div>
+                </div>
+                <ExternalLink size={13} className="shrink-0 opacity-50 group-hover:opacity-100 transition-opacity" style={{ color: 'var(--color-text-secondary)' }} />
+              </button>
+            </div>
+          )}
+
           {plan.length > 0 ? (
             <div className="px-5 py-4">
               <h3 className="text-[11px] font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--color-text-muted)' }}>
@@ -347,7 +388,7 @@ export function TaskDetailOverlay() {
               <PlanTimeline plan={plan} />
             </div>
           ) : (
-            !task.errorMessage && (
+            !task.errorMessage && !task.workspacePath && (
               <div className="flex flex-col items-center justify-center py-16 px-6 text-center">
                 <div
                   className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3"
