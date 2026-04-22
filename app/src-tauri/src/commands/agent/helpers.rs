@@ -248,20 +248,46 @@ pub(super) fn recall_memories(_db: &db::Database, user_message: &str) -> Option<
 
     let store = crate::engine::tools::get_memme_store()?;
     let options = memme_core::SearchOptions::new(crate::engine::tools::MEMME_USER_ID)
-        .limit(5)
+        .limit(10)
         .keyword_search(true);
     let results = store.search(user_message, options).ok()?;
-    if results.is_empty() {
+
+    // Auto-inject ONLY stable categories — user preferences and derived
+    // principles. Volatile categories (experience / note / decision / fact)
+    // often record past events like "task X was created" which cause the
+    // agent to mistake historical activity for current state. Those can
+    // still be accessed on-demand via the `memory_search` tool.
+    const STABLE_CATEGORIES: &[&str] = &["preference", "principle"];
+    let filtered: Vec<_> = results
+        .iter()
+        .filter(|m| {
+            m.categories
+                .as_ref()
+                .map(|cats| cats.iter().any(|c| STABLE_CATEGORIES.contains(&c.as_str())))
+                .unwrap_or(false)
+        })
+        .take(5)
+        .collect();
+
+    if filtered.is_empty() {
         return None;
     }
-    let mut context = String::from("[Recalled memories]\n");
-    for mem in &results {
-        let cats = mem.categories.as_ref()
+    let mut context = String::from(
+        "[User preferences and principles — NOT current state]\n",
+    );
+    for mem in &filtered {
+        let cats = mem
+            .categories
+            .as_ref()
             .map(|c| c.join(", "))
-            .unwrap_or_else(|| "note".into());
+            .unwrap_or_else(|| "preference".into());
         context.push_str(&format!("- [{}] {}\n", cats, mem.content));
     }
-    context.push_str("[/Recalled memories]\n");
+    context.push_str(
+        "[/End preferences] — Treat the above as guidance for HOW to respond, \
+        not as proof that any task/file/action from the past is still active. \
+        For current state, call the relevant tool.\n",
+    );
     Some(context)
 }
 
