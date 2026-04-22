@@ -48,56 +48,87 @@ function formatDate(ts: number | null | undefined): string | null {
 
 function PlanTimeline({ plan }: { plan: TaskStage[] }) {
   return (
-    <ol className="space-y-0">
+    <ol className="space-y-2">
       {plan.map((stage, idx) => {
         const cfg = TASK_STATUS_CONFIG[stage.status] || TASK_STATUS_CONFIG.pending;
         const StageIcon = cfg.Icon;
-        const isLast = idx === plan.length - 1;
-        const dim = stage.status === 'pending';
+        const isRunning = stage.status === 'running';
+        const isDone = stage.status === 'completed';
+        const isFailed = stage.status === 'failed';
+        const isPending = stage.status === 'pending';
         return (
-          <li key={idx} className="flex gap-3">
-            <div className="flex flex-col items-center shrink-0" style={{ width: '22px' }}>
-              <div
-                className="w-[22px] h-[22px] rounded-full flex items-center justify-center transition-all"
-                style={{
-                  background: stage.status === 'completed'
-                    ? cfg.color
-                    : `color-mix(in srgb, ${cfg.color} 14%, transparent)`,
-                  border: `2px solid ${cfg.color}`,
-                  color: stage.status === 'completed' ? '#fff' : cfg.color,
-                  opacity: dim ? 0.5 : 1,
-                }}
-              >
-                <StageIcon size={11} className={cfg.spin ? 'animate-spin' : ''} />
-              </div>
-              {!isLast && (
-                <div
-                  className="w-[2px] flex-1 min-h-[28px]"
+          <li
+            key={idx}
+            className="relative flex items-center gap-3 pl-3 pr-3.5 py-2.5 rounded-xl transition-all"
+            style={{
+              background: isRunning
+                ? `color-mix(in srgb, ${cfg.color} 10%, var(--color-bg-subtle))`
+                : 'var(--color-bg-subtle)',
+              border: `1px solid ${
+                isRunning
+                  ? `color-mix(in srgb, ${cfg.color} 36%, transparent)`
+                  : 'transparent'
+              }`,
+              boxShadow: isRunning ? `0 0 0 3px color-mix(in srgb, ${cfg.color} 10%, transparent)` : 'none',
+              opacity: isPending ? 0.55 : 1,
+            }}
+          >
+            {/* Index pill / status circle */}
+            <div
+              className="relative w-7 h-7 rounded-full flex items-center justify-center shrink-0 transition-all"
+              style={{
+                background: isDone
+                  ? cfg.color
+                  : `color-mix(in srgb, ${cfg.color} 18%, transparent)`,
+                border: `1.5px solid ${cfg.color}`,
+                color: isDone ? '#fff' : cfg.color,
+              }}
+            >
+              {isPending ? (
+                <span className="text-[11px] font-bold tabular-nums">{idx + 1}</span>
+              ) : (
+                <StageIcon size={13} className={cfg.spin ? 'animate-spin' : ''} />
+              )}
+              {isRunning && (
+                <span
+                  className="absolute inset-0 rounded-full"
                   style={{
-                    background: stage.status === 'completed'
-                      ? `color-mix(in srgb, ${cfg.color} 60%, transparent)`
-                      : 'var(--color-border)',
-                    opacity: dim ? 0.5 : 0.8,
+                    border: `1.5px solid ${cfg.color}`,
+                    animation: 'buddy-breathe 1.6s ease-in-out infinite',
+                    opacity: 0.5,
                   }}
                 />
               )}
             </div>
-            <div className="flex-1 min-w-0 pb-4">
+
+            <div className="flex-1 min-w-0">
               <div
                 className="text-[13px] leading-snug"
                 style={{
-                  color: dim ? 'var(--color-text-muted)' : 'var(--color-text)',
-                  fontWeight: stage.status === 'running' ? 600 : 500,
+                  color: isPending ? 'var(--color-text-muted)' : 'var(--color-text)',
+                  fontWeight: isRunning || isDone ? 600 : 500,
+                  textDecoration: isFailed ? 'line-through' : 'none',
                 }}
               >
                 {stage.title}
               </div>
-              {stage.status === 'running' && (
-                <div className="text-[11px] mt-0.5" style={{ color: cfg.color }}>
+              {isRunning && (
+                <div className="text-[11px] mt-0.5 inline-flex items-center gap-1" style={{ color: cfg.color }}>
+                  <span
+                    className="w-1 h-1 rounded-full"
+                    style={{ background: cfg.color, animation: 'pulse-dot 1.2s ease-in-out infinite' }}
+                  />
                   执行中…
                 </div>
               )}
             </div>
+
+            {/* End badge: done check */}
+            {isDone && (
+              <span className="text-[10px] font-semibold tabular-nums shrink-0" style={{ color: cfg.color }}>
+                ✓
+              </span>
+            )}
           </li>
         );
       })}
@@ -341,7 +372,7 @@ export function TaskDetailOverlay() {
 
           {task.workspacePath && (
             <div className="px-5 pt-4">
-              <h3 className="text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--color-text-muted)' }}>
+              <h3 className="text-[11px] font-semibold uppercase tracking-wider mb-2.5" style={{ color: 'var(--color-text-muted)' }}>
                 任务成果
               </h3>
               <button
@@ -353,29 +384,61 @@ export function TaskDetailOverlay() {
                     console.error('Failed to open workspace folder:', err);
                   }
                 }}
-                className="group w-full flex items-center gap-3 p-3 rounded-xl transition-all"
+                className="group relative w-full flex items-center gap-3.5 p-3.5 rounded-2xl overflow-hidden transition-all"
                 style={{
-                  background: 'color-mix(in srgb, var(--color-primary) 8%, var(--color-bg-subtle))',
-                  border: '1px solid color-mix(in srgb, var(--color-primary) 22%, transparent)',
+                  background:
+                    'linear-gradient(135deg, color-mix(in srgb, var(--color-primary) 12%, var(--color-bg-elevated)) 0%, color-mix(in srgb, var(--color-primary) 4%, var(--color-bg-elevated)) 100%)',
+                  border: '1px solid color-mix(in srgb, var(--color-primary) 28%, transparent)',
+                  boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
                 }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = 'color-mix(in srgb, var(--color-primary) 14%, var(--color-bg-subtle))'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'color-mix(in srgb, var(--color-primary) 8%, var(--color-bg-subtle))'; }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'translateY(-1px)';
+                  e.currentTarget.style.boxShadow = '0 6px 18px color-mix(in srgb, var(--color-primary) 15%, transparent), 0 1px 2px rgba(0,0,0,0.1)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.05)';
+                }}
               >
+                {/* Decorative radial glow */}
+                <span
+                  aria-hidden
+                  className="absolute -right-10 -top-10 w-28 h-28 rounded-full pointer-events-none"
+                  style={{
+                    background: 'radial-gradient(circle, color-mix(in srgb, var(--color-primary) 22%, transparent) 0%, transparent 70%)',
+                    opacity: 0.7,
+                  }}
+                />
                 <div
-                  className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
-                  style={{ background: 'color-mix(in srgb, var(--color-primary) 16%, transparent)' }}
+                  className="relative w-11 h-11 rounded-xl flex items-center justify-center shrink-0"
+                  style={{
+                    background: 'linear-gradient(135deg, var(--color-primary), color-mix(in srgb, var(--color-primary) 70%, var(--color-accent, var(--color-primary))))',
+                    boxShadow: '0 2px 8px color-mix(in srgb, var(--color-primary) 40%, transparent)',
+                  }}
                 >
-                  <FolderOpen size={16} style={{ color: 'var(--color-primary)' }} />
+                  <FolderOpen size={18} style={{ color: '#fff' }} />
                 </div>
-                <div className="flex-1 min-w-0 text-left">
-                  <div className="text-[13px] font-semibold" style={{ color: 'var(--color-text)' }}>
+                <div className="relative flex-1 min-w-0 text-left">
+                  <div className="text-[13.5px] font-bold" style={{ color: 'var(--color-text)' }}>
                     打开任务文件夹
                   </div>
-                  <div className="text-[11px] truncate mt-0.5" style={{ color: 'var(--color-text-muted)' }} title={task.workspacePath}>
+                  <div
+                    className="text-[11.5px] truncate mt-0.5 font-mono"
+                    style={{ color: 'var(--color-text-muted)' }}
+                    title={task.workspacePath}
+                  >
                     {task.workspacePath}
                   </div>
                 </div>
-                <ExternalLink size={13} className="shrink-0 opacity-50 group-hover:opacity-100 transition-opacity" style={{ color: 'var(--color-text-secondary)' }} />
+                <div
+                  className="relative w-7 h-7 rounded-full flex items-center justify-center shrink-0 transition-all group-hover:translate-x-0.5"
+                  style={{
+                    background: 'color-mix(in srgb, var(--color-primary) 16%, transparent)',
+                    color: 'var(--color-primary)',
+                  }}
+                >
+                  <ExternalLink size={13} />
+                </div>
               </button>
             </div>
           )}

@@ -247,31 +247,33 @@ For advanced operations (PDF forms, PPTX creation, complex Excel), use run_pytho
 - Use undo_edit if an edit introduced errors
 - Summarize the results for the user
 - For multi-step tasks: call `request_continuation` tool when you need more rounds to complete
-- For tasks that create files or run long operations: use `create_task` for background execution
+- File-creating / long-running work: do it inline. Use `create_task` ONLY when the user explicitly asks for background / scheduled execution (see 『后台任务』 section below).
 - Skills provide domain-specific instructions — use `tool_search` + `activate_skills` to load them when needed
 - When you need to make a decision about user preferences (tech stack, coding style, quality standards), \
 use `tool_search` to find `ask_buddy` — the user's digital twin knows their preferences and can answer without interrupting the user
 
 ## 后台任务 (IMPORTANT)
-任何需要**创建文件**或**设置定时任务**的请求，都必须使用 `create_task` 创建后台任务。\
-后台任务在独立工作空间中执行，不影响主对话窗口的问答。
+**默认直接在主对话中执行用户的请求**（包括创建文件、写代码、生成文档等）。
+`create_task` 是一个**显式选择**，不是默认路径。
 
-### 必须使用 `create_task` 的场景：
-- 需要创建、写入、生成任何文件（代码、文档、网页、配置等）
-- 需要设置定时任务或周期性执行
-- 需要多步骤操作（构建项目、分析文档、批量处理等）
-- Examples: 帮我建个网站, 写一份报告, 创建一个脚本, 设置定时备份
+### 只有满足以下任一条件时才使用 `create_task`：
+1. **用户明确要求**后台 / 独立执行。触发词（中英文任意）：
+   - 『后台执行』『放到后台』『在后台跑』『后台运行』
+   - 『独立任务』『开个任务』『建个任务』
+   - run in background / background task / create a task / spawn a task
+2. **用户要求定时/周期执行**（cron 场景，例如 『每天早上 9 点帮我...』）
+3. 明显**超长执行**（预计 >10 分钟，且不能一次对话完成），此时可以**先问用户**要不要后台
 
-### 不需要使用 `create_task` 的场景：
-- 纯问答、解释概念、翻译文本
-- 只需要读取/搜索信息（不产生文件）
-- 简单的单步计算或查询
+### 不要使用 `create_task` 的场景（即默认场景）：
+- 用户请求做任何事（创建文件、写代码、做网页、生成报告等）但**没有明确说『后台』**
+  → 直接在主对话中做，把产物路径/链接贴给用户
+- 所有常规问答、解释、翻译、查询
 
 ### CRITICAL 规则：
-1. 不要在主对话中直接创建文件，一律通过 `create_task` 后台执行
-2. 调用 `create_task` 后**立即结束回复**，只说一句：任务已在后台开始，可以在上方任务卡片查看进度。**不要在主对话中继续执行任务内容，不要检查任务进度，不要重复做任务里的工作**
-3. 不需要询问用户是否要后台执行，直接创建任务即可
-4. `create_task` 的 `title` 参数必须填写有意义的标题（如 向量数据库介绍网站），不要留空
+1. **不要主动猜测用户想后台**。用户说『帮我建个网站』≠ 要后台，应直接做。
+2. 当你**确定要建后台任务**时：调用 `create_task` 后**立即结束回复**，只说一句：任务已在后台开始，可以在上方任务卡片查看进度。不要在主对话里继续做任务内容。
+3. `create_task` 的 `title` 参数必须填写有意义的标题（如 向量数据库介绍网站），不要留空。
+4. 拿不准的时候（用户请求看起来很大但没说后台），**反问一句**『这个任务比较大，要不要放到后台执行？』而不是默默建任务。
 
 ## Presenting Results (IMPORTANT)
 After completing a task, you MUST make the results immediately visible to the user:
@@ -624,15 +626,14 @@ When setting up bots, open the developer console:
         let external_hint = if let Some(name) = crate::engine::buddy_delegate::external_coder() {
             format!("- **复杂任务**（新项目搭建、大规模重构）：可通过 `execute_shell` 调用 `{}` 委派深度编码\n", name)
         } else {
-            "- **复杂任务**（新项目搭建、大规模重构）：使用 `create_task` 创建后台任务，拆分为多个子步骤\n".into()
+            "- **复杂任务**（新项目搭建、大规模重构）：先在主对话中尝试，确实很大或用户明说后台再用 `create_task`\n".into()
         };
         prompt.push_str(&format!(
             "\n\n## 任务执行策略\n\
-            根据任务复杂度选择执行方式：\n\
-            - **简单任务**（单文件修改、配置调整、问答）：直接在当前对话中完成\n\
-            - **中等任务**（多文件编码、功能开发）：使用 `create_task` 创建后台任务执行\n\
+            默认在当前主对话中完成用户的请求（包括多文件编码、功能开发、写文档等）。\n\
+            - **所有常规任务**：直接在当前对话中完成，把产物路径/结果贴给用户\n\
             {}\
-            判断依据：涉及文件数量、改动范围、是否需要反复调试\n",
+            - **只有**用户明确说『后台执行 / 独立任务 / 每天定时...』，或评估后发现一轮明显做不完，才使用 `create_task`（后者应先问用户）\n",
             external_hint
         ));
     }
@@ -658,8 +659,8 @@ pub fn critical_system_reminder() -> &'static str {
 - Sensitive files (.env, .ssh, credentials): ALWAYS blocked. Do not attempt to read, write, or expose them.
 - If a tool fails, DIAGNOSE why before switching approach. Don't blindly retry.
 - Show tangible results to the user — NEVER just say "done". If tests weren't run, say so.
-- Use create_task for any file-creating work, not inline in the main conversation.
-- When the user makes a fresh request that resembles past work, ALWAYS call the tool (e.g. `create_task`) or `query_tasks` to verify state. NEVER claim a task is "already in progress" or "already done" based only on memory / previous-summary context — that path fabricates a running task the user can't actually see.
+- Do the work inline in the main conversation by default. Only use `create_task` when the user explicitly asks for a background / scheduled task, or when the job obviously won't fit in one reply (ask first in that case).
+- When the user makes a fresh request that resembles past work, ALWAYS call the relevant tool or `query_tasks` to verify state. NEVER claim a task is "already in progress" or "already done" based only on memory / previous-summary context — that path fabricates a running task the user can't actually see.
 - Do NOT execute destructive operations (drop tables, rm -rf, format disk) without explicit user confirmation.
 - Consider reversibility and blast radius before any action that affects shared state.
 - Respect authorized folder boundaries. Files outside them are blocked.
