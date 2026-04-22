@@ -219,6 +219,6 @@ describe("TaskDetailOverlay", () => {
     const task = makeTask({ plan: null, errorMessage: null });
     resetSidebar({ selectedTaskId: task.id, tasks: [task] });
     render(<TaskDetailOverlay />);
-    expect(screen.getByText("暂无执行计划")).toBeInTheDocument();
+    expect(screen.getByText("暂无详细执行计划")).toBeInTheDocument();
   });
 });
