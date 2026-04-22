@@ -50,12 +50,32 @@ pub struct ToolCallInfo {
     pub arguments: String,
 }
 
+/// Chat-history view of a spawned agent's result.
+///
+/// This is the shape persisted in `chat_messages.metadata.spawn_agents` and
+/// returned to the frontend via `get_history`. It mirrors
+/// `state::app_state::SpawnAgentResult` but keeps legacy field names
+/// (`result`, `is_error`) for backward compatibility with existing rows.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpawnAgentResult {
     pub name: String,
+    /// Legacy: preview / summary text. New rows store the first ~3000 chars of
+    /// `full_output`; old rows have the full truncated string here.
     pub result: String,
     #[serde(default)]
     pub is_error: bool,
+    /// Full uncapped output (new rows only; `None` for legacy rows).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full_output: Option<String>,
+    /// Full uncapped error text when `is_error` is true (new rows only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// "complete" | "failed" | "timeout" | "cancelled" — new rows only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// Wall-clock milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

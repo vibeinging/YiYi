@@ -972,6 +972,10 @@ pub async fn get_history_impl(
                         name: a["name"].as_str()?.to_string(),
                         result: a["result"].as_str().unwrap_or("").to_string(),
                         is_error: a["is_error"].as_bool().unwrap_or(false),
+                        full_output: a["full_output"].as_str().map(|s| s.to_string()),
+                        error: a["error"].as_str().map(|s| s.to_string()),
+                        status: a["status"].as_str().map(|s| s.to_string()),
+                        duration_ms: a["duration_ms"].as_u64(),
                     })
                 }).collect();
                 if agents.is_empty() { None } else { Some(agents) }

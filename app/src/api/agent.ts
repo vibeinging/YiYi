@@ -25,8 +25,20 @@ export interface ToolCallInfo {
 
 export interface SpawnAgentResult {
   name: string;
+  /// Legacy: preview/summary text (first ~3000 chars of full_output for new rows,
+  /// or the full truncated legacy string for pre-batch-2 rows).
   result: string;
   is_error?: boolean;
+  /// Full, uncapped agent output. Only present on rows written after the
+  /// structured-result migration.
+  full_output?: string;
+  /// Full, uncapped error text when is_error is true.
+  error?: string;
+  /// "complete" | "failed" | "timeout" | "cancelled"
+  status?: 'complete' | 'failed' | 'timeout' | 'cancelled';
+  duration_ms?: number;
+  success?: boolean;
+  summary?: string;
 }
 
 export interface ChatMessage {
@@ -180,9 +192,24 @@ export interface SpawnAgentToolEvent {
 export interface SpawnAgentCompleteEvent {
   agent_name: string;
   result: string;
+  success?: boolean;
+  status?: 'complete' | 'failed' | 'timeout' | 'cancelled';
+  duration_ms?: number;
+}
+
+export interface SpawnAgentErrorEvent {
+  agent_name: string;
+  reason: 'timeout' | 'runtime_error' | 'llm_error' | 'tool_error' | 'cancelled';
+  /// First ~200 chars for quick display.
+  preview: string;
+  /// Full uncapped error text — use this for debug views / "show more".
+  full: string;
+  /// Legacy alias of `full`, kept so existing listeners keep working.
+  message?: string;
+  session_id?: string;
 }
 
 export interface SpawnCompleteEvent {
-  results: { name: string; result: string }[];
+  results: SpawnAgentResult[];
 }
 

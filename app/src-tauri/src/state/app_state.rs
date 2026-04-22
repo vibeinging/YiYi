@@ -23,9 +23,87 @@ pub struct ToolSnapshot {
 pub struct SpawnAgentSnapshot {
     pub name: String,
     pub task: String,
-    pub status: String, // "running" or "complete"
+    pub status: String, // "running" | "complete" | "failed" | "timeout" | "cancelled"
     pub content: String,
     pub tools: Vec<ToolSnapshot>,
+    /// Full uncapped error message when `status` is `"failed"` or `"timeout"`.
+    /// Distinct from `content` which, on failure, only holds the preview text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full_error: Option<String>,
+    /// Wall-clock duration in milliseconds between spawn and terminal state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+}
+
+/// Structured result returned by a single spawned sub-agent.
+///
+/// Produced at the end of each agent's run and persisted into the parent
+/// assistant message's `metadata.spawn_agents` field so history-rendering code
+/// (and any future programmatic consumer) can reconstruct what happened without
+/// scraping a free-form string.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpawnAgentResult {
+    pub name: String,
+    /// True iff the agent reached `Complete` normally.
+    pub success: bool,
+    /// Short human-readable summary (first ~500 chars of `full_output`).
+    pub summary: String,
+    /// Full, uncapped final message. On failure holds the raw error text.
+    pub full_output: String,
+    /// Iterations consumed. 0 when unavailable (currently not surfaced by
+    /// `run_react` — kept for forward compatibility).
+    #[serde(default)]
+    pub iterations: u32,
+    /// Wall-clock milliseconds spent.
+    pub duration_ms: u64,
+    /// Present iff `success == false`. Uncapped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// "complete" | "failed" | "timeout" | "cancelled"
+    pub status: String,
+}
+
+impl SpawnAgentResult {
+    /// Build a structured result from the raw execution outcome.
+    ///
+    /// `is_error`=false + `timed_out`=false → "complete"
+    /// `timed_out`=true → "timeout"
+    /// `is_error`=true + cancellation text → "cancelled"
+    /// otherwise `is_error`=true → "failed"
+    #[must_use]
+    pub fn build(
+        name: &str,
+        output: &str,
+        is_error: bool,
+        timed_out: bool,
+        duration_ms: u64,
+    ) -> Self {
+        let status = if timed_out {
+            "timeout"
+        } else if is_error {
+            if output.eq_ignore_ascii_case("cancelled") || output.contains("cancelled") {
+                "cancelled"
+            } else {
+                "failed"
+            }
+        } else {
+            "complete"
+        };
+
+        // summary is a preview cap — `full_output` keeps everything.
+        let summary: String = output.chars().take(500).collect();
+
+        Self {
+            name: name.to_string(),
+            success: !is_error,
+            summary,
+            full_output: output.to_string(),
+            iterations: 0,
+            duration_ms,
+            error: if is_error { Some(output.to_string()) } else { None },
+            status: status.to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

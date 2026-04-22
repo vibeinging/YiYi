@@ -129,6 +129,8 @@ pub(super) async fn spawn_agents_tool(args: serde_json::Value) -> String {
                         status: "running".into(),
                         content: String::new(),
                         tools: vec![],
+                        full_error: None,
+                        duration_ms: None,
                     }
                 }).collect();
             }
@@ -206,6 +208,7 @@ fn spawn_agents_background(
 
             async move {
                 let agent_name = spec.name.clone();
+                let started_at = std::time::Instant::now();
 
                 // Register worker in WorkerRegistry
                 let worker_id = if let Some(handle) = super::APP_HANDLE.get() {
@@ -423,44 +426,80 @@ fn spawn_agents_background(
                     None => (run_future.await, false),
                 };
 
-                let (agent_result_text, is_error) = match result {
-                    Ok(reply) => (super::truncate_output(&reply, 12000), false),
+                // `full_text` is the complete, uncapped output/error. It is
+                // what we persist and what downstream consumers (worker
+                // registry, task registry, events, DB) may render. We also
+                // compute a short preview — but NEVER drop the full text.
+                let (full_text, is_error) = match result {
+                    Ok(reply) => (reply, false),
                     Err(e) => (e, true),
                 };
 
+                // For the parent LLM's tool-result context we still cap to
+                // avoid polluting the context window. Display/DB paths use
+                // `full_text` directly.
+                let preview_text: String = full_text.chars().take(200).collect();
+
+                let duration_ms = started_at.elapsed().as_millis() as u64;
+
                 // On timeout, emit a dedicated error event so the frontend can
-                // surface it distinctly from ordinary agent errors.
+                // surface it distinctly from ordinary agent errors. Include
+                // both a short preview and the FULL text so the UI has the
+                // information it needs without having to query the DB.
                 if timed_out {
                     if let Some(ref handle) = handle_for_agent {
                         handle.emit("chat://spawn_agent_error", serde_json::json!({
                             "agent_name": agent_name,
                             "reason": "timeout",
-                            "message": agent_result_text,
+                            "preview": preview_text,
+                            "full": full_text,
+                            "message": full_text, // legacy alias — keep for existing listeners
+                            "session_id": sid_for_agent,
+                        })).ok();
+                    }
+                } else if is_error {
+                    // Non-timeout runtime errors also get a dedicated event
+                    // so the UI doesn't have to reach into spawn_agent_complete
+                    // to distinguish success from failure.
+                    if let Some(ref handle) = handle_for_agent {
+                        handle.emit("chat://spawn_agent_error", serde_json::json!({
+                            "agent_name": agent_name,
+                            "reason": "runtime_error",
+                            "preview": preview_text,
+                            "full": full_text,
+                            "message": full_text,
                             "session_id": sid_for_agent,
                         })).ok();
                     }
                 }
 
-                // Transition worker state
+                // Transition worker state. We preserve the full error text in
+                // `FailureReason::RuntimeError` (UI can cap for display) so
+                // debugging and audit have what they need.
                 if let (Some(ref wid), Some(handle)) = (&worker_id, super::APP_HANDLE.get()) {
                     use crate::engine::worker::{WorkerState, FailureReason};
                     let registry = handle.state::<crate::engine::worker::WorkerRegistry>();
                     if is_error {
-                        let _ = registry.transition(wid, WorkerState::Failed {
-                            reason: FailureReason::RuntimeError(agent_result_text.chars().take(200).collect()),
-                        });
+                        let reason = if timed_out {
+                            FailureReason::Timeout
+                        } else {
+                            FailureReason::RuntimeError(full_text.clone())
+                        };
+                        let _ = registry.transition(wid, WorkerState::Failed { reason });
                     } else {
+                        // Finished-state `result` is a short summary; full
+                        // output lives in the DB metadata + snapshot.
                         let _ = registry.transition(wid, WorkerState::Finished {
-                            result: agent_result_text.chars().take(500).collect(),
+                            result: full_text.chars().take(500).collect(),
                         });
                     }
                 }
 
-                // Update TaskRegistry
+                // Update TaskRegistry — pass the full error, not a 200-char slice.
                 if let Some(reg) = crate::engine::task_registry::global_registry() {
                     let tid = worker_id.as_deref().unwrap_or(&agent_name);
                     if is_error {
-                        reg.fail(tid, &agent_result_text.chars().take(200).collect::<String>());
+                        reg.fail(tid, &full_text);
                     } else {
                         reg.complete(tid);
                     }
@@ -474,8 +513,16 @@ fn spawn_agents_background(
                 }
 
                 if let Some(ref handle) = handle_for_agent {
+                    // Emit the structured result so the frontend can render
+                    // success/failure/timeout without guessing from text.
                     handle.emit("chat://spawn_agent_complete", serde_json::json!({
-                        "agent_name": agent_name, "result": agent_result_text,
+                        "agent_name": agent_name,
+                        "result": full_text,        // legacy: full output
+                        "success": !is_error,
+                        "status": if timed_out { "timeout" }
+                                  else if is_error { "failed" }
+                                  else { "complete" },
+                        "duration_ms": duration_ms,
                         "session_id": sid_for_agent,
                     })).ok();
                 }
@@ -492,24 +539,43 @@ fn spawn_agents_background(
                                 } else {
                                     "complete".into()
                                 };
-                                agent.content = agent_result_text.clone();
+                                agent.content = full_text.clone();
+                                agent.full_error = if is_error { Some(full_text.clone()) } else { None };
+                                agent.duration_ms = Some(duration_ms);
                             }
                         }
                     }
                 }
 
-                (agent_name, agent_result_text, is_error)
+                (agent_name, full_text, is_error, timed_out, duration_ms)
             }
         }).collect();
 
         let results = futures::future::join_all(futures).await;
 
-        // Build structured agent results for metadata
-        let agent_results_json: Vec<serde_json::Value> = results.iter().map(|(name, text, is_err)| {
+        // Build structured agent results — the canonical SpawnAgentResult type.
+        let structured_results: Vec<crate::state::app_state::SpawnAgentResult> = results.iter()
+            .map(|(name, full_text, is_err, timed_out, duration_ms)| {
+                crate::state::app_state::SpawnAgentResult::build(
+                    name, full_text, *is_err, *timed_out, *duration_ms,
+                )
+            })
+            .collect();
+
+        // DB metadata: legacy fields (`result`, `is_error`) for backward-compat
+        // with existing rows, plus new structured fields. `full_output` holds
+        // the uncapped text; `result` remains a preview for quick reads.
+        let agent_results_json: Vec<serde_json::Value> = structured_results.iter().map(|r| {
             serde_json::json!({
-                "name": name,
-                "result": text.chars().take(3000).collect::<String>(),
-                "is_error": is_err,
+                "name": r.name,
+                "result": r.full_output.chars().take(3000).collect::<String>(),
+                "is_error": !r.success,
+                "full_output": r.full_output,
+                "error": r.error,
+                "status": r.status,
+                "duration_ms": r.duration_ms,
+                "success": r.success,
+                "summary": r.summary,
             })
         }).collect();
 
@@ -519,29 +585,33 @@ fn spawn_agents_background(
                 let metadata = serde_json::json!({
                     "spawn_agents": agent_results_json,
                 }).to_string();
-                // Content is a brief summary for LLM context
-                let summary: Vec<String> = results.iter().map(|(name, text, is_err)| {
-                    let preview: String = text.chars().take(500).collect();
-                    if *is_err {
-                        format!("[{}] Error: {}", name, preview)
-                    } else {
-                        format!("[{}] {}", name, preview)
-                    }
+                // Content is a brief, human-readable + machine-parseable list
+                // so the parent LLM can both read and structurally extract results.
+                let summary: Vec<String> = structured_results.iter().map(|r| {
+                    let marker = match r.status.as_str() {
+                        "complete" => "✓ complete",
+                        "timeout" => "⏱ timeout",
+                        "cancelled" => "⊘ cancelled",
+                        _ => "✗ failed",
+                    };
+                    format!("- [{}] {}: {}", marker, r.name, r.summary)
                 }).collect();
+                let header = format!(
+                    "Spawned {} agent(s):\n{}",
+                    structured_results.len(),
+                    summary.join("\n"),
+                );
                 db.push_message_with_metadata(
                     &session_id, "assistant",
-                    &summary.join("\n\n"),
+                    &header,
                     Some(&metadata),
                 ).ok();
             }
         }
 
         if let Some(ref handle) = app_handle {
-            let results_json: Vec<serde_json::Value> = results.iter()
-                .map(|(name, result, _)| serde_json::json!({ "name": name, "result": result }))
-                .collect();
             handle.emit("chat://spawn_complete", serde_json::json!({
-                "results": results_json,
+                "results": structured_results,
                 "session_id": session_id,
             })).ok();
         }

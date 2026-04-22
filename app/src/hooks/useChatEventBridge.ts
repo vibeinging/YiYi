@@ -127,12 +127,40 @@ export function useChatEventBridge() {
         },
       ),
 
-      listen<{ agent_name: string; session_id: string }>(
+      listen<{
+        agent_name: string;
+        session_id: string;
+        success?: boolean;
+        status?: 'complete' | 'failed' | 'timeout' | 'cancelled';
+        duration_ms?: number;
+      }>(
         'chat://spawn_agent_complete',
         (event) => {
           if (cancelled) return;
           if (event.payload.session_id !== store().sessionId) return;
-          store().spawnAgentComplete(event.payload.agent_name);
+          store().spawnAgentComplete(event.payload.agent_name, {
+            status: event.payload.status,
+            durationMs: event.payload.duration_ms,
+          });
+        },
+      ),
+
+      listen<{
+        agent_name: string;
+        reason: 'timeout' | 'runtime_error' | 'cancelled' | 'llm_error' | 'tool_error';
+        preview: string;
+        full: string;
+        session_id: string;
+      }>(
+        'chat://spawn_agent_error',
+        (event) => {
+          if (cancelled) return;
+          if (event.payload.session_id !== store().sessionId) return;
+          const status =
+            event.payload.reason === 'timeout' ? 'timeout'
+            : event.payload.reason === 'cancelled' ? 'cancelled'
+            : 'failed';
+          store().spawnAgentError(event.payload.agent_name, status, event.payload.full);
         },
       ),
 

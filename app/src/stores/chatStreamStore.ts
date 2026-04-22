@@ -46,9 +46,12 @@ export interface ClaudeCodeState {
 export interface SpawnAgent {
   name: string;
   task: string;
-  status: 'running' | 'complete';
+  status: 'running' | 'complete' | 'failed' | 'timeout' | 'cancelled';
   content: string;
   tools: { name: string; status: 'running' | 'done'; preview?: string }[];
+  /// Full uncapped error message when status is "failed" or "timeout".
+  full_error?: string;
+  duration_ms?: number;
 }
 
 export interface TaskStreamState {
@@ -123,7 +126,8 @@ interface ChatStreamState {
   spawnStart: (agents: { name: string; task: string }[]) => void;
   spawnAgentChunk: (agentName: string, content: string) => void;
   spawnAgentTool: (agentName: string, type: 'start' | 'end', toolName: string, preview: string) => void;
-  spawnAgentComplete: (agentName: string) => void;
+  spawnAgentComplete: (agentName: string, opts?: { status?: SpawnAgent['status']; durationMs?: number }) => void;
+  spawnAgentError: (agentName: string, status: 'failed' | 'timeout' | 'cancelled', fullError: string) => void;
   spawnComplete: () => void;
   toggleCollapseAgent: (agentName: string) => void;
 
@@ -348,11 +352,25 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
     }),
   })),
 
-  spawnAgentComplete: (agentName) => set((state) => ({
+  spawnAgentComplete: (agentName, opts) => set((state) => ({
     spawnAgents: state.spawnAgents.map((a) =>
-      a.name === agentName ? { ...a, status: 'complete' as const } : a
+      a.name === agentName
+        ? {
+            ...a,
+            status: (opts?.status ?? 'complete') as SpawnAgent['status'],
+            duration_ms: opts?.durationMs ?? a.duration_ms,
+          }
+        : a
     ),
     collapsedAgents: new Set([...state.collapsedAgents, agentName]),
+  })),
+
+  spawnAgentError: (agentName, status, fullError) => set((state) => ({
+    spawnAgents: state.spawnAgents.map((a) =>
+      a.name === agentName
+        ? { ...a, status, full_error: fullError }
+        : a
+    ),
   })),
 
   spawnComplete: () => set((state) => ({
@@ -522,7 +540,7 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
     spawnAgents: snapshot.spawn_agents.map((a) => ({
       name: a.name,
       task: a.task,
-      status: a.status as 'running' | 'complete',
+      status: a.status as SpawnAgent['status'],
       content: a.content,
       tools: a.tools.map((t) => ({
         name: t.name,
