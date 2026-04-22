@@ -1122,3 +1122,246 @@ Consolidated principles:"#,
         saved
     ))
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::db::Database;
+    use serial_test::serial;
+    use tempfile::TempDir;
+
+    fn mk_db() -> (TempDir, Database) {
+        let dir = TempDir::new().expect("tempdir");
+        let db = Database::open(dir.path()).expect("open db");
+        (dir, db)
+    }
+
+    // ── strip_code_fence ──────────────────────────────────────────
+
+    #[test]
+    fn strip_code_fence_removes_json_fenced_block() {
+        let input = "```json\n{\"a\": 1}\n```";
+        assert_eq!(strip_code_fence(input), "{\"a\": 1}");
+    }
+
+    #[test]
+    fn strip_code_fence_removes_plain_fence() {
+        let input = "```\nsome text\n```";
+        assert_eq!(strip_code_fence(input), "some text");
+    }
+
+    #[test]
+    fn strip_code_fence_returns_input_when_no_fence() {
+        let input = "{\"a\": 1}";
+        assert_eq!(strip_code_fence(input), "{\"a\": 1}");
+    }
+
+    #[test]
+    fn strip_code_fence_trims_leading_whitespace() {
+        let input = "   \n   hello";
+        assert_eq!(strip_code_fence(input), "hello");
+    }
+
+    // ── SignalType::base_confidence ───────────────────────────────
+
+    #[test]
+    fn signal_type_base_confidence_matches_documented_values() {
+        assert!((SignalType::ExplicitCorrection.base_confidence() - 0.90).abs() < 1e-9);
+        assert!((SignalType::ExplicitPraise.base_confidence() - 0.85).abs() < 1e-9);
+        assert!((SignalType::ToolError.base_confidence() - 0.70).abs() < 1e-9);
+        assert!((SignalType::MaxIterations.base_confidence() - 0.65).abs() < 1e-9);
+        assert!((SignalType::AgentError.base_confidence() - 0.70).abs() < 1e-9);
+        assert!((SignalType::SilentCompletion.base_confidence() - 0.35).abs() < 1e-9);
+    }
+
+    #[test]
+    fn signal_type_confidence_ordering_reflects_signal_strength() {
+        // Explicit feedback is more confident than silent completion.
+        assert!(
+            SignalType::ExplicitCorrection.base_confidence()
+                > SignalType::SilentCompletion.base_confidence()
+        );
+        assert!(
+            SignalType::ExplicitPraise.base_confidence()
+                > SignalType::SilentCompletion.base_confidence()
+        );
+    }
+
+    // ── SignalType::as_str ────────────────────────────────────────
+
+    #[test]
+    fn signal_type_as_str_stringifies_each_variant() {
+        assert_eq!(SignalType::ExplicitCorrection.as_str(), "explicit_correction");
+        assert_eq!(SignalType::ExplicitPraise.as_str(), "explicit_praise");
+        assert_eq!(SignalType::ToolError.as_str(), "tool_error");
+        assert_eq!(SignalType::MaxIterations.as_str(), "max_iterations");
+        assert_eq!(SignalType::AgentError.as_str(), "agent_error");
+        assert_eq!(SignalType::SilentCompletion.as_str(), "silent_completion");
+    }
+
+    // ── generate_growth_report ────────────────────────────────────
+
+    #[test]
+    #[serial]
+    fn generate_growth_report_returns_none_for_empty_reflections() {
+        let (_d, db) = mk_db();
+        assert!(generate_growth_report(&db).is_none());
+    }
+
+    #[test]
+    #[serial]
+    fn generate_growth_report_aggregates_reflections_by_outcome() {
+        let (_d, db) = mk_db();
+        // 3 successes, 1 failure, 1 partial.
+        db.add_reflection(None, None, "success", "did thing", Some("lesson-A"), None, "explicit_praise", 0.85).unwrap();
+        db.add_reflection(None, None, "success", "did thing 2", Some("lesson-B"), None, "explicit_praise", 0.85).unwrap();
+        db.add_reflection(None, None, "success", "did thing 3", None, None, "silent_completion", 0.35).unwrap();
+        db.add_reflection(None, None, "failure", "bad", None, None, "tool_error", 0.70).unwrap();
+        db.add_reflection(None, None, "partial", "meh", None, None, "silent_completion", 0.35).unwrap();
+
+        let report = generate_growth_report(&db).expect("report present");
+        assert_eq!(report.total_tasks, 5);
+        assert_eq!(report.success_count, 3);
+        assert_eq!(report.failure_count, 1);
+        assert_eq!(report.partial_count, 1);
+        assert!((report.success_rate - 0.6).abs() < 1e-9);
+        assert!(report.top_lessons.iter().any(|l| l.contains("lesson")));
+        assert!(report.top_lessons.len() <= 5);
+    }
+
+    // ── detect_skill_opportunity ──────────────────────────────────
+
+    #[test]
+    #[serial]
+    fn detect_skill_opportunity_returns_none_with_few_opportunities() {
+        let (_d, db) = mk_db();
+        db.add_reflection(
+            None, None, "success", "s", None, Some("build weekly data pipeline"),
+            "explicit_praise", 0.85,
+        ).unwrap();
+        // Fewer than 3 opportunities => None.
+        assert!(detect_skill_opportunity(&db).is_none());
+    }
+
+    #[test]
+    #[serial]
+    fn detect_skill_opportunity_flags_recurring_similar_patterns() {
+        let (_d, db) = mk_db();
+        // 3 opportunities that all share the words "build", "weekly", "pipeline" (>3 chars each).
+        for _ in 0..3 {
+            db.add_reflection(
+                None, None, "success", "s", None,
+                Some("build weekly pipeline reporting"),
+                "explicit_praise", 0.85,
+            ).unwrap();
+        }
+        let suggestion = detect_skill_opportunity(&db);
+        assert!(suggestion.is_some(), "expected suggestion when 3 similar opportunities exist");
+        let text = suggestion.unwrap();
+        assert!(text.contains("recurring pattern"));
+    }
+
+    // ── build_capability_profile ──────────────────────────────────
+
+    #[test]
+    #[serial]
+    fn build_capability_profile_returns_empty_for_no_data() {
+        let (_d, db) = mk_db();
+        assert!(build_capability_profile(&db).is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn build_capability_profile_categorizes_summaries_by_keyword() {
+        let (_d, db) = mk_db();
+        // 3 coding tasks (successes) and 2 document tasks (1 success, 1 failure).
+        db.add_reflection(None, None, "success", "wrote code for bug fix", None, None, "explicit_praise", 0.85).unwrap();
+        db.add_reflection(None, None, "success", "refactor programming module", None, None, "explicit_praise", 0.85).unwrap();
+        db.add_reflection(None, None, "success", "implement feature", None, None, "explicit_praise", 0.85).unwrap();
+        db.add_reflection(None, None, "success", "wrote a report", None, None, "explicit_praise", 0.85).unwrap();
+        db.add_reflection(None, None, "failure", "document draft failed", None, None, "tool_error", 0.70).unwrap();
+
+        let profile = build_capability_profile(&db);
+        assert!(!profile.is_empty());
+        // Sorted by sample_count desc.
+        for w in profile.windows(2) {
+            assert!(w[0].sample_count >= w[1].sample_count);
+        }
+        let coding = profile.iter().find(|d| d.name == "Coding");
+        assert!(coding.is_some(), "coding bucket missing: {:?}", profile);
+        let coding = coding.unwrap();
+        assert_eq!(coding.sample_count, 3);
+        assert!((coding.success_rate - 1.0).abs() < 1e-9);
+        // 3 samples => "low" confidence (< 5).
+        assert_eq!(coding.confidence, "low");
+    }
+
+    #[test]
+    #[serial]
+    fn build_capability_profile_marks_high_confidence_for_large_buckets() {
+        let (_d, db) = mk_db();
+        // 16 coding reflections => high confidence.
+        for i in 0..16 {
+            let outcome = if i % 4 == 0 { "failure" } else { "success" };
+            db.add_reflection(
+                None, None, outcome, "code refactor done", None, None,
+                "explicit_praise", 0.85,
+            ).unwrap();
+        }
+        let profile = build_capability_profile(&db);
+        let coding = profile.iter().find(|d| d.name == "Coding").expect("coding bucket");
+        assert_eq!(coding.confidence, "high");
+        assert_eq!(coding.sample_count, 16);
+    }
+
+    // ── build_growth_timeline ─────────────────────────────────────
+
+    #[test]
+    #[serial]
+    fn build_growth_timeline_returns_empty_for_no_data() {
+        let (_d, db) = mk_db();
+        let timeline = build_growth_timeline(&db, 10);
+        assert!(timeline.is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn build_growth_timeline_emits_lesson_and_correction_milestones() {
+        let (_d, db) = mk_db();
+        db.add_reflection(
+            None, None, "success", "did work",
+            Some("key takeaway from this task"),
+            None, "explicit_praise", 0.85,
+        ).unwrap();
+        db.add_correction(
+            "when user asks X",
+            Some("I did Y"),
+            "do Z instead",
+            Some("user_feedback"),
+            0.9,
+        ).unwrap();
+        let timeline = build_growth_timeline(&db, 10);
+        assert_eq!(timeline.len(), 2);
+        assert!(timeline.iter().any(|m| m.event_type == "lesson_learned"));
+        assert!(timeline.iter().any(|m| m.event_type == "correction"));
+    }
+
+    #[test]
+    #[serial]
+    fn build_growth_timeline_respects_limit() {
+        let (_d, db) = mk_db();
+        for i in 0..5 {
+            db.add_reflection(
+                None, None, "success", "did work",
+                Some(&format!("lesson {i}")),
+                None, "explicit_praise", 0.85,
+            ).unwrap();
+        }
+        let timeline = build_growth_timeline(&db, 3);
+        assert_eq!(timeline.len(), 3);
+    }
+}
