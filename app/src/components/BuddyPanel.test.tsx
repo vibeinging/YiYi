@@ -211,6 +211,25 @@ describe("BuddyPanel", () => {
     });
   });
 
+  it("routes meditation click through useMeditationStore.triggerMeditation (not a bare invoke)", async () => {
+    // Regression guard for the refactor that moved trigger_meditation from a
+    // direct invoke() in BuddyPanel to the store action. If a future change
+    // reverts to calling invoke directly, the store's isRunning would never
+    // flip and onComplete listeners would go stale.
+    const user = userEvent.setup();
+    const spy = vi.spyOn(useMeditationStore.getState(), "triggerMeditation");
+    renderPanel();
+    const btn = await screen.findByRole("button", { name: /开始冥想/ });
+    await user.click(btn);
+    await waitFor(() => {
+      expect(spy).toHaveBeenCalled();
+    });
+    // Store action synchronously flips isRunning=true after the await invoke().
+    await waitFor(() => {
+      expect(useMeditationStore.getState().isRunning).toBe(true);
+    });
+  });
+
   it("renders correction rows with 'correct_behavior' text from list_corrections", async () => {
     renderPanel({
       list_corrections: () => [
