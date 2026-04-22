@@ -473,3 +473,266 @@ pub(crate) async fn load_memme_context(session_id: &str) -> Option<String> {
     }
     fetch_memme_context(session_id, 3000).await
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::tools::{FunctionCall, ToolCall};
+
+    fn user_msg(text: &str) -> LLMMessage {
+        LLMMessage {
+            role: "user".into(),
+            content: Some(MessageContent::text(text)),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    fn assistant_msg(text: &str) -> LLMMessage {
+        LLMMessage {
+            role: "assistant".into(),
+            content: Some(MessageContent::text(text)),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    fn system_msg(text: &str) -> LLMMessage {
+        LLMMessage {
+            role: "system".into(),
+            content: Some(MessageContent::text(text)),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    fn assistant_with_tool_call(id: &str, name: &str) -> LLMMessage {
+        LLMMessage {
+            role: "assistant".into(),
+            content: None,
+            tool_calls: Some(vec![ToolCall {
+                id: id.into(),
+                r#type: "function".into(),
+                function: FunctionCall {
+                    name: name.into(),
+                    arguments: "{}".into(),
+                },
+            }]),
+            tool_call_id: None,
+        }
+    }
+
+    fn tool_result(id: &str, text: &str) -> LLMMessage {
+        LLMMessage {
+            role: "tool".into(),
+            content: Some(MessageContent::text(text)),
+            tool_calls: None,
+            tool_call_id: Some(id.into()),
+        }
+    }
+
+    // ── sanitize_messages ──────────────────────────────────────────
+
+    #[test]
+    fn sanitize_messages_removes_orphan_tool_results() {
+        let mut msgs = vec![
+            user_msg("hi"),
+            tool_result("nonexistent_id", "stray tool output"),
+            assistant_msg("ok"),
+        ];
+        sanitize_messages(&mut msgs);
+        // Orphan tool message should be gone.
+        assert_eq!(msgs.len(), 2);
+        assert!(msgs.iter().all(|m| m.role != "tool"));
+    }
+
+    #[test]
+    fn sanitize_messages_injects_placeholder_for_missing_tool_result() {
+        let mut msgs = vec![
+            user_msg("hi"),
+            assistant_with_tool_call("call_1", "my_tool"),
+            // No tool result for call_1!
+            user_msg("still waiting?"),
+        ];
+        sanitize_messages(&mut msgs);
+        // A placeholder tool message should be injected between the assistant
+        // and the follow-up user message.
+        let tool_idx = msgs
+            .iter()
+            .position(|m| m.role == "tool")
+            .expect("placeholder tool message injected");
+        assert_eq!(msgs[tool_idx].tool_call_id.as_deref(), Some("call_1"));
+        assert!(msgs[tool_idx]
+            .content
+            .as_ref()
+            .and_then(|c| c.as_text())
+            .unwrap_or("")
+            .contains("result unavailable"));
+    }
+
+    #[test]
+    fn sanitize_messages_leaves_healthy_tool_sequence_unchanged() {
+        let mut msgs = vec![
+            user_msg("hi"),
+            assistant_with_tool_call("call_1", "my_tool"),
+            tool_result("call_1", "ok"),
+            assistant_msg("done"),
+        ];
+        let before = msgs.len();
+        sanitize_messages(&mut msgs);
+        assert_eq!(msgs.len(), before);
+        assert_eq!(msgs[2].role, "tool");
+        assert_eq!(msgs[2].tool_call_id.as_deref(), Some("call_1"));
+    }
+
+    #[test]
+    fn sanitize_messages_relocates_tool_to_follow_parent_assistant() {
+        let mut msgs = vec![
+            user_msg("hi"),
+            assistant_with_tool_call("call_1", "my_tool"),
+            user_msg("intervening message"),
+            tool_result("call_1", "ok"),
+        ];
+        sanitize_messages(&mut msgs);
+        // The tool message should now immediately follow the assistant that
+        // issued call_1 (index 1).
+        assert_eq!(msgs[1].role, "assistant");
+        assert_eq!(msgs[2].role, "tool");
+        assert_eq!(msgs[2].tool_call_id.as_deref(), Some("call_1"));
+    }
+
+    #[test]
+    fn sanitize_messages_drops_tool_messages_without_tool_call_id() {
+        let mut msgs = vec![
+            user_msg("hi"),
+            LLMMessage {
+                role: "tool".into(),
+                content: Some(MessageContent::text("rogue tool msg")),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            assistant_msg("ack"),
+        ];
+        sanitize_messages(&mut msgs);
+        assert!(msgs.iter().all(|m| m.role != "tool"));
+    }
+
+    // ── total_message_tokens ──────────────────────────────────────
+
+    #[test]
+    fn total_message_tokens_is_zero_for_empty_history() {
+        assert_eq!(total_message_tokens(&[]), 0);
+    }
+
+    #[test]
+    fn total_message_tokens_grows_with_content_length() {
+        let short = vec![user_msg("hi")];
+        let long = vec![user_msg(&"x".repeat(2000))];
+        assert!(total_message_tokens(&long) > total_message_tokens(&short));
+    }
+
+    #[test]
+    fn total_message_tokens_counts_tool_call_arguments() {
+        let with_tool = vec![assistant_with_tool_call("call_1", "my_tool")];
+        let plain = vec![assistant_msg("")];
+        // Even though both have empty text content, tool-call overhead
+        // should count for at least the base 4 tokens of message framing.
+        assert!(total_message_tokens(&with_tool) >= total_message_tokens(&plain));
+    }
+
+    // ── find_compaction_split ─────────────────────────────────────
+
+    #[test]
+    fn find_compaction_split_returns_none_for_short_history() {
+        let msgs = vec![system_msg("sys"), user_msg("hi"), assistant_msg("hi back")];
+        assert!(find_compaction_split(&msgs).is_none());
+    }
+
+    #[test]
+    fn find_compaction_split_preserves_system_head_and_tail() {
+        let mut msgs = vec![system_msg("sys")];
+        for i in 0..20 {
+            msgs.push(user_msg(&format!("u{i}")));
+            msgs.push(assistant_msg(&format!("a{i}")));
+        }
+        let (keep_start, mid_end) = find_compaction_split(&msgs).expect("split available");
+        // keep_start points just past the system header.
+        assert_eq!(keep_start, 1);
+        // min_keep = 4 messages reserved at the tail.
+        assert!(msgs.len() - mid_end >= 4);
+        assert!(mid_end > keep_start);
+    }
+
+    #[test]
+    fn find_compaction_split_backs_off_when_tail_starts_with_tool() {
+        // Construct a case where msgs.len() - min_keep lands on a "tool" message;
+        // the split should back off until it's not a tool message.
+        let mut msgs = vec![system_msg("sys")];
+        for i in 0..8 {
+            msgs.push(user_msg(&format!("u{i}")));
+            msgs.push(assistant_msg(&format!("a{i}")));
+        }
+        // Replace the candidate boundary message with a tool.
+        let candidate = msgs.len() - 4;
+        msgs[candidate] = tool_result("call_1", "r");
+        let (_, mid_end) = find_compaction_split(&msgs).expect("split ok");
+        assert!(msgs[mid_end].role != "tool");
+    }
+
+    // format_session_context covered indirectly — SessionContext is
+    // non_exhaustive across the crate boundary so we can't construct it
+    // directly from a unit test.
+
+    // ── load_memme_context ────────────────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn load_memme_context_returns_none_for_empty_session_id() {
+        assert!(load_memme_context("").await.is_none());
+    }
+
+    // ── compact_messages_if_needed: below-threshold short-circuits ─
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compact_messages_if_needed_noop_when_below_threshold() {
+        let mut msgs = vec![
+            system_msg("sys"),
+            user_msg("hi"),
+            assistant_msg("hi back"),
+        ];
+        let before = msgs.clone();
+        let cfg = LLMConfig {
+            base_url: "http://127.0.0.1:1".into(),
+            api_key: "k".into(),
+            model: "m".into(),
+            provider_id: "openai".into(),
+            native_tools: vec![],
+        };
+        // Far below COMPACT_THRESHOLD (80k tokens) and messages.len() < 6.
+        compact_messages_if_needed(&mut msgs, &cfg, None).await;
+        assert_eq!(msgs.len(), before.len());
+        // Content preserved.
+        for (a, b) in msgs.iter().zip(before.iter()) {
+            assert_eq!(a.role, b.role);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn force_compact_messages_refuses_too_few_messages() {
+        let mut msgs = vec![user_msg("a"), assistant_msg("b")];
+        let before_len = msgs.len();
+        let cfg = LLMConfig {
+            base_url: "http://127.0.0.1:1".into(),
+            api_key: "k".into(),
+            model: "m".into(),
+            provider_id: "openai".into(),
+            native_tools: vec![],
+        };
+        force_compact_messages(&mut msgs, &cfg, None).await;
+        // Too few messages => no-op.
+        assert_eq!(msgs.len(), before_len);
+    }
+}
