@@ -33,6 +33,7 @@ import {
   type BuddyDecision, type TrustStats,
 } from '../api/buddy'
 import { getMemmeConfig, saveMemmeConfig, type MemmeConfig } from '../api/system'
+import { useMeditationStore } from '../stores/meditationStore'
 import { OrbCore } from './buddy/OrbCore'
 import { getSpeciesLabel, getSpeciesConfig, STAT_LABELS, STAT_NAMES } from '../utils/buddy'
 import { toast } from './Toast'
@@ -54,6 +55,7 @@ const Toggle: React.FC<{ value: boolean; onChange: (v: boolean) => void }> = ({ 
 export function BuddyPanel() {
   const { t } = useTranslation()
   const { companion, bones, config, setMuted, aiName, hostedMode, setHostedMode } = useBuddyStore()
+  const triggerMeditationAction = useMeditationStore((s) => s.triggerMeditation)
 
   // Meditation state
   const [meditationEnabled, setMeditationEnabled] = useState(false)
@@ -120,7 +122,7 @@ export function BuddyPanel() {
   const handleTriggerMeditation = async () => {
     setMeditationTriggering(true)
     try {
-      await invoke('trigger_meditation')
+      await triggerMeditationAction()
       toast.success(t('settings.meditationComplete'))
       const session: any = await invoke('get_latest_meditation')
       if (session) setMeditationLast(session)
