@@ -452,4 +452,47 @@ mod tests {
         reg.transition(&id, WorkerState::Spawning).unwrap();
         assert_eq!(get_worker(&reg, &id).unwrap().state.label(), "spawning");
     }
+
+    // ── FailureReason classification (Batch 1/2 regression guard) ──────
+    //
+    // Timeout is a dedicated variant (not RuntimeError("timed out ...")) so
+    // the frontend can distinguish timeouts from ordinary errors via the
+    // `kind` discriminant. These tests pin the serde tag + display format.
+
+    #[test]
+    fn failure_reason_timeout_display_and_serde() {
+        let r = FailureReason::Timeout;
+        assert_eq!(format!("{r}"), "timeout");
+        let j = serde_json::to_value(&r).unwrap();
+        assert_eq!(j["kind"], "timeout");
+        // Timeout carries no message payload — `content` key must be absent.
+        assert!(j.get("message").is_none() || j["message"].is_null());
+
+        // Round-trip preserves the variant identity.
+        let back: FailureReason = serde_json::from_value(j).unwrap();
+        assert_eq!(back, FailureReason::Timeout);
+    }
+
+    #[test]
+    fn failure_reason_runtime_error_preserves_full_message() {
+        // spawn_tools now threads the UNCAPPED error text through
+        // FailureReason::RuntimeError (Batch 2, Gap 5). A long payload
+        // must survive serde round-trip unchanged.
+        let long = "boom ".repeat(300); // 1500 chars
+        let r = FailureReason::RuntimeError(long.clone());
+        let j = serde_json::to_value(&r).unwrap();
+        assert_eq!(j["kind"], "runtime_error");
+        assert_eq!(j["message"], long);
+        let back: FailureReason = serde_json::from_value(j).unwrap();
+        assert_eq!(back, FailureReason::RuntimeError(long));
+    }
+
+    #[test]
+    fn failure_reason_variants_are_distinct() {
+        assert_ne!(FailureReason::Timeout, FailureReason::RuntimeError("x".into()));
+        assert_ne!(
+            FailureReason::TrustGate("a".into()),
+            FailureReason::PromptDelivery("a".into()),
+        );
+    }
 }
