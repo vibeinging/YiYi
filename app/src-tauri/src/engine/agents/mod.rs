@@ -209,4 +209,61 @@ const BUILTIN_AGENTS: &[(&str, &str)] = &[
     ("explore", include_str!("../../../agents/explore/AGENT.md")),
     ("planner", include_str!("../../../agents/planner/AGENT.md")),
     ("desktop_operator", include_str!("../../../agents/desktop_operator/AGENT.md")),
+    ("memory_curator", include_str!("../../../agents/memory_curator/AGENT.md")),
+    ("bot_coordinator", include_str!("../../../agents/bot_coordinator/AGENT.md")),
 ];
+
+// ═══════════════════════════════════════════════════════════════════════
+// Tests
+// ═══════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn agent_registry_loads_all_builtin_agents() {
+        let tmp = TempDir::new().unwrap();
+        let registry = AgentRegistry::load(tmp.path(), None);
+        let names: Vec<&str> = registry.list().iter().map(|a| a.name.as_str()).collect();
+        for expected in ["explore", "planner", "desktop_operator", "memory_curator", "bot_coordinator"] {
+            assert!(
+                names.contains(&expected),
+                "expected builtin agent '{}' to be registered, got: {:?}",
+                expected,
+                names
+            );
+        }
+    }
+
+    #[test]
+    fn agent_registry_loads_memory_curator_and_bot_coordinator() {
+        let tmp = TempDir::new().unwrap();
+        let registry = AgentRegistry::load(tmp.path(), None);
+
+        let mc = registry
+            .get("memory_curator")
+            .expect("memory_curator should be registered");
+        assert_eq!(mc.emoji(), "🧠");
+        assert!(mc.is_builtin());
+        let mc_tools = mc.tools.as_ref().expect("memory_curator should have tool allowlist");
+        assert!(mc_tools.iter().any(|t| t == "memory_search"));
+        assert!(mc_tools.iter().any(|t| t == "memory_delete"));
+        assert!(mc_tools.iter().any(|t| t == "memory_add"));
+        assert!(matches!(mc.tool_filter(), ToolFilter::Allow(_)));
+
+        let bc = registry
+            .get("bot_coordinator")
+            .expect("bot_coordinator should be registered");
+        assert_eq!(bc.emoji(), "🤝");
+        assert!(bc.is_builtin());
+        let bc_tools = bc.tools.as_ref().expect("bot_coordinator should have tool allowlist");
+        assert!(bc_tools.iter().any(|t| t == "send_bot_message"));
+        assert!(bc_tools.iter().any(|t| t == "list_bot_conversations"));
+        assert!(bc_tools.iter().any(|t| t == "manage_bot"));
+        // bot_coordinator must NOT have write access to filesystem/shell
+        assert!(!bc_tools.iter().any(|t| t == "execute_shell"));
+        assert!(!bc_tools.iter().any(|t| t == "write_file"));
+    }
+}
