@@ -969,3 +969,78 @@ async fn handle_qq_c2c_message(
 
     tx.send(incoming).await.ok();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_qq_mentions_removes_at_user_tag() {
+        assert_eq!(strip_qq_mentions("<@12345> hello"), "hello");
+        assert_eq!(strip_qq_mentions("<@!67890>  hi there"), "hi there");
+    }
+
+    #[test]
+    fn strip_qq_mentions_removes_at_everyone() {
+        assert_eq!(strip_qq_mentions("<qqbot-at-everyone/> message"), "message");
+    }
+
+    #[test]
+    fn strip_qq_mentions_preserves_non_mention_angle_brackets() {
+        assert_eq!(strip_qq_mentions("compare <a> tag"), "compare <a> tag");
+    }
+
+    #[test]
+    fn strip_qq_mentions_trims_surrounding_whitespace() {
+        assert_eq!(strip_qq_mentions("   <@42>   content   "), "content");
+    }
+
+    #[test]
+    fn parse_qq_attachments_classifies_by_content_type() {
+        let d = serde_json::json!({
+            "attachments": [
+                { "url": "https://x/a.png", "content_type": "image/png", "filename": "a.png" },
+                { "url": "https://x/b.mp3", "content_type": "audio/mpeg", "filename": "b.mp3" },
+                { "url": "https://x/c.mp4", "content_type": "video/mp4", "filename": "c.mp4" },
+                { "url": "https://x/d.pdf", "content_type": "application/pdf", "filename": "d.pdf" },
+            ],
+        });
+        let parts = parse_qq_attachments(&d);
+        assert_eq!(parts.len(), 4);
+        assert!(matches!(parts[0], super::super::ContentPart::Image { .. }));
+        assert!(matches!(parts[1], super::super::ContentPart::Audio { .. }));
+        assert!(matches!(parts[2], super::super::ContentPart::Video { .. }));
+        assert!(matches!(parts[3], super::super::ContentPart::File { .. }));
+    }
+
+    #[test]
+    fn parse_qq_attachments_adds_https_when_missing_scheme() {
+        let d = serde_json::json!({
+            "attachments": [{ "url": "x.y/pic.png", "content_type": "image/png", "filename": "pic.png" }],
+        });
+        let parts = parse_qq_attachments(&d);
+        match &parts[0] {
+            super::super::ContentPart::Image { url, .. } => {
+                assert!(url.starts_with("https://"));
+            }
+            _ => panic!("expected image"),
+        }
+    }
+
+    #[test]
+    fn parse_qq_attachments_skips_entries_with_empty_url() {
+        let d = serde_json::json!({
+            "attachments": [{ "url": "", "content_type": "image/png", "filename": "" }],
+        });
+        assert!(parse_qq_attachments(&d).is_empty());
+    }
+
+    #[test]
+    fn parse_qq_attachments_falls_back_to_extension_when_no_content_type() {
+        let d = serde_json::json!({
+            "attachments": [{ "url": "https://x/a.png", "content_type": "", "filename": "a.png" }],
+        });
+        let parts = parse_qq_attachments(&d);
+        assert!(matches!(parts[0], super::super::ContentPart::Image { .. }));
+    }
+}

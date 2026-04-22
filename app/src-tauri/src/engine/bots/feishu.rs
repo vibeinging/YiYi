@@ -808,3 +808,70 @@ fn extract_post_text(content: &serde_json::Value) -> String {
 
     texts.join(" ").trim().to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_feishu_mentions_removes_at_user() {
+        assert_eq!(strip_feishu_mentions("@_user_1 hello"), "hello");
+        assert_eq!(strip_feishu_mentions("hi @_user_42 there"), "hi  there".trim());
+    }
+
+    #[test]
+    fn strip_feishu_mentions_removes_at_all() {
+        assert_eq!(strip_feishu_mentions("@_all attention!"), "attention!");
+    }
+
+    #[test]
+    fn strip_feishu_mentions_preserves_plain_text() {
+        assert_eq!(strip_feishu_mentions("plain message"), "plain message");
+    }
+
+    #[test]
+    fn extract_post_text_handles_zh_cn_structure() {
+        let content = serde_json::json!({
+            "zh_cn": {
+                "title": "Hello",
+                "content": [[
+                    { "tag": "text", "text": "world" },
+                    { "tag": "a", "text": "docs", "href": "https://x" },
+                    { "tag": "at", "user_id": "u1" },
+                ]],
+            }
+        });
+        let extracted = extract_post_text(&content);
+        assert!(extracted.contains("Hello"));
+        assert!(extracted.contains("world"));
+        assert!(extracted.contains("[docs](https://x)"));
+    }
+
+    #[test]
+    fn extract_post_text_falls_back_to_en_us() {
+        let content = serde_json::json!({
+            "en_us": {
+                "title": "Greetings",
+                "content": [[{ "tag": "text", "text": "hi" }]],
+            }
+        });
+        let extracted = extract_post_text(&content);
+        assert!(extracted.contains("Greetings"));
+        assert!(extracted.contains("hi"));
+    }
+
+    #[test]
+    fn extract_post_text_handles_root_content_without_locale() {
+        let content = serde_json::json!({
+            "content": [[{ "tag": "text", "text": "raw" }]],
+        });
+        let extracted = extract_post_text(&content);
+        assert!(extracted.contains("raw"));
+    }
+
+    #[test]
+    fn extract_post_text_empty_on_missing_content() {
+        let content = serde_json::json!({});
+        assert_eq!(extract_post_text(&content), "");
+    }
+}

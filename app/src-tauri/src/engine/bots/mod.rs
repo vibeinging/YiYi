@@ -389,3 +389,93 @@ fn now_ts() -> u64 {
         .unwrap_or_default()
         .as_secs()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_extension_recognizes_all_media_types() {
+        assert!(matches!(classify_extension("png"), Some(MediaType::Image)));
+        assert!(matches!(classify_extension("JPG"), Some(MediaType::Image)));
+        assert!(matches!(classify_extension("mp3"), Some(MediaType::Audio)));
+        assert!(matches!(classify_extension("mp4"), Some(MediaType::Video)));
+        assert!(matches!(classify_extension("pdf"), Some(MediaType::File)));
+        assert!(classify_extension("exe").is_none());
+        assert!(classify_extension("").is_none());
+    }
+
+    #[test]
+    fn guess_mime_covers_common_formats() {
+        assert_eq!(guess_mime("png").as_deref(), Some("image/png"));
+        assert_eq!(guess_mime("JPG").as_deref(), Some("image/jpeg"));
+        assert_eq!(guess_mime("pdf").as_deref(), Some("application/pdf"));
+        assert_eq!(guess_mime("unknown"), None);
+    }
+
+    #[test]
+    fn is_path_delimiter_recognizes_whitespace_and_quotes() {
+        assert!(is_path_delimiter(' '));
+        assert!(is_path_delimiter('\n'));
+        assert!(is_path_delimiter(')'));
+        assert!(is_path_delimiter('"'));
+        assert!(!is_path_delimiter('a'));
+        assert!(!is_path_delimiter('/'));
+    }
+
+    #[test]
+    fn is_path_prefix_recognizes_opening_delimiters() {
+        assert!(is_path_prefix('('));
+        assert!(is_path_prefix('['));
+        assert!(is_path_prefix(':'));
+        assert!(!is_path_prefix('a'));
+    }
+
+    #[test]
+    fn strip_url_params_drops_query_and_fragment() {
+        assert_eq!(strip_url_params("https://x/y.png?a=1"), "https://x/y.png");
+        assert_eq!(strip_url_params("https://x/y.png#top"), "https://x/y.png");
+        assert_eq!(strip_url_params("https://x/y.png"), "https://x/y.png");
+    }
+
+    #[test]
+    fn url_media_extension_extracts_from_path() {
+        assert_eq!(url_media_extension("https://x/a/b.png"), Some("png"));
+        assert_eq!(url_media_extension("https://x/a/b.PNG?v=1"), Some("PNG"));
+        assert_eq!(url_media_extension("https://x/a/no-ext"), None);
+    }
+
+    #[test]
+    fn url_filename_extracts_last_segment() {
+        assert_eq!(url_filename("https://x/a/b.png").as_deref(), Some("b.png"));
+        assert_eq!(url_filename("https://x/a/b.png?v=1").as_deref(), Some("b.png"));
+    }
+
+    #[test]
+    fn platform_types_covers_all_supported_platforms() {
+        let ids: Vec<&str> = platform_types().into_iter().map(|(id, _)| id).collect();
+        for p in ["discord", "telegram", "qq", "dingtalk", "feishu", "wecom", "webhook"] {
+            assert!(ids.contains(&p), "missing platform: {p}");
+        }
+    }
+
+    #[test]
+    fn now_ts_is_positive_and_seconds_scaled() {
+        let t = now_ts();
+        assert!(t > 1_700_000_000); // sanity: after 2023
+    }
+
+    #[tokio::test]
+    async fn extract_media_from_text_detects_markdown_image_url() {
+        let text = "See ![logo](https://example.com/pic.png) here";
+        let content = extract_media_from_text(text).await;
+        assert_eq!(content.text, text);
+        assert!(content.media.iter().any(|m| matches!(m, MediaAttachment { .. })));
+    }
+
+    #[tokio::test]
+    async fn extract_media_from_text_ignores_plain_text() {
+        let content = extract_media_from_text("just some words").await;
+        assert_eq!(content.media.len(), 0);
+    }
+}
