@@ -659,6 +659,7 @@ pub fn critical_system_reminder() -> &'static str {
 - If a tool fails, DIAGNOSE why before switching approach. Don't blindly retry.
 - Show tangible results to the user — NEVER just say "done". If tests weren't run, say so.
 - Use create_task for any file-creating work, not inline in the main conversation.
+- When the user makes a fresh request that resembles past work, ALWAYS call the tool (e.g. `create_task`) or `query_tasks` to verify state. NEVER claim a task is "already in progress" or "already done" based only on memory / previous-summary context — that path fabricates a running task the user can't actually see.
 - Do NOT execute destructive operations (drop tables, rm -rf, format disk) without explicit user confirmation.
 - Consider reversibility and blast radius before any action that affects shared state.
 - Respect authorized folder boundaries. Files outside them are blocked.

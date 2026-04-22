@@ -77,8 +77,14 @@ async fn inject_memme_context(messages: &mut Vec<LLMMessage>) {
             role: "system".into(),
             content: Some(MessageContent::text(format!(
                 "<previous-summary>\n{}\n</previous-summary>\n\
-                The above is a summary of previous conversation. \
-                Use it as context to maintain continuity.",
+                The above is HISTORICAL context from prior conversations — useful for \
+                recognizing the user's preferences and recurring topics, but NOT proof \
+                that any task / file / state from that history still exists right now. \
+                When the user makes a NEW request (even if it looks similar to a past one), \
+                treat it as a fresh request and call the appropriate tools. \
+                NEVER claim work is 'already in progress' or 'already done' based solely \
+                on this summary — if you need to check current state, call `query_tasks` \
+                or the relevant tool to verify.",
                 summary.trim()
             ))),
             tool_calls: None,
