@@ -684,3 +684,63 @@ async fn load_cached_skills(
     }
     (skill_index, always_active)
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// Tests
+// ═══════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The LLM-facing JSON schema must advertise `timeout_secs` with
+    /// `type: integer, minimum: 1` on every agent spec. Without it, an LLM
+    /// can't set per-agent timeouts and `feat(spawn_tools): add per-agent
+    /// timeout_secs` silently regresses to a no-op.
+    #[test]
+    fn spawn_agents_schema_exposes_timeout_secs() {
+        let defs = definitions();
+        let spawn = defs.iter().find(|d| d.function.name == "spawn_agents")
+            .expect("spawn_agents must be registered");
+
+        let item_props = &spawn.function.parameters
+            ["properties"]["agents"]["items"]["properties"];
+        let t = &item_props["timeout_secs"];
+        assert_eq!(t["type"], "integer", "timeout_secs must be integer");
+        assert_eq!(t["minimum"], 1, "timeout_secs must have minimum 1");
+        assert!(t["description"].is_string(), "timeout_secs must describe itself");
+
+        // Not required — omission means "no timeout" (matches AgentSpec's
+        // Option<u64> default).
+        let required = spawn.function.parameters
+            ["properties"]["agents"]["items"]["required"]
+            .as_array()
+            .expect("required must be array");
+        let required_names: Vec<&str> = required.iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(!required_names.contains(&"timeout_secs"),
+            "timeout_secs must remain optional");
+    }
+
+    /// AgentSpec itself must deserialize `timeout_secs` into the Rust field
+    /// (not swallow it into a catch-all). This guards against a rename.
+    #[test]
+    fn agent_spec_deserializes_timeout_secs() {
+        let raw = serde_json::json!({
+            "name": "slow",
+            "task": "spin",
+            "timeout_secs": 30,
+        });
+        let spec: AgentSpec = serde_json::from_value(raw).unwrap();
+        assert_eq!(spec.name, "slow");
+        assert_eq!(spec.timeout_secs, Some(30));
+    }
+
+    #[test]
+    fn agent_spec_timeout_secs_defaults_to_none() {
+        let raw = serde_json::json!({ "name": "a", "task": "t" });
+        let spec: AgentSpec = serde_json::from_value(raw).unwrap();
+        assert!(spec.timeout_secs.is_none());
+    }
+}
