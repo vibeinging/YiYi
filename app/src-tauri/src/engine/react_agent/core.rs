@@ -503,10 +503,12 @@ where
                     }
                 }
 
-                // Emit ToolEnd
+                // Emit ToolEnd. 2000 chars: must be large enough for structured
+                // JSON payloads (e.g. create_task ~260 bytes, pty_spawn_interactive)
+                // so the frontend can parse __type to render inline cards.
                 on_event(AgentStreamEvent::ToolEnd {
                     name: tool_name.clone(),
-                    result_preview: output.chars().take(200).collect(),
+                    result_preview: output.chars().take(2000).collect(),
                 });
 
                 // Persist

@@ -20,7 +20,7 @@ export const BuddyBubble: React.FC<BuddyBubbleProps> = ({ text, visible, color, 
       }}
     >
       <div
-        className="relative px-3 py-1.5 rounded-xl text-xs leading-relaxed whitespace-pre-wrap max-w-[200px] text-center"
+        className="relative px-3.5 py-2 rounded-xl text-xs leading-relaxed whitespace-pre-wrap min-w-[140px] max-w-[320px] text-center"
         style={{
           background: 'var(--color-bg-elevated)',
           border: `1px solid ${color || 'var(--color-border)'}`,
