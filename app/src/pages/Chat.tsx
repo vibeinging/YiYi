@@ -35,6 +35,7 @@ import { toast } from '../components/Toast';
 import { ChatWelcome } from '../components/chat/ChatWelcome';
 import { ChatMessages, type ChatMessagesHandle } from '../components/chat/ChatMessages';
 import { ChatInput, type ChatInputHandle } from '../components/chat/ChatInput';
+import { PermissionCard } from '../components/chat/PermissionCard';
 import { VoiceOverlay } from '../components/voice/VoiceOverlay';
 import { useBuddyStore } from '../stores/buddyStore';
 
@@ -238,6 +239,8 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   // --- Streaming chat ---
   const streamLoading = useChatStreamStore((s) => s.loading);
   const spawnAgents = useChatStreamStore((s) => s.spawnAgents);
+  const activePermission = useChatStreamStore((s) => s.activePermission);
+  const isPermissionPending = activePermission?.status === 'pending';
   const spawnRunning = spawnAgents.some((a) => a.status === 'running');
   const loading = streamLoading || spawnRunning;
 
@@ -502,18 +505,25 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
       )}
 
 
-      {/* Input */}
-      <ChatInput
-        ref={inputRef}
-        loading={loading}
-        workspaceFiles={workspaceFiles}
-        onSend={handleSend}
-        onStop={handleStop}
-        onSelectCommand={executeCommand}
-        onSelectTask={(task) => navigateToSession(task.sessionId)}
-        onFileSelect={() => {}}
-        onFetchWorkspaceFiles={fetchWorkspaceFiles}
-      />
+      {/* Bottom dock: permission request takes over when pending */}
+      {isPermissionPending ? (
+        <div className="shrink-0 px-4 pt-2 pb-3 animate-in slide-in-from-bottom-2 duration-200"
+          style={{ background: 'var(--color-bg)', borderTop: '1px solid var(--color-border)' }}>
+          <PermissionCard request={activePermission!} />
+        </div>
+      ) : (
+        <ChatInput
+          ref={inputRef}
+          loading={loading}
+          workspaceFiles={workspaceFiles}
+          onSend={handleSend}
+          onStop={handleStop}
+          onSelectCommand={executeCommand}
+          onSelectTask={(task) => navigateToSession(task.sessionId)}
+          onFileSelect={() => {}}
+          onFetchWorkspaceFiles={fetchWorkspaceFiles}
+        />
+      )}
 
       {/* Voice Overlay */}
       <VoiceOverlay />

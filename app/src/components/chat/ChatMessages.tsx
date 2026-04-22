@@ -28,7 +28,6 @@ import { TaskCard } from '../TaskCard';
 import { LongTaskProgressPanel, RoundDivider } from '../LongTaskPanel';
 import { RetryStatusBar } from './RetryStatusBar';
 import { SpawnAgentPanel } from '../SpawnAgentPanel';
-import { PermissionCard } from './PermissionCard';
 import { CanvasRenderer } from '../canvas/CanvasRenderer';
 import type { CanvasActionHandler } from '../../api/canvas';
 import { CronJobSessionView } from '../CronJobSessionView';
@@ -267,7 +266,6 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
   const collapsedAgents = useChatStreamStore((s) => s.collapsedAgents);
   const toggleCollapseAgent = useChatStreamStore((s) => s.toggleCollapseAgent);
   const streamError = useChatStreamStore((s) => s.errorMessage);
-  const activePermission = useChatStreamStore((s) => s.activePermission);
   const longTask = useChatStreamStore((s) => s.longTask);
   const taskStreams = useChatStreamStore((s) => s.taskStreams);
   const canvases = useChatStreamStore((s) => s.canvases);
@@ -584,7 +582,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                     return (
                       <>
                         {(filteredTools.length > 0 || claudeCode) && <ToolCallPanel tools={filteredTools} />}
-                        {activePermission && <PermissionCard request={activePermission} />}
+                        {/* activePermission is now rendered in Chat.tsx bottom dock */}
                         {taskCards.map((tid) => <TaskCard key={tid} taskId={tid} />)}
                         {streamPtySessions.map((pty) => (
                           <div key={pty.sessionId} className="rounded-xl overflow-hidden" style={{
