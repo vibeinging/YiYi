@@ -227,9 +227,23 @@ function UpdateChecker() {
 
 type SettingsTab = 'general' | 'buddy' | 'models' | 'environments' | 'workspace' | 'cli' | 'plugins' | 'agents' | 'usage';
 
+const VALID_TABS: SettingsTab[] = ['general', 'buddy', 'models', 'environments', 'workspace', 'cli', 'plugins', 'agents', 'usage'];
+
 export function SettingsPage() {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+
+  // Accept tab hints from tray-menu navigation (App.tsx dispatches settings:set-tab)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const tab = (e as CustomEvent).detail as string | undefined;
+      if (tab && (VALID_TABS as string[]).includes(tab)) {
+        setActiveTab(tab as SettingsTab);
+      }
+    };
+    window.addEventListener('settings:set-tab', handler);
+    return () => window.removeEventListener('settings:set-tab', handler);
+  }, []);
   const [workspacePath, setWorkspacePath] = useState('');
   const [editingPath, setEditingPath] = useState('');
   const [isEditing, setIsEditing] = useState(false);

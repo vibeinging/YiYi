@@ -122,6 +122,19 @@ function MainApp() {
     return () => window.removeEventListener('navigate', handler);
   }, []);
 
+  // Tray menu navigation: jump to a specific page (and optional sub-tab).
+  useEffect(() => {
+    const unlisten = listen<{ page: Page; tab?: string | null }>('tray://navigate', (event) => {
+      const { page, tab } = event.payload;
+      if (page) setCurrentPage(page);
+      if (tab) {
+        // Settings page listens on this event to pre-select its tab.
+        window.dispatchEvent(new CustomEvent('settings:set-tab', { detail: tab }));
+      }
+    });
+    return () => { unlisten.then(fn => fn()); };
+  }, []);
+
   // Notification click navigation
   const pendingNotifCtx = useRef<Record<string, unknown> | null>(null);
 
