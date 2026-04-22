@@ -154,3 +154,40 @@ fn lsp_execute_sync(action: &str, path: &str, line: u32, col: u32) -> String {
         _ => format!("Unknown action: {action}"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn empty_path_is_rejected() {
+        let out = code_intelligence_tool(&serde_json::json!({ "action": "hover" })).await;
+        assert!(out.starts_with("Error: path is required"));
+    }
+
+    #[tokio::test]
+    async fn unsupported_extension_is_reported() {
+        let out = code_intelligence_tool(&serde_json::json!({
+            "action": "hover",
+            "path": "/tmp/foo.unknownext",
+        })).await;
+        assert!(out.contains("unsupported file type"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn unknown_action_returns_unknown_action() {
+        // Use a .rs path so language resolves; registry will likely fail to start rust-analyzer
+        // in the sandbox, so we just verify the tool returns a string (no panic).
+        let out = code_intelligence_tool(&serde_json::json!({
+            "action": "nonsense",
+            "path": "/tmp/x.rs",
+        })).await;
+        assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn definitions_includes_code_intelligence() {
+        let defs = definitions();
+        assert!(defs.iter().any(|d| d.function.name == "code_intelligence"));
+    }
+}

@@ -169,3 +169,48 @@ pub async fn render_canvas_tool(args: &serde_json::Value) -> String {
         count, canvas_id
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn missing_components_is_rejected() {
+        let out = render_canvas_tool(&serde_json::json!({})).await;
+        assert!(out.starts_with("Error: 'components' is required"));
+    }
+
+    #[tokio::test]
+    async fn empty_components_array_is_rejected() {
+        let out = render_canvas_tool(&serde_json::json!({ "components": [] })).await;
+        assert!(out.contains("at least one component"));
+    }
+
+    #[tokio::test]
+    async fn invalid_schema_is_reported() {
+        let out = render_canvas_tool(&serde_json::json!({
+            "components": [{ "type": "not-a-real-type" }],
+        })).await;
+        assert!(out.starts_with("Error: invalid components schema"));
+    }
+
+    #[tokio::test]
+    async fn valid_components_return_success_message() {
+        // No AppHandle registered in unit test → emit is silently skipped.
+        let out = render_canvas_tool(&serde_json::json!({
+            "title": "Test",
+            "components": [
+                { "type": "card", "title": "Hello" },
+            ],
+        })).await;
+        assert!(out.contains("Canvas rendered successfully"));
+        assert!(out.contains("1 component"));
+        assert!(out.contains("canvas_id:"));
+    }
+
+    #[test]
+    fn definitions_expose_render_canvas() {
+        let defs = definitions();
+        assert!(defs.iter().any(|d| d.function.name == "render_canvas"));
+    }
+}

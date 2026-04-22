@@ -195,6 +195,43 @@ pub(super) async fn git_log_tool(args: &serde_json::Value) -> String {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn commit_rejects_missing_message() {
+        let out = git_commit_tool(&serde_json::json!({})).await;
+        assert!(out.starts_with("Error: message is required"));
+    }
+
+    #[tokio::test]
+    async fn commit_rejects_empty_message() {
+        let out = git_commit_tool(&serde_json::json!({ "message": "" })).await;
+        assert!(out.starts_with("Error: message is required"));
+    }
+
+    #[tokio::test]
+    async fn create_branch_rejects_missing_name() {
+        let out = git_create_branch_tool(&serde_json::json!({})).await;
+        assert!(out.starts_with("Error: name is required"));
+    }
+
+    #[tokio::test]
+    async fn create_branch_rejects_empty_name() {
+        let out = git_create_branch_tool(&serde_json::json!({ "name": "" })).await;
+        assert!(out.starts_with("Error: name is required"));
+    }
+
+    #[test]
+    fn definitions_expose_all_git_tools() {
+        let names: Vec<_> = definitions().into_iter().map(|d| d.function.name).collect();
+        for n in ["git_commit", "git_create_branch", "git_diff", "git_log", "git_status"] {
+            assert!(names.iter().any(|x| x == n), "missing: {n}");
+        }
+    }
+}
+
 pub(super) async fn git_status_tool(_args: &serde_json::Value) -> String {
     match run_git(&["status", "--short"]).await {
         Ok(output) => {

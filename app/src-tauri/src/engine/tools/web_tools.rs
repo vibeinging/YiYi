@@ -106,3 +106,32 @@ pub(super) async fn web_search_tool(args: &serde_json::Value) -> String {
         results.join("\n\n")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn empty_query_is_rejected() {
+        let out = web_search_tool(&serde_json::json!({ "query": "" })).await;
+        assert!(out.starts_with("Error: query is required"));
+    }
+
+    #[tokio::test]
+    async fn whitespace_query_is_rejected() {
+        let out = web_search_tool(&serde_json::json!({ "query": "   " })).await;
+        assert!(out.starts_with("Error: query is required"));
+    }
+
+    #[tokio::test]
+    async fn missing_query_is_rejected() {
+        let out = web_search_tool(&serde_json::json!({})).await;
+        assert!(out.starts_with("Error: query is required"));
+    }
+
+    #[test]
+    fn definitions_expose_web_search() {
+        let defs = definitions();
+        assert!(defs.iter().any(|d| d.function.name == "web_search"));
+    }
+}

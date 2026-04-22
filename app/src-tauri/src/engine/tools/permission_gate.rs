@@ -152,6 +152,46 @@ pub async fn respond(request_id: &str, approved: bool) {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_key_joins_type_and_path() {
+        assert_eq!(session_key("shell_block", "rm -rf /"), "shell_block::rm -rf /");
+        assert_eq!(session_key("sensitive_path", "/etc/passwd"), "sensitive_path::/etc/passwd");
+    }
+
+    #[tokio::test]
+    async fn remember_then_check_returns_true() {
+        // Use a unique path so other tests' shared state doesn't interfere.
+        let path = "/tmp/permission_gate_test_UNIQUE_abcd";
+        assert!(!is_session_approved("shell_block", path).await);
+        remember_approval("shell_block", path).await;
+        assert!(is_session_approved("shell_block", path).await);
+    }
+
+    #[test]
+    fn extract_parent_folder_for_nonexistent_path_returns_parent() {
+        let p = std::path::Path::new("/definitely/not/existing/foo.txt");
+        let parent = extract_parent_folder(p);
+        assert_eq!(parent.to_string_lossy(), "/definitely/not/existing");
+    }
+
+    #[test]
+    fn extract_parent_folder_for_directory_returns_self() {
+        let tmp = std::env::temp_dir();
+        let parent = extract_parent_folder(&tmp);
+        assert_eq!(parent, tmp);
+    }
+
+    #[tokio::test]
+    async fn respond_without_pending_is_noop() {
+        // Should not panic when the request_id is not in the pending map.
+        respond("nonexistent-id", true).await;
+    }
+}
+
 /// Helper: extract the best parent folder from a canonical path.
 /// For files or non-existent paths, returns the parent directory.
 /// For directories, returns the path itself.
