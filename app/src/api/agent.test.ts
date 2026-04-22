@@ -469,4 +469,58 @@ describe("agent api", () => {
       await expect(deleteMessage(42)).rejects.toThrow("not found");
     });
   });
+
+  // ── Spawn agent event type shapes ──────────────────────────────────────
+  // These are compile-time-ish guards for the widened SpawnAgentCompleteEvent
+  // and the new SpawnAgentErrorEvent. tsc runs as part of CI, so an
+  // accidental rename/removal of status/reason/full will fail `npx tsc`.
+  describe("spawn-agent event payload types", () => {
+    it("SpawnAgentCompleteEvent accepts status + duration_ms + success", () => {
+      const ev: import("./agent").SpawnAgentCompleteEvent = {
+        agent_name: "explore",
+        result: "done",
+        success: true,
+        status: "complete",
+        duration_ms: 1234,
+      };
+      expect(ev.status).toBe("complete");
+      expect(ev.duration_ms).toBe(1234);
+      // Widened status union must accept every classification.
+      const statuses: Array<NonNullable<typeof ev.status>> = [
+        "complete",
+        "failed",
+        "timeout",
+        "cancelled",
+      ];
+      expect(statuses).toHaveLength(4);
+    });
+
+    it("SpawnAgentErrorEvent carries preview + full + reason", () => {
+      const ev: import("./agent").SpawnAgentErrorEvent = {
+        agent_name: "slow",
+        reason: "timeout",
+        preview: "Agent 'slow' timed out after 1s",
+        full: "Agent 'slow' timed out after 1s (detailed diagnostic trail...)",
+        message: "Agent 'slow' timed out after 1s (detailed diagnostic trail...)",
+        session_id: "sess-123",
+      };
+      expect(ev.reason).toBe("timeout");
+      expect(ev.full.length).toBeGreaterThanOrEqual(ev.preview.length);
+    });
+
+    it("SpawnAgentResult exposes structured fields (status/full_output/error/duration_ms)", () => {
+      const r: import("./agent").SpawnAgentResult = {
+        name: "planner",
+        result: "summary preview",
+        is_error: false,
+        full_output: "full uncapped body",
+        status: "complete",
+        duration_ms: 42,
+        success: true,
+        summary: "summary preview",
+      };
+      expect(r.status).toBe("complete");
+      expect(r.full_output).toBe("full uncapped body");
+    });
+  });
 });
