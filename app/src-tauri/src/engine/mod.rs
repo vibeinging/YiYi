@@ -41,3 +41,6 @@ pub mod tool_registry_global;
 
 // ── Voice control ──
 pub mod voice;
+
+// ── Testability: abstract over Tauri's event emitter ──
+pub mod emitter;
