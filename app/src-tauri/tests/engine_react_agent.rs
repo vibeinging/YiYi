@@ -261,3 +261,61 @@ async fn react_agent_stream_emits_token_and_complete_events() {
     // Prevent flag drops from warnings — explicit discard
     let _ = Ordering::Relaxed;
 }
+
+// ── Per-agent wall-clock timeout ───────────────────────────────────────
+//
+// Mirrors the timeout wrapping applied inside `spawn_agents_background`:
+// if a ReAct run exceeds `timeout_secs`, `tokio::time::timeout` returns
+// `Elapsed` and we synthesize a "timed out" error string.
+//
+// Uses a mock whose SSE response is delayed (via wiremock's
+// `ResponseTemplate::set_delay`) so the underlying future can't resolve
+// before the timeout fires. Asserts we bail well before the delay elapses.
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn react_agent_timeout_wrapper_aborts_before_llm_responds() {
+    let mock = MockLlmServer::start().await;
+    // Mock will not respond for 5s — our timeout is 1s, so we should bail
+    // long before the stream ever arrives.
+    mock.mock_chat_completion_stream_delayed(
+        &["this should never be seen"],
+        std::time::Duration::from_secs(5),
+    )
+    .await;
+
+    let config = make_llm_config(&mock.uri());
+
+    let started = std::time::Instant::now();
+    let agent_name = "slow_agent";
+    let run_future = run_react(&config, "sys", "hi", &[]);
+    let timeout_secs: u64 = 1;
+
+    let outcome: Result<String, String> = match tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs),
+        run_future,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => Err(format!(
+            "Agent '{}' timed out after {}s",
+            agent_name, timeout_secs
+        )),
+    };
+
+    let elapsed = started.elapsed();
+
+    // Must have bailed with a timeout error, not waited for the 5s mock delay.
+    let err = outcome.expect_err("expected timeout Err, not Ok");
+    assert!(
+        err.contains("timed out") && err.contains(agent_name),
+        "expected timeout error mentioning agent name, got: {:?}",
+        err
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(3),
+        "timeout should bail ~1s, not wait for the 5s delay (elapsed {:?})",
+        elapsed
+    );
+}

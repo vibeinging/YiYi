@@ -118,6 +118,44 @@ impl MockLlmServer {
             .await;
     }
 
+    /// Configure a streaming response (like `mock_chat_completion_stream`) but
+    /// with an artificial delay applied to every response. Useful for exercising
+    /// per-agent timeout logic: set a delay longer than the timeout and verify
+    /// the caller aborts within the expected bound.
+    pub async fn mock_chat_completion_stream_delayed(
+        &self,
+        chunks: &[&str],
+        delay: std::time::Duration,
+    ) {
+        let mut body = String::new();
+        for chunk in chunks {
+            let evt = serde_json::json!({
+                "id": "mock-id",
+                "object": "chat.completion.chunk",
+                "created": 0,
+                "model": "mock-model",
+                "choices": [{
+                    "index": 0,
+                    "delta": { "content": chunk },
+                    "finish_reason": null
+                }]
+            });
+            body.push_str(&format!("data: {}\n\n", evt));
+        }
+        body.push_str("data: [DONE]\n\n");
+
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(body.into_bytes(), "text/event-stream")
+                    .insert_header("content-type", "text/event-stream")
+                    .set_delay(delay),
+            )
+            .mount(&self.server)
+            .await;
+    }
+
     /// Configure an SSE response that emits a tool_call chunk, for ReAct tests
     /// that exercise tool dispatch.
     pub async fn mock_chat_completion_tool_call(
