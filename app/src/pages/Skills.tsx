@@ -44,7 +44,7 @@ import {
 
 type SourceFilter = 'all' | 'builtin' | 'customized' | 'hub' | 'openclaw';
 
-export function SkillsPage() {
+export function SkillsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const { t } = useTranslation();
   const [skills, setSkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(true);
@@ -280,7 +280,7 @@ export function SkillsPage() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="w-full px-8 py-8">
-        <PageHeader
+        {!embedded && <PageHeader
           title={t('skills.title')}
           description={t('skills.description')}
           actions={<>
@@ -314,7 +314,7 @@ export function SkillsPage() {
               {t('skills.create')}
             </button>
           </>}
-        />
+        />}
 
         {/* Filters */}
         <div className="flex items-center gap-3 mb-6">

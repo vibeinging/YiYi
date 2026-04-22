@@ -49,7 +49,7 @@ interface MCPDialog {
   cwd: string;
 }
 
-export function MCPPage() {
+export function MCPPage({ embedded = false }: { embedded?: boolean } = {}) {
   const { t } = useTranslation();
   const [clients, setClients] = useState<MCPClientInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -228,7 +228,7 @@ export function MCPPage() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="w-full px-8 py-8">
-        <PageHeader
+        {!embedded && <PageHeader
           title={t('mcp.title')}
           description={t('mcp.description')}
           actions={<>
@@ -240,7 +240,7 @@ export function MCPPage() {
               {t('mcp.add')}
             </button>
           </>}
-        />
+        />}
 
         {/* Clients list */}
         {clients.length === 0 && !loading ? (
