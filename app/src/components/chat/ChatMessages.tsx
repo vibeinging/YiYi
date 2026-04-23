@@ -18,7 +18,9 @@ import {
   Clock,
   X,
 } from 'lucide-react';
+import React from 'react';
 import ReactMarkdown from 'react-markdown';
+import { CollapsibleContent } from './CollapsibleContent';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { open } from '@tauri-apps/plugin-shell';
@@ -254,6 +256,37 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
         {children}
       </a>
     ),
+    pre: (props: React.HTMLAttributes<HTMLPreElement>) => {
+      const child = React.Children.toArray(props.children)[0] as React.ReactElement<any> | undefined;
+      const childClass = (child?.props?.className as string | undefined) ?? '';
+      const lang = childClass.match(/language-(\w+)/)?.[1];
+      const collectText = (nodes: React.ReactNode): string => {
+        if (nodes == null || typeof nodes === 'boolean') return '';
+        if (typeof nodes === 'string' || typeof nodes === 'number') return String(nodes);
+        if (Array.isArray(nodes)) return nodes.map(collectText).join('');
+        if (React.isValidElement(nodes)) return collectText((nodes.props as { children?: React.ReactNode }).children);
+        return '';
+      };
+      const rawText = collectText(child?.props?.children);
+      return (
+        <div className="code-block">
+          <div className="code-block-bar">
+            <span className="code-block-lang">{lang || 'text'}</span>
+            <button
+              className="code-block-copy"
+              onClick={() => {
+                navigator.clipboard?.writeText(rawText).catch(() => {});
+              }}
+              title="复制"
+              aria-label="复制代码块"
+            >
+              ⧉
+            </button>
+          </div>
+          <pre {...props} />
+        </div>
+      );
+    },
   }), []);
 
   // Stream state from store
@@ -516,9 +549,11 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                         </div>
                       ) : (
                         <div className="markdown-body">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
-                            {msg.content}
-                          </ReactMarkdown>
+                          <CollapsibleContent>
+                            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
+                              {msg.content}
+                            </ReactMarkdown>
+                          </CollapsibleContent>
                         </div>
                       )}
                     </div>
