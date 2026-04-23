@@ -1,19 +1,30 @@
 /**
  * Playwright Bridge Server
  *
- * A lightweight HTTP server that wraps Playwright's browser automation API.
- * Rust spawns this as a child process and communicates via HTTP on a random port.
+ * Lightweight HTTP server that wraps Playwright for YiYi's agent.
  *
- * Protocol:
+ * Transport:
  *   POST /action  { action: string, ...args }  →  { text: string, images: string[] }
  *   GET  /health                               →  { ok: true }
+ *
+ * Architecture:
+ *   Chrome is spawned by `chrome-manager.mjs` as a long-lived OS process with
+ *   a persistent user-data-dir (pattern borrowed from openclaw). This bridge
+ *   attaches to it via `chromium.connectOverCDP(...)`. When the bridge dies
+ *   or YiYi restarts, the next bridge re-attaches to the same Chrome — cookies,
+ *   logins, and localStorage survive restarts.
+ *
+ *   `stop` defaults to merely disconnecting the CDP client (Chrome keeps
+ *   running); pass `{ kill: true }` to terminate the process + wipe state.
  */
 import http from "node:http";
 import { chromium } from "playwright";
+import { startOrAttach, killChrome } from "./chrome-manager.mjs";
 
-let browser = null;
-let context = null;
-let page = null;
+let browser = null;       // CDP-attached Browser handle (do NOT .close() — that kills Chrome)
+let context = null;       // persistent default BrowserContext (browser.contexts()[0])
+let page = null;          // currently active page
+let activeProfile = null; // profile name used by startOrAttach
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -114,33 +125,62 @@ const AI_SNAPSHOT_JS = `(() => {
 
 const handlers = {
   async start(args) {
+    // Detach from any stale CDP connection, but leave the Chrome process alone.
     if (browser) {
-      await browser.close().catch(() => {});
+      try { await browser.close(); } catch {}
       browser = null;
       context = null;
       page = null;
     }
     const headed = args.headed === true;
-    browser = await chromium.launch({
-      headless: !headed,
-      args: ["--window-size=1280,900", "--no-first-run", "--no-default-browser-check"],
-    });
-    context = await browser.newContext({
+    const profile = args.profile || "default";
+
+    let info;
+    try {
+      info = await startOrAttach({ headed, profile });
+    } catch (e) {
+      return err(e.message);
+    }
+
+    try {
+      browser = await chromium.connectOverCDP(`http://127.0.0.1:${info.cdpPort}`);
+    } catch (e) {
+      return err(`connectOverCDP failed on port ${info.cdpPort}: ${e.message}`);
+    }
+
+    // In persistent mode the browser has exactly one pre-existing default context
+    const contexts = browser.contexts();
+    context = contexts[0] ?? (await browser.newContext({
       viewport: { width: 1280, height: 900 },
       locale: "zh-CN",
-    });
-    page = null;
-    return ok(headed ? "Browser started in visible (headed) mode." : "Browser started in headless mode.");
+    }));
+
+    // Reuse the first existing page if one is already there; otherwise wait
+    // for the agent to call `open`.
+    const existingPages = context.pages();
+    page = existingPages[0] ?? null;
+
+    activeProfile = profile;
+    const reuseNote = info.wasReused ? " (attached to existing process)" : " (spawned new process)";
+    const modeNote = headed ? "visible" : "headless";
+    return ok(`Browser started in ${modeNote} mode${reuseNote}. profile=${profile}, cdp=${info.cdpPort}, pages=${existingPages.length}`);
   },
 
-  async stop() {
+  async stop(args) {
+    const killProcess = args?.kill === true;
     if (browser) {
-      await browser.close().catch(() => {});
+      try { await browser.close(); } catch {}
       browser = null;
       context = null;
       page = null;
     }
-    return ok("Browser stopped.");
+    if (killProcess) {
+      const profile = args?.profile || activeProfile || "default";
+      const res = await killChrome(profile);
+      activeProfile = null;
+      return ok(`Browser stopped and Chrome process killed (profile=${profile}, pid=${res.pid ?? "n/a"}).`);
+    }
+    return ok("Bridge disconnected. Chrome process kept alive for next start.");
   },
 
   async open(args) {
@@ -193,6 +233,20 @@ const handlers = {
     if (!page) return err("No page open.");
     const title = await page.title().catch(() => "");
     const url = page.url();
+
+    // Prefer Playwright's private _snapshotForAI — produces a compact,
+    // LLM-optimized DOM tree. Falls back to the hand-rolled evaluator if
+    // the private API is unavailable in the installed playwright version.
+    if (typeof page._snapshotForAI === "function") {
+      try {
+        const snap = await page._snapshotForAI();
+        const body = typeof snap === "string" ? snap : JSON.stringify(snap, null, 2);
+        return ok(truncate(`Title: ${title}\nURL: ${url}\n\n${body}`, 8000));
+      } catch {
+        // fall through to legacy evaluator
+      }
+    }
+
     try {
       const data = await page.evaluate(AI_SNAPSHOT_JS);
       const elements = data.elements.join("\n");
@@ -563,14 +617,14 @@ server.listen(0, "127.0.0.1", () => {
   process.stdout.write(`READY:${port}\n`);
 });
 
-// Graceful shutdown
-process.on("SIGTERM", async () => {
-  if (browser) await browser.close().catch(() => {});
+// Graceful shutdown — disconnect CDP but KEEP Chrome alive so the next bridge
+// can re-attach. Use the `stop` action with `{ kill: true }` to fully quit.
+async function gracefulShutdown() {
+  if (browser) {
+    try { await browser.close(); } catch {}
+  }
   server.close();
   process.exit(0);
-});
-process.on("SIGINT", async () => {
-  if (browser) await browser.close().catch(() => {});
-  server.close();
-  process.exit(0);
-});
+}
+process.on("SIGTERM", gracefulShutdown);
+process.on("SIGINT", gracefulShutdown);

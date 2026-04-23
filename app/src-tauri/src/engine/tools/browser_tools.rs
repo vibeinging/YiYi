@@ -64,14 +64,15 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
     vec![
         super::tool_def(
             "browser_use",
-            "Control a Chromium browser for web automation. Actions:\n\
-            - start: Launch browser (headed=true for visible window)\n\
+            "Control a persistent Chromium browser for web automation. Chrome runs as a long-lived OS process with a named profile (user-data-dir) — cookies / logins / localStorage survive YiYi restarts.\n\
+            Actions:\n\
+            - start: Attach to (or spawn if missing) Chrome for this profile. Pass 'profile' to switch user-data-dir (default: 'default'). 'headed=true' for visible window on first spawn.\n\
             - open: Open URL in new tab\n\
             - goto: Navigate current page to URL (no new tab)\n\
             - get_url: Get current page URL\n\
             - snapshot: Get page text content (title + body text)\n\
-            - ai_snapshot: Get structured page snapshot with numbered interactive elements for AI. Returns a tree with [1] <button>Login</button> style labels. Use 'act' to interact by number. Labels are ephemeral — re-run ai_snapshot after navigation or major DOM changes.\n\
-            - act: Interact with a numbered element from ai_snapshot. Provide 'element' (number), 'operation' (click/type/select). For type also provide 'text'; for select provide 'value'. If the element is not found, run ai_snapshot again.\n\
+            - ai_snapshot: LLM-optimized DOM snapshot via Playwright's _snapshotForAI (falls back to hand-rolled evaluator). Re-run after navigation or major DOM changes.\n\
+            - act: Interact with a numbered element from ai_snapshot. Provide 'element' (number), 'operation' (click/type/select). For type also provide 'text'; for select provide 'value'.\n\
             - screenshot: Capture page as PNG image\n\
             - click: Click element by CSS selector\n\
             - type: Type text into element\n\
@@ -86,7 +87,7 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
             - list_frames: List all frames/iframes on the page\n\
             - switch_frame: Switch context to a specific iframe by index or URL\n\
             - evaluate_in_frame: Execute JavaScript inside a specific iframe\n\
-            - stop: Close browser",
+            - stop: Disconnect the bridge from Chrome. Chrome stays alive so the next 'start' re-attaches instantly. Pass 'kill=true' to also terminate the Chrome process + clear its state.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -117,7 +118,9 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
                     "domain": { "type": "string", "description": "Cookie domain (for 'cookies set')" },
                     "frame_index": { "type": "number", "description": "Frame index from list_frames (for 'switch_frame' / 'evaluate_in_frame')" },
                     "frame_url": { "type": "string", "description": "Frame URL pattern to match (for 'switch_frame' / 'evaluate_in_frame')" },
-                    "element": { "type": "number", "description": "Element number from ai_snapshot (for 'act' action)" }
+                    "element": { "type": "number", "description": "Element number from ai_snapshot (for 'act' action)" },
+                    "profile": { "type": "string", "description": "Persistent Chrome profile name for 'start' (default: 'default'). Each profile has its own user-data-dir." },
+                    "kill": { "type": "boolean", "description": "For 'stop' only: also kill the Chrome process and wipe profile state (default: false)." }
                 },
                 "required": ["action"]
             }),
