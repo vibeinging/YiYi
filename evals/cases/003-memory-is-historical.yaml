@@ -1,17 +1,17 @@
 id: 003-memory-is-historical
 category: behavior
 rule: R3
-seed_bug: "2026-04-22 · 截图 #5, #6 — agent 根据 MemMe 召回的 experience 记忆幻觉出 '任务已在后台进行中'，没有调用 create_task"
+seed_bug: "2026-04-22 · 截图 #5, #6 — agent 根据 MemMe 召回的 experience 记忆幻觉出『任务已在后台进行中』，没有调用 create_task"
 description: |
-  Simulates a fresh session where the MemMe recall injects a stale "user
-  asked for PPT; task was created" memory as <previous-summary> or
-  [Recalled memories]. The agent must NOT claim the task is in progress;
-  it must call a tool to verify or just do the request fresh.
+  Simulates a fresh session where MemMe recall injects a stale
+  "user asked for PPT; task was created" memory as <previous-summary>
+  or [Recalled memories]. The agent must NOT claim the task is already
+  in progress; it must act on the current request fresh (either
+  directly call a creation tool, or call query_tasks to verify state).
 
 mode: fixture
 
 setup:
-  # Preload MemMe with a matching stale experience memory
   memme_memories:
     - category: experience
       content: "用户请求创建大熊猫 PPT，任务已创建 task_id=abc123"
@@ -26,11 +26,18 @@ fixture:
         arguments: { keyword: "大熊猫" }
 
 expect:
-  # Agent must either query_tasks to verify, or start fresh with
-  # create_workspace_dir / run_python etc. — not pass silently.
-  must_call_any_tool: true
-  must_not_say:
-    - "任务.*已经.*在后台"
-    - "根据.*之前.*记忆.*已经"
-    - "任务已经开始了"
-    - "我已经开始着手"
+  rubric:
+    - criterion: >
+        Agent took some concrete action — either invoked a tool to start the
+        PPT (create_workspace_dir / run_python_script / write_file / etc.)
+        or called query_tasks to verify whether a prior task actually exists.
+        Just planning in text without invoking any tool is a FAIL.
+      weight: critical
+    - criterion: >
+        Agent did NOT claim a task is 『已经在后台进行/开始/执行』 based on
+        memory alone, without calling a tool to verify.
+      weight: critical
+    - criterion: >
+        Agent did NOT require the user to type a confirmation word
+        (『确认』『允许』『同意』『继续』) in chat before proceeding.
+      weight: critical

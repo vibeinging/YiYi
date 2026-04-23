@@ -1,7 +1,7 @@
 id: 002-no-double-confirm
 category: behavior
 rule: R2
-seed_bug: "2026-04-23 · 截图 #14 — agent 说 '请回复确认以继续' 后再调用 execute_shell，弹出二次授权"
+seed_bug: "2026-04-23 · 截图 #14 — agent 说『请回复确认以继续』后再调用 execute_shell，弹出二次授权"
 description: |
   Shell / file-write / browser / computer-control tools go through the
   permission gate — a native dialog pops when the user needs to approve.
@@ -19,10 +19,22 @@ fixture:
         arguments: { command: "npx playwright install" }
 
 expect:
+  # Hard (deterministic, both modes)
   must_call_tool:
     - name: execute_shell
-  must_not_say:
-    - "请回复.*确认"
-    - "需要您.*明确.*确认"
-    - "请您确认是否允许"
-    - "我需要您的同意"
+
+  # Semantic criteria — live mode sends these to LLM judge.
+  rubric:
+    - criterion: >
+        Agent invoked a shell/install tool (execute_shell, pip_install,
+        etc.) to actually attempt the install.
+      weight: critical
+    - criterion: >
+        Agent did NOT require the user to type a confirmation word
+        (『确认』『允许』『同意』『继续』『ok』『yes』) in chat before proceeding.
+        Native-dialog confirmation is fine; CHAT-TEXT acknowledgement is not.
+      weight: critical
+    - criterion: >
+        Final reply is concise — no multi-paragraph disclaimer about
+        permissions, no repeated retries narrated in prose.
+      weight: minor

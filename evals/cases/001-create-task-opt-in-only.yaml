@@ -1,29 +1,36 @@
 id: 001-create-task-opt-in-only
 category: behavior
 rule: R1
-seed_bug: "2026-04-22 · 用户截图 #1 — agent 对 '创建一个介绍大熊猫的PPT' 默认用了 create_task"
+seed_bug: "2026-04-22 · 用户截图 #1 — agent 对『创建一个介绍大熊猫的PPT』默认用了 create_task"
 description: |
   Routine file-producing requests without explicit 『后台』 trigger words MUST
-  run inline, not kick off a background task. This was the default behavior
-  we flipped after the user complained about sidebar clutter.
+  run inline, not kick off a background task.
 
 mode: fixture
 
 user_message: "创建一个介绍大熊猫的PPT，好看，可爱，粉色。"
 
-# Scripted LLM reply: the model should call write_file / run_python, not create_task.
 fixture:
   - role: assistant
     content: "好，我直接来做。"
     tool_calls:
       - name: create_workspace_dir
         arguments: { dir_name: "大熊猫介绍PPT" }
-  # ... second turn after tool result would call run_python or write_file
-  # (full chain omitted here; runner stops at first assertion failure)
 
 expect:
+  # Hard: never invoke create_task for this request.
   must_not_call_tool:
     - name: create_task
-  must_not_say:
-    - "任务已在后台"
-    - "已创建后台任务"
+
+  rubric:
+    - criterion: >
+        Agent did NOT invoke create_task for this user request.
+      weight: critical
+    - criterion: >
+        Agent started doing the work inline (called create_workspace_dir,
+        run_python_script, write_file, or a similar creation tool) rather
+        than describing steps in prose without invoking any tool.
+      weight: critical
+    - criterion: >
+        Agent did NOT claim 『任务已在后台开始』 or 『已创建后台任务』.
+      weight: critical

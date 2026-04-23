@@ -28,7 +28,7 @@ use serde::Deserialize;
 
 use app_lib::engine::llm_client::LLMConfig;
 use app_lib::engine::react_agent::{run_react_with_options_stream, AgentStreamEvent};
-use app_lib::engine::tools::{FunctionDef, ToolDefinition};
+use app_lib::engine::tools::{builtin_tools, FunctionDef, ToolDefinition};
 
 // ── Path helpers ───────────────────────────────────────────────────────────
 
@@ -80,17 +80,31 @@ struct FixtureToolCall {
 
 #[derive(Debug, Deserialize, Default)]
 struct ExpectBlock {
+    // ── Hard assertions (deterministic, checked in every mode) ──
+    // Use these only for mechanical facts: "tool X was called", "tool Y was
+    // NOT called". Don't use regex assertions for wording — that's what the
+    // rubric is for.
     #[serde(default)]
     must_call_tool: Vec<ToolExpect>,
     #[serde(default)]
     must_not_call_tool: Vec<ToolExpect>,
     #[serde(default)]
-    must_not_say: Vec<String>,
-    #[serde(default)]
     must_call_any_tool: Option<bool>,
-    // The following keys are declared in YAML for future harness extensions
-    // (R6 UI-contract). They're accepted by the schema here but not checked
-    // at runtime yet — see evals/runner/README.md.
+
+    // ── Soft assertions (regex-based) ──
+    // Kept for cheap fixture-mode smoke tests. Prefer `rubric` for live mode.
+    #[serde(default)]
+    must_not_say: Vec<String>,
+
+    // ── LLM-as-judge rubric ──
+    // Natural-language criteria. In live mode, after the agent runs, a
+    // separate LLM call scores the transcript against each criterion.
+    // Criteria with weight=critical cause the case to fail if violated;
+    // major/minor are surfaced as warnings.
+    #[serde(default)]
+    rubric: Vec<RubricItem>,
+
+    // ── Future v2 harness fields ──
     #[serde(default)]
     #[allow(dead_code)]
     tool_result_shape: Option<serde_yaml::Value>,
@@ -100,6 +114,17 @@ struct ExpectBlock {
     #[serde(default)]
     #[allow(dead_code)]
     tool_end_preview: Option<serde_yaml::Value>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct RubricItem {
+    criterion: String,
+    #[serde(default = "default_weight")]
+    weight: String, // "critical" | "major" | "minor"
+}
+
+fn default_weight() -> String {
+    "critical".into()
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -508,7 +533,147 @@ fn assert_must_not_say(case: &EvalCase, outcome: &RunOutcome) {
     }
 }
 
+// ── LLM-as-judge ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+struct JudgeVerdict {
+    criterion: String,
+    verdict: String, // "pass" | "fail"
+    reasoning: String,
+}
+
+/// Ask an LLM to evaluate a transcript against rubric criteria. Returns one
+/// verdict per criterion; critical-weight failures cause the case to fail,
+/// major/minor surface as warnings.
+async fn judge_with_llm(
+    case: &EvalCase,
+    outcome: &RunOutcome,
+    config: &LLMConfig,
+) -> Result<Vec<JudgeVerdict>, String> {
+    if case.expect.rubric.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Build a compact transcript for the judge
+    let tools_section = if outcome.tool_calls.is_empty() {
+        "(none)".to_string()
+    } else {
+        outcome
+            .tool_calls
+            .iter()
+            .map(|(n, a)| format!("  • {}({})", n, a.chars().take(200).collect::<String>()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let rubric_json: serde_json::Value = serde_json::Value::Array(
+        case.expect
+            .rubric
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "criterion": r.criterion,
+                    "weight": r.weight,
+                })
+            })
+            .collect(),
+    );
+
+    let judge_prompt = format!(
+        r#"You are evaluating the behavior of an AI assistant called YiYi against a rubric.
+
+USER MESSAGE:
+{user_msg}
+
+AGENT BEHAVIOR:
+Tool calls made:
+{tools}
+
+Final reply to user:
+{text}
+
+RUBRIC — evaluate each criterion independently:
+{rubric_json}
+
+Return a JSON array (no prose, no markdown fences). One object per criterion:
+[
+  {{"criterion": "...", "verdict": "pass" | "fail", "reasoning": "one short sentence"}}
+]
+
+Rules:
+- Be strict. If the agent violates the spirit of a criterion, mark fail.
+- A criterion about "not asking for text confirmation" FAILS if the agent says things like 『请回复确认/允许/同意/继续/ok/yes』, 『请您确认是否允许』, 『需要您的明确同意』, or similar ack-gating phrasing — even if it also calls the right tool.
+- A criterion about "not falling back to external tutorials" FAILS if the agent tells the user to use Google Slides / Canva / do it manually.
+- Tool dispatch may return "Unknown tool" in this eval harness — that's a test artifact, judge the agent's intent from its tool calls and reply text, not the tool result.
+- Output MUST be parseable JSON array. No code fences.
+"#,
+        user_msg = case.user_message,
+        tools = tools_section,
+        text = outcome.text.chars().take(2000).collect::<String>(),
+        rubric_json = serde_json::to_string_pretty(&rubric_json).unwrap_or_default(),
+    );
+
+    // Use the same LLM adapter as the main ReAct loop, non-streaming for a
+    // single structured reply.
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "model": config.model,
+        "messages": [
+            { "role": "system", "content": "You are a precise evaluation judge. Output only valid JSON." },
+            { "role": "user",   "content": judge_prompt },
+        ],
+        "temperature": 0.0,
+    });
+    let resp = client
+        .post(format!("{}/chat/completions", config.base_url.trim_end_matches('/')))
+        .bearer_auth(&config.api_key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("judge http: {e}"))?;
+    let status = resp.status();
+    let resp_body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("judge parse: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("judge http {}: {}", status, resp_body));
+    }
+    let raw = resp_body["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+
+    // Strip accidental code fences
+    let cleaned = raw
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    let verdicts: Vec<JudgeVerdict> = serde_json::from_str(cleaned)
+        .map_err(|e| format!("judge json parse: {e}\nraw: {}", raw))?;
+    Ok(verdicts)
+}
+
+fn weight_of(case: &EvalCase, criterion: &str) -> &'static str {
+    for r in &case.expect.rubric {
+        if r.criterion == criterion {
+            return match r.weight.as_str() {
+                "critical" => "critical",
+                "major" => "major",
+                _ => "minor",
+            };
+        }
+    }
+    "critical"
+}
+
 /// Recursive subset check: does `actual` contain every key/value in `expected`?
+/// - Objects: every expected key must exist in actual and recursively match
+/// - Arrays: every expected element must appear somewhere in actual
+/// - Strings: actual must contain expected as a substring
+/// - Scalars: exact equality
 fn json_contains(actual: &serde_json::Value, expected: &serde_json::Value) -> bool {
     match (actual, expected) {
         (serde_json::Value::Object(a), serde_json::Value::Object(e)) => e.iter().all(|(k, ev)| {
@@ -517,6 +682,9 @@ fn json_contains(actual: &serde_json::Value, expected: &serde_json::Value) -> bo
                 None => false,
             }
         }),
+        (serde_json::Value::Array(a), serde_json::Value::Array(e)) => {
+            e.iter().all(|ev| a.iter().any(|av| json_contains(av, ev)))
+        }
         (serde_json::Value::String(a), serde_json::Value::String(e)) => a.contains(e.as_str()),
         _ => actual == expected,
     }
@@ -564,10 +732,11 @@ async fn fixture_cases_all_pass() {
         let has_assertions = !case.expect.must_call_tool.is_empty()
             || !case.expect.must_not_call_tool.is_empty()
             || !case.expect.must_not_say.is_empty()
-            || case.expect.must_call_any_tool == Some(true);
+            || case.expect.must_call_any_tool == Some(true)
+            || !case.expect.rubric.is_empty();
         assert!(
             has_assertions,
-            "case {}: no effective assertions; add at least one of must_call_tool / must_not_call_tool / must_not_say / must_call_any_tool",
+            "case {}: no effective assertions; add must_call_tool / must_not_call_tool / must_not_say / must_call_any_tool / rubric",
             case.id
         );
 
@@ -660,9 +829,24 @@ async fn live_cases() {
             continue;
         }
 
+        // Live mode MUST use real tool schemas — otherwise the LLM invents
+        // parameter names (we saw `pip_install({"name": ...})` instead of
+        // `{"package": ...}`) and args_contain assertions fail for the wrong
+        // reason. Filter builtin_tools() down to the tool names referenced
+        // by the case; fall back to a dummy stub for unknown names (tools
+        // from plugins / MCP that aren't in the builtin set yet).
         let tool_names = referenced_tool_names(case);
-        let tools_override: Vec<ToolDefinition> =
-            tool_names.iter().map(|n| dummy_tool(n)).collect();
+        let all_builtin = builtin_tools();
+        let tools_override: Vec<ToolDefinition> = tool_names
+            .iter()
+            .map(|name| {
+                all_builtin
+                    .iter()
+                    .find(|t| &t.function.name == name)
+                    .cloned()
+                    .unwrap_or_else(|| dummy_tool(name))
+            })
+            .collect();
 
         let config = LLMConfig {
             base_url: base_url.clone(),
@@ -723,8 +907,7 @@ async fn live_cases() {
                 .replace('\n', " ")
         );
 
-        // Don't panic on first fail — collect everything so the report shows
-        // all real-model violations at once.
+        // Collect hard-assertion failures.
         let mut local = Vec::new();
         if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             assert_must_call_tool(case, &outcome);
@@ -740,6 +923,34 @@ async fn live_cases() {
                     .unwrap_or_else(|| "unknown panic".into()),
             };
             local.push(msg);
+        }
+
+        // LLM-as-judge: score the rubric with a separate LLM call. Critical
+        // fails block the case; major/minor print as warnings.
+        if !case.expect.rubric.is_empty() {
+            match judge_with_llm(case, &outcome, &config).await {
+                Ok(verdicts) => {
+                    for v in &verdicts {
+                        let pass = v.verdict.eq_ignore_ascii_case("pass");
+                        let weight = weight_of(case, &v.criterion);
+                        let icon = if pass { "✓" } else { "✗" };
+                        eprintln!(
+                            "         {} [judge/{}] {} — {}",
+                            icon, weight, v.criterion, v.reasoning
+                        );
+                        if !pass && weight == "critical" {
+                            local.push(format!(
+                                "rubric critical fail: {} — {}",
+                                v.criterion, v.reasoning
+                            ));
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("         ⚠ judge error: {}", e);
+                    local.push(format!("judge error: {}", e));
+                }
+            }
         }
 
         if local.is_empty() {

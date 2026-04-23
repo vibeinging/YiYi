@@ -18,10 +18,10 @@ metadata:
 **Before running any script in this skill, install the Python dependency:**
 
 ```
-pip_install(package="python-pptx")
+pip_install(packages=["python-pptx"])
 ```
 
-Call the `pip_install` tool (not shell). It's idempotent — safe to call even if already installed.
+Call the `pip_install` tool (not shell). **`packages` is an array of strings** (see the tool's schema). It's idempotent — safe to call even if already installed.
 
 ## Reading & Extracting Text
 
