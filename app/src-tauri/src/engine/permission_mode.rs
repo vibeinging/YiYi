@@ -144,10 +144,25 @@ impl PermissionPolicy {
         } else if self.active_mode == PermissionMode::Standard
             && required == PermissionMode::Full
         {
-            // Standard mode can use Full tools with user confirmation
+            // Standard mode can use Full tools with user confirmation.
+            //
+            // This `reason` string gets surfaced to the frontend permission
+            // dialog AND — crucially — embedded in the tool result text
+            // that flows back to the LLM when the user denies the request.
+            //
+            // Keep this a MACHINE-FLAVORED error code, not a natural-language
+            // sentence. If the reason reads like 『请确认是否允许执行』, the
+            // LLM treats that string as ground truth and parrots it to the
+            // user in its next reply — producing a double-confirmation
+            // anti-pattern that no amount of prompt engineering can fix.
+            //
+            // Frontend is responsible for translating this code into
+            // human-friendly dialog copy.
             PermissionOutcome::NeedsConfirmation {
                 reason: format!(
-                    "此操作需要更高权限，请确认是否允许执行"
+                    "permission_upgrade_required: tool '{}' needs 'full' mode (current: '{}')",
+                    tool_name,
+                    self.active_mode.as_str(),
                 ),
             }
         } else {

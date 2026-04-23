@@ -27,6 +27,19 @@ function truncatePath(path: string, max: number = 80): string {
   return '…' + path.slice(path.length - max + 1);
 }
 
+/**
+ * Translate machine-flavored permission error codes into user-friendly text.
+ * Codes from the backend stay machine-style (see permission_mode.rs) so they
+ * don't pollute the LLM's tool result and cause it to parrot the phrase back
+ * to the user.
+ */
+function humanizeReason(raw: string): string {
+  if (raw.startsWith('permission_upgrade_required:')) {
+    return '此操作需要更高权限模式，点『允许』后系统会临时授权';
+  }
+  return raw;
+}
+
 export function PermissionCard({ request }: { request: PermissionRequestState }) {
   const [responding, setResponding] = useState(false);
   const resolvePermission = useChatStreamStore((s) => s.resolvePermission);
@@ -101,7 +114,7 @@ export function PermissionCard({ request }: { request: PermissionRequestState })
         </div>
         {request.reason && (
           <div className="text-[11px] mt-1" style={{ color: 'var(--color-text-muted)' }}>
-            {request.reason}
+            {humanizeReason(request.reason)}
           </div>
         )}
         {request.parentFolder && request.permissionType === 'folder_access' && (
