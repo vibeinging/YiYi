@@ -1,8 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { FileDown, X } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
-import { open } from '@tauri-apps/plugin-shell';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { healthCheck, isSetupComplete } from './api/system';
 import { SetupWizard } from './pages/SetupWizard';
@@ -37,7 +34,6 @@ function App() {
 }
 
 function MainApp() {
-  const { t } = useTranslation();
   const [currentPage, setCurrentPage] = useState<Page>('chat');
   const [healthStatus, setHealthStatus] = useState<'ok' | 'error' | 'checking'>('checking');
   const [setupDone, setSetupDone] = useState<boolean | null>(null);
@@ -75,11 +71,6 @@ function MainApp() {
     loadTasks();
   }, [loadTasks]);
 
-  // File notifications from agent send_file_to_user tool
-  const [fileNotification, setFileNotification] = useState<{
-    path: string; filename: string; description: string; size: number;
-  } | null>(null);
-
   useEffect(() => {
     healthCheck()
       .then(() => setHealthStatus('ok'))
@@ -100,18 +91,6 @@ function MainApp() {
     const t = setTimeout(() => el.remove(), 260);
     return () => clearTimeout(t);
   }, [setupDone]);
-
-  // Listen for agent://send_file events
-  useEffect(() => {
-    const unlisten = listen<{ path: string; filename: string; description: string; size: number }>(
-      'agent://send_file',
-      (event) => {
-        setFileNotification(event.payload);
-        setTimeout(() => setFileNotification(null), 15000);
-      }
-    );
-    return () => { unlisten.then(fn => fn()); };
-  }, []);
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -250,36 +229,6 @@ function MainApp() {
             className="h-10 shrink-0 app-drag-region"
             style={{ background: 'var(--color-bg)' }}
           />
-        )}
-        {/* File notification bar */}
-        {fileNotification && (
-          <div
-            className="flex items-center gap-3 px-4 py-2.5 text-[13px] animate-in slide-in-from-top"
-            style={{ background: 'var(--color-accent)', color: '#fff' }}
-          >
-            <FileDown size={16} />
-            <span className="font-medium">{fileNotification.filename}</span>
-            {fileNotification.description && (
-              <span className="opacity-80">— {fileNotification.description}</span>
-            )}
-            <span className="opacity-60">
-              ({(fileNotification.size / 1024).toFixed(1)} KB)
-            </span>
-            <button
-              className="ml-auto px-3 py-1 rounded-md text-[12px] font-medium"
-              style={{ background: 'rgba(255,255,255,0.2)' }}
-              onClick={() => {
-                open(fileNotification.path).catch(() => {
-                  navigator.clipboard.writeText(fileNotification.path);
-                });
-              }}
-            >
-              {t('common.open')}
-            </button>
-            <button onClick={() => setFileNotification(null)} className="opacity-60 hover:opacity-100">
-              <X size={14} />
-            </button>
-          </div>
         )}
         {/* Page content */}
         <div className="flex-1 overflow-hidden" style={{ background: 'var(--color-bg)', position: 'relative' }}>

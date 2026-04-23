@@ -774,16 +774,26 @@ pub(super) async fn send_file_to_user_tool(args: &serde_json::Value) -> String {
                 }),
             );
 
-            format!(
-                "File sent to user: {} ({} bytes)",
-                filename, size
-            )
+            // Return structured JSON so the frontend can render an inline
+            // file card (mirrors the create_task / pty_session pattern).
+            // Keep the text short so it doesn't blow past the 2000-char
+            // result_preview cap in run_react's stream emitter.
+            serde_json::json!({
+                "__type": "file_sent",
+                "path": path,
+                "filename": filename,
+                "description": description,
+                "size": size,
+            }).to_string()
         }
         None => {
-            format!(
-                "File ready: {} ({} bytes) at {}",
-                filename, size, path
-            )
+            serde_json::json!({
+                "__type": "file_sent",
+                "path": path,
+                "filename": filename,
+                "description": description,
+                "size": size,
+            }).to_string()
         }
     }
 }

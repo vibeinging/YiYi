@@ -27,6 +27,7 @@ import { open } from '@tauri-apps/plugin-shell';
 
 import { ToolCallPanel, HistorySpawnAgentsPanel, getToolLabel } from '../ToolCallPanel';
 import { TaskCard } from '../TaskCard';
+import { FileCard, type SentFile } from '../FileCard';
 import { LongTaskProgressPanel, RoundDivider } from '../LongTaskPanel';
 import { RetryStatusBar } from './RetryStatusBar';
 import { SpawnAgentPanel } from '../SpawnAgentPanel';
@@ -58,6 +59,7 @@ export interface ProcessedMsg {
   historyAgents?: { name: string; result: string; is_error?: boolean }[];
   taskIds?: string[];
   ptySessions?: PtySessionInfo[];
+  sentFiles?: SentFile[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -143,6 +145,7 @@ export function processMessages(messages: ChatMessage[]): ProcessedMsg[] {
 
       const taskIds: string[] = [];
       const ptySessions: PtySessionInfo[] = [];
+      const sentFiles: SentFile[] = [];
       const regularTools = allTools.filter((tool) => {
         if (tool.name === 'create_task' && tool.resultPreview) {
           try {
@@ -155,6 +158,20 @@ export function processMessages(messages: ChatMessage[]): ProcessedMsg[] {
             const parsed = JSON.parse(tool.resultPreview);
             if (parsed.__type === 'pty_session' && parsed.session_id) {
               ptySessions.push({ sessionId: parsed.session_id, command: parsed.command || 'shell' });
+              return false;
+            }
+          } catch { /* keep */ }
+        }
+        if (tool.name === 'send_file_to_user' && tool.resultPreview) {
+          try {
+            const parsed = JSON.parse(tool.resultPreview);
+            if (parsed.__type === 'file_sent' && parsed.path && parsed.filename) {
+              sentFiles.push({
+                path: parsed.path,
+                filename: parsed.filename,
+                description: parsed.description,
+                size: typeof parsed.size === 'number' ? parsed.size : 0,
+              });
               return false;
             }
           } catch { /* keep */ }
@@ -172,6 +189,7 @@ export function processMessages(messages: ChatMessage[]): ProcessedMsg[] {
           historyAgents: finalMsg.spawn_agents?.length ? finalMsg.spawn_agents : undefined,
           taskIds: taskIds.length > 0 ? taskIds : undefined,
           ptySessions: ptySessions.length > 0 ? ptySessions : undefined,
+          sentFiles: sentFiles.length > 0 ? sentFiles : undefined,
         });
         i = j + 1;
       } else {
@@ -180,6 +198,7 @@ export function processMessages(messages: ChatMessage[]): ProcessedMsg[] {
           historyTools: regularTools,
           taskIds: taskIds.length > 0 ? taskIds : undefined,
           ptySessions: ptySessions.length > 0 ? ptySessions : undefined,
+          sentFiles: sentFiles.length > 0 ? sentFiles : undefined,
         });
         i = j;
       }
@@ -437,7 +456,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
           ) : null // Welcome screen handled by parent
         ) : (
           <div className="w-full py-6 px-8 space-y-6">
-            {processedMessages.map(({ msg, historyTools, historyAgents, taskIds, ptySessions }, idx) => {
+            {processedMessages.map(({ msg, historyTools, historyAgents, taskIds, ptySessions, sentFiles }, idx) => {
               if (msg.role === 'context_reset') {
                 return (
                   <div key={idx} className="flex items-center gap-3 py-3 px-4">
@@ -464,6 +483,11 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                     {taskIds && taskIds.length > 0 && (
                       <div className="space-y-2">
                         {taskIds.map((tid) => <TaskCard key={tid} taskId={tid} />)}
+                      </div>
+                    )}
+                    {sentFiles && sentFiles.length > 0 && (
+                      <div className="space-y-2">
+                        {sentFiles.map((f, i) => <FileCard key={`${f.path}-${i}`} file={f} />)}
                       </div>
                     )}
                     {ptySessions && ptySessions.length > 0 && ptySessions.map((pty) => (
@@ -596,6 +620,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                   {(activeTools.length > 0 || claudeCode) && (() => {
                     const taskCards: string[] = [];
                     const streamPtySessions: PtySessionInfo[] = [];
+                    const streamSentFiles: SentFile[] = [];
                     const filteredTools = activeTools.filter((t) => {
                       if (t.name === 'create_task' && t.status === 'done' && t.resultPreview) {
                         try {
@@ -612,13 +637,27 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                           }
                         } catch { /* keep */ }
                       }
+                      if (t.name === 'send_file_to_user' && t.status === 'done' && t.resultPreview) {
+                        try {
+                          const parsed = JSON.parse(t.resultPreview);
+                          if (parsed.__type === 'file_sent' && parsed.path && parsed.filename) {
+                            streamSentFiles.push({
+                              path: parsed.path,
+                              filename: parsed.filename,
+                              description: parsed.description,
+                              size: typeof parsed.size === 'number' ? parsed.size : 0,
+                            });
+                            return false;
+                          }
+                        } catch { /* keep */ }
+                      }
                       return true;
                     });
                     return (
                       <>
                         {(filteredTools.length > 0 || claudeCode) && <ToolCallPanel tools={filteredTools} />}
-                        {/* activePermission is now rendered in Chat.tsx bottom dock */}
                         {taskCards.map((tid) => <TaskCard key={tid} taskId={tid} />)}
+                        {streamSentFiles.map((f, i) => <FileCard key={`${f.path}-${i}`} file={f} />)}
                         {streamPtySessions.map((pty) => (
                           <div key={pty.sessionId} className="rounded-xl overflow-hidden" style={{
                             height: '300px', border: '1px solid var(--color-border)', background: 'var(--color-bg)',
