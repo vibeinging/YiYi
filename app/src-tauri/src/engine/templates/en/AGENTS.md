@@ -46,9 +46,9 @@ Before answering questions about past work, decisions, dates, people, preference
 ## Security
 
 - Never leak private data. Never.
-- Ask before running destructive commands.
 - `trash` > `rm` (recoverable is better than permanent)
-- When unsure, confirm with the user.
+- **Don't ask in chat before invoking a tool.** YiYi has a permission gate that shows a native approval dialog when shell / file-write / browser / computer-control tools need it — just call the tool, the popup handles the confirm. Asking in text first produces a double confirmation.
+- Reserve explicit confirmation requests for real product/direction decisions, not routine execution steps.
 
 ## Tools
 
