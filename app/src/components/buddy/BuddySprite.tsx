@@ -12,7 +12,9 @@ import { getMorningGreeting } from '../../api/system'
 import { BuddyBubble } from './BuddyBubble'
 import { BuddyStatsCard } from './BuddyStatsCard'
 import { BuddyHatchAnimation } from './BuddyHatchAnimation'
+import { GrowthSuggestionsBubble } from './GrowthSuggestionsBubble'
 import { OrbCore } from './OrbCore'
+import { useGrowthSuggestionsStore } from '../../stores/growthSuggestionsStore'
 
 const IDLE_ANIMATIONS: Record<string, string> = {
   breathe: 'buddy-breathe 3s ease-in-out infinite',
@@ -55,6 +57,10 @@ export const BuddySprite: React.FC = () => {
   const [fidget, setFidget] = useState(false)
   const [particles, setParticles] = useState<{ id: number; x: number; y: number; emoji: string }[]>([])
   const particleIdRef = useRef(0)
+
+  // Growth suggestions: badge count + pop-out bubble
+  const growthCount = useGrowthSuggestionsStore((s) => s.visiblePending().length)
+  const [showGrowth, setShowGrowth] = useState(false)
 
   // Drag state
   const [position, setPosition] = useState<{ x: number; y: number }>(() => {
@@ -266,7 +272,10 @@ export const BuddySprite: React.FC = () => {
             <BuddyStatsCard companion={companion} onClose={() => setShowStats(false)} flipRight={flipRight} />
           </div>
         )}
-        {bubbleText && <BuddyBubble text={bubbleText} visible={bubbleVisible} color={accentColor} flipRight={flipRight} />}
+        {showGrowth && (
+          <GrowthSuggestionsBubble onClose={() => setShowGrowth(false)} flipRight={flipRight} />
+        )}
+        {bubbleText && !showGrowth && <BuddyBubble text={bubbleText} visible={bubbleVisible} color={accentColor} flipRight={flipRight} />}
 
         {/* Floating Hearts */}
         {petting && (
@@ -322,6 +331,28 @@ export const BuddySprite: React.FC = () => {
             size={36}
             shiny={!muted && companion.shiny}
           />
+
+          {/* Growth suggestions badge ✨ */}
+          {growthCount > 0 && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                setShowGrowth((v) => !v)
+              }}
+              className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center text-[10px] font-bold"
+              style={{
+                background: 'linear-gradient(135deg, #A78BFA, #6366F1)',
+                color: '#fff',
+                boxShadow: '0 0 10px rgba(167,139,250,0.7)',
+                animation: 'buddy-breathe 2s ease-in-out infinite',
+                pointerEvents: 'auto',
+                cursor: 'pointer',
+              }}
+              title={`${growthCount} 个成长建议`}
+            >
+              {growthCount > 9 ? '9+' : growthCount}
+            </button>
+          )}
         </div>
 
         {/* Name label */}

@@ -1,73 +1,60 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { renderHook, act } from '@testing-library/react';
 import { mockEventBridge } from '../test-utils/mockEvent';
-import { ToastProvider } from '../components/Toast';
+import { useGrowthSuggestionsStore } from '../stores/growthSuggestionsStore';
 import { useGrowthEventBridge } from './useGrowthEventBridge';
-
-function Harness() {
-  useGrowthEventBridge();
-  return null;
-}
 
 describe('useGrowthEventBridge', () => {
   let bridge: ReturnType<typeof mockEventBridge>;
 
   beforeEach(() => {
     bridge = mockEventBridge();
+    useGrowthSuggestionsStore.getState().clearAll();
+    // wipe persisted lastSavedAt too
+    useGrowthSuggestionsStore.setState({ lastSavedAt: {} });
   });
 
-  it('renders localized toast when persist suggestion arrives', async () => {
-    render(
-      <ToastProvider>
-        <Harness />
-      </ToastProvider>,
+  it('subscribes to growth://persist_suggestion', async () => {
+    renderHook(() => useGrowthEventBridge());
+    await vi.waitFor(() =>
+      expect(bridge.channels()).toContain('growth://persist_suggestion'),
     );
-    await vi.waitFor(() => expect(bridge.channels()).toContain('growth://persist_suggestion'));
+  });
+
+  it('pushes a suggestion into the store on event', async () => {
+    renderHook(() => useGrowthEventBridge());
+    await vi.waitFor(() =>
+      expect(bridge.channels()).toContain('growth://persist_suggestion'),
+    );
     act(() => {
       bridge.dispatch('growth://persist_suggestion', {
         type: 'skill',
-        name: 'summarize',
-        description: 'Summarize long documents',
+        name: '批量重命名',
+        description: '按正则批量改名并生成报告',
+        reason: '本会话 3 次类似操作',
+        session_id: 'sess-1',
+        task_id: 't-1',
       });
     });
-    expect(await screen.findByText(/可以保存为技能/)).toBeInTheDocument();
-    expect(screen.getByText(/summarize/)).toBeInTheDocument();
+    const pending = useGrowthSuggestionsStore.getState().pending;
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      type: 'skill',
+      name: '批量重命名',
+      sessionId: 'sess-1',
+      taskId: 't-1',
+    });
   });
 
-  it('truncates long descriptions to 60 chars + ...', async () => {
-    render(
-      <ToastProvider>
-        <Harness />
-      </ToastProvider>,
+  it('skips payloads missing name or type', async () => {
+    renderHook(() => useGrowthEventBridge());
+    await vi.waitFor(() =>
+      expect(bridge.channels()).toContain('growth://persist_suggestion'),
     );
-    await vi.waitFor(() => expect(bridge.channels()).toContain('growth://persist_suggestion'));
-    const longDesc = 'x'.repeat(200);
     act(() => {
-      bridge.dispatch('growth://persist_suggestion', {
-        type: 'workflow',
-        name: 'n',
-        description: longDesc,
-      });
+      bridge.dispatch('growth://persist_suggestion', { name: 'no type' });
+      bridge.dispatch('growth://persist_suggestion', { type: 'skill' });
     });
-    const msg = await screen.findByText(/可以保存为工作流/);
-    expect(msg.textContent).toContain('...');
-    expect(msg.textContent).not.toContain('x'.repeat(61));
-  });
-
-  it('falls back to raw type for unknown categories', async () => {
-    render(
-      <ToastProvider>
-        <Harness />
-      </ToastProvider>,
-    );
-    await vi.waitFor(() => expect(bridge.channels()).toContain('growth://persist_suggestion'));
-    act(() => {
-      bridge.dispatch('growth://persist_suggestion', {
-        type: 'mystery',
-        name: 'x',
-        description: 'y',
-      });
-    });
-    expect(await screen.findByText(/可以保存为mystery/)).toBeInTheDocument();
+    expect(useGrowthSuggestionsStore.getState().pending).toHaveLength(0);
   });
 });
