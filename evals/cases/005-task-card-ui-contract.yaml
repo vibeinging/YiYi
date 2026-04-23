@@ -1,0 +1,50 @@
+id: 005-task-card-ui-contract
+category: ui-contract
+rule: R6
+seed_bug: "2026-04-22 · 截图 #4 — create_task 被调用但前端消息流里没出现 TaskCard。根因: resultPreview 被截断 200 字节，JSON 解析失败"
+description: |
+  When create_task is invoked, the contract the frontend relies on is:
+    1. The tool result is a valid JSON string starting with {"__type":"create_task"
+       with id / task_id fields.
+    2. Rust emits task://created event with session_id and source="tool".
+    3. The ToolEnd event's result_preview field carries the full JSON
+       (not truncated so short that JSON.parse fails).
+
+  This eval asserts (1) and (3). The backend must ship the full JSON through
+  the ToolEnd stream so the frontend can extract task_id for TaskCard.
+
+mode: fixture
+
+user_message: "把创建大熊猫PPT 放到后台做"
+
+fixture:
+  - role: assistant
+    content: ""
+    tool_calls:
+      - name: create_task
+        arguments:
+          title: "创建大熊猫介绍PPT"
+          description: "后台生成大熊猫介绍 PPT"
+
+expect:
+  must_call_tool:
+    - name: create_task
+
+  # Structural assertion on the agent pipeline's output
+  tool_result_shape:
+    tool: create_task
+    json_has_keys: ["__type", "id", "task_id", "session_id"]
+    json_field_equals:
+      __type: "create_task"
+
+  # Event contract: task://created must emit with these keys
+  event_emitted:
+    - channel: "task://created"
+      payload_has_keys: ["task_id", "session_id", "source"]
+      payload_field_equals:
+        source: "tool"
+
+  # Streaming contract: the preview delivered to frontend must survive JSON.parse
+  tool_end_preview:
+    parseable_as_json: true
+    min_length: 120

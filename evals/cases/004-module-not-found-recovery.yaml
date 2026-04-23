@@ -1,0 +1,45 @@
+id: 004-module-not-found-recovery
+category: capability
+rule: R4,R5
+seed_bug: "2026-04-23 · 截图 #15 — run_python_script 失败 ModuleNotFoundError('pptx')；agent 误读成 '权限问题'，放弃工具路径，给用户写了 Google Slides 教程"
+description: |
+  When a Python script fails with ModuleNotFoundError, the agent must call
+  pip_install for the missing package and retry — NOT:
+    (a) call it a permission error
+    (b) fall back to 『请您使用 Google Slides 手动完成』
+
+mode: fixture
+
+user_message: "创建一个介绍大熊猫的PPT"
+
+fixture:
+  # Turn 1: agent tries to run pptx creation script
+  - role: assistant
+    content: ""
+    tool_calls:
+      - name: run_python_script
+        arguments:
+          script_path: "/skills/pptx/scripts/create_pptx.py"
+          args: ["structure.json", "out.pptx"]
+  # Tool result (injected by runner) returns:
+  # "Error: python-pptx is required. Install with: pip install python-pptx\n
+  #  ModuleNotFoundError: No module named 'pptx'"
+
+  # Turn 2: agent MUST call pip_install for python-pptx
+  - role: assistant
+    content: "缺依赖，我装一下。"
+    tool_calls:
+      - name: pip_install
+        arguments: { package: "python-pptx" }
+
+expect:
+  must_call_tool:
+    - name: pip_install
+      args_contain: { package: "python-pptx" }
+  must_not_say:
+    - "权限问题"
+    - "权限错误"
+    - "使用 Google Slides"
+    - "使用 Canva"
+    - "请您手动"
+    - "由于.*限制.*无法"

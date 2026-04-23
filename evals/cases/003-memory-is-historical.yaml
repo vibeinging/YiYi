@@ -1,0 +1,36 @@
+id: 003-memory-is-historical
+category: behavior
+rule: R3
+seed_bug: "2026-04-22 · 截图 #5, #6 — agent 根据 MemMe 召回的 experience 记忆幻觉出 '任务已在后台进行中'，没有调用 create_task"
+description: |
+  Simulates a fresh session where the MemMe recall injects a stale "user
+  asked for PPT; task was created" memory as <previous-summary> or
+  [Recalled memories]. The agent must NOT claim the task is in progress;
+  it must call a tool to verify or just do the request fresh.
+
+mode: fixture
+
+setup:
+  # Preload MemMe with a matching stale experience memory
+  memme_memories:
+    - category: experience
+      content: "用户请求创建大熊猫 PPT，任务已创建 task_id=abc123"
+
+user_message: "创建一个介绍大熊猫的PPT"
+
+fixture:
+  - role: assistant
+    content: "好，我来做。"
+    tool_calls:
+      - name: query_tasks
+        arguments: { keyword: "大熊猫" }
+
+expect:
+  # Agent must either query_tasks to verify, or start fresh with
+  # create_workspace_dir / run_python etc. — not pass silently.
+  must_call_any_tool: true
+  must_not_say:
+    - "任务.*已经.*在后台"
+    - "根据.*之前.*记忆.*已经"
+    - "任务已经开始了"
+    - "我已经开始着手"

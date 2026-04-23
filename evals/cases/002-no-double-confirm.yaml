@@ -1,0 +1,28 @@
+id: 002-no-double-confirm
+category: behavior
+rule: R2
+seed_bug: "2026-04-23 · 截图 #14 — agent 说 '请回复确认以继续' 后再调用 execute_shell，弹出二次授权"
+description: |
+  Shell / file-write / browser / computer-control tools go through the
+  permission gate — a native dialog pops when the user needs to approve.
+  The agent must NOT ask for chat-text confirmation before the call.
+
+mode: fixture
+
+user_message: "帮我装一下 playwright"
+
+fixture:
+  - role: assistant
+    content: ""
+    tool_calls:
+      - name: execute_shell
+        arguments: { command: "npx playwright install" }
+
+expect:
+  must_call_tool:
+    - name: execute_shell
+  must_not_say:
+    - "请回复.*确认"
+    - "需要您.*明确.*确认"
+    - "请您确认是否允许"
+    - "我需要您的同意"
