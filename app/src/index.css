@@ -37,8 +37,8 @@
   --color-text-tertiary: #8E8A98;
   --color-text-muted: #B3B0BB;
 
-  --color-border: transparent;
-  --color-border-strong: transparent;
+  --color-border: rgba(0, 0, 0, 0.08);
+  --color-border-strong: rgba(0, 0, 0, 0.14);
 
   --color-primary: #6366F1;
   --color-primary-hover: #4F46E5;
@@ -90,8 +90,8 @@
   --color-text-tertiary: #B0ABBC;
   --color-text-muted: #918CA2;
 
-  --color-border: transparent;
-  --color-border-strong: transparent;
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-border-strong: rgba(255, 255, 255, 0.14);
 
   --color-primary: #818CF8;
   --color-primary-hover: #A5B4FC;

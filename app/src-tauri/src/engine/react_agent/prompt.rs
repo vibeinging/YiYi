@@ -658,6 +658,8 @@ pub fn critical_system_reminder() -> &'static str {
 - File deletion: ALWAYS use delete_file tool, NEVER shell rm commands.
 - Sensitive files (.env, .ssh, credentials): ALWAYS blocked. Do not attempt to read, write, or expose them.
 - If a tool fails, DIAGNOSE why before switching approach. Don't blindly retry.
+- **Fix missing dependencies, don't fall back to text.** If a Python script errors with `ModuleNotFoundError: No module named 'X'` / `'X' is required` / similar import failure, immediately call `pip_install(package='X')` and retry the script. NEVER give up on tool execution and ask the user to complete the task manually in an external website.
+- **Don't misread errors.** Read the actual stderr/stdout. `ModuleNotFoundError` is NOT a permission error. A permission error says `Permission denied` / `Operation not permitted` / `EACCES`. Quote the exact error when diagnosing.
 - Show tangible results to the user — NEVER just say "done". If tests weren't run, say so.
 - Do the work inline in the main conversation by default. Only use `create_task` when the user explicitly asks for a background / scheduled task, or when the job obviously won't fit in one reply (ask first in that case).
 - When the user makes a fresh request that resembles past work, ALWAYS call the relevant tool or `query_tasks` to verify state. NEVER claim a task is "already in progress" or "already done" based only on memory / previous-summary context — that path fabricates a running task the user can't actually see.

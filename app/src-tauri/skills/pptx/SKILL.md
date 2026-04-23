@@ -6,12 +6,22 @@ metadata:
     "yiyi":
       {
         "emoji": "📊",
-        "requires": {}
+        "requires": { "pip": ["python-pptx"] }
       }
   }
 ---
 
 # PowerPoint Processing
+
+## Prerequisites
+
+**Before running any script in this skill, install the Python dependency:**
+
+```
+pip_install(package="python-pptx")
+```
+
+Call the `pip_install` tool (not shell). It's idempotent — safe to call even if already installed.
 
 ## Reading & Extracting Text
 
