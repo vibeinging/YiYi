@@ -578,6 +578,190 @@ async fn fixture_cases_all_pass() {
     eprintln!("✓ {} fixture case(s) passed", ran);
 }
 
+// ── Live mode ──────────────────────────────────────────────────────────────
+//
+// Runs each case against the real configured LLM. Gated by the env var
+// `YIYI_EVAL_LIVE=1` so CI stays deterministic / free.
+//
+// Required env:
+//   DASHSCOPE_API_KEY (or provider-matching env var; see providers.rs)
+// Optional:
+//   YIYI_EVAL_BASE_URL     (default: https://dashscope.aliyuncs.com/compatible-mode/v1)
+//   YIYI_EVAL_MODEL        (default: qwen-max)
+//   YIYI_EVAL_PROVIDER_ID  (default: openai — OpenAI-compatible adapter)
+//   YIYI_EVAL_ONLY         (substring filter for case id)
+//
+// Loads the REAL system prompt (persona + build_system_prompt) from ~/.yiyi/
+// so this actually exercises the prompt rules + persona files we edit to
+// fix behavior bugs. Dummy tool definitions stub dispatch — we only care
+// whether the LLM *chooses* the right tool, not what happens after.
+
+fn live_env() -> Option<(String, String, String, String)> {
+    if std::env::var("YIYI_EVAL_LIVE").ok().as_deref() != Some("1") {
+        return None;
+    }
+    let api_key = std::env::var("DASHSCOPE_API_KEY")
+        .or_else(|_| std::env::var("YIYI_EVAL_API_KEY"))
+        .ok()?;
+    let base_url = std::env::var("YIYI_EVAL_BASE_URL")
+        .unwrap_or_else(|_| "https://dashscope.aliyuncs.com/compatible-mode/v1".into());
+    let model = std::env::var("YIYI_EVAL_MODEL").unwrap_or_else(|_| "qwen-max".into());
+    let provider_id = std::env::var("YIYI_EVAL_PROVIDER_ID").unwrap_or_else(|_| "openai".into());
+    Some((api_key, base_url, model, provider_id))
+}
+
+async fn build_real_system_prompt() -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let working_dir = PathBuf::from(&home).join(".yiyi");
+    let user_workspace = PathBuf::from(&home).join("Documents/YiYi");
+    app_lib::engine::react_agent::build_system_prompt(
+        &working_dir,
+        Some(&user_workspace),
+        &[],
+        &[],
+        Some("zh-CN"),
+        None,
+        None,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn live_cases() {
+    let Some((api_key, base_url, model, provider_id)) = live_env() else {
+        eprintln!("YIYI_EVAL_LIVE not set — skipping live harness.");
+        eprintln!("To run: YIYI_EVAL_LIVE=1 DASHSCOPE_API_KEY=sk-xxx cargo test --features test-support --test evals_runner live_cases -- --nocapture");
+        return;
+    };
+
+    let only_filter = std::env::var("YIYI_EVAL_ONLY").ok();
+    let system_prompt = build_real_system_prompt().await;
+    eprintln!("── Live eval (model={}, base={}) ──", model, base_url);
+
+    let cases = load_all_cases();
+    let mut ran = 0;
+    let mut failures: Vec<(String, String)> = Vec::new();
+
+    for (_, case) in &cases {
+        if case.mode != "fixture" && case.mode != "live" {
+            continue;
+        }
+        if let Some(ref f) = only_filter {
+            if !case.id.contains(f.as_str()) {
+                continue;
+            }
+        }
+        // Contract-shape cases need the v2 harness; skip here too.
+        if case.expect.tool_result_shape.is_some()
+            || case.expect.event_emitted.is_some()
+            || case.expect.tool_end_preview.is_some()
+        {
+            eprintln!("  [skip] {} — contract case", case.id);
+            continue;
+        }
+
+        let tool_names = referenced_tool_names(case);
+        let tools_override: Vec<ToolDefinition> =
+            tool_names.iter().map(|n| dummy_tool(n)).collect();
+
+        let config = LLMConfig {
+            base_url: base_url.clone(),
+            api_key: api_key.clone(),
+            model: model.clone(),
+            provider_id: provider_id.clone(),
+            native_tools: vec![],
+        };
+
+        let events = Arc::new(Mutex::new(Vec::<AgentStreamEvent>::new()));
+        let events_cb = events.clone();
+
+        eprintln!("  [live] {} — sending real LLM request…", case.id);
+        let result = run_react_with_options_stream(
+            &config,
+            &system_prompt,
+            &case.user_message,
+            &[],
+            &[],
+            Some(3), // allow up to 3 rounds for real agent
+            None,
+            move |e| events_cb.lock().unwrap().push(e),
+            None,
+            None,
+            Some(tools_override),
+        )
+        .await;
+
+        let events = events.lock().unwrap().clone();
+        let mut tool_calls = Vec::new();
+        let mut text = String::new();
+        for e in &events {
+            match e {
+                AgentStreamEvent::ToolStart { name, args_preview } => {
+                    tool_calls.push((name.clone(), args_preview.clone()));
+                }
+                AgentStreamEvent::Token(t) => text.push_str(t),
+                _ => {}
+            }
+        }
+
+        let outcome = RunOutcome {
+            tool_calls,
+            text,
+            final_result: result,
+        };
+        eprintln!(
+            "         → tool_calls: {:?}",
+            outcome.tool_calls
+        );
+        eprintln!(
+            "         → text: {}…",
+            outcome
+                .text
+                .chars()
+                .take(120)
+                .collect::<String>()
+                .replace('\n', " ")
+        );
+
+        // Don't panic on first fail — collect everything so the report shows
+        // all real-model violations at once.
+        let mut local = Vec::new();
+        if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            assert_must_call_tool(case, &outcome);
+            assert_must_not_call_tool(case, &outcome);
+            assert_must_call_any_tool(case, &outcome);
+            assert_must_not_say(case, &outcome);
+        })) {
+            let msg = match e.downcast_ref::<String>() {
+                Some(s) => s.clone(),
+                None => e
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "unknown panic".into()),
+            };
+            local.push(msg);
+        }
+
+        if local.is_empty() {
+            eprintln!("         ✓ pass");
+        } else {
+            for m in &local {
+                eprintln!("         ✗ {}", m);
+            }
+            failures.push((case.id.clone(), local.join("\n")));
+        }
+        ran += 1;
+    }
+
+    eprintln!("── Live eval complete: {} case(s) ran, {} failed ──", ran, failures.len());
+    if !failures.is_empty() {
+        for (id, msg) in &failures {
+            eprintln!("✗ {} — {}", id, msg);
+        }
+        panic!("{} live case(s) failed", failures.len());
+    }
+}
+
 // ── Coverage report ────────────────────────────────────────────────────────
 
 #[test]
