@@ -1,58 +1,63 @@
 # Eval Runner
 
-## Current status: **skeleton**
+The runner lives at `app/src-tauri/tests/evals_runner.rs`.
 
-The runner currently does two things:
+## What runs today
 
-1. **Static lint** (`cargo test --features test-support --test evals_runner`)
-   - Loads every `cases/*.yaml`
-   - Asserts the schema: `id`, `category`, `rule`, `mode`, `user_message`, `expect` all present
-   - Asserts `mode` ∈ {`fixture`, `live`}
-   - Asserts `category` ∈ {`behavior`, `capability`, `safety`, `ui-contract`}
-   - Asserts `rule` references an actual R# in `rubric/behavior-rules.md`
+1. **Schema lint** (7 tests)
+   - Every `cases/*.yaml` deserializes, has required fields, uses known
+     `mode` / `category`, filename matches `id`, `rule:` refs exist in the
+     rubric. Also prints a rule-coverage report.
 
-2. **Fixture dry-run** — not implemented yet. Future plan:
-   - For each fixture case, boot `react_agent::run_react_with_options_stream`
-     with `MockLlmServer` (from `test_support`) pre-seeded with the case's
-     `fixture:` reply chain.
-   - Capture all `AgentStreamEvent::ToolStart / ToolEnd` + final text.
-   - Assert against `expect.must_call_tool` / `must_not_call_tool` /
-     `must_not_say` regexes.
-   - Assert `tool_result_shape` / `event_emitted` / `tool_end_preview` for
-     ui-contract cases.
+2. **Fixture harness** (`fixture_cases_all_pass`)
+   - For each `mode: fixture` case: boots a local `wiremock` server
+     programmed with the YAML's `fixture:` reply chain (content + tool_calls
+     emitted as OpenAI-format SSE), drives
+     `run_react_with_options_stream` with dummy tool definitions derived
+     from the case, captures every `AgentStreamEvent::ToolStart` + `Token`,
+     and asserts against the `expect:` block:
+     - `must_call_tool` — name matched, optional `args_contain` subset-check
+     - `must_not_call_tool` — name never seen
+     - `must_not_say` — regex **not** matched in accumulated text
+     - `must_call_any_tool: true` — at least one tool call observed
+   - Cases with `tool_result_shape` / `event_emitted` / `tool_end_preview`
+     are SKIPPED with a log line — those need a v2 harness with TempDb +
+     MockEmitter + real tool dispatch.
 
-3. **Live mode** — not implemented. Future plan:
-   - `./run.sh --live <case.yaml>` invokes the real configured LLM.
-   - Captures full transcript + emitted events.
-   - Pipes transcript to an LLM-as-judge with the rubric prompt.
-   - Returns pass / fail + reasoning per assertion.
+## What's NOT implemented yet
+
+- **Live mode** (`run.sh --live`) — prints a not-implemented message.
+  Plan: invoke the real configured LLM, capture full transcript, pipe to an
+  LLM-as-judge with the rubric prompt for pass/fail + reasoning.
+- **UI-contract v2 harness** — seeding TempDb + MockEmitter so that tool
+  dispatch actually runs and we can assert `task://created` payload shape +
+  final `result_preview` JSON-parseability. Case 005 is ready and waiting.
 
 ## Usage
 
 ```bash
-# Right now — only the lint step runs. Catches typos/drift in YAML schema.
+# Run everything (schema lint + fixture harness)
 cd app/src-tauri
 cargo test --features test-support --test evals_runner
 
-# Run a specific case (once fixture mode lands)
-cargo test --features test-support --test evals_runner -- memory_is_historical
+# Verbose — see which cases ran + what tool calls they produced
+cargo test --features test-support --test evals_runner -- --nocapture
 
-# Live mode (once implemented)
+# Just the fixture harness
+cargo test --features test-support --test evals_runner fixture_cases_all_pass
+
+# Live mode (stub)
 ./evals/runner/run.sh --live
 ```
 
-## Growing the runner
+## Harness limitations (by design)
 
-Each seed case in `cases/` currently describes the target behavior
-declaratively. The fixture harness needs these pieces wired up, in order:
-
-- [ ] YAML → Rust struct deserialization (`serde_yaml`)
-- [ ] Per-case `test_support::MockLlmServer` programming from `fixture:` chain
-- [ ] Capture ToolStart/ToolEnd events into an assertion buffer
-- [ ] Regex matcher for `must_not_say` against accumulated assistant text
-- [ ] JSON-shape matcher for `tool_result_shape`
-- [ ] Event capture via `test_support::MockEmitter` for `event_emitted`
-
-None of these require new dependencies — all pieces exist in `test_support`
-already. Tracking work in `docs/plans/2026-04-23-eval-harness.md` (not yet
-written).
+- No `AppHandle` / DB setup. DB-backed tool calls like `create_task` will
+  dispatch to real handlers that return `Error: DB not available`. We still
+  see the `ToolStart` event, which is what the behavior-class assertions
+  care about.
+- `max_iterations` auto-set to the number of fixture turns. If your case
+  needs more rounds, add more turns.
+- Dummy tool definitions stub out schemas — we're telling the LLM the tool
+  *exists* so it's willing to emit a tool_call, but the real tool's full
+  parameters aren't validated.
