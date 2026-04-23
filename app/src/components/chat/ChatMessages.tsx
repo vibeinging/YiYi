@@ -600,7 +600,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                   {streamingThinking && <ThinkingBlock content={streamingThinking} streaming />}
 
                   {streamingContent ? (
-                    <div className="py-2.5 px-4 rounded-2xl text-[14px] leading-relaxed prose prose-sm max-w-none"
+                    <div className="py-2.5 px-4 rounded-2xl text-[14px] leading-relaxed markdown-body"
                       style={{
                         background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)',
                         borderBottomLeftRadius: '6px', color: 'var(--color-text)',
@@ -721,7 +721,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                     </div>
                   )}
                   {currentTaskStream.streamingContent ? (
-                    <div className="py-2.5 px-4 rounded-2xl text-[14px] leading-relaxed prose prose-sm max-w-none"
+                    <div className="py-2.5 px-4 rounded-2xl text-[14px] leading-relaxed markdown-body"
                       style={{
                         background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)',
                         borderBottomLeftRadius: '6px', color: 'var(--color-text)',
