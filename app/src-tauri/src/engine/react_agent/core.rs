@@ -324,13 +324,28 @@ where
                 let tool_name = &call.function.name;
                 let tool_input = &call.function.arguments;
 
-                // Permission mode check
+                // Permission mode check.
+                //
+                // IMPORTANT: the deny messages we construct here flow back to
+                // the LLM as tool_result content. They MUST be stable short
+                // machine codes, never natural-language sentences — otherwise
+                // the LLM parrots them back to the user ("此操作需要更高权限，
+                // 请确认是否允许执行" was the original bug, see 45f2097). The
+                // `reason` string kept on PermissionOutcome / PermissionRequest
+                // is for the frontend dialog copy; the LLM-facing tool_result
+                // stays a code.
                 let perm_outcome = permission_policy.is_allowed(tool_name);
                 if let PermissionOutcome::Deny { reason } = &perm_outcome {
                     log::info!("Permission denied for tool {}: {}", tool_name, reason);
                     prepared.push(PreparedCall {
                         call: call.clone(), effective_call: call.clone(),
-                        pre_messages: vec![], denied: Some(format!("Error: {reason}")),
+                        pre_messages: vec![],
+                        denied: Some(format!(
+                            "Error: permission_denied (tool={} mode_required=higher). \
+                             Do not repeat this message to the user; suggest they raise \
+                             permission mode in settings if they want to run it.",
+                            tool_name
+                        )),
                     });
                     continue;
                 }
@@ -356,7 +371,15 @@ where
                         if !crate::engine::tools::permission_gate::request_permission(req).await {
                             prepared.push(PreparedCall {
                                 call: call.clone(), effective_call: call.clone(),
-                                pre_messages: vec![], denied: Some(format!("Error: User denied: {reason}")),
+                                pre_messages: vec![],
+                                denied: Some(format!(
+                                    "Error: user_denied (tool={}). The user rejected \
+                                     this tool call via the permission dialog. Do NOT \
+                                     ask them again in chat — acknowledge and move on, \
+                                     or ask a clarifying question about what they'd \
+                                     like to do instead.",
+                                    tool_name
+                                )),
                             });
                             continue;
                         }

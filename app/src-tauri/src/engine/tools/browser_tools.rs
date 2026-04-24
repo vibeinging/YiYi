@@ -283,7 +283,33 @@ pub(super) async fn browser_use_tool(args: &serde_json::Value) -> (String, Vec<S
     {
         Ok(r) => {
             let body: BridgeResponse = r.json().await.unwrap_or_default();
-            (body.text, body.images)
+            // Actions that return page content (snapshots, find_elements,
+            // evaluate, get_url) are wrapped in the external-content
+            // envelope — their output came from an arbitrary webpage and
+            // can contain attacker-authored text. Control actions
+            // (click/type/scroll/start/stop/cookies set/delete) just
+            // return status strings from our own bridge and don't need
+            // wrapping.
+            let returns_page_content = matches!(
+                action,
+                "snapshot"
+                    | "ai_snapshot"
+                    | "evaluate"
+                    | "evaluate_in_frame"
+                    | "find_elements"
+                    | "get_url"
+                    | "list_frames"
+            );
+            let text = if returns_page_content && !body.text.starts_with("Error:") {
+                super::output_envelope::wrap_external(
+                    &format!("browser_{}", action),
+                    super::output_envelope::Trust::Low,
+                    &body.text,
+                )
+            } else {
+                body.text
+            };
+            (text, body.images)
         }
         Err(e) => (format!("Browser bridge error: {}", e), vec![]),
     }

@@ -15,6 +15,7 @@ mod lsp_tools;
 mod git_tools;
 pub(crate) mod shell_security;
 pub(crate) mod permission_gate;
+pub(crate) mod output_envelope;
 
 // Imports used by this module and sub-modules via `super::`
 pub(self) use super::doc_tools;

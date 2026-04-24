@@ -103,7 +103,14 @@ pub(super) async fn web_search_tool(args: &serde_json::Value) -> String {
     if results.is_empty() {
         format!("No results found for: {}", query)
     } else {
-        results.join("\n\n")
+        // Wrap results in external-content envelope — DuckDuckGo HTML can
+        // contain arbitrary attacker-authored text (SEO spam, PI attempts,
+        // anomaly-modal junk). See engine/tools/output_envelope.rs.
+        super::output_envelope::wrap_external(
+            "web_search",
+            super::output_envelope::Trust::Low,
+            &results.join("\n\n"),
+        )
     }
 }
 
