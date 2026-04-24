@@ -1,5 +1,4 @@
 use super::compaction::{compact_messages_if_needed, force_compact_messages, sanitize_messages};
-use super::prompt::critical_system_reminder;
 use super::{AgentStreamEvent, PersistToolFn, ToolPersistEvent, DEFAULT_MAX_ITERATIONS};
 use crate::engine::hooks::{HookRunner, HookConfig, merge_hook_feedback};
 use crate::engine::permission_mode::{PermissionMode, PermissionPolicy, PermissionOutcome};
@@ -93,24 +92,11 @@ async fn inject_memme_context(messages: &mut Vec<LLMMessage>) {
     }
 }
 
-/// Inject the critical system reminder as a system message.
-/// Replaces any previous reminder to avoid unbounded growth.
-fn inject_critical_reminder(messages: &mut Vec<LLMMessage>) {
-    const REMINDER_MARKER: &str = "[System Reminder]";
-    // Remove any previous critical reminder to prevent accumulation
-    messages.retain(|m| {
-        !(m.role == "system"
-            && m.content
-                .as_ref()
-                .map_or(false, |c| c.as_text().map_or(false, |t| t.starts_with(REMINDER_MARKER))))
-    });
-    messages.push(LLMMessage {
-        role: "system".into(),
-        content: Some(MessageContent::text(critical_system_reminder())),
-        tool_calls: None,
-        tool_call_id: None,
-    });
-}
+// NOTE: `inject_critical_reminder` was removed as part of the Claude Code
+// migration plan (see docs/review/2026-04-24_claude-code-migration-plan.md,
+// Step 1.4). The reminder is now part of the static system prompt once,
+// cached by Anthropic's prompt-cache prefix, instead of being re-appended
+// to the message list every ReAct iteration (which busted the cache).
 
 /// Run a ReAct agent loop (single-turn, no history).
 /// Used by channels, scheduler, heartbeat, cronjobs.
@@ -242,9 +228,9 @@ where
     for iteration in 0..max_iter {
         log::info!("ReAct stream iteration {}/{}", iteration + 1, max_iter);
 
-        if iteration > 0 {
-            inject_critical_reminder(&mut messages);
-        }
+        // Critical behavior reminder is now part of the static system prompt
+        // (see prompt.rs end of build_system_prompt), so we don't re-inject
+        // per iteration — that would defeat prompt-cache.
 
         // Check cancellation before each LLM call
         if cancelled.map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {

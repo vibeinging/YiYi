@@ -428,51 +428,13 @@ When setting up bots, open the developer console:
         }
     }
 
-    // Load HOT-tier context from MemMe (high-importance memories)
-    {
-        let hot_context = crate::engine::mem::tiered_memory::load_hot_context(2500);
-        if !hot_context.is_empty() {
-            prompt.push_str(&hot_context);
-        } else if let Some(db) = crate::engine::tools::get_database() {
-            // Fallback: if no HOT-tier memories yet, inject high-confidence corrections directly
-            let corrections = db.get_high_confidence_corrections(5, 0.60);
-            if !corrections.is_empty() {
-                prompt.push_str("\n\n## Learned Behaviors (from past feedback)\n");
-                for (trigger, _, behavior, _confidence) in &corrections {
-                    let safe_trigger = sanitize_prompt_field(trigger, 80);
-                    let safe_behavior = sanitize_prompt_field(behavior, 150);
-                    prompt.push_str(&format!("- {}: {}\n", safe_trigger, safe_behavior));
-                }
-            }
-        }
-    }
-
-    // Personality context injection (from personality_signals, time-decayed)
-    if let Some(db) = crate::engine::tools::get_database() {
-        let aggregates = db.get_personality_aggregates();
-        let has_signals = aggregates.iter().any(|(_, delta)| delta.abs() > 0.1);
-        if has_signals {
-            prompt.push_str("\n\n## 你的性格倾向\n");
-            let base = crate::engine::db::PERSONALITY_BASE_STAT;
-            let base_stats = [
-                ("energy", "活力", base),
-                ("warmth", "温柔", base),
-                ("mischief", "调皮", base),
-                ("wit", "聪慧", base),
-                ("sass", "犀利", base),
-            ];
-            for (trait_key, trait_cn, base) in &base_stats {
-                let delta = aggregates.iter()
-                    .find(|(t, _)| t == trait_key)
-                    .map(|(_, d)| *d)
-                    .unwrap_or(0.0);
-                let value = (base + delta).clamp(0.0, 100.0) as i32;
-                let level = if value >= 70 { "较高" } else if value <= 30 { "较低" } else { "适中" };
-                prompt.push_str(&format!("- {}：{}/100（{}）\n", trait_cn, value, level));
-            }
-            prompt.push_str("你的回应风格应自然反映这些倾向，不需要刻意表演。\n");
-        }
-    }
+    // HOT-tier memory / corrections / personality aggregates are NOT auto-injected
+    // into the system prompt anymore (Priya diagnosis P1-5: auto-inject was
+    // breaking prompt cache every session and poisoning the agent with memory
+    // summaries it misread as running state — see 7b87759 / 8d3084e history).
+    // The agent now pulls memory on demand via `memory_search`. Corrections and
+    // personality are surfaced through the Buddy UI (BuddyPanel) and through
+    // events (growth://persist_suggestion) instead.
 
     // Capability growth guidance + pending suggestions
     {
@@ -637,6 +599,13 @@ When setting up bots, open the developer console:
             external_hint
         ));
     }
+
+    // Critical behavior rules — merged into the static system prompt once so
+    // the Anthropic prompt-cache prefix stays stable across turns. Previously
+    // `inject_critical_reminder` re-appended this to the message list every
+    // iteration, which busted the cache and cost us ~700 tokens × N turns.
+    prompt.push_str("\n\n");
+    prompt.push_str(critical_system_reminder());
 
     prompt
 }
