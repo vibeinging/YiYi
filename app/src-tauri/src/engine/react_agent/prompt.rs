@@ -61,10 +61,31 @@ pub fn seed_default_templates(working_dir: &std::path::Path, language: &str) {
 // Persona loading & system prompt building
 // ---------------------------------------------------------------------------
 
+/// Build the persona prefix injected BEFORE the first user message.
+///
+/// Returns an empty string if no persona files are present — in that case
+/// the ReAct loop should send the user's message directly.
+///
+/// Wrapped in `<persona-prefix>...</persona-prefix>` so the model can tell
+/// runtime-authored guidance apart from the user's own words.
+pub async fn build_persona_prefix(
+    working_dir: &std::path::Path,
+    user_workspace: Option<&std::path::Path>,
+) -> String {
+    let persona = load_persona(working_dir, user_workspace).await;
+    if persona.trim().is_empty() {
+        return String::new();
+    }
+    format!(
+        "<persona-prefix>\n{}\n</persona-prefix>\n\n",
+        persona.trim()
+    )
+}
+
 /// Load persona files asynchronously.
 /// Checks both working_dir (~/.yiyi/) and user_workspace (~/Documents/YiYi/),
 /// with user_workspace taking priority (user may customize SOUL.md there via SetupWizard).
-async fn load_persona(working_dir: &std::path::Path, user_workspace: Option<&std::path::Path>) -> String {
+pub async fn load_persona(working_dir: &std::path::Path, user_workspace: Option<&std::path::Path>) -> String {
     let files = ["AGENTS.md", "SOUL.md", "PROFILE.md"];
     let mut parts = Vec::new();
 
@@ -131,7 +152,13 @@ pub async fn build_system_prompt(
     mcp_tools: Option<&[crate::engine::infra::mcp_runtime::MCPTool]>,
     unavailable_servers: Option<&[String]>,
 ) -> String {
-    let persona = load_persona(working_dir, user_workspace).await;
+    // Persona (AGENTS.md / SOUL.md / PROFILE.md) used to be prepended to the
+    // system prompt here — that made the system prompt vary per user and
+    // per session, busting Anthropic prompt-cache (Priya P0-4). Persona is
+    // now injected as a user-message prefix via `build_persona_prefix()`,
+    // called separately by the ReAct loop (see core.rs). The system prompt
+    // itself stays stable "You are YiYi..." + static tools/capabilities, so
+    // the cache prefix is shared across users.
     let lang = language.unwrap_or("zh-CN");
     let lang_instruction = if lang.starts_with("zh") {
         "Please respond in Chinese."
@@ -139,11 +166,10 @@ pub async fn build_system_prompt(
         "Please respond in English."
     };
 
-    let mut prompt = if persona.is_empty() {
-        format!("You are YiYi, a helpful AI assistant. {}\n\n", lang_instruction)
-    } else {
-        format!("{}\n\n{}\n\n", persona, lang_instruction)
-    };
+    let mut prompt = format!(
+        "You are YiYi, a helpful AI assistant. {}\n\n",
+        lang_instruction
+    );
 
     // Bootstrap guidance: check flag file to prevent re-triggering
     let bootstrap_done = working_dir.join(BOOTSTRAP_COMPLETED);
@@ -811,11 +837,45 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn build_system_prompt_loads_persona_files_when_present() {
+    async fn build_persona_prefix_loads_persona_files_when_present() {
+        // Persona no longer goes into the system prompt (see Priya P0-4:
+        // moving it out was the whole point of this refactor). Instead it's
+        // returned by build_persona_prefix() for the ReAct loop to prepend
+        // to the first user message.
         let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join(BOOTSTRAP_COMPLETED), "done").unwrap();
         std::fs::write(dir.path().join("AGENTS.md"), "# AGENTS\n\nBE HELPFUL").unwrap();
         std::fs::write(dir.path().join("SOUL.md"), "# SOUL\n\nCARING").unwrap();
+        let prefix = build_persona_prefix(dir.path(), None).await;
+        assert!(prefix.contains("BE HELPFUL"));
+        assert!(prefix.contains("CARING"));
+        assert!(prefix.starts_with("<persona-prefix>"));
+        assert!(prefix.trim_end().ends_with("</persona-prefix>"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn build_persona_prefix_is_empty_when_no_files() {
+        let dir = TempDir::new().unwrap();
+        let prefix = build_persona_prefix(dir.path(), None).await;
+        assert!(prefix.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn build_persona_prefix_prefers_user_workspace_over_working_dir() {
+        let wd = TempDir::new().unwrap();
+        let ws = TempDir::new().unwrap();
+        std::fs::write(wd.path().join("AGENTS.md"), "FROM_WORKING_DIR").unwrap();
+        std::fs::write(ws.path().join("AGENTS.md"), "FROM_USER_WORKSPACE").unwrap();
+        let prefix = build_persona_prefix(wd.path(), Some(ws.path())).await;
+        assert!(prefix.contains("FROM_USER_WORKSPACE"));
+        assert!(!prefix.contains("FROM_WORKING_DIR"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn build_system_prompt_no_longer_contains_persona() {
+        // Regression: persona must NOT leak back into the system prompt.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join(BOOTSTRAP_COMPLETED), "done").unwrap();
+        std::fs::write(dir.path().join("AGENTS.md"), "# AGENTS\n\nUNIQUE_PERSONA_MARKER").unwrap();
         let prompt = build_system_prompt(
             dir.path(),
             None,
@@ -826,31 +886,9 @@ mod tests {
             None,
         )
         .await;
-        assert!(prompt.contains("BE HELPFUL"));
-        assert!(prompt.contains("CARING"));
-        // Default fallback ("You are YiYi") should not apply when persona is loaded.
-        assert!(!prompt.contains("You are YiYi, a helpful"));
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn build_system_prompt_prefers_user_workspace_over_working_dir() {
-        let wd = TempDir::new().unwrap();
-        let ws = TempDir::new().unwrap();
-        std::fs::write(wd.path().join(BOOTSTRAP_COMPLETED), "done").unwrap();
-        std::fs::write(wd.path().join("AGENTS.md"), "FROM_WORKING_DIR").unwrap();
-        std::fs::write(ws.path().join("AGENTS.md"), "FROM_USER_WORKSPACE").unwrap();
-        let prompt = build_system_prompt(
-            wd.path(),
-            Some(ws.path()),
-            &[],
-            &[],
-            Some("en"),
-            None,
-            None,
-        )
-        .await;
-        assert!(prompt.contains("FROM_USER_WORKSPACE"));
-        assert!(!prompt.contains("FROM_WORKING_DIR"));
+        assert!(!prompt.contains("UNIQUE_PERSONA_MARKER"));
+        // Default fallback should always be used now.
+        assert!(prompt.contains("You are YiYi, a helpful"));
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -205,9 +205,32 @@ where
         messages.extend(history.iter().cloned());
     }
 
+    // Persona (AGENTS.md / SOUL.md) is prepended to the FIRST user message
+    // of a fresh session instead of sitting in the system prompt. System
+    // prompt stays stable across users / sessions so Anthropic prompt-cache
+    // prefix can be shared; persona lives in conversation history from turn 2
+    // onwards (retained by the compaction summarizer, re-injected fresh on
+    // session restart when history is empty again). See
+    // docs/review/2026-04-24_claude-code-migration-plan.md Step 1.3.
+    let effective_user_message = if history.is_empty() {
+        if let Some(wd) = working_dir {
+            let ws = crate::engine::tools::get_effective_workspace();
+            let persona_prefix = super::prompt::build_persona_prefix(wd, Some(&ws)).await;
+            if persona_prefix.is_empty() {
+                user_message.to_string()
+            } else {
+                format!("{}{}", persona_prefix, user_message)
+            }
+        } else {
+            user_message.to_string()
+        }
+    } else {
+        user_message.to_string()
+    };
+
     messages.push(LLMMessage {
         role: "user".into(),
-        content: Some(MessageContent::text(user_message)),
+        content: Some(MessageContent::text(&effective_user_message)),
         tool_calls: None,
         tool_call_id: None,
     });

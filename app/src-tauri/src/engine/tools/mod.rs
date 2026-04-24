@@ -560,7 +560,7 @@ pub fn get_memme_store() -> Option<&'static Arc<memme_core::MemoryStore>> {
 }
 
 /// Get the effective working directory: task-local > global USER_WORKSPACE.
-fn get_effective_workspace() -> PathBuf {
+pub fn get_effective_workspace() -> PathBuf {
     TASK_WORKING_DIR
         .try_with(|d| d.clone())
         .unwrap_or_else(|_| {
