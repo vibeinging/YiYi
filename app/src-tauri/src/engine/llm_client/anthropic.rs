@@ -207,13 +207,46 @@ fn build_request_body(
         body["stream"] = serde_json::json!(true);
     }
     if let Some(sys) = system_prompt {
-        // Use content block array with cache_control for Anthropic prompt caching.
-        // The system prompt is static across ReAct iterations — caching it saves ~90% input cost.
-        body["system"] = serde_json::json!([{
-            "type": "text",
-            "text": sys,
-            "cache_control": {"type": "ephemeral"}
-        }]);
+        // Anthropic prompt caching: `cache_control: ephemeral` on a content
+        // block marks everything UP TO AND INCLUDING that block as the
+        // cache key. If we put one marker on the full prompt, the cache key
+        // includes per-session variables (workspace path, git context,
+        // MCP status, bootstrap…) — cache misses every session.
+        //
+        // `build_system_prompt` (engine/react_agent/prompt.rs) emits a
+        // literal `<!-- yiyi:cache_boundary -->` at the seam between the
+        // fully-static cross-user prefix (~3,385 tokens) and the dynamic
+        // tail (~150-1500 tokens per session). We split here and put the
+        // marker only on the static block so the static prefix is cached
+        // across all users and all sessions. The dynamic tail runs at full
+        // price — but it's small and per-session anyway.
+        const CACHE_BOUNDARY: &str = "<!-- yiyi:cache_boundary -->";
+        let blocks: Vec<serde_json::Value> =
+            if let Some((static_part, dynamic_part)) = sys.split_once(CACHE_BOUNDARY) {
+                let mut v = vec![serde_json::json!({
+                    "type": "text",
+                    "text": static_part,
+                    "cache_control": {"type": "ephemeral"}
+                })];
+                let trimmed_tail = dynamic_part.trim_start_matches(['\n', ' ']);
+                if !trimmed_tail.is_empty() {
+                    v.push(serde_json::json!({
+                        "type": "text",
+                        "text": trimmed_tail,
+                    }));
+                }
+                v
+            } else {
+                // Fallback — caller didn't produce a boundary (e.g. a custom
+                // system_prompt from a test). Cache the whole thing like we
+                // used to.
+                vec![serde_json::json!({
+                    "type": "text",
+                    "text": sys,
+                    "cache_control": {"type": "ephemeral"}
+                })]
+            };
+        body["system"] = serde_json::Value::Array(blocks);
     }
     if !tools.is_empty() {
         body["tools"] = serde_json::Value::Array(tools_to_anthropic(tools));
@@ -430,4 +463,77 @@ where
         Some(tool_calls)
     };
     Ok(build_stream_response(full_content, tool_calls_opt, stream_usage))
+}
+
+#[cfg(test)]
+mod cache_split_tests {
+    use super::*;
+    use crate::engine::llm_client::types::{LLMMessage, MessageContent};
+
+    fn msg(role: &str, text: &str) -> LLMMessage {
+        LLMMessage {
+            role: role.into(),
+            content: Some(MessageContent::text(text)),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    fn cfg() -> LLMConfig {
+        LLMConfig {
+            base_url: "https://api.anthropic.com/v1/messages".into(),
+            api_key: "sk-ant-test".into(),
+            model: "claude-sonnet-4-6".into(),
+            provider_id: "anthropic".into(),
+            native_tools: vec![],
+        }
+    }
+
+    #[test]
+    fn system_prompt_with_boundary_splits_into_two_blocks() {
+        let sys = "STATIC part here\n\n<!-- yiyi:cache_boundary -->\n\nDYNAMIC part here";
+        let messages = vec![msg("system", sys), msg("user", "hi")];
+        let body = build_request_body(&cfg(), &messages, &[], false);
+
+        let system = body.get("system").expect("system must be present");
+        let arr = system.as_array().expect("system must be an array");
+        assert_eq!(arr.len(), 2, "expected 2 blocks (static + dynamic)");
+
+        let first = &arr[0];
+        assert_eq!(first["type"], "text");
+        assert!(first["text"].as_str().unwrap().starts_with("STATIC part"));
+        assert_eq!(first["cache_control"]["type"], "ephemeral",
+            "static block MUST carry cache_control");
+
+        let second = &arr[1];
+        assert_eq!(second["type"], "text");
+        assert!(second["text"].as_str().unwrap().starts_with("DYNAMIC part"));
+        assert!(second.get("cache_control").is_none(),
+            "dynamic block must NOT carry cache_control (would bust cache key)");
+    }
+
+    #[test]
+    fn system_prompt_without_boundary_caches_whole_thing() {
+        let sys = "One big static prompt with no boundary marker.";
+        let messages = vec![msg("system", sys), msg("user", "hi")];
+        let body = build_request_body(&cfg(), &messages, &[], false);
+
+        let arr = body["system"].as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["cache_control"]["type"], "ephemeral");
+    }
+
+    #[test]
+    fn empty_dynamic_tail_is_dropped() {
+        // If the prompt ends exactly at the boundary marker (no dynamic
+        // content), don't emit a second empty block — Anthropic rejects
+        // empty text blocks.
+        let sys = "STATIC only\n\n<!-- yiyi:cache_boundary -->\n\n";
+        let messages = vec![msg("system", sys), msg("user", "hi")];
+        let body = build_request_body(&cfg(), &messages, &[], false);
+
+        let arr = body["system"].as_array().unwrap();
+        assert_eq!(arr.len(), 1, "empty dynamic tail should be dropped");
+        assert!(arr[0]["text"].as_str().unwrap().starts_with("STATIC only"));
+    }
 }
