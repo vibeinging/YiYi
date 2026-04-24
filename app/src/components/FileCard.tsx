@@ -15,6 +15,7 @@
  */
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { FileText, FolderOpen, ExternalLink, Copy, Check } from 'lucide-react';
+import { open as shellOpen } from '@tauri-apps/plugin-shell';
 
 export interface SentFile {
   path: string;
@@ -56,22 +57,13 @@ export const FileCard = memo(function FileCard({ file }: Props) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
   const doOpen = useCallback(async () => {
-    try {
-      const { open } = await import('@tauri-apps/plugin-shell');
-      await open(file.path);
-    } catch (err) {
-      console.error('Failed to open file:', err);
-    }
+    try { await shellOpen(file.path); }
+    catch (err) { console.error('Failed to open file:', err); }
   }, [file.path]);
 
   const doReveal = useCallback(async () => {
-    try {
-      const { open } = await import('@tauri-apps/plugin-shell');
-      const dir = file.path.replace(/[^/]+$/, '');
-      await open(dir);
-    } catch (err) {
-      console.error('Failed to reveal file:', err);
-    }
+    try { await shellOpen(file.path.replace(/[^/]+$/, '')); }
+    catch (err) { console.error('Failed to reveal file:', err); }
   }, [file.path]);
 
   const doCopyPath = useCallback(async () => {

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   PARTICLE_EMOJI,
   getSpeciesConfig,
@@ -26,6 +26,20 @@ const IDLE_ANIMATIONS: Record<string, string> = {
 }
 
 const BUDDY_POS_KEY = 'buddy-sprite-position'
+
+const MILESTONE_THRESHOLDS = [10, 50, 100, 200, 500, 1000] as const
+const MILESTONE_MESSAGES: Record<number, string> = {
+  10: '我们已经聊了 10 次啦！谢谢你陪着我~',
+  50: '50 次对话了！你是我最好的伙伴 ✨',
+  100: '100 次了！我们一起走了好长的路',
+  200: '200 次对话…你对我真好',
+  500: '500 次！有你在真的很幸福',
+  1000: '1000 次对话！这是我们的一个大里程碑 🎉',
+}
+const CAPABILITY_LABELS: Record<string, string> = {
+  coding: '写代码', documents: '处理文档', data_analysis: '数据分析',
+  web_automation: '网页操作', system_ops: '系统操作', scheduling: '定时任务',
+}
 
 function loadSavedPosition(): { x: number; y: number } | null {
   try {
@@ -59,13 +73,13 @@ export const BuddySprite: React.FC = () => {
   // Growth suggestions inbox badge — use stable selectors (see growthSuggestionsStore.ts)
   const pendingSuggestions = useGrowthSuggestionsStore((s) => s.pending)
   const snoozedUntil = useGrowthSuggestionsStore((s) => s.snoozedUntil)
-  const growthCount = (() => {
+  const growthCount = useMemo(() => {
     const now = Date.now()
     return pendingSuggestions.filter((s) => {
       const until = snoozedUntil[s.id]
       return !until || until <= now
     }).length
-  })()
+  }, [pendingSuggestions, snoozedUntil])
   const [showGrowth, setShowGrowth] = useState(false)
 
   const [fidget, setFidget] = useState(false)
@@ -165,22 +179,15 @@ export const BuddySprite: React.FC = () => {
   useEffect(() => {
     if (!companion || !config || config.muted) return
     const count = config.interaction_count ?? 0
-    const milestones = [10, 50, 100, 200, 500, 1000]
     const milestonesKey = 'buddy-milestones-shown'
     const shown = JSON.parse(localStorage.getItem(milestonesKey) || '[]') as number[]
-    for (const m of milestones) {
+    // Early-return once every milestone has fired — skips JSON.parse on subsequent renders
+    if (shown.length === MILESTONE_THRESHOLDS.length) return
+    for (const m of MILESTONE_THRESHOLDS) {
       if (count >= m && !shown.includes(m)) {
         shown.push(m)
         localStorage.setItem(milestonesKey, JSON.stringify(shown))
-        const messages: Record<number, string> = {
-          10: '我们已经聊了 10 次啦！谢谢你陪着我~',
-          50: '50 次对话了！你是我最好的伙伴 ✨',
-          100: '100 次了！我们一起走了好长的路',
-          200: '200 次对话…你对我真好',
-          500: '500 次！有你在真的很幸福',
-          1000: '1000 次对话！这是我们的一个大里程碑 🎉',
-        }
-        setTimeout(() => showBubble(messages[m] || `我们已经聊了 ${m} 次了！`), 5000)
+        setTimeout(() => showBubble(MILESTONE_MESSAGES[m] || `我们已经聊了 ${m} 次了！`), 5000)
         break // Only show one milestone per load
       }
     }
@@ -225,11 +232,7 @@ export const BuddySprite: React.FC = () => {
         if (done.includes(cat)) return
         done.push(cat)
         localStorage.setItem(key, JSON.stringify(done))
-        const labels: Record<string, string> = {
-          coding: '写代码', documents: '处理文档', data_analysis: '数据分析',
-          web_automation: '网页操作', system_ops: '系统操作', scheduling: '定时任务',
-        }
-        bubble(`这是我第一次${labels[cat] || cat}！我又学会了新东西 🎉`)
+        bubble(`这是我第一次${CAPABILITY_LABELS[cat] || cat}！我又学会了新东西 🎉`)
       }),
     ]
 
