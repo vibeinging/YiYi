@@ -4,7 +4,9 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { healthCheck, isSetupComplete } from './api/system';
 import { SetupWizard } from './pages/SetupWizard';
 import { ChatPage } from './pages/Chat';
+import { BuddyPage } from './pages/Buddy';
 import { SkillsPage } from './pages/Skills';
+import { ExtensionsPage } from './pages/Extensions';
 import { BotsPage } from './pages/Bots';
 import { SettingsPage } from './pages/Settings';
 import { TerminalPage } from './pages/Terminal';
@@ -27,7 +29,7 @@ import { TaskSidebar } from './components/TaskSidebar';
 import { TaskDetailOverlay } from './components/TaskDetailOverlay';
 import { useTaskSidebarStore } from './stores/taskSidebarStore';
 import { useTaskStore } from './stores/taskStore';
-export type Page = 'chat' | 'skills' | 'cronjobs' | 'workspace' | 'mcp' | 'heartbeat' | 'growth' | 'bots' | 'terminal' | 'settings';
+export type Page = 'chat' | 'buddy' | 'skills' | 'extensions' | 'cronjobs' | 'workspace' | 'mcp' | 'heartbeat' | 'growth' | 'bots' | 'terminal' | 'settings';
 
 function App() {
   return <MainApp />;
@@ -173,7 +175,9 @@ function MainApp() {
   const renderPage = () => {
     switch (currentPage) {
       case 'chat': return <ChatPage consumeNotifContext={consumeNotifContext} healthStatus={healthStatus} />;
+      case 'buddy': return <BuddyPage />;
       case 'skills': return <SkillsPage />;
+      case 'extensions': return <ExtensionsPage />;
       case 'cronjobs': return <CronJobsPage consumeNotifContext={consumeNotifContext} />;
       case 'workspace': return <WorkspacePage />;
       case 'mcp': return <MCPPage />;

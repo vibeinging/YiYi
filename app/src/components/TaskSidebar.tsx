@@ -8,7 +8,7 @@
 
 import { memo, useState, useEffect, useRef, useCallback } from 'react';
 import {
-  Settings, Puzzle, Bot, Zap, FolderOpen, Sprout,
+  Settings, Puzzle, Bot, Zap, FolderOpen, Sprout, Sparkles,
   Trash2, MessageCircle, Clock,
   PanelLeftClose, PanelLeft, Grid3X3,
   Plus, Pencil, MessageSquare, Search, X,
@@ -177,18 +177,15 @@ function SidebarSessionCard({ session, isActive, onPageChange }: {
 
 // --- Bottom Nav Items ---
 const primaryNav: { id: Page; icon: React.ComponentType<any>; labelKey: string }[] = [
-  { id: 'chat', icon: MessageCircle, labelKey: 'nav.chat' },
-  { id: 'skills', icon: Puzzle, labelKey: 'nav.skills' },
+  { id: 'buddy', icon: Sparkles, labelKey: 'nav.buddy' },
+  { id: 'extensions', icon: Puzzle, labelKey: 'nav.extensions' },
   { id: 'bots', icon: Bot, labelKey: 'nav.bots' },
-];
-
-const moreNavItems: { id: Page; icon: React.ComponentType<any>; labelKey: string }[] = [
-  { id: 'growth', icon: Sprout, labelKey: 'nav.growth' },
-  { id: 'mcp', icon: Zap, labelKey: 'nav.mcp' },
-  { id: 'cronjobs', icon: Clock, labelKey: 'nav.cronjobs' },
-  { id: 'workspace', icon: FolderOpen, labelKey: 'nav.workspace' },
   { id: 'settings', icon: Settings, labelKey: 'nav.settings' },
 ];
+
+// Empty on purpose — growth/mcp/cronjobs/workspace are reachable from their
+// respective entry points (Buddy page, Extensions page, task detail).
+const moreNavItems: { id: Page; icon: React.ComponentType<any>; labelKey: string }[] = [];
 
 // --- More Popover ---
 function MorePopover({ currentPage, onPageChange, onClose }: { currentPage: Page; onPageChange: (p: Page) => void; onClose: () => void }) {
@@ -498,19 +495,21 @@ export const TaskSidebar = memo(function TaskSidebar({
               </button>
             );
           })}
-          <button
-            onClick={() => setMoreOpen(!moreOpen)}
-            className="flex-1 flex flex-col items-center gap-[3px] py-1.5 rounded-lg transition-all"
-            style={{
-              color: isMorePage ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)',
-              opacity: isMorePage || moreOpen ? 1 : 0.6,
-            }}
-            onMouseEnter={(e) => { (e.currentTarget.style as any).opacity = '0.9'; }}
-            onMouseLeave={(e) => { if (!isMorePage && !moreOpen) (e.currentTarget.style as any).opacity = '0.6'; }}
-          >
-            <Grid3X3 size={17} strokeWidth={isMorePage ? 2.2 : 1.8} />
-            <span className="text-[9px] font-medium leading-none">{t('nav.more', '更多')}</span>
-          </button>
+          {moreNavItems.length > 0 && (
+            <button
+              onClick={() => setMoreOpen(!moreOpen)}
+              className="flex-1 flex flex-col items-center gap-[3px] py-1.5 rounded-lg transition-all"
+              style={{
+                color: isMorePage ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)',
+                opacity: isMorePage || moreOpen ? 1 : 0.6,
+              }}
+              onMouseEnter={(e) => { (e.currentTarget.style as any).opacity = '0.9'; }}
+              onMouseLeave={(e) => { if (!isMorePage && !moreOpen) (e.currentTarget.style as any).opacity = '0.6'; }}
+            >
+              <Grid3X3 size={17} strokeWidth={isMorePage ? 2.2 : 1.8} />
+              <span className="text-[9px] font-medium leading-none">{t('nav.more', '更多')}</span>
+            </button>
+          )}
         </div>
 
         <button

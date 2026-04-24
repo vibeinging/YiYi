@@ -8,7 +8,9 @@ const resources = {
       // Navigation
       nav: {
         chat: '聊天',
+        buddy: '小精灵',
         skills: '技能',
+        extensions: '扩展',
         models: '模型',
         environments: '环境变量',
         cronjobs: '计划任务',
@@ -816,7 +818,9 @@ const resources = {
       // Navigation
       nav: {
         chat: 'Chat',
+        buddy: 'Buddy',
         skills: 'Skills',
+        extensions: 'Extensions',
         models: 'Models',
         environments: 'Environments',
         cronjobs: 'Tasks',

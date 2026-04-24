@@ -146,8 +146,12 @@ describe('TaskSidebar expanded mode', () => {
     expect(screen.getByText('A')).toBeInTheDocument();
   });
 
-  it('bottom nav shows chat/skills/bots + more', () => {
+  it('bottom nav shows buddy/extensions/bots/settings', () => {
     renderSidebar({ collapsed: false });
-    expect(screen.getAllByRole('button').some(b => b.textContent?.includes('更多'))).toBe(true);
+    const buttons = screen.getAllByRole('button');
+    const labels = ['小精灵', '扩展', '机器人', '设置'];
+    for (const label of labels) {
+      expect(buttons.some(b => b.textContent?.includes(label))).toBe(true);
+    }
   });
 });

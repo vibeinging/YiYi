@@ -16,6 +16,7 @@
     "notification:default",
     "updater:default",
     "process:allow-restart",
-    "process:allow-exit"
+    "process:allow-exit",
+    "pty:default"
   ]
 }
