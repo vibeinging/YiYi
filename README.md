@@ -37,12 +37,12 @@
     <td align="center"><b>技能扩展</b><br/>25+ 内置 + 自定义 + MCP</td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/screenshots/04-bots.png" alt="多平台 Bot" /></td>
-    <td width="50%"><img src="docs/screenshots/05-tasks.png" alt="长任务" /></td>
+    <td width="50%"><img src="docs/screenshots/04-tasks.png" alt="长任务执行" /></td>
+    <td width="50%"><img src="docs/screenshots/05-authorize.png" alt="授权确认" /></td>
   </tr>
   <tr>
-    <td align="center"><b>多平台分身</b><br/>Discord / QQ / Feishu / ...</td>
-    <td align="center"><b>长任务执行</b><br/>自动拆解 · 可暂停恢复</td>
+    <td align="center"><b>长任务执行</b><br/>自动拆解 · 可暂停 · 可恢复</td>
+    <td align="center"><b>安全授权</b><br/>敏感操作需明确确认，绝不偷跑</td>
   </tr>
 </table>
 

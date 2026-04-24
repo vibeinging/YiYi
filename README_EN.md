@@ -38,12 +38,12 @@ and get to know you better with every interaction.
     <td align="center"><b>Skills extension</b><br/>25+ built-in + custom + MCP</td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/screenshots/04-bots.png" alt="Multi-platform bots" /></td>
-    <td width="50%"><img src="docs/screenshots/05-tasks.png" alt="Long tasks" /></td>
+    <td width="50%"><img src="docs/screenshots/04-tasks.png" alt="Long tasks" /></td>
+    <td width="50%"><img src="docs/screenshots/05-authorize.png" alt="Authorization prompt" /></td>
   </tr>
   <tr>
-    <td align="center"><b>Multi-platform bots</b><br/>Discord / QQ / Telegram / Feishu / ...</td>
     <td align="center"><b>Long-running tasks</b><br/>Auto-decomposed · pausable · resumable</td>
+    <td align="center"><b>Safe by default</b><br/>Sensitive ops require explicit approval</td>
   </tr>
 </table>
 
