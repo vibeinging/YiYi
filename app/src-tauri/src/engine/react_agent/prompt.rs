@@ -141,114 +141,53 @@ fn sanitize_prompt_field(s: &str, max_chars: usize) -> String {
     cleaned.trim().to_string()
 }
 
-/// Build the system prompt asynchronously.
-/// Tool list is auto-generated from builtin_tools() to stay in sync.
-pub async fn build_system_prompt(
-    working_dir: &std::path::Path,
-    user_workspace: Option<&std::path::Path>,
-    skill_index: &[crate::commands::agent::SkillIndexEntry],
-    always_active_skills: &[String],
-    language: Option<&str>,
-    mcp_tools: Option<&[crate::engine::infra::mcp_runtime::MCPTool]>,
-    unavailable_servers: Option<&[String]>,
-) -> String {
-    // Persona (AGENTS.md / SOUL.md / PROFILE.md) used to be prepended to the
-    // system prompt here — that made the system prompt vary per user and
-    // per session, busting Anthropic prompt-cache (Priya P0-4). Persona is
-    // now injected as a user-message prefix via `build_persona_prefix()`,
-    // called separately by the ReAct loop (see core.rs). The system prompt
-    // itself stays stable "You are YiYi..." + static tools/capabilities, so
-    // the cache prefix is shared across users.
-    let lang = language.unwrap_or("zh-CN");
+/// The fully-static portion of the system prompt, stable across all users
+/// and sessions. This string only depends on `lang` (there are effectively
+/// two variants: zh and en). Everything that varies per user / per workspace
+/// / per session lives AFTER the cache boundary marker, not here.
+///
+/// This is what Anthropic prompt-cache matches on (via `cache_control:
+/// ephemeral`). For qwen and OpenAI, it's the stable prefix their implicit
+/// prefix-cache benefits from.
+pub fn static_system_block(lang: &str) -> String {
     let lang_instruction = if lang.starts_with("zh") {
         "Please respond in Chinese."
     } else {
         "Please respond in English."
     };
+    let mut s = String::with_capacity(8 * 1024);
+    s.push_str(&format!("You are YiYi, a helpful AI assistant. {}\n\n", lang_instruction));
+    s.push_str(STATIC_TOOL_STRATEGY);
+    s.push_str("\n\n## Capability Growth\n\
+        After completing meaningful work, evaluate if the result has reuse value:\n\
+        - **Script/tool created** → suggest registering to code library (search_my_code)\n\
+        - **Reusable workflow** → suggest creating a skill (activate_skills → skill_creator)\n\
+        - **Domain knowledge gained** → suggest saving as memory\n\
+        Ask the user briefly: \"这个[工具/流程]以后可能还会用到，要保存下来吗？\" Don't force it.\n");
+    s.push_str("\n\n## 任务执行策略\n\
+        默认在当前主对话中完成用户的请求（包括多文件编码、功能开发、写文档等）。\n\
+        - **所有常规任务**：直接在当前对话中完成，把产物路径/结果贴给用户\n\
+        - **复杂任务**（新项目搭建、大规模重构）：先在主对话中尝试，确实很大或用户明说后台再用 `create_task`\n\
+        - **只有**用户明确说『后台执行 / 独立任务 / 每天定时...』，或评估后发现一轮明显做不完，才使用 `create_task`（后者应先问用户）\n");
+    s.push_str("\n\n");
+    s.push_str(critical_system_reminder());
+    s
+}
 
-    let mut prompt = format!(
-        "You are YiYi, a helpful AI assistant. {}\n\n",
-        lang_instruction
-    );
-
-    // Bootstrap guidance: check flag file to prevent re-triggering
-    let bootstrap_done = working_dir.join(BOOTSTRAP_COMPLETED);
-    if !bootstrap_done.exists() {
-        let bootstrap_path = working_dir.join("BOOTSTRAP.md");
-        if let Ok(bootstrap) = tokio::fs::read_to_string(&bootstrap_path).await {
-            let stripped = strip_yaml_frontmatter(&bootstrap);
-            if !stripped.trim().is_empty() {
-                prompt.push_str(&stripped);
-                prompt.push_str("\n\n");
-                // Tell agent to create flag after completing bootstrap
-                prompt.push_str(&format!(
-                    "After completing bootstrap setup, create a flag file at '{}' \
-                    (any content) to prevent re-triggering.\n\n",
-                    bootstrap_done.to_string_lossy()
-                ));
-            }
-        }
-    }
-
-    // Note any unavailable MCP servers (tool definitions are passed via API `tools` parameter,
-    // so we only inject strategic guidance and MCP status into the prompt)
-    let mcp_status = {
-        let mut lines = String::new();
-        if let Some(mcp) = mcp_tools {
-            if !mcp.is_empty() {
-                lines.push_str(&format!(
-                    "\nYou also have {} MCP server tool(s) available. They are prefixed with server names.",
-                    mcp.len()
-                ));
-            }
-        }
-        if let Some(unavail) = unavailable_servers {
-            if !unavail.is_empty() {
-                lines.push_str(&format!(
-                    "\nNote: The following MCP servers are currently unavailable: {}. \
-                    Their tools cannot be used until they reconnect.",
-                    unavail.join(", ")
-                ));
-            }
-        }
-        lines
-    };
-
-    // Workspace & authorized folders information
-    let output_dir = user_workspace
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|| working_dir.to_string_lossy().to_string());
-    let authorized_paths = crate::engine::tools::get_all_authorized_paths().await;
-    let authorized_info = if authorized_paths.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "\nAuthorized folders (you can freely access these):\n{}\n",
-            authorized_paths
-                .iter()
-                .map(|p| format!("- {}", p))
-                .collect::<Vec<_>>()
-                .join("\n")
-        )
-    };
-
-    // Native coding guidance (no external CLI dependency)
-    let claude_code_guidance = "";
-
-    prompt.push_str(&format!(
-        "\
+/// The big (~4k token) tool-strategy / coding-discipline / bots / browser
+/// guidance block. Extracted verbatim from what used to be interleaved into
+/// `build_system_prompt` — but with all `{output_dir}` / `{authorized_info}`
+/// / `{mcp_status}` placeholders removed so this string is byte-stable.
+const STATIC_TOOL_STRATEGY: &str = "\
 ## Workspace & File Access
-Your default output directory is: {output_dir}
-When creating files (documents, spreadsheets, reports, etc.), save them here unless the user specifies a different path.
-{authorized_info}
-Files outside authorized folders are blocked. If the user asks you to access a path that is blocked, \
-tell them to add the folder in Settings > Workspace.
-Sensitive files (.env, .ssh, .pem, credentials) are always blocked for security.
+Your default output directory + authorized folders are listed in the dynamic \
+block near the end of this system prompt. Files outside authorized folders \
+are blocked. Sensitive files (.env, .ssh, .pem, credentials) are always \
+blocked for security.
 
 ## Tool Usage Strategy
 Tool definitions are provided via the API tools parameter. Here is how to choose between them:
-{mcp_status}
-{claude_code_guidance}
+
 ### Priority rules:
 - **File reading**: For simple document reading, prefer built-in tools (read_pdf, read_docx, read_spreadsheet). \
 For advanced operations (PDF forms, PPTX creation, complex Excel), use run_python or run_python_script.
@@ -274,7 +213,9 @@ For advanced operations (PDF forms, PPTX creation, complex Excel), use run_pytho
 - Summarize the results for the user
 - For multi-step tasks: call `request_continuation` tool when you need more rounds to complete
 - File-creating / long-running work: do it inline. Use `create_task` ONLY when the user explicitly asks for background / scheduled execution (see 『后台任务』 section below).
-- Skills provide domain-specific instructions — use `tool_search` + `activate_skills` to load them when needed
+- Skills: use `tool_search` + `activate_skills` to load them when needed. You don't see a pre-injected list of skill names — call `tool_search` with a topic keyword to discover what's available.
+- Code library: you've written scripts that are saved for reuse. Call `search_my_code` to find them by name or topic; don't re-write something that already exists.
+- Memory: durable facts about the user (preferences, decisions, past work) live in a vector store. Call `memory_search` when a user request might have precedent, and `memory_add` to save new learnings.
 - When you need to make a decision about user preferences (tech stack, coding style, quality standards), \
 use `tool_search` to find `ask_buddy` — the user's digital twin knows their preferences and can answer without interrupting the user
 
@@ -327,70 +268,141 @@ Choose the right tool based on timing:
 IMPORTANT: Do NOT use cron for one-time tasks. For reminders > 30 min away, prefer add_calendar_event.
 
 ## Bots & External Messaging
-Users have platform bots (QQ, Feishu, Discord, Telegram, DingTalk, etc.) that auto-create conversations per group/channel.
-- To see active conversations: call `list_bot_conversations`
-- To send a message to a group/channel: call `send_bot_message` with the conversation_id
-- To create/manage bots: call `manage_bot`
-- Each group/channel has its own isolated conversation context — messages from different groups never mix
-- Bot information is stored in the database, NEVER in config files
+Users have platform bots (QQ, Feishu, Discord, Telegram, DingTalk, etc.) that auto-create conversations per group/channel. To see active conversations: `list_bot_conversations`. To send a message: `send_bot_message` with the conversation_id. To create/manage bots: `manage_bot`. Each group/channel has its own isolated conversation context — messages from different groups never mix. Bot information is stored in the database, NEVER in config files.
 
 ## CLI 工具 (CLI Providers)
-CLI Provider 是 YiYi 内置的外部命令行工具管理系统。用户可以在「设置 > CLI 工具」中注册外部 CLI 工具（如飞书 lark-cli、钉钉 CLI 等），\
-配置安装命令、认证命令和凭证（app_id、app_secret 等）。
-- 每个 Provider 包含：标识 key、可执行文件名 binary、安装命令、认证命令、凭证、启用状态
-- YiYi 会自动检测 binary 是否已安装在系统 PATH 中
-- 用户配置好凭证后，你可以通过 `execute_shell` 直接调用这些 CLI 工具
-- 如果用户问「CLI Provider 是什么」或类似问题，要从 YiYi 自身功能的角度解释，而不是外部平台的概念
-- 目前内置了飞书 CLI (lark-cli) 的默认配置模板
+CLI Provider 是 YiYi 内置的外部命令行工具管理系统。用户可以在「设置 > CLI 工具」中注册外部 CLI 工具（如飞书 lark-cli、钉钉 CLI 等），配置安装命令、认证命令和凭证。每个 Provider 包含：标识 key、可执行文件名 binary、安装命令、认证命令、凭证、启用状态。YiYi 会自动检测 binary 是否已安装在系统 PATH 中。用户配置好凭证后，你可以通过 `execute_shell` 直接调用这些 CLI 工具。
 
-## Web Search (web_search tool)
-Use `web_search` for quick information lookup. It searches DuckDuckGo and returns results instantly — no browser needed.
-- Prefer `web_search` over `browser_use` for simple searches
-- If you need more detail from a search result, use `browser_use` to open the URL
+## Web Search / Browser Usage
+For simple lookups prefer `web_search` (DuckDuckGo, no browser needed). For reading or interacting with a specific page, prefer the cheap `browser_fetch` (dump-dom) or `browser_screenshot` (PNG). Only use `browser_use` (full Playwright) when you need interaction (click/type/scroll/login). Typical `browser_use` flow: `start(headed=true)` → `open(url)` → `ai_snapshot` → `act(element=N, operation=click)` → `stop`. Platform-bot developer consoles: Feishu https://open.feishu.cn/app, Discord https://discord.com/developers/applications, Telegram https://t.me/BotFather, DingTalk https://open-dev.dingtalk.com/, QQ https://q.qq.com/. Never fill passwords — let the user do it. When user action is needed (login / QR / CAPTCHA) say \"请在浏览器中完成登录/扫码，完成后告诉我\".
+";
 
-## Browser Usage (browser_use tool)
-You have a full Chromium browser for web automation. Use it when you need to:
-- **Browse websites** — open and interact with specific URLs
-- **Operate platforms** — post content, manage accounts, perform actions on websites
-- **Set up platform bots** — navigate developer consoles, extract credentials
-- **Scrape or extract data** — read page content, find elements, collect information
-- **Deep search** — when `web_search` results are insufficient, open a URL from the results to read the full page
+/// Build the system prompt.
+///
+/// Structure (critical for prompt-cache — see
+/// docs/review/2026-04-24_jury-cost-optimization.md):
+///
+///   [STATIC BLOCK] ← identical across all users / sessions → cache-able
+///     1. "You are YiYi..." + language instruction
+///     2. Tool Usage Strategy (no variables)
+///     3. Task routing policy
+///     4. Capability Growth guidance
+///     5. critical_system_reminder
+///   [CACHE BOUNDARY — visible comment so anthropic.rs can split here]
+///   [DYNAMIC BLOCK] ← per-user / per-session / per-turn
+///     6. Workspace & authorized paths
+///     7. MCP status
+///     8. Git context (short)
+///     9. Project info
+///     10. Buddy hosted mode (if enabled)
+///     11. Bootstrap guidance (if first-run)
+///     12. Pending growth suggestion (if any)
+///
+/// Deleted from system prompt entirely (previously polluted cache):
+///   - Code Library listing  → LLM uses `search_my_code` tool on demand
+///   - Identity Insights     → LLM uses `memory_search` on demand
+///   - Skill / bot / MCP name list → LLM uses `tool_search` / `manage_bot` / MCP tools
+///   - USER.md excerpt       → moved into `build_persona_prefix` (user-message prefix)
+///   - HOT-tier memory / corrections / personality signals (previously removed in e38121b)
+pub async fn build_system_prompt(
+    working_dir: &std::path::Path,
+    user_workspace: Option<&std::path::Path>,
+    skill_index: &[crate::commands::agent::SkillIndexEntry],
+    always_active_skills: &[String],
+    language: Option<&str>,
+    mcp_tools: Option<&[crate::engine::infra::mcp_runtime::MCPTool]>,
+    unavailable_servers: Option<&[String]>,
+) -> String {
+    let _ = (skill_index, always_active_skills); // kept for API compat — lazy-loaded now
 
-### Decision flow:
-1. If the user asks to search for information → **use web_search** first for quick results
-2. If you need to read a full page or interact with a website → **use browser_use**
-3. If the task involves any web interaction (clicking, filling forms, etc.) → **use browser_use**
-4. NEVER tell the user you cannot access a website or search the web.
+    let lang = language.unwrap_or("zh-CN");
 
-### Common workflow:
-1. `browser_use(action='start', headed=true)` — start visible browser
-2. `browser_use(action='open', url='...')` — open the target URL
-3. `browser_use(action='screenshot')` — see the page visually (the screenshot is sent to you as an image)
-4. `browser_use(action='snapshot')` — read the page text content
-5. Use click/type/scroll/find_elements to interact with the page
-6. Use `list_frames` + `evaluate_in_frame` if the page has iframes
-7. `browser_use(action='stop')` — close when done
+    // ── STATIC BLOCK ─────────────────────────────────────────────────────
+    let mut prompt = static_system_block(lang).to_string();
 
-### Platform bot setup:
-When setting up bots, open the developer console:
-- Feishu: https://open.feishu.cn/app
-- Discord: https://discord.com/developers/applications
-- Telegram: https://t.me/BotFather
-- DingTalk: https://open-dev.dingtalk.com/
-- QQ: https://q.qq.com/
+    // ── CACHE BOUNDARY MARKER ────────────────────────────────────────────
+    // Anthropic-aware clients (see llm_client/anthropic.rs) split the system
+    // prompt on this marker and put `cache_control: {"type": "ephemeral"}`
+    // on the block BEFORE it. For OpenAI / qwen this is just whitespace —
+    // harmless, and they do implicit prefix-match caching anyway.
+    prompt.push_str("\n\n<!-- yiyi:cache_boundary -->\n\n");
 
-### Key principles:
-- Use `headed=true` so the user can see and interact with the browser
-- Take screenshots frequently — you can see them as images to understand the page
-- When user action is needed (login, QR scan, CAPTCHA): tell the user \"请在浏览器中完成登录/扫码，完成后告诉我\"
-- NEVER try to fill in passwords — let the user do it
-- Be patient — wait for user confirmation between steps
-- When browsing Chinese sites (小红书、微博、抖音等), navigate directly to the website URL
-",
-        output_dir = output_dir,
-        authorized_info = authorized_info,
-        mcp_status = mcp_status,
+    // ── DYNAMIC BLOCK ────────────────────────────────────────────────────
+
+    // Workspace & authorized folders information
+    let output_dir = user_workspace
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| working_dir.to_string_lossy().to_string());
+    let authorized_paths = crate::engine::tools::get_all_authorized_paths().await;
+    let authorized_info = if authorized_paths.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nAuthorized folders (you can freely access these):\n{}\n",
+            authorized_paths
+                .iter()
+                .map(|p| format!("- {}", p))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    };
+    prompt.push_str(&format!(
+        "## Workspace & File Access\n\
+         Your default output directory is: {output_dir}\n\
+         When creating files (documents, spreadsheets, reports, etc.), save them here unless the user specifies a different path.\n\
+         {authorized_info}\n\
+         Files outside authorized folders are blocked. If the user asks you to access a path that is blocked, \
+         tell them to add the folder in Settings > Workspace.\n\
+         Sensitive files (.env, .ssh, .pem, credentials) are always blocked for security.\n",
     ));
+
+    // MCP status (count + unavailable server list). Tool definitions are
+    // passed via the API tools parameter; we only inject ambient status here.
+    let mcp_status = {
+        let mut lines = String::new();
+        if let Some(mcp) = mcp_tools {
+            if !mcp.is_empty() {
+                lines.push_str(&format!(
+                    "\nYou also have {} MCP server tool(s) available. They are prefixed with server names.",
+                    mcp.len()
+                ));
+            }
+        }
+        if let Some(unavail) = unavailable_servers {
+            if !unavail.is_empty() {
+                lines.push_str(&format!(
+                    "\nNote: The following MCP servers are currently unavailable: {}. \
+                    Their tools cannot be used until they reconnect.",
+                    unavail.join(", ")
+                ));
+            }
+        }
+        lines
+    };
+    if !mcp_status.is_empty() {
+        prompt.push_str("\n## MCP Status");
+        prompt.push_str(&mcp_status);
+        prompt.push('\n');
+    }
+
+    // Bootstrap guidance (first-run only — auto-disappears once flag file exists)
+    let bootstrap_done = working_dir.join(BOOTSTRAP_COMPLETED);
+    if !bootstrap_done.exists() {
+        let bootstrap_path = working_dir.join("BOOTSTRAP.md");
+        if let Ok(bootstrap) = tokio::fs::read_to_string(&bootstrap_path).await {
+            let stripped = strip_yaml_frontmatter(&bootstrap);
+            if !stripped.trim().is_empty() {
+                prompt.push_str("\n\n");
+                prompt.push_str(&stripped);
+                prompt.push_str("\n\n");
+                prompt.push_str(&format!(
+                    "After completing bootstrap setup, create a flag file at '{}' \
+                    (any content) to prevent re-triggering.\n",
+                    bootstrap_done.to_string_lossy()
+                ));
+            }
+        }
+    }
 
     // Inject git context if workspace is a git repo
     {
@@ -454,79 +466,7 @@ When setting up bots, open the developer console:
         }
     }
 
-    // HOT-tier memory / corrections / personality aggregates are NOT auto-injected
-    // into the system prompt anymore (Priya diagnosis P1-5: auto-inject was
-    // breaking prompt cache every session and poisoning the agent with memory
-    // summaries it misread as running state — see 7b87759 / 8d3084e history).
-    // The agent now pulls memory on demand via `memory_search`. Corrections and
-    // personality are surfaced through the Buddy UI (BuddyPanel) and through
-    // events (growth://persist_suggestion) instead.
-
-    // Capability growth guidance + pending suggestions
-    {
-        prompt.push_str("\n\n## Capability Growth\n\
-            After completing meaningful work, evaluate if the result has reuse value:\n\
-            - **Script/tool created** → suggest registering to code library (search_my_code)\n\
-            - **Reusable workflow** → suggest creating a skill (activate_skills → skill_creator)\n\
-            - **Domain knowledge gained** → suggest saving as memory\n\
-            Ask the user briefly: \"这个[工具/流程]以后可能还会用到，要保存下来吗？\" Don't force it.\n");
-
-        if let Some(db) = crate::engine::tools::get_database() {
-            if let Some(suggestion) = detect_skill_opportunity(&db) {
-                prompt.push_str(&format!(
-                    "\n**Pending suggestion**: {}\n",
-                    suggestion
-                ));
-            }
-        }
-    }
-
-    // Inject code library summary (so LLM knows what scripts are available)
-    if let Some(db) = crate::engine::tools::get_database() {
-        let code_entries = db.search_code_registry("", 10);
-        if !code_entries.is_empty() {
-            prompt.push_str("\n\n## My Code Library (scripts I've created)\n\
-                             Before writing new code, check if something similar exists here. Use `search_my_code` for details.\n");
-            for entry in code_entries.iter().take(10) {
-                let status = if let Some(ref err) = entry.last_error {
-                    {
-                        // Sanitize error: remove potential sensitive paths
-                        let sanitized: String = err.chars().take(50).collect();
-                        format!(" [LAST ERROR: {}]", sanitized.replace(|c: char| c == '/' || c == '\\', "_"))
-                    }
-                } else if entry.run_count > 0 {
-                    format!(" [{}/{} runs OK]", entry.success_count, entry.run_count)
-                } else {
-                    " [never run]".into()
-                };
-                let safe_desc = sanitize_prompt_field(&entry.description, 120);
-                prompt.push_str(&format!("- **{}** ({}): {}{}\n",
-                    entry.name, entry.language, safe_desc, status
-                ));
-            }
-            if code_entries.len() > 10 {
-                prompt.push_str(&format!("  ...and {} more. Use search_my_code to find them.\n", code_entries.len() - 10));
-            }
-        }
-    }
-
-    // Identity traits from MemMe (high-level user profile: role, values, preferences)
-    {
-        if let Some(store) = crate::engine::tools::get_memme_store() {
-            if let Ok(traits) = store.list_identity_traits(crate::engine::tools::MEMME_USER_ID) {
-                if !traits.is_empty() {
-                    prompt.push_str("\n\n## Identity Insights (learned about you over time)\n");
-                    for t in traits.iter().take(8) {
-                        let safe_content = sanitize_prompt_field(&t.content, 120);
-                        prompt.push_str(&format!("- [{}] {} (confidence: {:.0}%)\n",
-                            t.trait_type.as_str(), safe_content, t.confidence * 100.0));
-                    }
-                }
-            }
-        }
-    }
-
-    // Buddy hosted mode notification
+    // Buddy hosted mode notification (dynamic — toggles at runtime)
     if crate::engine::buddy_delegate::is_hosted() {
         prompt.push_str("\n\n## 托管模式已开启\n\
             用户的数字分身（Buddy）正在代理决策。你可以：\n\
@@ -536,102 +476,32 @@ When setting up bots, open the developer console:
             - 完成后向用户汇报结果即可\n");
     }
 
-    // User model from USER.md
-    {
-        let user_model = crate::engine::mem::user_model::load_user_model(working_dir);
-        if !user_model.is_empty() {
-            prompt.push_str("\n\n## About the User\n");
-            // Truncate to ~500 chars to save tokens
-            let truncated: String = user_model.chars().take(500).collect();
-            prompt.push_str(&truncated);
-            if user_model.chars().count() > 500 {
-                prompt.push_str("\n...");
-            }
-            prompt.push('\n');
-        }
-    }
-
-    // Long-term memory is now included in HOT-tier context loaded above (via tiered_memory::load_hot_context).
-    // No separate MEMORY.md file read needed.
-
-    // Dynamic capability index — compact self-awareness (names only, details via activate_skills)
-    // Replaces static app_guide skill. Grows automatically as skills/bots/MCP change.
-    {
-        let _ = always_active_skills; // kept for API compat, no longer injected
-
-        let mut cap_lines: Vec<String> = Vec::new();
-
-        // Skills (names only — LLM uses activate_skills to load full content)
-        if !skill_index.is_empty() {
-            let names: Vec<&str> = skill_index.iter().map(|e| e.name.as_str()).collect();
-            cap_lines.push(format!("Skills: {}", names.join(", ")));
-        }
-
-        // Bots (from DB — platform + status)
-        if let Some(db) = crate::engine::tools::get_database() {
-            if let Ok(bots) = db.list_bots() {
-                if !bots.is_empty() {
-                    let bot_strs: Vec<String> = bots.iter().map(|b| {
-                        format!("{}({})", b.platform, if b.enabled { "on" } else { "off" })
-                    }).collect();
-                    cap_lines.push(format!("Bots: {}", bot_strs.join(", ")));
-                }
-            }
-        }
-
-        // MCP servers (already noted in mcp_status above, just add count)
-        if let Some(mcp) = mcp_tools {
-            if !mcp.is_empty() {
-                let server_keys: std::collections::HashSet<&str> = mcp.iter()
-                    .map(|t| t.server_key.as_str())
-                    .filter(|k| !k.is_empty())
-                    .collect();
-                if !server_keys.is_empty() {
-                    let mut names: Vec<&str> = server_keys.into_iter().collect();
-                    names.sort_unstable();
-                    cap_lines.push(format!("MCP: {}", names.join(", ")));
-                }
-            }
-        }
-
-        // Deferred tools (count only — LLM uses tool_search to discover)
-        let deferred_count = crate::engine::tools::deferred_tools_count();
-        if deferred_count > 0 {
-            cap_lines.push(format!("Extended tools: {} discoverable via tool_search", deferred_count));
-        }
-
-        if !cap_lines.is_empty() {
-            prompt.push_str("\n\n## Capabilities\n");
-            prompt.push_str("Use `activate_skills` to load skill details. Use `tool_search` to discover extended tools.\n");
-            for line in &cap_lines {
-                prompt.push_str(&format!("- {}\n", line));
-            }
-        }
-    }
-
-    // Task routing guidance
-    {
-        let external_hint = if let Some(name) = crate::engine::buddy_delegate::external_coder() {
-            format!("- **复杂任务**（新项目搭建、大规模重构）：可通过 `execute_shell` 调用 `{}` 委派深度编码\n", name)
-        } else {
-            "- **复杂任务**（新项目搭建、大规模重构）：先在主对话中尝试，确实很大或用户明说后台再用 `create_task`\n".into()
-        };
+    // External-coder override (affects task-routing default — dynamic)
+    if let Some(name) = crate::engine::buddy_delegate::external_coder() {
         prompt.push_str(&format!(
-            "\n\n## 任务执行策略\n\
-            默认在当前主对话中完成用户的请求（包括多文件编码、功能开发、写文档等）。\n\
-            - **所有常规任务**：直接在当前对话中完成，把产物路径/结果贴给用户\n\
-            {}\
-            - **只有**用户明确说『后台执行 / 独立任务 / 每天定时...』，或评估后发现一轮明显做不完，才使用 `create_task`（后者应先问用户）\n",
-            external_hint
+            "\n\n## 外部编码代理可用\n\
+            复杂任务（新项目搭建、大规模重构）可以通过 `execute_shell` 调用 `{}` 委派深度编码。\n",
+            name,
         ));
     }
 
-    // Critical behavior rules — merged into the static system prompt once so
-    // the Anthropic prompt-cache prefix stays stable across turns. Previously
-    // `inject_critical_reminder` re-appended this to the message list every
-    // iteration, which busted the cache and cost us ~700 tokens × N turns.
-    prompt.push_str("\n\n");
-    prompt.push_str(critical_system_reminder());
+    // Pending growth suggestion (dynamic — recalc each session)
+    if let Some(db) = crate::engine::tools::get_database() {
+        if let Some(suggestion) = detect_skill_opportunity(&db) {
+            prompt.push_str(&format!(
+                "\n\n**Pending capability-growth suggestion**: {}\n",
+                suggestion,
+            ));
+        }
+    }
+
+    // Deleted from system prompt (Priya P1-4 / P1-5 lazy-load):
+    //   - Code Library listing   → agent uses `search_my_code` tool on demand
+    //   - Identity Insights      → agent uses `memory_search` on demand
+    //   - Dynamic capability idx (skill / bot / MCP names) → `tool_search` / `manage_bot` / MCP tools
+    //   - USER.md excerpt        → moved to `build_persona_prefix` (user-message prefix)
+    // These used to interleave per-user content into what is now a cleanly
+    // static prefix. See docs/review/2026-04-24_jury-cost-optimization.md.
 
     prompt
 }
@@ -941,7 +811,11 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn build_system_prompt_lists_skills_from_skill_index() {
+    async fn build_system_prompt_no_longer_lists_skills_in_prompt() {
+        // Previously the prompt interpolated a skill-name list — that
+        // broke cache prefix every time the user installed/uninstalled a
+        // skill. Regression: must NOT list names; agent discovers via
+        // `tool_search`.
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join(BOOTSTRAP_COMPLETED), "done").unwrap();
         let skills = vec![
@@ -958,8 +832,9 @@ mod tests {
             None,
         )
         .await;
-        // Capability section lists names, not descriptions.
-        assert!(prompt.contains("Skills: writer, coder"));
+        assert!(!prompt.contains("Skills: writer, coder"));
+        // But the static text should still direct the agent to tool_search.
+        assert!(prompt.contains("tool_search"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -978,5 +853,42 @@ mod tests {
         )
         .await;
         assert!(prompt.contains(&ws.path().to_string_lossy().to_string()));
+    }
+}
+
+#[cfg(test)]
+mod cache_size_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// Measure static vs dynamic block sizes. Run with:
+    ///   cargo test --features test-support --lib cache_size -- --nocapture
+    #[tokio::test(flavor = "multi_thread")]
+    async fn print_system_prompt_breakdown() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join(BOOTSTRAP_COMPLETED), "done").unwrap();
+
+        let static_zh = static_system_block("zh");
+        let static_en = static_system_block("en");
+        let full = build_system_prompt(dir.path(), None, &[], &[], Some("zh"), None, None).await;
+
+        let (before, after) = full.split_once("<!-- yiyi:cache_boundary -->").unwrap_or((&full, ""));
+
+        eprintln!(
+            "\n─── system prompt cache breakdown ───\n\
+             static_system_block(zh):  {} chars (~{} tokens)\n\
+             static_system_block(en):  {} chars (~{} tokens)\n\
+             full prompt (zh):         {} chars (~{} tokens)\n\
+             before cache boundary:    {} chars (~{} tokens)\n\
+             after  cache boundary:    {} chars (~{} tokens)\n",
+            static_zh.len(), static_zh.len() / 4,
+            static_en.len(), static_en.len() / 4,
+            full.len(), full.len() / 4,
+            before.len(), before.len() / 4,
+            after.len(), after.len() / 4,
+        );
+
+        assert!(static_zh.len() > 3_000);
+        assert!(before.len() > after.len() * 2, "static prefix should dominate");
     }
 }
