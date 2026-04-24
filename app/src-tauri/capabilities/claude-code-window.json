@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "claude-code-window",
+  "description": "Minimal permissions for Claude Code terminal viewer subwindows (label matches `claude-code-*`). These windows are read-only viewers of output streamed from the main process — they must NOT be able to execute shell commands, spawn PTY sessions, or terminate the app. This capability split is the P0 mitigation for Marcus's 'LLM agent裸 shell:execute' finding (see docs/review/2026-04-24_jury-yiyi-overall-assessment.md).",
+  "windows": [
+    "claude-code-*"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "shell:allow-open",
+    "notification:default"
+  ]
+}
