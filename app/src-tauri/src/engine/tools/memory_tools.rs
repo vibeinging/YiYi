@@ -6,93 +6,46 @@
 use super::MEMME_USER_ID;
 
 pub(super) fn definitions() -> Vec<super::ToolDefinition> {
+    // Priya P1-4 + P1-5 consolidation: the LLM surface is deliberately just
+    // `memory_add` (write on-demand) and `memory_search` (read on-demand).
+    //
+    // Previously exposed but removed (execution fns kept below for internal
+    // callers / BuddyPanel UI):
+    //   - memory_list    → Buddy UI shows lists; LLM uses memory_search
+    //   - memory_delete  → Buddy UI has a delete button; LLM has no need
+    //   - memory_read    → MEMORY.md is legacy; use read_file if needed
+    //   - memory_write   → ditto; use write_file
+    //   - diary_write    → diary is session journal, owned by meditation engine
+    //   - diary_read     → ditto
+    //
+    // Rationale: the LLM was misusing list/read as a cheap way to "dump
+    // everything", which polluted context. Forcing on-demand search with a
+    // query tells the agent to think about WHAT it's looking for.
     vec![
         super::tool_def(
             "memory_add",
-            "Add a memory entry to the persistent vector knowledge store. Use this to save important facts, user preferences, project decisions, or experiences that should be remembered across conversations. Supports categories and importance scoring.",
+            "Save a fact / preference / decision / principle to long-term memory. Use sparingly — only for information that should survive across conversations.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
                     "content": { "type": "string", "description": "The memory content to store" },
-                    "category": { "type": "string", "enum": ["fact", "preference", "experience", "decision", "note", "principle"], "description": "Category of the memory (default: fact)" },
-                    "importance": { "type": "number", "description": "Importance score 0.0-1.0 (default: 0.5). Higher = more important." }
+                    "category": { "type": "string", "enum": ["fact", "preference", "experience", "decision", "note", "principle"], "description": "Category (default: fact)" },
+                    "importance": { "type": "number", "description": "0.0-1.0 (default: 0.5)" }
                 },
                 "required": ["content"]
             }),
         ),
         super::tool_def(
             "memory_search",
-            "Search stored memories using vector similarity + keyword hybrid search. Returns semantically relevant results even when exact keywords don't match. Supports Chinese and English.",
+            "Recall relevant memories via vector + keyword hybrid search. Use when the user references past work or when their current request might have a precedent.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "query": { "type": "string", "description": "Search query (natural language, supports Chinese and English)" },
-                    "category": { "type": "string", "enum": ["fact", "preference", "experience", "decision", "note", "principle"], "description": "Optional: filter by category" },
-                    "max_results": { "type": "integer", "description": "Maximum results to return (default: 10)" }
+                    "query": { "type": "string", "description": "Natural-language query (zh/en)" },
+                    "category": { "type": "string", "enum": ["fact", "preference", "experience", "decision", "note", "principle"], "description": "Optional filter" },
+                    "max_results": { "type": "integer", "description": "Default: 10" }
                 },
                 "required": ["query"]
-            }),
-        ),
-        super::tool_def(
-            "memory_delete",
-            "Delete a specific memory entry by its ID. Use memory_search or memory_list first to find the ID.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "id": { "type": "string", "description": "The memory ID to delete" }
-                },
-                "required": ["id"]
-            }),
-        ),
-        super::tool_def(
-            "memory_list",
-            "List stored memories, optionally filtered by category. Shows content, category, importance, and timestamps.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "category": { "type": "string", "enum": ["fact", "preference", "experience", "decision", "note", "principle"], "description": "Optional: filter by category" },
-                    "limit": { "type": "integer", "description": "Maximum entries to return (default: 20)" }
-                }
-            }),
-        ),
-        // --- Markdown diary & long-term memory tools ---
-        super::tool_def(
-            "diary_write",
-            "Write an entry to today's diary. Use this to record important events, learnings, decisions, and interactions from the current session.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "content": { "type": "string", "description": "The diary entry content" },
-                    "topic": { "type": "string", "description": "Brief topic/title for this entry" }
-                },
-                "required": ["content"]
-            }),
-        ),
-        super::tool_def(
-            "diary_read",
-            "Read diary entries. Can read a specific date or recent days. Returns chronological diary content.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "date": { "type": "string", "description": "Specific date in YYYY-MM-DD format. If omitted, reads recent days." },
-                    "days": { "type": "integer", "description": "Number of recent days to read (default: 3, max: 30)" }
-                }
-            }),
-        ),
-        super::tool_def(
-            "memory_read",
-            "Read the long-term memory file (MEMORY.md). Contains important persistent facts, user preferences, key decisions, and knowledge accumulated over time.",
-            serde_json::json!({ "type": "object", "properties": {} }),
-        ),
-        super::tool_def(
-            "memory_write",
-            "Update the long-term memory file (MEMORY.md). Use this to promote important information from diary or conversation to persistent memory. Overwrites the entire file - read first, then write the updated version.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "content": { "type": "string", "description": "The complete MEMORY.md content to write" }
-                },
-                "required": ["content"]
             }),
         ),
     ]
