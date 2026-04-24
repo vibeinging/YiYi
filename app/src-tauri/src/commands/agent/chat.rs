@@ -730,14 +730,15 @@ pub async fn chat_stream_start(
                                 }
                             }
 
-                            // Growth System: reflect on chat if tools were used (real work done)
+                            // Growth System: reflect on chat if tools were used (real work done).
+                            //
+                            // The hot path — SilentCompletion / ToolError / MaxIterations —
+                            // fires on every tool-using turn. That was costing ~1.2M tokens/mo
+                            // per active user (cost jury P0 #3). We now sample this path via
+                            // `should_reflect_silent` so only 1-in-N turns call the LLM;
+                            // the ExplicitCorrection / ExplicitPraise / AgentError paths
+                            // above remain immediate because they're rare + high signal.
                             if tool_call_count.load(std::sync::atomic::Ordering::Relaxed) > 0 {
-                                let config_ref = ctx.config.clone();
-                                let user_msg = ctx.augmented_message.clone();
-                                let reply_ref = last_reply.clone();
-                                let sid_ref = sid_clone.clone();
-
-                                // Determine success: no tool errors and didn't hit max iterations/rounds
                                 let had_tool_errors = tool_error_count.load(std::sync::atomic::Ordering::Relaxed) > 0;
                                 let hit_max_iterations = stop_reason == "max_rounds";
                                 let was_successful = !had_tool_errors && !hit_max_iterations;
@@ -750,25 +751,40 @@ pub async fn chat_stream_start(
                                     SignalType::SilentCompletion
                                 };
 
-                                log::debug!(
-                                    "Reflection: was_successful={}, tool_errors={}, stop_reason={}, signal={:?}",
-                                    was_successful,
-                                    tool_error_count.load(std::sync::atomic::Ordering::Relaxed),
-                                    stop_reason,
-                                    signal_type,
-                                );
+                                if react_agent::should_reflect_silent(&sid_clone) {
+                                    let config_ref = ctx.config.clone();
+                                    let user_msg = ctx.augmented_message.clone();
+                                    let reply_ref = last_reply.clone();
+                                    let sid_ref = sid_clone.clone();
 
-                                tokio::spawn(async move {
-                                    react_agent::reflect_on_task(
-                                        &config_ref,
-                                        None,
-                                        Some(&sid_ref),
-                                        &user_msg,
-                                        &reply_ref,
+                                    log::debug!(
+                                        "Reflection firing: was_successful={}, tool_errors={}, stop_reason={}, signal={:?}",
                                         was_successful,
+                                        tool_error_count.load(std::sync::atomic::Ordering::Relaxed),
+                                        stop_reason,
                                         signal_type,
-                                    ).await;
-                                });
+                                    );
+
+                                    tokio::spawn(async move {
+                                        react_agent::reflect_on_task(
+                                            &config_ref,
+                                            None,
+                                            Some(&sid_ref),
+                                            &user_msg,
+                                            &reply_ref,
+                                            was_successful,
+                                            signal_type,
+                                        ).await;
+                                    });
+                                } else {
+                                    log::debug!(
+                                        "Reflection sampled OUT this turn (signal={:?}, was_successful={}). \
+                                         Sampling keeps 1-in-{} silent-completion reflections.",
+                                        signal_type,
+                                        was_successful,
+                                        react_agent::SILENT_REFLECT_SAMPLE_EVERY,
+                                    );
+                                }
                             }
 
                             // Memory extraction is delegated to MemMe's meditation pipeline (runs nightly).

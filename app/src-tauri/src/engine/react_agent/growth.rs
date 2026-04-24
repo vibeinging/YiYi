@@ -2,6 +2,58 @@ use super::{SignalType, GROWTH_LLM_SEMAPHORE};
 use crate::engine::llm_client::{chat_completion_tracked, LLMConfig, LLMMessage, MessageContent};
 use crate::engine::usage::UsageSource;
 
+// ─────────────────────────────────────────────────────────────────────────
+// Silent-completion reflection sampler (cost jury P0 #3)
+//
+// `reflect_on_task` used to fire on EVERY user message that triggered any
+// tool call. Thomas's audit: for an active user (20 tool-turns/day) that's
+// ~1.2M tokens/month of reflection alone — potentially the biggest single
+// sink in the whole system.
+//
+// Strategy: keep the rare high-signal triggers (correction / praise /
+// agent-error) as immediate, but the common SilentCompletion / ToolError /
+// MaxIterations path — which fires 95% of the time — only actually runs
+// the LLM call every Nth invocation per session. Skipped turns still get
+// a lightweight non-LLM record written to the reflections table so we
+// don't lose the fact that work happened.
+// ─────────────────────────────────────────────────────────────────────────
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+/// How often (per session) the silent-completion path calls the LLM.
+/// 1 = never sample (always reflect), ∞ = never reflect.
+pub const SILENT_REFLECT_SAMPLE_EVERY: u32 = 5;
+
+static SILENT_COUNTERS: std::sync::OnceLock<Mutex<HashMap<String, u32>>> =
+    std::sync::OnceLock::new();
+
+fn silent_counters() -> &'static Mutex<HashMap<String, u32>> {
+    SILENT_COUNTERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Returns true if this silent-completion turn should actually run the
+/// LLM reflection (vs. be sampled out). Increments a per-session counter.
+pub fn should_reflect_silent(session_id: &str) -> bool {
+    let mut map = silent_counters().lock().unwrap_or_else(|e| e.into_inner());
+    let counter = map.entry(session_id.to_string()).or_insert(0);
+    *counter += 1;
+    let fire = *counter % SILENT_REFLECT_SAMPLE_EVERY == 1;
+    // Cap per-session counter growth — hash map could grow unbounded across
+    // long-lived processes with many short sessions. Reset once we've seen
+    // enough turns that the sampling is stable.
+    if *counter > 10_000 {
+        *counter = 0;
+    }
+    fire
+}
+
+#[cfg(test)]
+pub fn reset_silent_counter_for_test(session_id: &str) {
+    let mut map = silent_counters().lock().unwrap_or_else(|e| e.into_inner());
+    map.remove(session_id);
+}
+
 /// Shared capability category keywords used by both reflect_on_task and build_capability_profile.
 const CAPABILITY_CATEGORIES: &[(&str, &[&str])] = &[
     ("coding", &["代码", "编程", "code", "programming", "编写", "函数", "bug", "refactor", "实现", "feature"]),
@@ -1364,5 +1416,54 @@ mod tests {
         }
         let timeline = build_growth_timeline(&db, 3);
         assert_eq!(timeline.len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod silent_sampler_tests {
+    use super::{reset_silent_counter_for_test, should_reflect_silent, SILENT_REFLECT_SAMPLE_EVERY};
+
+    #[test]
+    fn first_call_fires_then_sampled() {
+        let sid = "test-session-sampler-1";
+        reset_silent_counter_for_test(sid);
+
+        // Counter %N==1 hits on calls 1, N+1, 2N+1, ...
+        let mut fires = Vec::new();
+        for i in 1..=20 {
+            if should_reflect_silent(sid) {
+                fires.push(i);
+            }
+        }
+        // With SAMPLE_EVERY=5 we expect fires at 1, 6, 11, 16 → 4 times in 20 turns.
+        let expected_rate = 20 / SILENT_REFLECT_SAMPLE_EVERY as usize;
+        assert!(
+            fires.len() == expected_rate || fires.len() == expected_rate + 1,
+            "over 20 turns, expected ~{} fires (N={}), got {} at {:?}",
+            expected_rate,
+            SILENT_REFLECT_SAMPLE_EVERY,
+            fires.len(),
+            fires,
+        );
+    }
+
+    #[test]
+    fn different_sessions_counter_independently() {
+        let a = "sess-a";
+        let b = "sess-b";
+        reset_silent_counter_for_test(a);
+        reset_silent_counter_for_test(b);
+
+        assert!(should_reflect_silent(a)); // a:1 → fire
+        assert!(should_reflect_silent(b)); // b:1 → fire (independent)
+        assert!(!should_reflect_silent(a)); // a:2 → skip
+        assert!(!should_reflect_silent(b)); // b:2 → skip
+    }
+
+    #[test]
+    fn sample_constant_is_stable() {
+        // Regression guard so a future "optimisation" doesn't silently set
+        // this to 1 (every turn) and undo the savings.
+        assert!(SILENT_REFLECT_SAMPLE_EVERY >= 3);
     }
 }

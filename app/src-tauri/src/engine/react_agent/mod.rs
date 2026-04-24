@@ -10,7 +10,7 @@ pub use growth::{
     build_capability_profile, build_growth_timeline, consolidate_corrections_to_principles,
     detect_skill_opportunity, generate_growth_report,
     generate_morning_reflection, improve_skill_from_experience, learn_from_feedback,
-    reflect_on_task, update_user_model,
+    reflect_on_task, should_reflect_silent, update_user_model, SILENT_REFLECT_SAMPLE_EVERY,
 };
 pub use prompt::{build_system_prompt, seed_default_templates};
 
