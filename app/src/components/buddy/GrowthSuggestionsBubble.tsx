@@ -10,7 +10,7 @@
  * suggestions. Dismissing the bubble doesn't clear the store — only acting
  * on a suggestion does.
  */
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Sparkles, X, Save, Clock, Pencil, Check, Trash2, Loader2 } from 'lucide-react';
 import {
   useGrowthSuggestionsStore,
@@ -38,10 +38,22 @@ interface Props {
 }
 
 export const GrowthSuggestionsBubble: React.FC<Props> = ({ onClose, flipRight }) => {
-  const visible = useGrowthSuggestionsStore((s) => s.visiblePending());
+  // Select stable fields — calling s.visiblePending() returns a fresh array
+  // every render and trips zustand into an infinite re-render loop (which
+  // unmounts the whole app tree and shows a blank/dark screen).
+  const pending = useGrowthSuggestionsStore((s) => s.pending);
+  const snoozedUntil = useGrowthSuggestionsStore((s) => s.snoozedUntil);
   const remove = useGrowthSuggestionsStore((s) => s.remove);
   const snooze = useGrowthSuggestionsStore((s) => s.snooze);
   const recordSave = useGrowthSuggestionsStore((s) => s.recordSave);
+
+  const visible = useMemo(() => {
+    const now = Date.now();
+    return pending.filter((s) => {
+      const until = snoozedUntil[s.id];
+      return !until || until <= now;
+    });
+  }, [pending, snoozedUntil]);
 
   const [expandedId, setExpandedId] = useState<string | null>(
     visible[0]?.id ?? null,
