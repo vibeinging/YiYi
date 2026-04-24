@@ -5,7 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::engine::db::Database;
-use crate::engine::llm_client::{chat_completion, LLMConfig, LLMMessage, MessageContent};
+use crate::engine::llm_client::{chat_completion_tracked, LLMConfig, LLMMessage, MessageContent};
+use crate::engine::usage::UsageSource;
 use super::memory;
 use crate::engine::react_agent;
 use super::tiered_memory;
@@ -422,7 +423,7 @@ async fn phase_growth(
         tool_call_id: None,
     }];
 
-    let response = chat_completion(config, &messages, &[])
+    let response = chat_completion_tracked(UsageSource::Meditation, config, &messages, &[])
         .await
         .map_err(|e| format!("Growth LLM call failed: {}", e))?;
 
@@ -563,7 +564,7 @@ async fn phase_journal(
         tool_call_id: None,
     }];
 
-    let journal = match chat_completion(config, &messages, &[]).await {
+    let journal = match chat_completion_tracked(UsageSource::Meditation, config, &messages, &[]).await {
         Ok(resp) => resp
             .message
             .content
@@ -717,7 +718,7 @@ async fn phase_personality_evolution(
         tool_call_id: None,
     }];
 
-    let response = chat_completion(config, &messages, &[])
+    let response = chat_completion_tracked(UsageSource::Meditation, config, &messages, &[])
         .await
         .map_err(|e| format!("Personality analysis LLM call failed: {}", e))?;
 
@@ -838,7 +839,7 @@ async fn phase_proactive_care(
         tool_call_id: None,
     }];
 
-    let response = chat_completion(config, &messages, &[])
+    let response = chat_completion_tracked(UsageSource::Meditation, config, &messages, &[])
         .await
         .map_err(|e| format!("Proactive care LLM call failed: {}", e))?;
 

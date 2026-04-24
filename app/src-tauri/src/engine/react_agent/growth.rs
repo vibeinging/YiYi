@@ -1,5 +1,6 @@
 use super::{SignalType, GROWTH_LLM_SEMAPHORE};
-use crate::engine::llm_client::{chat_completion, LLMConfig, LLMMessage, MessageContent};
+use crate::engine::llm_client::{chat_completion_tracked, LLMConfig, LLMMessage, MessageContent};
+use crate::engine::usage::UsageSource;
 
 /// Shared capability category keywords used by both reflect_on_task and build_capability_profile.
 const CAPABILITY_CATEGORIES: &[(&str, &[&str])] = &[
@@ -111,7 +112,7 @@ JSON only:"#
         tool_call_id: None,
     }];
 
-    let result = match chat_completion(config, &messages, &[]).await {
+    let result = match chat_completion_tracked(UsageSource::Growth, config, &messages, &[]).await {
         Ok(resp) => resp.message.content.map(|c| c.into_text()).unwrap_or_default(),
         Err(e) => {
             log::warn!("Reflection LLM call failed: {}", e);
@@ -322,7 +323,7 @@ Respond with either UNCHANGED or the complete improved SKILL.md:"#
         tool_call_id: None,
     }];
 
-    let result = match chat_completion(config, &messages, &[]).await {
+    let result = match chat_completion_tracked(UsageSource::Growth, config, &messages, &[]).await {
         Ok(resp) => resp.message.content.map(|c| c.into_text()).unwrap_or_default(),
         Err(e) => {
             log::warn!("Skill improvement LLM call failed for '{}': {}", skill_name, e);
@@ -454,7 +455,7 @@ Otherwise respond with the COMPLETE updated profile (not just the changes)."#
         tool_call_id: None,
     }];
 
-    let result = match chat_completion(config, &messages, &[]).await {
+    let result = match chat_completion_tracked(UsageSource::Growth, config, &messages, &[]).await {
         Ok(resp) => resp.message.content.map(|c| c.into_text()).unwrap_or_default(),
         Err(e) => {
             log::warn!("User model update LLM call failed: {}", e);
@@ -534,7 +535,7 @@ JSON only:"#
         tool_call_id: None,
     }];
 
-    let result = match chat_completion(config, &messages, &[]).await {
+    let result = match chat_completion_tracked(UsageSource::Growth, config, &messages, &[]).await {
         Ok(resp) => resp.message.content.map(|c| c.into_text()).unwrap_or_default(),
         Err(e) => {
             log::warn!("Feedback learning LLM call failed: {}", e);
@@ -869,7 +870,7 @@ Morning greeting:"#
         tool_call_id: None,
     }];
 
-    let greeting = match chat_completion(config, &messages, &[]).await {
+    let greeting = match chat_completion_tracked(UsageSource::Growth, config, &messages, &[]).await {
         Ok(resp) => resp.message.content.map(|c| c.into_text()),
         Err(e) => {
             log::warn!("Morning reflection LLM call failed: {}", e);
@@ -1052,7 +1053,7 @@ Consolidated principles:"#,
         tool_call_id: None,
     }];
 
-    let result = match chat_completion(config, &messages, &[]).await {
+    let result = match chat_completion_tracked(UsageSource::Growth, config, &messages, &[]).await {
         Ok(resp) => resp.message.content.map(|c| c.into_text()).unwrap_or_default(),
         Err(e) => return Err(format!("LLM consolidation failed: {}", e)),
     };

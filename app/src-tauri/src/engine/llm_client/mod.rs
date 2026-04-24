@@ -120,7 +120,16 @@ fn api_format(config: &LLMConfig) -> &'static str {
 
 // ── Public dispatch API ─────────────────────────────────────────────
 
-/// Call LLM with tool definitions (auto-detects provider and dispatches)
+/// Call LLM with tool definitions (auto-detects provider and dispatches).
+///
+/// NOTE: this low-level fn does NOT record usage to the persistent log.
+/// For background callsites (meditation / compaction / growth / subagent /
+/// heartbeat / eval / buddy delegate), prefer `chat_completion_tracked`
+/// which auto-records to the `token_usage` SQLite table — without it the
+/// cost-breakdown pie chart undercounts by 30-50%.
+///
+/// The streaming ReAct loop uses its own in-memory `UsageTracker` for
+/// per-turn display and records at stream end; it's exempt from this.
 pub async fn chat_completion(
     config: &LLMConfig,
     messages: &[LLMMessage],
@@ -131,6 +140,22 @@ pub async fn chat_completion(
         "google" => google::chat_completion(config, messages, tools).await,
         _ => openai::chat_completion(config, messages, tools, &config.native_tools).await,
     }
+}
+
+/// Same as `chat_completion` but auto-records the response's usage to the
+/// persistent `token_usage` table, tagged by `source`. Use this for any
+/// background / off-main-loop LLM call.
+pub async fn chat_completion_tracked(
+    source: crate::engine::usage::UsageSource,
+    config: &LLMConfig,
+    messages: &[LLMMessage],
+    tools: &[ToolDefinition],
+) -> Result<LLMResponse, String> {
+    let resp = chat_completion(config, messages, tools).await?;
+    if let Some(usage) = resp.usage {
+        crate::engine::usage::record_llm_usage(source, usage, &config.model);
+    }
+    Ok(resp)
 }
 
 /// Streaming chat completion via SSE (auto-detects provider and dispatches)

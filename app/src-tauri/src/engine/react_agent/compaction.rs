@@ -1,5 +1,6 @@
 use super::COMPACT_THRESHOLD;
-use crate::engine::llm_client::{chat_completion, LLMConfig, LLMMessage, MessageContent};
+use crate::engine::llm_client::{chat_completion_tracked, LLMConfig, LLMMessage, MessageContent};
+use crate::engine::usage::UsageSource;
 use crate::engine::token_counter::estimate_tokens;
 use crate::engine::tools::{get_current_session_id, get_memme_store};
 
@@ -313,7 +314,7 @@ async fn generate_preview_summary(messages: &[LLMMessage], config: &LLMConfig) -
             tool_calls: None,
             tool_call_id: None,
         }];
-        match chat_completion(config, &summary_msgs, &[]).await {
+        match chat_completion_tracked(UsageSource::Compaction, config, &summary_msgs, &[]).await {
             Ok(resp) => resp
                 .message
                 .content

@@ -143,7 +143,7 @@ pub async fn delegate(
 
     let response = tokio::time::timeout(
         std::time::Duration::from_secs(20),
-        llm_client::chat_completion(config, &messages, &[]),
+        llm_client::chat_completion_tracked(crate::engine::usage::UsageSource::BuddyDelegate, config, &messages, &[]),
     )
     .await
     .ok()?

@@ -164,6 +164,7 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_heartbeat_ts ON heartbeat_history(timestamp);
 
+
             -- Bot conversations: each (bot, group/channel) pair has its own session
             CREATE TABLE IF NOT EXISTS bot_conversations (
                 id TEXT PRIMARY KEY,
@@ -460,10 +461,12 @@ impl Database {
                 cache_read_tokens INTEGER NOT NULL DEFAULT 0,
                 cache_write_tokens INTEGER NOT NULL DEFAULT 0,
                 estimated_cost_usd REAL NOT NULL DEFAULT 0.0,
-                recorded_at INTEGER NOT NULL
+                recorded_at INTEGER NOT NULL,
+                source TEXT NOT NULL DEFAULT 'main'
             );
             CREATE INDEX IF NOT EXISTS idx_token_usage_session ON token_usage(session_id);
-            CREATE INDEX IF NOT EXISTS idx_token_usage_ts ON token_usage(recorded_at);",
+            CREATE INDEX IF NOT EXISTS idx_token_usage_ts ON token_usage(recorded_at);
+            CREATE INDEX IF NOT EXISTS idx_token_usage_source ON token_usage(source, recorded_at);",
         )
         .map_err(|e| format!("Failed to create token_usage table: {}", e))?;
 
@@ -514,6 +517,19 @@ impl Database {
 
         // Drop legacy session_bots table (replaced by bot_conversations)
         conn.execute_batch("DROP TABLE IF EXISTS session_bots;").ok();
+
+        // Add source column to token_usage (cost breakdown by UsageSource —
+        // see engine/usage.rs). Old rows default to 'main'.
+        let has_usage_source: bool = conn
+            .prepare("SELECT source FROM token_usage LIMIT 0")
+            .is_ok();
+        if !has_usage_source {
+            conn.execute_batch(
+                "ALTER TABLE token_usage ADD COLUMN source TEXT NOT NULL DEFAULT 'main';
+                 CREATE INDEX IF NOT EXISTS idx_token_usage_source ON token_usage(source, recorded_at);"
+            ).map_err(|e| format!("Migration error (token_usage source): {}", e))?;
+            log::info!("Migrated token_usage table: added source column");
+        }
 
         // Add execution_mode to cronjobs table
         let has_execution_mode: bool = conn
