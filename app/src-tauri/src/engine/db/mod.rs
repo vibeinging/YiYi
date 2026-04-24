@@ -466,7 +466,10 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_token_usage_session ON token_usage(session_id);
             CREATE INDEX IF NOT EXISTS idx_token_usage_ts ON token_usage(recorded_at);
-            CREATE INDEX IF NOT EXISTS idx_token_usage_source ON token_usage(source, recorded_at);",
+            -- idx_token_usage_source is created in migrate_tables, AFTER the
+            -- ALTER TABLE that adds the column for existing DBs. For fresh
+            -- DBs the column is present immediately, but the index is still
+            -- created during migrate_tables (idempotent IF NOT EXISTS).",
         )
         .map_err(|e| format!("Failed to create token_usage table: {}", e))?;
 
