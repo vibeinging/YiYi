@@ -551,7 +551,7 @@ async fn get_memory_stats_tallies_seeded_memories_by_first_category() {
 
     seed_memory(&t, "learn rust", vec!["study"], Some(0.5));
     seed_memory(&t, "write tests", vec!["work", "study"], Some(0.7));
-    // memory with no categories falls into "uncategorized"
+    // memory with no categories falls into "未归类"
     let opts = memme_core::AddOptions::new(TEST_USER_ID);
     t.state()
         .memme_store
@@ -560,11 +560,11 @@ async fn get_memory_stats_tallies_seeded_memories_by_first_category() {
 
     let got = get_memory_stats_impl(t.state()).await.unwrap();
     assert_eq!(got.total, 3);
-    // Two traces have first-category "study" and "work"; one goes to "uncategorized".
+    // Two traces have first-category "study" and "work"; one goes to "未归类".
     assert_eq!(got.by_category.get("study").copied().unwrap_or(0), 1);
     assert_eq!(got.by_category.get("work").copied().unwrap_or(0), 1);
     assert_eq!(
-        got.by_category.get("uncategorized").copied().unwrap_or(0),
+        got.by_category.get("未归类").copied().unwrap_or(0),
         1
     );
 }

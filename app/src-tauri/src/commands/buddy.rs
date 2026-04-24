@@ -236,7 +236,7 @@ pub async fn get_memory_stats_impl(state: &AppState) -> Result<MemoryStats, Stri
     for m in &all {
         let cat = m.categories.as_ref()
             .and_then(|c| c.first().cloned())
-            .unwrap_or_else(|| "uncategorized".into());
+            .unwrap_or_else(|| "未归类".into());
         *by_category.entry(cat).or_insert(0) += 1;
     }
 

@@ -171,7 +171,7 @@ pub(super) async fn memory_search_tool(args: &serde_json::Value) -> String {
                 .map(|m| {
                     let cats = m.categories.as_ref()
                         .map(|c| c.join(", "))
-                        .unwrap_or_else(|| "uncategorized".into());
+                        .unwrap_or_else(|| "未归类".into());
                     let score = m.score.map(|s| format!("{:.3}", s)).unwrap_or_default();
                     let imp = m.importance.map(|i| format!("{:.1}", i)).unwrap_or_else(|| "-".into());
                     format!(
@@ -225,7 +225,7 @@ pub(super) async fn memory_list_tool(args: &serde_json::Value) -> String {
                 .map(|m| {
                     let cats = m.categories.as_ref()
                         .map(|c| c.join(", "))
-                        .unwrap_or_else(|| "uncategorized".into());
+                        .unwrap_or_else(|| "未归类".into());
                     let imp = m.importance.map(|i| format!("{:.1}", i)).unwrap_or_else(|| "-".into());
                     format!(
                         "- [{}] (importance: {}) {} (id: {}, updated: {})",
