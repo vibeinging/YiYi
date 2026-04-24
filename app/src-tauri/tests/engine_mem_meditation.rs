@@ -75,41 +75,30 @@ async fn meditation_respects_cancel_flag_and_returns_err_quickly() {
     );
 }
 
-// ── Empty-DB happy path ─────────────────────────────────────────────────
+// ── Empty-DB idle-gate path ─────────────────────────────────────────────
 //
-// Fresh TempDb has no sessions / no corrections. MemMe store is not
-// initialised in the test process, so Phase A/B short-circuit. Phase C
-// (growth) and Phase D (journal) still fire chat_completion calls; the mock
-// answers every call with GROWTH_RESPONSE. Final result should be Ok with
-// zero counts and a populated journal.
+// Fresh TempDb has no sessions / no corrections. The idle-gate (added for
+// cost jury P0 #4) short-circuits the whole YiYi-specific phase set
+// because there's nothing to reflect on. Result is Ok with `depth="idle"`
+// and no LLM calls made.
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn meditation_on_empty_db_completes_with_zero_counts_and_journal() {
+async fn meditation_on_empty_db_short_circuits_to_idle() {
     let tmp = TempDb::new();
     let ws = TempWorkspace::new();
     let mock = MockLlmServer::start().await;
-    // Single mock serves every POST /chat/completions with the same body — good
-    // enough for phase_growth, phase_journal, phase_personality_evolution, etc.
-    mock.mock_chat_completion_response(GROWTH_RESPONSE).await;
+    // No mocks mounted — idle gate must prevent any LLM call.
 
     let config = make_llm_config(&mock.uri());
     let cancel = Arc::new(AtomicBool::new(false));
 
     let result = run_meditation_session(&config, &tmp.db(), ws.path(), cancel).await;
 
-    let r = result.expect("empty-DB meditation should succeed");
-    assert_eq!(r.sessions_reviewed, 0, "no sessions in fresh DB");
-    assert_eq!(r.principles_changed, 0, "no corrections in fresh DB");
-    // memories_updated / memories_archived are 0 because MemMe is not
-    // initialised in test process (Phase A short-circuits).
-    assert_eq!(r.memories_updated, 0);
-    assert_eq!(r.memories_archived, 0);
-    assert_eq!(r.depth, "memme");
-    assert!(
-        !r.journal.is_empty(),
-        "journal should be populated by Phase D LLM call"
-    );
+    let r = result.expect("idle-gate path should succeed");
+    assert_eq!(r.depth, "idle");
+    assert_eq!(r.sessions_reviewed, 0);
+    assert!(r.journal.contains("Quiet day"));
 }
 
 // ── LLM error in Phase C bubbles up ─────────────────────────────────────
@@ -119,6 +108,21 @@ async fn meditation_on_empty_db_completes_with_zero_counts_and_journal() {
 async fn meditation_propagates_llm_error() {
     let tmp = TempDb::new();
     let ws = TempWorkspace::new();
+
+    // Seed corrections so we bypass the idle-gate added for the cost-jury
+    // #4 work — 401 has to actually be hit for the test to mean anything.
+    for i in 0..3 {
+        tmp.db()
+            .add_correction(
+                &format!("trigger {i}"),
+                Some("old behavior"),
+                &format!("corrected behavior {i}"),
+                Some("chat"),
+                0.9,
+            )
+            .expect("seeding correction should succeed");
+    }
+
     let mock = MockLlmServer::start().await;
     // 401 is a hard auth failure; the client should not retry indefinitely.
     mock.mock_chat_completion_error(401).await;

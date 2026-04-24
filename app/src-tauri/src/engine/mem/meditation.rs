@@ -143,6 +143,39 @@ async fn run_phases(
         identity_section,
     };
 
+    // Honor cancellation before the idle-gate short-circuit so a
+    // pre-cancelled meditation still returns Err (tests rely on this).
+    check_cancel(cancel)?;
+
+    // ── Idle-day gate (cost jury P0 #4) ──
+    // If today had fewer than IDLE_THRESHOLD new messages and there were no
+    // corrections to learn from, the whole meditation pipeline produces
+    // near-zero value but still burns ~8-12k tokens (Growth + Journal +
+    // Proactive Care LLM calls). Skip the entire YiYi-specific phase set —
+    // MemMe's decay / entity graph work has already finished above in a
+    // separate code path and doesn't cost LLM tokens. The user's trace is
+    // preserved; we just don't pay for meditation on their quiet days.
+    const IDLE_THRESHOLD: usize = 3;
+    if ctx.messages.len() < IDLE_THRESHOLD && ctx.corrections_count == 0 {
+        info!(
+            "Meditation: idle-day gate triggered ({} messages, {} corrections) — skipping Growth/Journal/ProactiveCare LLM phases",
+            ctx.messages.len(),
+            ctx.corrections_count,
+        );
+        return Ok(MeditationResult {
+            depth: "idle".into(),
+            sessions_reviewed,
+            memories_updated: 0,
+            memories_archived: 0,
+            principles_changed: 0,
+            journal: format!(
+                "Quiet day ({} messages, no corrections). Meditation phases skipped.",
+                ctx.messages.len()
+            ),
+            tomorrow_intentions: String::new(),
+        });
+    }
+
     // ── Phase A0: Pre-compact all sessions with uncompacted events ──
     // meditate() only extracts memories from episodes; sessions that never hit the
     // pressure-compact threshold would otherwise never be processed. Force-compact
@@ -815,6 +848,34 @@ async fn phase_proactive_care(
         .collect();
 
     if message_summary.is_empty() {
+        return Ok(());
+    }
+
+    // Pre-filter gate (cost jury P0 #4): run a cheap keyword heuristic
+    // first. Only invoke LLM if the user's recent messages contain any
+    // emotional/stress/achievement signal. Previously we paid an LLM call
+    // every single night to discover "no, nothing to reach out about" —
+    // most days for most users. Rina's estimate: 80-90% of nights this
+    // gate saves the entire Proactive Care LLM call.
+    const CARE_SIGNAL_KEYWORDS: &[&str] = &[
+        // Stress / fatigue
+        "累", "烦", "忙", "难受", "崩溃", "熬夜", "失眠", "压力", "焦虑", "心累", "没睡", "睡不着",
+        "tired", "stressed", "exhausted", "overwhelmed", "burned out", "burnout", "anxious",
+        // Emotional negative
+        "哭", "伤心", "难过", "沮丧", "失望", "生气", "emo",
+        "sad", "depressed", "upset", "frustrated", "angry",
+        // Achievement / milestone
+        "搞定", "做完了", "完成了", "成功了", "发布了", "拿到了",
+        "finished", "shipped", "done", "launched", "got it", "celebrated",
+        // Explicit ask for care
+        "陪陪我", "陪我", "安慰", "鼓励", "comfort", "cheer me",
+    ];
+    let any_signal = message_summary.iter().any(|msg| {
+        let lowered = msg.to_lowercase();
+        CARE_SIGNAL_KEYWORDS.iter().any(|kw| lowered.contains(kw))
+    });
+    if !any_signal {
+        info!("Phase F: no care signals in today's messages — skipping LLM");
         return Ok(());
     }
 
