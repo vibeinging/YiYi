@@ -64,30 +64,7 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
     vec![
         super::tool_def(
             "browser_use",
-            "Control a persistent Chromium browser for web automation. Chrome runs as a long-lived OS process with a named profile (user-data-dir) — cookies / logins / localStorage survive YiYi restarts.\n\
-            Actions:\n\
-            - start: Attach to (or spawn if missing) Chrome for this profile. Pass 'profile' to switch user-data-dir (default: 'default'). 'headed=true' for visible window on first spawn.\n\
-            - open: Open URL in new tab\n\
-            - goto: Navigate current page to URL (no new tab)\n\
-            - get_url: Get current page URL\n\
-            - snapshot: Get page text content (title + body text)\n\
-            - ai_snapshot: LLM-optimized DOM snapshot via Playwright's _snapshotForAI (falls back to hand-rolled evaluator). Re-run after navigation or major DOM changes.\n\
-            - act: Interact with a numbered element from ai_snapshot. Provide 'element' (number), 'operation' (click/type/select). For type also provide 'text'; for select provide 'value'.\n\
-            - screenshot: Capture page as PNG image\n\
-            - click: Click element by CSS selector\n\
-            - type: Type text into element\n\
-            - press_key: Press keyboard key (Enter, Tab, Escape, ArrowDown, etc.)\n\
-            - scroll: Scroll page or scroll element into view\n\
-            - wait: Wait for element to appear or wait N milliseconds\n\
-            - evaluate: Execute JavaScript and return result\n\
-            - find_elements: Find multiple elements and extract text/attributes\n\
-            - select: Choose option in dropdown/select element\n\
-            - upload: Upload file to file input element\n\
-            - cookies: Get/set/delete cookies\n\
-            - list_frames: List all frames/iframes on the page\n\
-            - switch_frame: Switch context to a specific iframe by index or URL\n\
-            - evaluate_in_frame: Execute JavaScript inside a specific iframe\n\
-            - stop: Disconnect the bridge from Chrome. Chrome stays alive so the next 'start' re-attaches instantly. Pass 'kill=true' to also terminate the Chrome process + clear its state.",
+            "Drive a persistent Chromium session (cookies + logins survive restarts). Call 'start' first, then navigate / observe / act. Typical flow: start → open(url) → ai_snapshot → act(element=N, operation=click). Use 'stop' to disconnect (or 'stop' with kill=true to quit Chrome). Action vocab is in the `action` enum below — pick one per call. Parameter semantics are keyed by action; see parameter descriptions.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
