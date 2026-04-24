@@ -64,7 +64,7 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
     vec![
         super::tool_def(
             "browser_use",
-            "Drive a persistent Chromium session (cookies + logins survive restarts). Call 'start' first, then navigate / observe / act. Typical flow: start → open(url) → ai_snapshot → act(element=N, operation=click). Use 'stop' to disconnect (or 'stop' with kill=true to quit Chrome). Action vocab is in the `action` enum below — pick one per call. Parameter semantics are keyed by action; see parameter descriptions.",
+            "Drive a persistent Chromium session with INTERACTION (click/type/scroll/login). Cookies + sessions survive restarts via a named profile. Prefer the cheaper `browser_screenshot` or `browser_fetch` if you only need to see or read a page — those use system Chrome and don't spawn Playwright. Typical interactive flow: start → open(url) → ai_snapshot → act(element=N, operation=click). 'stop' disconnects (kill=true also quits Chrome). Action vocab is in the `action` enum below.",
             serde_json::json!({
                 "type": "object",
                 "properties": {

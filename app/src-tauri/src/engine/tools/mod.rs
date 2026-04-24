@@ -2,6 +2,7 @@
 mod file_tools;
 mod web_tools;
 mod browser_tools;
+mod cheap_browser;
 mod system_tools;
 pub(crate) mod memory_tools;
 mod cron_tools;
@@ -132,6 +133,7 @@ pub(crate) fn file_state_was_read(path: &str) -> bool {
 pub fn is_tool_concurrency_safe(name: &str) -> bool {
     matches!(name,
         "read_file" | "grep_search" | "glob_search" | "web_search" | "web_fetch"
+        | "browser_screenshot" | "browser_fetch"
         | "memory_search" | "memory_list" | "memory_read" | "diary_read"
         | "tool_search" | "query_tasks" | "code_intelligence"
     )
@@ -911,8 +913,8 @@ pub fn core_tools() -> Vec<ToolDefinition> {
             "list_directory", "grep_search", "glob_search",
             // Shell (Claw Code MVP)
             "execute_shell",
-            // Web
-            "web_search",
+            // Web (cheap tier — system Chrome headless, no Playwright spawn)
+            "web_search", "browser_screenshot", "browser_fetch",
             // YiYi identity — memory and skills make YiYi who she is
             "memory_search", "memory_add",
             "activate_skills",
@@ -924,6 +926,8 @@ pub fn core_tools() -> Vec<ToolDefinition> {
         all.extend(file_tools::definitions());
         all.extend(system_tools::definitions());
         all.extend(web_tools::definitions());
+        all.push(cheap_browser::screenshot_def());
+        all.push(cheap_browser::fetch_def());
         all.extend(memory_tools::definitions());
         all.extend(skill_tools::definitions());
         all.extend(spawn_tools::definitions());
@@ -1240,6 +1244,15 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
                 images,
             };
         }
+        "browser_screenshot" => {
+            let (content, images) = cheap_browser::browser_screenshot_tool(&args).await;
+            return ToolResult {
+                tool_call_id: call.id.clone(),
+                content,
+                images,
+            };
+        }
+        "browser_fetch" => cheap_browser::browser_fetch_tool(&args).await,
         "run_python" => system_tools::run_python_tool(&args).await,
         "run_python_script" => system_tools::run_python_script_tool(&args).await,
         "pip_install" => system_tools::pip_install_tool(&args).await,
