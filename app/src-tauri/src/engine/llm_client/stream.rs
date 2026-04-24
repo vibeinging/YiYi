@@ -61,6 +61,9 @@ impl Utf8Decoder {
 pub enum StreamError {
     /// Normal error (parse failure, mid-stream API error, etc.)
     Normal(String),
+    /// Transport-level failure mid-stream (TCP reset, body decode, timeout).
+    /// Eligible for non-streaming fallback.
+    Transport(String),
     /// The stream was idle for too long — eligible for non-streaming fallback.
     IdleTimeout,
     /// User cancelled.
@@ -71,6 +74,7 @@ impl std::fmt::Display for StreamError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StreamError::Normal(s) => write!(f, "{}", s),
+            StreamError::Transport(s) => write!(f, "Stream transport error: {}", s),
             StreamError::IdleTimeout => write!(f, "Stream idle timeout ({}s)", STREAM_IDLE_TIMEOUT.as_secs()),
             StreamError::Cancelled => write!(f, "cancelled"),
         }
@@ -80,7 +84,28 @@ impl std::fmt::Display for StreamError {
 impl StreamError {
     /// Returns `true` when falling back to non-streaming might recover.
     pub fn is_fallback_eligible(&self) -> bool {
-        matches!(self, StreamError::IdleTimeout)
+        matches!(self, StreamError::IdleTimeout | StreamError::Transport(_))
+    }
+}
+
+/// Classify a reqwest error encountered while reading a streaming body.
+/// Body-decode / timeout / connection-closed errors are transport-level and
+/// may recover via non-stream retry; everything else stays `Normal`.
+fn classify_stream_read_error(e: reqwest::Error) -> StreamError {
+    if e.is_timeout() || e.is_connect() || e.is_body() {
+        return StreamError::Transport(e.to_string());
+    }
+    let msg = e.to_string();
+    let lc = msg.to_lowercase();
+    if lc.contains("decoding response body")
+        || lc.contains("connection closed")
+        || lc.contains("connection reset")
+        || lc.contains("broken pipe")
+        || lc.contains("unexpected eof")
+    {
+        StreamError::Transport(msg)
+    } else {
+        StreamError::Normal(format!("Stream read error: {}", msg))
     }
 }
 
@@ -111,7 +136,7 @@ pub async fn process_sse_stream(
             chunk_opt = stream.next() => {
                 match chunk_opt {
                     None => return Ok(()), // stream ended normally
-                    Some(Err(e)) => return Err(StreamError::Normal(format!("Stream read error: {}", e))),
+                    Some(Err(e)) => return Err(classify_stream_read_error(e)),
                     Some(Ok(chunk)) => {
                         // Reset watchdog on every successful chunk
                         idle_deadline = Instant::now() + STREAM_IDLE_TIMEOUT;
@@ -175,7 +200,7 @@ pub async fn process_anthropic_sse_stream(
             chunk_opt = stream.next() => {
                 match chunk_opt {
                     None => return Ok(()),
-                    Some(Err(e)) => return Err(StreamError::Normal(format!("Stream read error: {}", e))),
+                    Some(Err(e)) => return Err(classify_stream_read_error(e)),
                     Some(Ok(chunk)) => {
                         idle_deadline = Instant::now() + STREAM_IDLE_TIMEOUT;
 
