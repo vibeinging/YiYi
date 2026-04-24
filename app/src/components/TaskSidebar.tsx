@@ -495,6 +495,7 @@ export const TaskSidebar = memo(function TaskSidebar({
               </button>
             );
           })}
+          {/* More button (only shown when there are items) */}
           {moreNavItems.length > 0 && (
             <button
               onClick={() => setMoreOpen(!moreOpen)}

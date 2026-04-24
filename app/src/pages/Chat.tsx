@@ -304,6 +304,16 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
       attachments: userAttachments,
     }]);
 
+    // Optimistic title from first user message: if session is still "New Chat", take first 30 chars of the prompt.
+    try {
+      const { chatSessions, renameSession } = useSessionStore.getState();
+      const current = chatSessions.find(s => s.id === activeSessionId);
+      if (current && current.name === 'New Chat' && plainText.trim()) {
+        const snippet = plainText.trim().replace(/\s+/g, ' ').slice(0, 30);
+        renameSession(activeSessionId, snippet).catch(() => {});
+      }
+    } catch {}
+
     try {
       await runStreamingChat(userMessage, activeSessionId, userAttachments);
       await loadMessages(activeSessionId);

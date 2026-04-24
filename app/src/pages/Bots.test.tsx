@@ -50,10 +50,10 @@ describe("BotsPage", () => {
 
   it("renders the empty state and header when no bots exist", async () => {
     renderPage();
-    expect(screen.getByRole("heading", { name: /机器人管理/ })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /分身/ })).toBeInTheDocument();
     // Empty state message appears after the async loadData() settles.
-    expect(await screen.findByText("暂无机器人")).toBeInTheDocument();
-    expect(screen.getByText("点击创建第一个机器人")).toBeInTheDocument();
+    expect(await screen.findByText("还没有分身")).toBeInTheDocument();
+    expect(screen.getByText("创建第一个分身")).toBeInTheDocument();
     expect(invokeMock).toHaveBeenCalledWith("bots_list");
     expect(invokeMock).toHaveBeenCalledWith("bots_list_platforms");
   });
@@ -80,7 +80,7 @@ describe("BotsPage", () => {
     expect(screen.getByText(/1 \/ 2/)).toBeInTheDocument();
   });
 
-  it("opens the create dialog when clicking '创建机器人' and invokes bots_create on save", async () => {
+  it("opens the create dialog when clicking '创建分身' and invokes bots_create on save", async () => {
     const user = userEvent.setup();
     let createdName = "";
     mockInvoke({
@@ -93,13 +93,13 @@ describe("BotsPage", () => {
       },
     });
     renderPage();
-    await screen.findByText("暂无机器人");
+    await screen.findByText("还没有分身");
 
-    // Header '创建机器人' button.
-    await user.click(screen.getByRole("button", { name: /^创建机器人$/ }));
+    // Header '创建分身' button.
+    await user.click(screen.getByRole("button", { name: /^创建分身$/ }));
 
     // Dialog — name input placeholder.
-    const nameInput = await screen.findByPlaceholderText("例如: 我的 Discord 机器人");
+    const nameInput = await screen.findByPlaceholderText("例如: 我的 Discord 分身");
     await user.type(nameInput, "New Bot");
 
     // Click the primary '创建' in the dialog footer (last occurrence).

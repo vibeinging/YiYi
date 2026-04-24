@@ -28,18 +28,18 @@ import {
   Eye,
   EyeOff,
   Info,
-  Puzzle,
-  Bot,
-  Sparkles,
+  Database,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { LanguageSwitcher } from '../components/LanguageSwitcher';
 import { PageHeader } from '../components/PageHeader';
+import { Select } from '../components/Select';
 import { ModelsPage } from './Models';
 import { EnvironmentsPage } from './Environments';
-import { getUserWorkspace, setUserWorkspace } from '../api/system';
+import { getUserWorkspace, setUserWorkspace, getMemmeConfig, saveMemmeConfig, type MemmeConfig } from '../api/system';
+import { getActiveLlm, listProviders, type ActiveModelsInfo } from '../api/models';
 import { exportConversations, exportMemories, exportSettings } from '../api/export';
 import {
   listAuthorizedFolders,
@@ -57,9 +57,6 @@ import {
 import { toast } from '../components/Toast';
 import { listCliProviders, saveCliProviderConfig, installCliProvider, deleteCliProvider, type CliProviderInfo } from '../api/cli';
 import { UsagePanel } from '../components/UsagePanel';
-import { PluginsPanel } from '../components/PluginsPanel';
-import { AgentsPanel } from '../components/AgentsPanel';
-import { BuddyPanel } from '../components/BuddyPanel';
 
 type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'installing' | 'up-to-date' | 'error';
 
@@ -225,7 +222,7 @@ function UpdateChecker() {
   );
 }
 
-type SettingsTab = 'general' | 'buddy' | 'models' | 'environments' | 'workspace' | 'cli' | 'plugins' | 'agents' | 'usage';
+type SettingsTab = 'general' | 'buddy' | 'models' | 'memory' | 'environments' | 'workspace' | 'cli' | 'plugins' | 'agents' | 'usage';
 
 const VALID_TABS: SettingsTab[] = ['general', 'buddy', 'models', 'environments', 'workspace', 'cli', 'plugins', 'agents', 'usage'];
 
@@ -252,6 +249,90 @@ export function SettingsPage() {
   // Export state
   const [exportingConversations, setExportingConversations] = useState(false);
   const [exportingMemories, setExportingMemories] = useState(false);
+
+  // Memory engine config state
+  const [memmeConfig, setMemmeConfigState] = useState<MemmeConfig | null>(null);
+  const [memmeConfigSaved, setMemmeConfigSaved] = useState<MemmeConfig | null>(null); // last-saved snapshot for dirty check
+  const [memmeSaving, setMemmeSaving] = useState<boolean>(false);
+  const [activeLlmInfo, setActiveLlmInfo] = useState<ActiveModelsInfo | null>(null);
+  useEffect(() => {
+    if (activeTab === 'memory') {
+      Promise.all([getMemmeConfig(), getActiveLlm()]).then(([cfg, active]) => {
+        setActiveLlmInfo(active);
+        if (!cfg) return;
+        setMemmeConfigState(cfg);
+        setMemmeConfigSaved(cfg);
+      }).catch(() => {});
+    }
+  }, [activeTab]);
+
+  const llmKeys: (keyof MemmeConfig)[] = ['memory_llm_base_url', 'memory_llm_api_key', 'memory_llm_model'];
+
+  const llmDirty = !!(memmeConfig && memmeConfigSaved &&
+    llmKeys.some(k => (memmeConfig as any)[k] !== (memmeConfigSaved as any)[k]));
+
+  const handleSaveMemmeLlm = async () => {
+    if (!memmeConfig || !memmeConfigSaved) return;
+    setMemmeSaving(true);
+    try {
+      const patch: MemmeConfig = { ...memmeConfigSaved };
+      for (const k of llmKeys) {
+        (patch as any)[k] = (memmeConfig as any)[k];
+      }
+      const result = await saveMemmeConfig(patch);
+      setMemmeConfigSaved(patch);
+      if (result?.warning) {
+        toast.error(result.warning);
+      } else {
+        toast.success('已保存');
+      }
+    } catch (e) {
+      console.error(e);
+      toast.error('保存失败: ' + String(e));
+    } finally { setMemmeSaving(false); }
+  };
+
+  const memoryPresets: Record<string, { label: string; chatUrl: string; llmModel: string }> = {
+    'dashscope':    { label: '阿里云通义', chatUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', llmModel: 'qwen-turbo' },
+    'coding-plan':  { label: '阿里云百炼', chatUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', llmModel: 'qwen-turbo' },
+    'openai':       { label: 'OpenAI',    chatUrl: 'https://api.openai.com/v1/chat/completions',                          llmModel: 'gpt-4o-mini' },
+    'zhipu':        { label: '智谱 AI',   chatUrl: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',                llmModel: 'glm-4-flash' },
+  };
+  const activePreset = activeLlmInfo?.provider_id ? memoryPresets[activeLlmInfo.provider_id] : undefined;
+
+  const applyMemoryPreset = async () => {
+    if (!activePreset || !memmeConfig) return;
+    const next: MemmeConfig = {
+      ...memmeConfig,
+      memory_llm_base_url: activePreset.chatUrl,
+      memory_llm_api_key: '',
+      memory_llm_model: activePreset.llmModel,
+    };
+    setMemmeConfigState(next);
+    setMemmeSaving(true);
+    try {
+      await saveMemmeConfig(next);
+      setMemmeConfigSaved(next);
+      toast.success(`已填入并保存：${activePreset.llmModel}`);
+    } catch (e) {
+      toast.error('保存失败：' + String(e));
+    } finally {
+      setMemmeSaving(false);
+    }
+  };
+
+  const presetAlreadyApplied = !!(activePreset && memmeConfig &&
+    memmeConfig.memory_llm_base_url === activePreset.chatUrl &&
+    memmeConfig.memory_llm_model === activePreset.llmModel);
+
+  // Read pending tab from sessionStorage on mount (set by BuddyPanel before navigating here)
+  useEffect(() => {
+    const pending = sessionStorage.getItem('settings_pending_tab');
+    if (pending) {
+      sessionStorage.removeItem('settings_pending_tab');
+      setActiveTab(pending as SettingsTab);
+    }
+  }, []);
   const [exportingSettings, setExportingSettings] = useState(false);
   const [lastExportPath, setLastExportPath] = useState<string | null>(null);
 
@@ -417,13 +498,11 @@ export function SettingsPage() {
 
   const tabs: { id: SettingsTab; labelKey: string; icon: React.ComponentType<any> }[] = [
     { id: 'general', labelKey: 'settings.tabGeneral', icon: SlidersHorizontal },
-    { id: 'buddy', labelKey: 'settings.tabBuddy', icon: Sparkles },
     { id: 'models', labelKey: 'settings.tabModels', icon: Cpu },
+    { id: 'memory', labelKey: 'settings.tabMemory', icon: Database },
     { id: 'environments', labelKey: 'settings.tabEnvs', icon: Key },
     { id: 'workspace', labelKey: 'settings.tabWorkspace', icon: Shield },
     { id: 'cli', labelKey: 'settings.tabCli', icon: FileText },
-    { id: 'plugins', labelKey: 'settings.tabPlugins', icon: Puzzle },
-    { id: 'agents', labelKey: 'settings.tabAgents', icon: Bot },
     { id: 'usage', labelKey: 'settings.tabUsage', icon: BarChart3 },
   ];
 
@@ -667,12 +746,110 @@ export function SettingsPage() {
           </div>
         )}
 
-        {activeTab === 'buddy' && (
-          <BuddyPanel />
-        )}
-
         {activeTab === 'models' && (
           <ModelsPage embedded />
+        )}
+
+        {activeTab === 'memory' && (
+          <div className="space-y-4">
+            <div className="p-5 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
+              <div className="flex items-center gap-2 mb-4">
+                <Cpu size={18} className="text-[var(--color-primary)]" />
+                <h2 className="font-semibold text-[14px]">向量化模型 (Embedding)</h2>
+              </div>
+              <div className="ml-[26px] space-y-2">
+                <div className="text-[13px]">
+                  <span className="text-[var(--color-text-muted)]">模型：</span>
+                  <span className="font-mono font-medium">bge-small-zh-v1.5</span>
+                  <span className="text-[var(--color-text-muted)] ml-2">· 512 维 · 本地 ONNX</span>
+                </div>
+                <p className="text-[12px] leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>
+                  记忆向量化已内置，完全离线运行、无 API 费用。首次启动会自动下载约 100MB 的模型文件到 <span className="font-mono">~/.yiyi/models/</span>。
+                </p>
+              </div>
+            </div>
+
+            {/* Memory LLM model — dedicated cheap model for background memory ops */}
+            <div className="p-5 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
+              <div className="flex items-center gap-2 mb-2">
+                <Brain size={18} className="text-[var(--color-primary)]" />
+                <h2 className="font-semibold text-[14px]">语言模型</h2>
+              </div>
+              <p className="text-[12px] text-[var(--color-text-muted)] mb-3 ml-[26px] leading-relaxed">
+                用于记忆提取、冥想分析、知识图谱构建等后台任务。
+              </p>
+
+              {/* Cost warning */}
+              <div className="mb-4 ml-[26px] p-3 rounded-xl flex items-start gap-2.5" style={{ background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)' }}>
+                <AlertCircle size={14} className="shrink-0 mt-0.5" style={{ color: 'var(--color-warning)' }} />
+                <div className="text-[12px] leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>
+                  <div className="font-medium mb-0.5" style={{ color: 'var(--color-text)' }}>为什么需要单独配置？</div>
+                  记忆操作在后台频繁运行（每次对话后提取、每晚冥想、知识图谱构建）。如果用主模型（Claude Opus、GPT-4 等），API 成本会显著增加。建议在这里配置一个便宜快速的模型（如 GPT-4o-mini、DeepSeek、Qwen-Turbo）专门给记忆用。
+                </div>
+              </div>
+
+              {activePreset && (
+                <div className="mb-4 ml-[26px] p-3 rounded-xl flex items-start gap-2.5" style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)' }}>
+                  <Info size={14} className="shrink-0 mt-0.5" style={{ color: 'var(--color-primary)' }} />
+                  <div className="flex-1 min-w-0 text-[12px] leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>
+                    <div className="font-medium mb-0.5" style={{ color: 'var(--color-text)' }}>
+                      你的主模型是 <span style={{ color: 'var(--color-primary)' }}>{activePreset.label}</span>
+                    </div>
+                    一键填入它旗下便宜的 <span className="font-mono">{activePreset.llmModel}</span>，API Key 自动复用主模型的。
+                  </div>
+                  <button
+                    onClick={applyMemoryPreset}
+                    disabled={memmeSaving || presetAlreadyApplied}
+                    className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium text-white disabled:cursor-not-allowed"
+                    style={{ background: presetAlreadyApplied ? 'var(--color-text-muted)' : 'var(--color-primary)', opacity: presetAlreadyApplied ? 0.6 : 1 }}
+                  >
+                    {memmeSaving && <Loader2 size={12} className="animate-spin" />}
+                    {presetAlreadyApplied ? '已填入' : '一键填入'}
+                  </button>
+                </div>
+              )}
+
+              <div className="space-y-3 p-3 rounded-xl">
+                {[
+                  { key: 'memory_llm_base_url', label: 'API 完整地址', placeholder: 'https://api.openai.com/v1/chat/completions', type: 'text' },
+                  { key: 'memory_llm_api_key', label: 'API Key', placeholder: '留空则使用主模型的 Key', type: 'password' },
+                  { key: 'memory_llm_model', label: '模型名称', placeholder: 'gpt-4o-mini', type: 'text' },
+                ].map(field => (
+                  <div key={field.key} className="flex items-center justify-between">
+                    <div className="text-[13px] font-medium">{field.label}</div>
+                    <input type={field.type} placeholder={field.placeholder}
+                      value={(memmeConfig as any)?.[field.key] ?? ''}
+                      onChange={e => setMemmeConfigState({ ...memmeConfig!, [field.key]: e.target.value })}
+                      className="text-[13px] px-3 py-2 rounded-xl w-[280px]"
+                      style={{ background: 'var(--color-bg-muted)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }} />
+                  </div>
+                ))}
+              </div>
+
+              {/* Status hint */}
+              <div className="mt-3 ml-[26px] text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+                {(memmeConfig?.memory_llm_model && memmeConfig?.memory_llm_api_key)
+                  ? <>✓ 当前使用独立模型 <span className="font-medium" style={{ color: 'var(--color-success)' }}>{memmeConfig.memory_llm_model}</span> 处理记忆</>
+                  : <>留空则使用主模型（在 <span className="font-medium" style={{ color: 'var(--color-primary)' }}>模型</span> 标签配置）</>}
+              </div>
+
+              {/* Per-card save */}
+              <div className="flex items-center justify-end gap-3 mt-4">
+                {llmDirty && (
+                  <span className="text-[12px]" style={{ color: 'var(--color-text-muted)' }}>有未保存的修改</span>
+                )}
+                <button
+                  onClick={handleSaveMemmeLlm}
+                  onMouseDown={(e) => e.preventDefault()}
+                  disabled={!llmDirty || memmeSaving}
+                  className="flex items-center justify-center gap-2 px-5 py-2 rounded-xl text-[13px] font-medium text-white disabled:opacity-40 min-w-[88px]"
+                  style={{ background: 'var(--color-primary)', boxShadow: 'none' }}>
+                  {memmeSaving && <Loader2 size={14} className="animate-spin" />}
+                  保存
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
         {activeTab === 'environments' && (
@@ -852,14 +1029,6 @@ export function SettingsPage() {
 
         {activeTab === 'cli' && (
           <CliProvidersSection />
-        )}
-
-        {activeTab === 'plugins' && (
-          <PluginsPanel />
-        )}
-
-        {activeTab === 'agents' && (
-          <AgentsPanel />
         )}
 
         {activeTab === 'usage' && (

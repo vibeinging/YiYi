@@ -256,6 +256,25 @@ pub(super) async fn write_file_tool(args: &serde_json::Value) -> String {
     }
     let is_create = original.is_none();
 
+    // Safety: warn if overwrite would shrink file by >50% (likely truncated LLM output)
+    if let Some(ref orig) = original {
+        let orig_len = orig.len();
+        let new_len = content.len();
+        if orig_len > 500 && new_len < orig_len / 2 {
+            return format!(
+                "Error: write_file would shrink '{}' from {} to {} bytes ({:.0}% reduction). \
+                 This usually means the content was truncated. Use edit_file for partial changes instead of rewriting the entire file.",
+                path, orig_len, new_len, (1.0 - new_len as f64 / orig_len as f64) * 100.0
+            );
+        }
+    }
+
+    // Auto-backup before overwriting existing files (use already-loaded content, no second disk read)
+    if let Some(ref orig) = original {
+        let bak = format!("{}.bak", path);
+        tokio::fs::write(&bak, orig).await.ok();
+    }
+
     match tokio::fs::write(path, content).await {
         Ok(_) => {
             // Auto-register scripts in code library

@@ -7,13 +7,14 @@ import {
 import { listen } from '@tauri-apps/api/event'
 import { useBuddyStore } from '../../stores/buddyStore'
 import { useChatStreamStore } from '../../stores/chatStreamStore'
+import { useMeditationStore } from '../../stores/meditationStore'
 import { getBuddyHosted } from '../../api/buddy'
 import { getMorningGreeting } from '../../api/system'
 import { BuddyBubble } from './BuddyBubble'
 import { BuddyStatsCard } from './BuddyStatsCard'
 import { BuddyHatchAnimation } from './BuddyHatchAnimation'
+import { PersonalityOrb } from './PersonalityOrb'
 import { GrowthSuggestionsBubble } from './GrowthSuggestionsBubble'
-import { OrbCore } from './OrbCore'
 import { useGrowthSuggestionsStore } from '../../stores/growthSuggestionsStore'
 
 const IDLE_ANIMATIONS: Record<string, string> = {
@@ -53,14 +54,23 @@ export const BuddySprite: React.FC = () => {
 
   const isWorking = useChatStreamStore(s => s.loading)
   const hasError = useChatStreamStore(s => !!s.errorMessage)
+  const isMeditating = useMeditationStore(s => s.isRunning)
+
+  // Growth suggestions inbox badge — use stable selectors (see growthSuggestionsStore.ts)
+  const pendingSuggestions = useGrowthSuggestionsStore((s) => s.pending)
+  const snoozedUntil = useGrowthSuggestionsStore((s) => s.snoozedUntil)
+  const growthCount = (() => {
+    const now = Date.now()
+    return pendingSuggestions.filter((s) => {
+      const until = snoozedUntil[s.id]
+      return !until || until <= now
+    }).length
+  })()
+  const [showGrowth, setShowGrowth] = useState(false)
 
   const [fidget, setFidget] = useState(false)
   const [particles, setParticles] = useState<{ id: number; x: number; y: number; emoji: string }[]>([])
   const particleIdRef = useRef(0)
-
-  // Growth suggestions: badge count + pop-out bubble
-  const growthCount = useGrowthSuggestionsStore((s) => s.visiblePending().length)
-  const [showGrowth, setShowGrowth] = useState(false)
 
   // Drag state
   const [position, setPosition] = useState<{ x: number; y: number }>(() => {
@@ -151,7 +161,7 @@ export const BuddySprite: React.FC = () => {
     return () => clearTimeout(timer)
   }, [companion, config?.muted])
 
-  // Conversation milestones — celebrate 10/50/100/200/500/1000 turns
+  // Conversation milestones (纪念日)
   useEffect(() => {
     if (!companion || !config || config.muted) return
     const count = config.interaction_count ?? 0
@@ -171,10 +181,10 @@ export const BuddySprite: React.FC = () => {
           1000: '1000 次对话！这是我们的一个大里程碑 🎉',
         }
         setTimeout(() => showBubble(messages[m] || `我们已经聊了 ${m} 次了！`), 5000)
-        break // Only one milestone per load
+        break // Only show one milestone per load
       }
     }
-  }, [companion?.name, config?.interaction_count, config?.muted, showBubble])
+  }, [companion?.name, config?.interaction_count, config?.muted])
 
   // Event-driven notifications
   useEffect(() => {
@@ -196,17 +206,17 @@ export const BuddySprite: React.FC = () => {
       listen<{ job_name?: string }>('buddy://cron_precheck', (e) => {
         bubble(`正在执行定时任务：${e.payload?.job_name || '任务'}`)
       }),
-      // Route suggestion — agent is about to delegate a complex task
+      // Route suggestion notification
       listen<{ route?: string }>('buddy://route_suggestion', (e) => {
         const r = e.payload?.route
         if (r === 'delegate_coding') bubble('这个任务比较复杂，我会安排深度处理')
         else if (r === 'background_task') bubble('这个需要花点时间，建议创建后台任务')
       }),
-      // Proactive care — meditation engine notices something and reaches out
+      // Phase F: "She Noticed" proactive care
       listen<{ message?: string }>('buddy://proactive_care', (e) => {
         if (e.payload?.message) bubble(e.payload.message)
       }),
-      // "第一次" ritual — first-time use of a capability category
+      // "第一次" ritual — detect first-time capability usage
       listen<{ category?: string }>('growth://new_capability', (e) => {
         const cat = e.payload?.category
         if (!cat) return
@@ -266,10 +276,11 @@ export const BuddySprite: React.FC = () => {
   const scale = companion.sizeScale
 
   // Determine visual mood
-  type BuddyMood = 'muted' | 'petting' | 'talking' | 'working' | 'error' | 'fidget' | 'idle'
+  type BuddyMood = 'muted' | 'petting' | 'meditating' | 'talking' | 'working' | 'error' | 'fidget' | 'idle'
   let mood: BuddyMood = 'idle'
   if (muted) mood = 'muted'
   else if (petting) mood = 'petting'
+  else if (isMeditating) mood = 'meditating'
   else if (bubbleVisible) mood = 'talking'
   else if (hasError) mood = 'error'
   else if (isWorking) mood = 'working'
@@ -285,6 +296,9 @@ export const BuddySprite: React.FC = () => {
       animStyle = {}; opacityOverride = 0.3; filterOverride = 'grayscale(0.6) brightness(0.5)'; break
     case 'petting':
       animStyle = { animation: 'buddy-fidget 0.3s ease-in-out 3' }; break
+    case 'meditating':
+      // Slow, deep breathing. No horizontal fidget. Halo added below.
+      animStyle = { animation: 'buddy-breathe 4.5s ease-in-out infinite' }; break
     case 'talking':
       animStyle = { animation: 'buddy-bounce 1.2s ease-in-out infinite' }; break
     case 'working':
@@ -366,7 +380,7 @@ export const BuddySprite: React.FC = () => {
           title={`${companion.name} · 右键查看属性`}
         >
           {/* Hosted mode green ambient glow */}
-          {hostedMode && !muted && (
+          {hostedMode && !muted && !isMeditating && (
             <div
               className="absolute inset-0 rounded-full"
               style={{
@@ -377,13 +391,46 @@ export const BuddySprite: React.FC = () => {
               }}
             />
           )}
-          <OrbCore
+
+          {/* Meditation: calm indigo aura + rotating halo ring */}
+          {isMeditating && (
+            <>
+              <div
+                className="absolute inset-0 rounded-full"
+                style={{
+                  background: 'radial-gradient(circle, rgba(139,92,246,0.35) 0%, rgba(99,102,241,0.12) 55%, transparent 80%)',
+                  transform: 'scale(2.4)',
+                  animation: 'buddy-breathe 4.5s ease-in-out infinite',
+                  pointerEvents: 'none',
+                }}
+              />
+              <div
+                className="absolute inset-0 rounded-full"
+                style={{
+                  border: '1px dashed rgba(167,139,250,0.55)',
+                  ['--halo-scale' as any]: '1.7',
+                  animation: 'buddy-meditate-rotate 8s linear infinite',
+                  pointerEvents: 'none',
+                }}
+              />
+              <div
+                className="absolute inset-0 rounded-full"
+                style={{
+                  border: '1px solid rgba(196,181,253,0.4)',
+                  ['--halo-scale' as any]: '2.0',
+                  animation: 'buddy-meditate-rotate 14s linear infinite reverse',
+                  pointerEvents: 'none',
+                }}
+              />
+            </>
+          )}
+          <PersonalityOrb
+            stats={companion.stats}
             from={companion.palette.from}
             to={companion.palette.to}
-            css={speciesConfig.css}
-            glow={glowOverride ?? (muted ? 4 : speciesConfig.glowSpread)}
-            size={36}
+            size={56}
             shiny={!muted && companion.shiny}
+            muted={muted}
           />
 
           {/* Growth suggestions badge ✨ */}
@@ -412,10 +459,15 @@ export const BuddySprite: React.FC = () => {
         {/* Name label */}
         <div
           className="text-center mt-0.5 text-xs font-medium truncate max-w-[80px] transition-opacity duration-300"
-          style={{ color: accentColor, cursor: 'pointer', pointerEvents: 'auto', opacity: opacityOverride ?? 1 }}
+          style={{
+            color: isMeditating ? '#a78bfa' : accentColor,
+            cursor: 'pointer',
+            pointerEvents: 'auto',
+            opacity: opacityOverride ?? 1,
+          }}
           onClick={() => setShowStats(!showStats)}
         >
-          {companion.name}
+          {isMeditating ? '冥想中…' : companion.name}
         </div>
 
       </div>

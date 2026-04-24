@@ -124,6 +124,9 @@ describe("system api", () => {
     enable_graph: true,
     enable_forgetting_curve: false,
     extraction_depth: "standard",
+    memory_llm_base_url: "",
+    memory_llm_api_key: "",
+    memory_llm_model: "",
   };
 
   const sampleTrait: IdentityTrait = {

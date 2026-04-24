@@ -226,21 +226,36 @@ export function MCPPage({ embedded = false }: { embedded?: boolean } = {}) {
   };
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="w-full px-8 py-8">
-        {!embedded && <PageHeader
-          title={t('mcp.title')}
-          description={t('mcp.description')}
-          actions={<>
-            <button onClick={loadClients} disabled={loading} className="w-9 h-9 flex items-center justify-center rounded-xl transition-colors disabled:opacity-50" style={{ color: 'var(--color-text-secondary)' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-elevated)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }} title={t('mcp.refresh')}>
-              <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+    <div className={embedded ? '' : 'h-full overflow-y-auto'}>
+      <div className={embedded ? 'w-full px-8 py-4' : 'w-full px-8 py-8'}>
+        {!embedded ? (
+          <PageHeader
+            title={t('mcp.title')}
+            description={t('mcp.description')}
+            actions={<>
+              <button onClick={loadClients} disabled={loading} className="w-9 h-9 flex items-center justify-center rounded-xl transition-colors disabled:opacity-50" style={{ color: 'var(--color-text-secondary)' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-elevated)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }} title={t('mcp.refresh')}>
+                <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+              </button>
+              <button onClick={openCreateDialog} className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-[13px] font-medium transition-colors" style={{ background: 'var(--color-primary)', color: '#FFFFFF' }}>
+                <Plus size={15} />
+                {t('mcp.add')}
+              </button>
+            </>}
+          />
+        ) : (
+          <div className="flex items-center justify-end gap-2 mb-4">
+            <button onClick={loadClients} disabled={loading}
+              className="w-8 h-8 flex items-center justify-center rounded-lg transition-colors"
+              style={{ color: 'var(--color-text-muted)' }}>
+              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
             </button>
-            <button onClick={openCreateDialog} className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-[13px] font-medium transition-colors" style={{ background: 'var(--color-primary)', color: '#FFFFFF' }}>
-              <Plus size={15} />
-              {t('mcp.add')}
+            <button onClick={openCreateDialog}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium"
+              style={{ background: 'var(--color-primary)', color: '#fff' }}>
+              <Plus size={13} /> {t('mcp.add')}
             </button>
-          </>}
-        />}
+          </div>
+        )}
 
         {/* Clients list */}
         {clients.length === 0 && !loading ? (

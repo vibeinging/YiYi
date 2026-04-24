@@ -188,14 +188,22 @@ export async function deleteQuickAction(id: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export interface MemmeConfig {
-  embedding_provider: string;      // "mock" | "openai"
-  embedding_model: string;         // e.g. "text-embedding-3-small"
-  embedding_api_key: string;       // optional, falls back to active LLM provider
-  embedding_base_url: string;      // optional, defaults to provider default
-  embedding_dims: number;          // 384 | 1536
+  // Embedding is hard-coded to local bge-small-zh-v1.5 (512 dims) in the Rust
+  // backend. These five fields are kept for config-file back-compat only —
+  // the UI does not let the user edit them and the backend ignores them.
+  embedding_provider: string;      // always "local-bge-zh"
+  embedding_model: string;         // always "bge-small-zh-v1.5"
+  embedding_api_key: string;       // unused
+  embedding_base_url: string;      // unused
+  embedding_dims: number;          // always 512
   enable_graph: boolean;           // knowledge graph
   enable_forgetting_curve: boolean; // Ebbinghaus forgetting curve
   extraction_depth: string;        // "standard" | "thorough"
+  // Optional dedicated LLM for memory operations (meditate/extract/graph).
+  // If empty, falls back to main active LLM. Use case: main model is expensive.
+  memory_llm_base_url: string;
+  memory_llm_api_key: string;
+  memory_llm_model: string;
 }
 
 export interface IdentityTrait {
@@ -210,8 +218,13 @@ export async function getMemmeConfig(): Promise<MemmeConfig> {
   return await invoke<MemmeConfig>('get_memme_config');
 }
 
-export async function saveMemmeConfig(config: MemmeConfig): Promise<void> {
-  await invoke('save_memme_config', { config });
+export interface SaveMemmeConfigResult {
+  llm_hot_swapped: boolean;
+  warning: string | null;
+}
+
+export async function saveMemmeConfig(config: MemmeConfig): Promise<SaveMemmeConfigResult> {
+  return await invoke<SaveMemmeConfigResult>('save_memme_config', { config });
 }
 
 export async function getIdentityTraits(): Promise<IdentityTrait[]> {

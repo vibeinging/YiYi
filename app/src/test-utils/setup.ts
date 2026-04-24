@@ -1,6 +1,16 @@
 import "@testing-library/jest-dom";
 import { vi, beforeEach } from "vitest";
 
+// jsdom lacks ResizeObserver; CollapsibleContent (and anything using it
+// transitively) crashes without a polyfill. Stub with a no-op.
+if (typeof globalThis.ResizeObserver === "undefined") {
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as any;
+}
+
 // Default: any invoke() call that isn't explicitly mocked throws loudly so
 // tests can't silently get `undefined` and miss assertion gaps. Tests opt in
 // with mockInvoke({ command: handler }).

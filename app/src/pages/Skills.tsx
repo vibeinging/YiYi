@@ -278,8 +278,9 @@ export function SkillsPage({ embedded = false }: { embedded?: boolean } = {}) {
   });
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="w-full px-8 py-8">
+    <div className={embedded ? '' : 'h-full overflow-y-auto'}>
+      <div className={embedded ? 'w-full px-8 py-4' : 'w-full px-8 py-8'}>
+
         {!embedded && <PageHeader
           title={t('skills.title')}
           description={t('skills.description')}
@@ -316,7 +317,7 @@ export function SkillsPage({ embedded = false }: { embedded?: boolean } = {}) {
           </>}
         />}
 
-        {/* Filters */}
+        {/* Filters + actions (single row) */}
         <div className="flex items-center gap-3 mb-6">
           <div className="relative flex-1 max-w-xs">
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--color-text-tertiary)' }} />
@@ -423,6 +424,27 @@ export function SkillsPage({ embedded = false }: { embedded?: boolean } = {}) {
               />
               <span className="text-[13px]" style={{ color: 'var(--color-text-secondary)' }}>{t('skills.enabledOnly')}</span>
             </label>
+          )}
+
+          {/* Action buttons (embedded mode: inline with filters; standalone: in PageHeader) */}
+          {embedded && (
+            <div className="flex items-center gap-2 ml-auto shrink-0">
+              <button onClick={handleReload} disabled={reloading}
+                className="w-8 h-8 flex items-center justify-center rounded-lg transition-colors"
+                style={{ color: 'var(--color-text-muted)' }}>
+                <RefreshCw size={14} className={reloading ? 'animate-spin' : ''} />
+              </button>
+              <button onClick={() => setShowImport(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium"
+                style={{ background: 'var(--color-bg-elevated)', color: 'var(--color-text)' }}>
+                <Download size={13} /> {t('skills.import')}
+              </button>
+              <button onClick={() => setShowCreate(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium"
+                style={{ background: 'var(--color-primary)', color: '#fff' }}>
+                <Plus size={13} /> {t('skills.create')}
+              </button>
+            </div>
           )}
         </div>
 

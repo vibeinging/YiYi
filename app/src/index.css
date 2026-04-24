@@ -1001,6 +1001,11 @@ select {
   100% { opacity: 0; transform: translateY(-50px) scale(0.5); }
 }
 
+@keyframes buddy-meditate-rotate {
+  from { transform: scale(var(--halo-scale, 1.7)) rotate(0deg); }
+  to   { transform: scale(var(--halo-scale, 1.7)) rotate(360deg); }
+}
+
 @keyframes buddy-hatch-wobble {
   0%, 100% { transform: rotate(0deg); }
   15% { transform: rotate(-12deg); }

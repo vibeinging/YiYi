@@ -28,7 +28,7 @@ import {
   removeAuthorizedFolder,
   type AuthorizedFolder,
 } from '../api/workspace';
-import { completeSetup, saveMemmeConfig, type MemmeConfig } from '../api/system';
+import { completeSetup } from '../api/system';
 import {
   QUICK_PROVIDERS,
   BUILTIN_PROVIDER_IDS,
@@ -85,18 +85,6 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
   const [selectedRole, setSelectedRole] = useState('assistant');
   const [customSoul, setCustomSoul] = useState('');
   const [finishing, setFinishing] = useState(false);
-
-  // Memory (Embedding) step — full MemmeConfig with all fields
-  const [memoryConfig, setMemoryConfig] = useState<MemmeConfig>({
-    embedding_provider: 'openai',
-    embedding_base_url: '',
-    embedding_api_key: '',
-    embedding_model: 'text-embedding-3-small',
-    embedding_dims: 1536,
-    enable_graph: true,
-    enable_forgetting_curve: true,
-    extraction_depth: 'standard',
-  });
 
   // Meditation step
   const [meditationEnabled, setMeditationEnabled] = useState(true);
@@ -229,9 +217,6 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     setFinishing(true);
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-
-      // Save memory (embedding) config
-      await saveMemmeConfig(memoryConfig);
 
       // Save meditation config
       await invoke('save_meditation_config', {
@@ -379,12 +364,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
             )}
 
             {currentStep === 'memory' && (
-              <StepMemory
-                lang={lang}
-                config={memoryConfig}
-                onChange={setMemoryConfig}
-                llmProviderName={QUICK_PROVIDERS.find(p => p.id === selectedProvider)?.name}
-              />
+              <StepMemory lang={lang} />
             )}
 
             {currentStep === 'meditation' && (

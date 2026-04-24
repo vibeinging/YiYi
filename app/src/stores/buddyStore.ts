@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { invoke } from '@tauri-apps/api/core'
 import {
   getBuddyConfig,
   saveBuddyConfig,
@@ -234,7 +235,23 @@ export const useBuddyStore = create<BuddyState>((set, get) => ({
       }
     }
 
-    // 2. Ask LLM for bubble reaction (async, non-blocking)
+    // 2. Memory recall check — "还记得那天..." (10% chance, based on ENERGY)
+    try {
+      const recallChance = 0.10 * (energy / 100) // ENERGY scales recall probability
+      if (Math.random() < recallChance) {
+        const candidates: any[] = await invoke('get_recall_candidates', { limit: 1 })
+        if (candidates && candidates.length > 0) {
+          const memory = candidates[0]
+          const content = memory.content.length > 60 ? memory.content.slice(0, 60) + '...' : memory.content
+          get().showBubble(`还记得那天...「${content}」`)
+          return // Recall takes priority over LLM observe
+        }
+      }
+    } catch {
+      // Recall is non-critical
+    }
+
+    // 3. Ask LLM for bubble reaction (async, non-blocking)
     try {
       const speciesLabel = getSpeciesLabel(bones.species)
       const currentCompanion = get().companion ?? companion

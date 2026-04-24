@@ -149,7 +149,7 @@ describe('TaskSidebar expanded mode', () => {
   it('bottom nav shows buddy/extensions/bots/settings', () => {
     renderSidebar({ collapsed: false });
     const buttons = screen.getAllByRole('button');
-    const labels = ['小精灵', '扩展', '机器人', '设置'];
+    const labels = ['小精灵', '扩展', '分身', '设置'];
     for (const label of labels) {
       expect(buttons.some(b => b.textContent?.includes(label))).toBe(true);
     }
