@@ -141,7 +141,7 @@ YiYi 原生支持 **MCP (Model Context Protocol)**：
 - **Agent 引擎**：ReAct（think → act → observe） + spawn_agents 多 Agent 并行
 - **LLM Client**：统一接口，原生支持 OpenAI / Anthropic / Gemini / DashScope，含 Anthropic prompt-cache 分段优化
 - **数据库**：SQLite (WAL)
-- **向量记忆**：MemMe 分层记忆 + 冥想巩固
+- **向量记忆**：[MemMe](https://github.com/vibeinging/MemMe) 分层记忆 + 冥想巩固
 - **Python 集成**：PyO3 嵌入，内置 pypdf / python-docx / openpyxl / python-pptx
 - **浏览器**：Playwright bridge（交互流） + 系统 Chrome headless（轻量截图 / HTML fetch）
 

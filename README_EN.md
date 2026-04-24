@@ -146,7 +146,7 @@ Grab the installer for your platform from [Releases](https://github.com/vibeingi
 - **Agent**: ReAct (think → act → observe) + `spawn_agents` parallel sub-agents
 - **LLM client**: Unified abstraction, native support for OpenAI / Anthropic / Gemini / DashScope, including Anthropic prompt-cache split optimization
 - **DB**: SQLite (WAL)
-- **Vector memory**: MemMe tiered memory + nightly meditation consolidation
+- **Vector memory**: [MemMe](https://github.com/vibeinging/MemMe) tiered memory + nightly meditation consolidation
 - **Python integration**: PyO3 embedded, bundled pypdf / python-docx / openpyxl / python-pptx
 - **Browser**: Playwright bridge (interactive) + system Chrome headless (cheap tier for screenshot / HTML fetch)
 
