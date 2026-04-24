@@ -166,6 +166,18 @@ fn playwright_bridge_script() -> String {
 pub(super) async fn browser_use_tool(args: &serde_json::Value) -> (String, Vec<String>) {
     let action = args["action"].as_str().unwrap_or("");
 
+    // SSRF guard: any action that takes a URL must be checked before we
+    // forward the request to the Playwright bridge. (Control actions like
+    // click / type / scroll don't receive URLs.)
+    if matches!(action, "open" | "goto") {
+        if let Some(url) = args.get("url").and_then(|v| v.as_str()) {
+            if let super::url_guard::UrlVerdict::Deny(code) = super::url_guard::check_url(url) {
+                log::warn!("browser_use {} blocked by URL guard: {} ({})", action, code, url);
+                return (super::url_guard::deny_message(code, url), vec![]);
+            }
+        }
+    }
+
     // "start" needs special handling: launch the bridge process
     if action == "start" {
         let mut state_lock = BROWSER_STATE.lock().await;
