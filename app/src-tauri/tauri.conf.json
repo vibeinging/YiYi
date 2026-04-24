@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "YiYi",
-  "version": "0.0.1",
+  "version": "0.0.5-beta.1",
   "identifier": "com.yiyi.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -42,14 +42,12 @@
     ],
     "resources": {
       "src-python/": "src-python/",
-      "wheels/": "wheels/",
-      "python-stdlib/": "python-stdlib/",
       "skills/": "skills/"
     },
     "createUpdaterArtifacts": true,
     "macOS": {
-      "frameworks": ["libs/libpython3.13.dylib"],
-      "signingIdentity": "-",
+      "frameworks": [],
+      "signingIdentity": "Developer ID Application: Jian ming Wu (BB5VK42K87)",
       "dmg": {
         "appPosition": { "x": 180, "y": 170 },
         "applicationFolderPosition": { "x": 480, "y": 170 },

@@ -100,7 +100,7 @@ build_target() {
 
         # Verify
         echo "  Verifying linkage:"
-        otool -L "$app_binary" | grep python
+        otool -L "$app_binary" | grep python || echo "  (no dynamic python linkage — static build)"
     fi
 
     # Sign all binaries inside wheels (.so files in .whl zips)
@@ -142,9 +142,9 @@ build_target() {
     local dmg_dir="$TAURI_DIR/target/$target/release/bundle/dmg"
     local dmg_name
     if [ "$arch" = "arm" ]; then
-        dmg_name="YiYi_0.1.0_aarch64.dmg"
+        dmg_name="YiYi_0.0.5-beta.1_aarch64.dmg"
     else
-        dmg_name="YiYi_0.1.0_x64.dmg"
+        dmg_name="YiYi_0.0.5-beta.1_x64.dmg"
     fi
     echo "  Re-creating DMG..."
     rm -f "$dmg_dir/$dmg_name"

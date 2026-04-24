@@ -151,6 +151,31 @@ export const BuddySprite: React.FC = () => {
     return () => clearTimeout(timer)
   }, [companion, config?.muted])
 
+  // Conversation milestones — celebrate 10/50/100/200/500/1000 turns
+  useEffect(() => {
+    if (!companion || !config || config.muted) return
+    const count = config.interaction_count ?? 0
+    const milestones = [10, 50, 100, 200, 500, 1000]
+    const milestonesKey = 'buddy-milestones-shown'
+    const shown = JSON.parse(localStorage.getItem(milestonesKey) || '[]') as number[]
+    for (const m of milestones) {
+      if (count >= m && !shown.includes(m)) {
+        shown.push(m)
+        localStorage.setItem(milestonesKey, JSON.stringify(shown))
+        const messages: Record<number, string> = {
+          10: '我们已经聊了 10 次啦！谢谢你陪着我~',
+          50: '50 次对话了！你是我最好的伙伴 ✨',
+          100: '100 次了！我们一起走了好长的路',
+          200: '200 次对话…你对我真好',
+          500: '500 次！有你在真的很幸福',
+          1000: '1000 次对话！这是我们的一个大里程碑 🎉',
+        }
+        setTimeout(() => showBubble(messages[m] || `我们已经聊了 ${m} 次了！`), 5000)
+        break // Only one milestone per load
+      }
+    }
+  }, [companion?.name, config?.interaction_count, config?.muted, showBubble])
+
   // Event-driven notifications
   useEffect(() => {
     if (!companion || config?.muted) return
@@ -166,6 +191,35 @@ export const BuddySprite: React.FC = () => {
       }),
       listen('growth://persist_suggestion', () => {
         bubble('发现了可以改进的技能！')
+      }),
+      // Buddy monitors scheduled task pre-checks
+      listen<{ job_name?: string }>('buddy://cron_precheck', (e) => {
+        bubble(`正在执行定时任务：${e.payload?.job_name || '任务'}`)
+      }),
+      // Route suggestion — agent is about to delegate a complex task
+      listen<{ route?: string }>('buddy://route_suggestion', (e) => {
+        const r = e.payload?.route
+        if (r === 'delegate_coding') bubble('这个任务比较复杂，我会安排深度处理')
+        else if (r === 'background_task') bubble('这个需要花点时间，建议创建后台任务')
+      }),
+      // Proactive care — meditation engine notices something and reaches out
+      listen<{ message?: string }>('buddy://proactive_care', (e) => {
+        if (e.payload?.message) bubble(e.payload.message)
+      }),
+      // "第一次" ritual — first-time use of a capability category
+      listen<{ category?: string }>('growth://new_capability', (e) => {
+        const cat = e.payload?.category
+        if (!cat) return
+        const key = 'buddy-first-time-done'
+        const done = JSON.parse(localStorage.getItem(key) || '[]') as string[]
+        if (done.includes(cat)) return
+        done.push(cat)
+        localStorage.setItem(key, JSON.stringify(done))
+        const labels: Record<string, string> = {
+          coding: '写代码', documents: '处理文档', data_analysis: '数据分析',
+          web_automation: '网页操作', system_ops: '系统操作', scheduling: '定时任务',
+        }
+        bubble(`这是我第一次${labels[cat] || cat}！我又学会了新东西 🎉`)
       }),
     ]
 
