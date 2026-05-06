@@ -178,6 +178,10 @@ pub async fn chat_completion(
     let msg = &choice["message"];
     let content = msg["content"].as_str().map(|s| MessageContent::text(s));
     let tool_calls = parse_tool_calls(&msg["tool_calls"]);
+    let reasoning_content = msg["reasoning_content"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
 
     // Parse OpenAI usage
     let usage = parse_openai_usage(&json["usage"]);
@@ -188,6 +192,7 @@ pub async fn chat_completion(
             content,
             tool_calls,
             tool_call_id: None,
+            reasoning_content,
         },
         usage,
     })
@@ -269,7 +274,16 @@ where
             let content_text = msg["content"].as_str().unwrap_or("").to_string();
             let tool_calls = parse_tool_calls(&msg["tool_calls"]);
             let usage = parse_openai_usage(&json["usage"]);
-            let response = build_stream_response(content_text, tool_calls, usage);
+            let reasoning = msg["reasoning_content"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
+            // Replay reasoning chunk(s) to the UI so the frontend stays consistent
+            // even on the non-stream fallback path.
+            if let Some(ref r) = reasoning {
+                on_event(StreamEvent::ReasoningDelta(r.clone()));
+            }
+            let response = build_stream_response(content_text, tool_calls, usage, reasoning);
             emit_fallback_content(&response, &on_event);
             Ok(response)
         }
@@ -287,6 +301,7 @@ where
     F: Fn(StreamEvent) + Send + 'static,
 {
     let mut full_content = String::new();
+    let mut full_reasoning = String::new();
     let mut finish_reason = "stop".to_string();
     let mut tool_call_acc: std::collections::BTreeMap<u32, (String, String, String)> =
         std::collections::BTreeMap::new();
@@ -294,6 +309,7 @@ where
 
     {
         let fc = &mut full_content;
+        let fre = &mut full_reasoning;
         let fr = &mut finish_reason;
         let tca = &mut tool_call_acc;
         let su = &mut stream_usage;
@@ -324,6 +340,7 @@ where
                 let delta = &choice["delta"];
                 if let Some(reasoning) = delta["reasoning_content"].as_str() {
                     if !reasoning.is_empty() {
+                        fre.push_str(reasoning);
                         on_event(StreamEvent::ReasoningDelta(reasoning.to_string()));
                     }
                 }
@@ -398,7 +415,12 @@ where
     }
 
     // Usage captured from stream chunks (last chunk usually has it)
-    Ok(build_stream_response(full_content, tool_calls, stream_usage))
+    let reasoning_opt = if full_reasoning.is_empty() {
+        None
+    } else {
+        Some(full_reasoning)
+    };
+    Ok(build_stream_response(full_content, tool_calls, stream_usage, reasoning_opt))
 }
 
 /// Parse tool_calls array from OpenAI response JSON

@@ -217,6 +217,7 @@ fn parse_gemini_response(json: &serde_json::Value) -> Result<LLMResponse, String
                 Some(tool_calls)
             },
             tool_call_id: None,
+            reasoning_content: None,
         },
         usage,
     })
@@ -428,5 +429,5 @@ where
     } else {
         Some(tool_calls)
     };
-    Ok(build_stream_response(full_content, tool_calls_opt, None))
+    Ok(build_stream_response(full_content, tool_calls_opt, None, None))
 }

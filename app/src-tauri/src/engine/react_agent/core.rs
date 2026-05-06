@@ -88,6 +88,7 @@ async fn inject_memme_context(messages: &mut Vec<LLMMessage>) {
             ))),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
         });
     }
 }
@@ -196,6 +197,7 @@ where
         content: Some(MessageContent::text(system_prompt)),
         tool_calls: None,
         tool_call_id: None,
+            reasoning_content: None,
     }];
 
     // Load context summary from MemMe for continuity
@@ -233,6 +235,7 @@ where
         content: Some(MessageContent::text(&effective_user_message)),
         tool_calls: None,
         tool_call_id: None,
+            reasoning_content: None,
     });
 
     sanitize_messages(&mut messages);
@@ -622,6 +625,7 @@ where
                     content: Some(content),
                     tool_calls: None,
                     tool_call_id: Some(prep.call.id.clone()),
+            reasoning_content: None,
                 });
             }
 
@@ -638,6 +642,7 @@ where
                     content: Some(MessageContent::text(&warn)),
                     tool_calls: None,
                     tool_call_id: None,
+            reasoning_content: None,
                 });
             }
 
@@ -720,6 +725,7 @@ where
                 )),
                 tool_calls: None,
                 tool_call_id: None,
+            reasoning_content: None,
             });
         }
 

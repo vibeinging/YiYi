@@ -72,6 +72,7 @@ pub(super) fn sanitize_messages(messages: &mut Vec<LLMMessage>) {
                     content: Some(MessageContent::text("(result unavailable)")),
                     tool_calls: None,
                     tool_call_id: Some(id.clone()),
+            reasoning_content: None,
                 });
             }
         }
@@ -313,6 +314,7 @@ async fn generate_preview_summary(messages: &[LLMMessage], config: &LLMConfig) -
             content: Some(MessageContent::text(summary_request)),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
         }];
         match chat_completion_tracked(UsageSource::Compaction, config, &summary_msgs, &[]).await {
             Ok(resp) => resp
@@ -357,6 +359,7 @@ async fn apply_compaction(
         ))),
         tool_calls: None,
         tool_call_id: None,
+        reasoning_content: None,
     };
 
     let mut new_messages = Vec::new();
@@ -518,6 +521,7 @@ mod tests {
             content: Some(MessageContent::text(text)),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
         }
     }
 
@@ -527,6 +531,7 @@ mod tests {
             content: Some(MessageContent::text(text)),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
         }
     }
 
@@ -536,6 +541,7 @@ mod tests {
             content: Some(MessageContent::text(text)),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
         }
     }
 
@@ -552,6 +558,7 @@ mod tests {
                 },
             }]),
             tool_call_id: None,
+            reasoning_content: None,
         }
     }
 
@@ -561,6 +568,7 @@ mod tests {
             content: Some(MessageContent::text(text)),
             tool_calls: None,
             tool_call_id: Some(id.into()),
+            reasoning_content: None,
         }
     }
 
@@ -643,6 +651,7 @@ mod tests {
                 content: Some(MessageContent::text("rogue tool msg")),
                 tool_calls: None,
                 tool_call_id: None,
+            reasoning_content: None,
             },
             assistant_msg("ack"),
         ];

@@ -467,6 +467,7 @@ pub fn spawn_task_execution(
                         content: Some(super::llm_client::MessageContent::text(&m.content)),
                         tool_calls: None,
                         tool_call_id: None,
+            reasoning_content: None,
                     })
                 }
             }).collect()

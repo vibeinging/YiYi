@@ -155,12 +155,14 @@ pub async fn buddy_observe_impl(
             content: Some(MessageContent::text(&system_prompt)),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
         },
         LLMMessage {
             role: "user".into(),
             content: Some(MessageContent::text(&format!("最近的对话：\n{}", context))),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
         },
     ];
 

@@ -100,6 +100,13 @@ pub struct LLMMessage {
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// DeepSeek V4 thinking-mode reasoning trace for assistant messages.
+    /// MUST be echoed back to the API on subsequent turns when this assistant
+    /// message is replayed in the conversation history — otherwise the model
+    /// loses its prior thinking and quality degrades. Default `None` for
+    /// non-assistant roles or when thinking is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -119,13 +126,16 @@ pub struct LLMResponse {
 }
 
 // NOTE on DeepSeek V4 native reasoning ("thinking mode"):
-// We do NOT carry `reasoning_content` on `LLMResponse` or `LLMMessage`. Reasoning
-// is surfaced live via `StreamEvent::ReasoningDelta` (see openai.rs streaming path)
-// and consumed by the ReAct agent which forwards it as `AgentStreamEvent::Thinking`
-// for the frontend to render in a collapsible block. Reasoning is not part of
-// conversation history — DeepSeek itself emits it fresh each turn — so storing
-// it on the message would just bloat memory. If a future caller needs the final
-// accumulated trace, hook into `StreamEvent::ReasoningDelta` like the agent does.
+// `reasoning_content` IS carried on `LLMMessage`. DeepSeek's multi-turn
+// thinking-mode protocol requires the prior assistant turn's reasoning to be
+// echoed back in the next request — without it, the model loses its earlier
+// chain-of-thought and quality regresses. The streaming path (openai.rs)
+// accumulates reasoning chunks and writes the full trace to the assistant
+// `LLMMessage.reasoning_content`; the ReAct loop pushes that message back into
+// history verbatim, so the next request body includes the field automatically
+// (skip_serializing_if drops it for non-assistant turns).
+// Live UI rendering still goes through `StreamEvent::ReasoningDelta` so the
+// frontend can show thinking incrementally in a collapsible block.
 
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
@@ -239,11 +249,15 @@ pub fn emit_fallback_content<F: Fn(StreamEvent)>(response: &LLMResponse, on_even
     on_event(StreamEvent::Done);
 }
 
-/// Build an LLMResponse from accumulated streaming state
+/// Build an LLMResponse from accumulated streaming state.
+/// `reasoning_content` is the full thinking-mode trace concatenated from
+/// `StreamEvent::ReasoningDelta` chunks (DeepSeek V4); pass `None` when the
+/// stream produced no reasoning.
 pub fn build_stream_response(
     full_content: String,
     tool_calls: Option<Vec<ToolCall>>,
     usage: Option<crate::engine::usage::TokenUsage>,
+    reasoning_content: Option<String>,
 ) -> LLMResponse {
     let has_tool_calls = tool_calls.as_ref().map_or(false, |t| !t.is_empty());
     let content = if full_content.is_empty() {
@@ -257,7 +271,54 @@ pub fn build_stream_response(
             content,
             tool_calls: if has_tool_calls { tool_calls } else { None },
             tool_call_id: None,
+            reasoning_content,
         },
         usage,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// V4 thinking-mode protocol: when an assistant message carries
+    /// `reasoning_content`, it MUST round-trip through serde so the next
+    /// request body echoes it back to DeepSeek. Skipping `None` is also
+    /// required so non-assistant turns don't emit an empty field.
+    #[test]
+    fn assistant_reasoning_content_serializes() {
+        let msg = LLMMessage {
+            role: "assistant".into(),
+            content: Some(MessageContent::text("ok")),
+            tool_calls: None,
+            tool_call_id: None,
+            reasoning_content: Some("step 1: think; step 2: answer".into()),
+        };
+        let v = serde_json::to_value(&msg).unwrap();
+        assert_eq!(v["reasoning_content"], "step 1: think; step 2: answer");
+        // Round-trip: deserialize back and confirm field survives.
+        let back: LLMMessage = serde_json::from_value(v).unwrap();
+        assert_eq!(back.reasoning_content.as_deref(), Some("step 1: think; step 2: answer"));
+    }
+
+    #[test]
+    fn user_message_skips_reasoning_field() {
+        let msg = LLMMessage {
+            role: "user".into(),
+            content: Some(MessageContent::text("hi")),
+            tool_calls: None,
+            tool_call_id: None,
+            reasoning_content: None,
+        };
+        let v = serde_json::to_value(&msg).unwrap();
+        assert!(v.get("reasoning_content").is_none(), "None reasoning_content must be skipped on serialize");
+    }
+
+    #[test]
+    fn legacy_request_without_reasoning_deserializes() {
+        // Old payloads (pre-thinking-mode) must still load without the field.
+        let raw = serde_json::json!({ "role": "assistant", "content": "ok" });
+        let msg: LLMMessage = serde_json::from_value(raw).unwrap();
+        assert!(msg.reasoning_content.is_none());
     }
 }

@@ -102,6 +102,7 @@ fn user_msg(text: impl Into<String>) -> LLMMessage {
         content: Some(MessageContent::text(text.into())),
         tool_calls: None,
         tool_call_id: None,
+            reasoning_content: None,
     }
 }
 
@@ -111,6 +112,7 @@ fn system_msg(text: impl Into<String>) -> LLMMessage {
         content: Some(MessageContent::text(text.into())),
         tool_calls: None,
         tool_call_id: None,
+            reasoning_content: None,
     }
 }
 

@@ -454,6 +454,7 @@ async fn phase_growth(
         content: Some(MessageContent::text(prompt)),
         tool_calls: None,
         tool_call_id: None,
+            reasoning_content: None,
     }];
 
     let response = chat_completion_tracked(UsageSource::Meditation, config, &messages, &[])
@@ -595,6 +596,7 @@ async fn phase_journal(
         content: Some(MessageContent::text(prompt)),
         tool_calls: None,
         tool_call_id: None,
+            reasoning_content: None,
     }];
 
     let journal = match chat_completion_tracked(UsageSource::Meditation, config, &messages, &[]).await {
@@ -749,6 +751,7 @@ async fn phase_personality_evolution(
         content: Some(MessageContent::text(prompt)),
         tool_calls: None,
         tool_call_id: None,
+            reasoning_content: None,
     }];
 
     let response = chat_completion_tracked(UsageSource::Meditation, config, &messages, &[])
@@ -898,6 +901,7 @@ async fn phase_proactive_care(
         content: Some(MessageContent::text(prompt)),
         tool_calls: None,
         tool_call_id: None,
+            reasoning_content: None,
     }];
 
     let response = chat_completion_tracked(UsageSource::Meditation, config, &messages, &[])

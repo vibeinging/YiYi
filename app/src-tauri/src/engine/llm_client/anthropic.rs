@@ -172,6 +172,7 @@ fn parse_anthropic_response(json: &serde_json::Value) -> Result<LLMResponse, Str
                 Some(tool_calls)
             },
             tool_call_id: None,
+            reasoning_content: None,
         },
         usage,
     })
@@ -462,7 +463,7 @@ where
     } else {
         Some(tool_calls)
     };
-    Ok(build_stream_response(full_content, tool_calls_opt, stream_usage))
+    Ok(build_stream_response(full_content, tool_calls_opt, stream_usage, None))
 }
 
 #[cfg(test)]
@@ -476,6 +477,7 @@ mod cache_split_tests {
             content: Some(MessageContent::text(text)),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
         }
     }
 

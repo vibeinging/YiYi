@@ -198,6 +198,7 @@ async fn execute_isolated(
                 content: Some(MessageContent::text(&msg.content)),
                 tool_calls: None,
                 tool_call_id: None,
+            reasoning_content: None,
             })
             .collect();
         filtered

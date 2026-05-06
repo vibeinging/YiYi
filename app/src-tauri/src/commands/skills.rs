@@ -678,12 +678,14 @@ pub async fn generate_skill_ai(
             content: Some(MessageContent::text(SKILL_GENERATION_PROMPT)),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
         },
         LLMMessage {
             role: "user".into(),
             content: Some(MessageContent::text(&description)),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
         },
     ];
 

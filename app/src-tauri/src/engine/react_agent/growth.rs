@@ -162,6 +162,7 @@ JSON only:"#
         content: Some(MessageContent::text(reflection_prompt)),
         tool_calls: None,
         tool_call_id: None,
+            reasoning_content: None,
     }];
 
     let result = match chat_completion_tracked(UsageSource::Growth, config, &messages, &[]).await {
@@ -373,6 +374,7 @@ Respond with either UNCHANGED or the complete improved SKILL.md:"#
         content: Some(MessageContent::text(prompt)),
         tool_calls: None,
         tool_call_id: None,
+            reasoning_content: None,
     }];
 
     let result = match chat_completion_tracked(UsageSource::Growth, config, &messages, &[]).await {
@@ -505,6 +507,7 @@ Otherwise respond with the COMPLETE updated profile (not just the changes)."#
         content: Some(MessageContent::text(prompt)),
         tool_calls: None,
         tool_call_id: None,
+            reasoning_content: None,
     }];
 
     let result = match chat_completion_tracked(UsageSource::Growth, config, &messages, &[]).await {
@@ -585,6 +588,7 @@ JSON only:"#
         content: Some(MessageContent::text(correction_prompt)),
         tool_calls: None,
         tool_call_id: None,
+            reasoning_content: None,
     }];
 
     let result = match chat_completion_tracked(UsageSource::Growth, config, &messages, &[]).await {
@@ -920,6 +924,7 @@ Morning greeting:"#
         content: Some(MessageContent::text(prompt_text)),
         tool_calls: None,
         tool_call_id: None,
+            reasoning_content: None,
     }];
 
     let greeting = match chat_completion_tracked(UsageSource::Growth, config, &messages, &[]).await {
@@ -1103,6 +1108,7 @@ Consolidated principles:"#,
         content: Some(MessageContent::text(prompt_text)),
         tool_calls: None,
         tool_call_id: None,
+            reasoning_content: None,
     }];
 
     let result = match chat_completion_tracked(UsageSource::Growth, config, &messages, &[]).await {

@@ -128,6 +128,7 @@ pub async fn delegate(
             content: Some(MessageContent::text(&system_prompt)),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
         },
         LLMMessage {
             role: "user".into(),
@@ -138,6 +139,7 @@ pub async fn delegate(
             ))),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
         },
     ];
 

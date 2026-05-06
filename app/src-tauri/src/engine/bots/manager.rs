@@ -547,6 +547,7 @@ fn db_messages_to_llm(messages: &[crate::engine::db::ChatMessage]) -> Vec<LLMMes
             content: Some(MessageContent::text(&m.content)),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
         })
         .collect()
 }

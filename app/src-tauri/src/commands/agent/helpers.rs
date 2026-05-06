@@ -209,6 +209,7 @@ pub(super) fn db_messages_to_llm(internal_dir: &Path, workspace_dir: &Path, mess
                 content,
                 tool_calls,
                 tool_call_id,
+                reasoning_content: None,
             }
         })
         .collect()
