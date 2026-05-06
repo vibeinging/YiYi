@@ -29,27 +29,31 @@ pub struct DeferredEntry {
     pub missing: Vec<DepSpec>,
 }
 
-/// Hardcoded tool surface for known MCP servers. When the server is
-/// deferred we expose these stubs so the agent can plan around the
-/// capability. Names match the real Playwright MCP tool names so once
-/// the real server is up its definitions seamlessly take over.
-const PLAYWRIGHT_STUBS: &[(&str, &str)] = &[
-    ("browser_navigate", "Navigate the headless browser to a URL. Provides interactive browsing — for read-only fetching, prefer `browser_fetch`."),
-    ("browser_click", "Click on an element identified by an ARIA snapshot ref."),
-    ("browser_type", "Type text into a focused or referenced input field."),
-    ("browser_snapshot", "Capture an ARIA accessibility-tree snapshot of the current page (text, no pixels). Pair with browser_click/type using the returned refs."),
-    ("browser_press_key", "Press a keyboard key (Enter, Tab, Escape, etc.)."),
-    ("browser_evaluate", "Run a JavaScript expression on the page and return the result."),
-    ("browser_wait_for", "Wait for a selector / text / load state before continuing."),
-    ("browser_console_messages", "Read console.log/warn/error messages emitted since last check."),
-    ("browser_close", "Close the current browser tab."),
-    ("browser_handle_dialog", "Accept or dismiss a JavaScript dialog (alert / confirm / prompt)."),
-];
+/// Single proxy stub per deferred MCP server. When the server is
+/// deferred, the agent sees ONE tool that represents the whole missing
+/// capability. Calling it triggers the install dialog; after install
+/// completes, the real MCP server registers its actual (rich) tool set,
+/// and the agent retries the original task with the proper tools.
+///
+/// Why one instead of ten: a long stub list bloats the agent's tool
+/// surface and confuses planning. One unmistakable "this feature is
+/// behind an install" entry is clearer and cheaper.
+const PLAYWRIGHT_STUB: (&str, &str) = (
+    "browser_enable",
+    "Enable the interactive browser (Playwright). Call this whenever a \
+     task needs to navigate, click, type, fill forms, take an ARIA \
+     snapshot, or otherwise *interact* with a web page beyond simple \
+     read-only fetching with `browser_fetch`. Will prompt the user to \
+     install Playwright; once they confirm, a full set of \
+     `browser_navigate` / `browser_click` / `browser_type` / \
+     `browser_snapshot` / etc. tools becomes available — retry your \
+     original step then.",
+);
 
-fn stubs_for(server_id: &str) -> &'static [(&'static str, &'static str)] {
+fn stub_for(server_id: &str) -> Option<(&'static str, &'static str)> {
     match server_id {
-        "playwright" => PLAYWRIGHT_STUBS,
-        _ => &[],
+        "playwright" => Some(PLAYWRIGHT_STUB),
+        _ => None,
     }
 }
 
@@ -92,14 +96,14 @@ pub fn list_deferred() -> Vec<DeferredEntry> {
         .unwrap_or_default()
 }
 
-/// If `tool_name` is a stub belonging to a deferred MCP, return that
+/// If `tool_name` is the proxy stub for a deferred MCP, return that
 /// server's id. Used by the dispatcher to route stub invocations to the
 /// install-prompt flow instead of a real MCP backend.
 pub fn find_stub_owner(tool_name: &str) -> Option<String> {
     let map = registry().read().ok()?;
-    for (server_id, _) in map.iter() {
-        for (stub_name, _desc) in stubs_for(server_id) {
-            if *stub_name == tool_name {
+    for server_id in map.keys() {
+        if let Some((stub_name, _)) = stub_for(server_id) {
+            if stub_name == tool_name {
                 return Some(server_id.clone());
             }
         }
@@ -107,27 +111,26 @@ pub fn find_stub_owner(tool_name: &str) -> Option<String> {
     None
 }
 
-/// Build `ToolDefinition`s for every stub owned by a currently-deferred
+/// Build a single proxy `ToolDefinition` for every currently-deferred
 /// server. Called from `deferred_tools()` so the agent's tool_search can
-/// surface them.
+/// surface the capability without flooding the tool list.
 pub fn stubs_for_active_deferrals() -> Vec<ToolDefinition> {
     let Ok(map) = registry().read() else { return Vec::new(); };
     let mut out = Vec::new();
     for server_id in map.keys() {
-        for (name, desc) in stubs_for(server_id) {
-            // Stubs use a permissive schema — the real MCP definition
-            // will replace this one once installed; until then we just
-            // need the model to know the name and capability.
+        if let Some((name, desc)) = stub_for(server_id) {
             out.push(tool_def(
                 name,
-                &format!(
-                    "{} (currently disabled — invoking will prompt the user to install Playwright; agent should retry the call once install succeeds.)",
-                    desc
-                ),
+                desc,
                 json!({
                     "type": "object",
-                    "properties": {},
-                    "additionalProperties": true,
+                    "properties": {
+                        "reason": {
+                            "type": "string",
+                            "description": "Optional one-line reason you need this capability — surfaced to the user in the install dialog."
+                        }
+                    },
+                    "additionalProperties": false,
                 }),
             ));
         }
@@ -151,21 +154,24 @@ mod tests {
     fn mark_then_find_stub_owner() {
         cleanup();
         mark_deferred("playwright", "Playwright", vec![]);
-        assert_eq!(find_stub_owner("browser_navigate").as_deref(), Some("playwright"));
+        assert_eq!(
+            find_stub_owner("browser_enable").as_deref(),
+            Some("playwright")
+        );
         assert_eq!(find_stub_owner("totally_unrelated_tool"), None);
         clear_deferred("playwright");
-        assert!(find_stub_owner("browser_navigate").is_none());
+        assert!(find_stub_owner("browser_enable").is_none());
     }
 
     #[test]
     #[serial(deferred_mcp_global)]
-    fn stubs_visible_only_when_deferred() {
+    fn single_stub_per_deferred_server() {
         cleanup();
         assert!(stubs_for_active_deferrals().is_empty());
         mark_deferred("playwright", "Playwright", vec![]);
         let stubs = stubs_for_active_deferrals();
-        assert!(stubs.iter().any(|t| t.function.name == "browser_navigate"));
-        assert!(stubs.iter().any(|t| t.function.name == "browser_snapshot"));
+        assert_eq!(stubs.len(), 1, "exactly one proxy stub per deferred MCP");
+        assert_eq!(stubs[0].function.name, "browser_enable");
         clear_deferred("playwright");
         assert!(stubs_for_active_deferrals().is_empty());
     }
