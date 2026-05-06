@@ -17,7 +17,6 @@ import {
   configureProvider,
   testProvider,
   setActiveLlm,
-  createCustomProvider,
   type TestConnectionResponse,
 } from '../api/models';
 import {
@@ -31,7 +30,6 @@ import {
 import { completeSetup } from '../api/system';
 import {
   QUICK_PROVIDERS,
-  BUILTIN_PROVIDER_IDS,
   STEPS,
   buildSoulContent,
   type Step,
@@ -61,13 +59,13 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     localStorage.getItem('language') || 'zh'
   );
 
-  // Model step
-  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
-  const [selectedModel, setSelectedModel] = useState<string | null>(null);
-  const [customModelId, setCustomModelId] = useState('');
-  const [useCustomModel, setUseCustomModel] = useState(false);
+  // Model step — V4-only build: provider/model are locked to DeepSeek V4
+  const [selectedProvider] = useState<string | null>('deepseek');
+  const [selectedModel] = useState<string | null>('deepseek-v4-pro');
+  const [customModelId] = useState('');
+  const [useCustomModel] = useState(false);
   const [apiKey, setApiKey] = useState('');
-  const [baseUrl, setBaseUrl] = useState('');
+  const [baseUrl, setBaseUrl] = useState('https://api.deepseek.com/v1');
   const [showBaseUrl, setShowBaseUrl] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<TestConnectionResponse | null>(null);
@@ -189,20 +187,10 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       if (!ok) return; // Test failed — stay on this step
     }
 
-    const modelId = useCustomModel ? customModelId.trim() : (selectedModel || provider.models[0].id);
+    const modelId = selectedModel || provider.models[0].id;
     setModelSaving(true);
     try {
-      // For non-builtin providers, create as custom provider first
-      if (!BUILTIN_PROVIDER_IDS.includes(provider.id)) {
-        await createCustomProvider(
-          provider.id,
-          provider.name,
-          baseUrl || provider.baseUrl,
-          provider.id.toUpperCase().replace(/-/g, '_') + '_API_KEY',
-          provider.models.map(m => ({ id: m.id, name: m.name })),
-        );
-      }
-      // Configure API key (needed for both custom and builtin)
+      // V4-only build: only built-in DeepSeek provider exists; just save key + active model.
       await configureProvider(provider.id, apiKey.trim(), baseUrl || provider.baseUrl);
       await setActiveLlm(provider.id, modelId);
       transitionTo('workspace');
@@ -323,10 +311,10 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                 showBaseUrl={showBaseUrl}
                 testing={testing}
                 testResult={testResult}
-                onSelectProvider={setSelectedProvider}
-                onSelectModel={setSelectedModel}
-                onCustomModelIdChange={setCustomModelId}
-                onUseCustomModelChange={setUseCustomModel}
+                onSelectProvider={() => { /* locked to deepseek */ }}
+                onSelectModel={() => { /* locked to deepseek-v4-pro */ }}
+                onCustomModelIdChange={() => { /* not supported */ }}
+                onUseCustomModelChange={() => { /* not supported */ }}
                 onApiKeyChange={setApiKey}
                 onBaseUrlChange={setBaseUrl}
                 onShowBaseUrlChange={setShowBaseUrl}

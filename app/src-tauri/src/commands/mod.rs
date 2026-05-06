@@ -23,3 +23,5 @@ pub mod workers;
 pub mod usage;
 pub mod export;
 pub mod extensions;
+pub mod snapshots;
+pub mod deepseek;

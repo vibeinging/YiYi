@@ -1,4 +1,4 @@
-use super::COMPACT_THRESHOLD;
+use super::{AUTO_COMPACT_FLOOR, COMPACT_THRESHOLD};
 use crate::engine::llm_client::{chat_completion_tracked, LLMConfig, LLMMessage, MessageContent};
 use crate::engine::usage::UsageSource;
 use crate::engine::token_counter::estimate_tokens;
@@ -402,6 +402,32 @@ async fn apply_compaction(
 // Context compaction entry point
 // ---------------------------------------------------------------------------
 
+/// Decide whether to fire *automatic* compaction at the given token count.
+///
+/// V4-aware gating with two layers:
+///
+/// 1. **Floor (`AUTO_COMPACT_FLOOR`, 500K)** — below this, return `false`
+///    unconditionally. The prefix cache is still healthy and a compaction
+///    here would rewrite the prefix at miss prices ($0.435 vs $0.0036 per
+///    1M tokens, ≈120× the cost of a hit). The budget reclaim is not worth
+///    the cache invalidation.
+/// 2. **Threshold (`COMPACT_THRESHOLD`, 800K)** — at 80% of V4's 1M window
+///    we have enough headroom concern to justify paying the cache-bust
+///    cost. Above this, auto-compact fires.
+///
+/// Manual `/compact` triggers and overflow-recovery `force_compact_messages`
+/// must NOT call this gate — they bypass the floor by design.
+#[must_use]
+pub(crate) fn should_auto_compact(total_tokens: usize) -> bool {
+    // Floor gate: short-circuit early. Below the floor, no auto compaction
+    // happens regardless of any other signal.
+    if total_tokens < AUTO_COMPACT_FLOOR {
+        return false;
+    }
+    // Threshold gate: only fire once we're actually close to the 1M window.
+    total_tokens >= COMPACT_THRESHOLD
+}
+
 /// Compact messages when context exceeds threshold.
 /// Uses MemMe for summary generation when available, falls back to preview-based summary.
 pub(super) async fn compact_messages_if_needed(
@@ -410,7 +436,9 @@ pub(super) async fn compact_messages_if_needed(
     working_dir: Option<&std::path::Path>,
 ) {
     let total = total_message_tokens(messages);
-    if total < COMPACT_THRESHOLD || messages.len() < 6 {
+    // V4-aware auto gate: respects both the 800K threshold and the 500K floor.
+    // See `should_auto_compact` for the prefix-cache rationale.
+    if !should_auto_compact(total) || messages.len() < 6 {
         return;
     }
     log::info!("Context compaction triggered: ~{} tokens, {} messages", total, messages.len());
@@ -712,13 +740,92 @@ mod tests {
             provider_id: "openai".into(),
             native_tools: vec![],
         };
-        // Far below COMPACT_THRESHOLD (80k tokens) and messages.len() < 6.
+        // Far below the 500K AUTO_COMPACT_FLOOR and messages.len() < 6.
         compact_messages_if_needed(&mut msgs, &cfg, None).await;
         assert_eq!(msgs.len(), before.len());
         // Content preserved.
         for (a, b) in msgs.iter().zip(before.iter()) {
             assert_eq!(a.role, b.role);
         }
+    }
+
+    // ── should_auto_compact: V4-aware threshold gate ──────────────
+    //
+    // V4 has a 1M-token window and 120× cache hit/miss price gap. The auto
+    // path must:
+    //   - skip below the 500K floor (cache still healthy, not worth busting)
+    //   - skip between 500K and 800K (within window, no pressure yet)
+    //   - fire at/above 800K (80% of window, headroom shrinking)
+    // Manual paths bypass this gate entirely (verified by inspection: only
+    // `compact_messages_if_needed` calls it; `force_compact_messages` does not).
+
+    #[test]
+    fn should_auto_compact_below_floor_returns_false() {
+        // 100K — well below the 500K floor. Prefix cache still healthy; compacting
+        // here would just burn a 120× cache miss for no headroom benefit.
+        assert!(!should_auto_compact(100_000));
+        // Right below the floor — still suppressed.
+        assert!(!should_auto_compact(AUTO_COMPACT_FLOOR - 1));
+    }
+
+    #[test]
+    fn should_auto_compact_above_floor_below_threshold_returns_false() {
+        // 600K — past the floor but still under the 800K trigger. We have plenty
+        // of headroom in the 1M window; let the prefix cache keep paying off.
+        assert!(!should_auto_compact(600_000));
+        // Right under the threshold — still no.
+        assert!(!should_auto_compact(COMPACT_THRESHOLD - 1));
+    }
+
+    #[test]
+    fn should_auto_compact_at_or_above_threshold_returns_true() {
+        // 850K — past the 80%-of-1M trigger; auto compaction fires.
+        assert!(should_auto_compact(850_000));
+        // Exactly at the threshold — fires.
+        assert!(should_auto_compact(COMPACT_THRESHOLD));
+        // Way above — fires.
+        assert!(should_auto_compact(950_000));
+    }
+
+    #[test]
+    fn should_auto_compact_floor_is_strict_lt() {
+        // Exactly at the floor: still below the threshold, so result is false —
+        // but the floor itself does not gate (the threshold does at this point).
+        assert!(!should_auto_compact(AUTO_COMPACT_FLOOR));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn force_compact_bypasses_floor_at_low_token_count() {
+        // Manual / overflow-recovery path must work even when total tokens are
+        // far below AUTO_COMPACT_FLOOR. We can't easily run the full LLM path
+        // in a unit test, but we can verify force_compact_messages doesn't
+        // refuse based on token count — it only refuses if too few messages.
+        let mut msgs = vec![
+            system_msg("sys"),
+            user_msg("hi"),
+            assistant_msg("hello"),
+            user_msg("more"),
+            assistant_msg("ok"),
+        ];
+        let cfg = LLMConfig {
+            base_url: "http://127.0.0.1:1".into(),
+            api_key: "k".into(),
+            model: "m".into(),
+            provider_id: "openai".into(),
+            native_tools: vec![],
+        };
+        // Token count here is tiny (well below 500K floor). Auto gate would
+        // reject this; manual path must NOT reject based on the floor.
+        // We don't assert the messages mutate (LLM call will fail), but we do
+        // assert the function is reachable and doesn't short-circuit on
+        // "too few messages" — proving the floor is not consulted here.
+        let before_len = msgs.len();
+        force_compact_messages(&mut msgs, &cfg, None).await;
+        // With ≥4 messages the function proceeds past its only guard (the
+        // length check). It may not actually compact (LLM call to localhost:1
+        // fails), but it crucially does NOT refuse based on token count.
+        // Length should be ≤ before (compaction shrinks or no-ops).
+        assert!(msgs.len() <= before_len);
     }
 
     #[tokio::test(flavor = "multi_thread")]

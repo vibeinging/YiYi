@@ -1316,3 +1316,34 @@ pub async fn get_recall_candidates(
 ) -> Result<Vec<serde_json::Value>, String> {
     get_recall_candidates_impl(&*state, limit).await
 }
+
+
+// ── DeepSeek V4 thinking-mode effort ──────────────────────────────────────
+
+/// Get the current thinking-mode effort.
+/// Returns "off" / "high" / "max" (defaults to "high" if unset).
+#[tauri::command]
+pub async fn get_thinking_effort(state: State<'_, AppState>) -> Result<String, String> {
+    let config = state.config.read().await;
+    Ok(config
+        .agents
+        .thinking_effort
+        .clone()
+        .unwrap_or_else(|| "high".to_string()))
+}
+
+/// Set the thinking-mode effort. Accepts "off" | "high" | "max".
+#[tauri::command]
+pub async fn set_thinking_effort(
+    state: State<'_, AppState>,
+    effort: String,
+) -> Result<(), String> {
+    let normalized = match effort.as_str() {
+        "off" | "high" | "max" => effort,
+        _ => return Err(format!("Invalid thinking_effort: {}", effort)),
+    };
+    let mut config = state.config.write().await;
+    config.agents.thinking_effort = Some(normalized);
+    config.save(&state.working_dir)
+}
+

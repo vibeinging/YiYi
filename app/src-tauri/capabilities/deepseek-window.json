@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "deepseek-window",
+  "description": "Permissions for the in-app DeepSeek platform webview windows (label matches `deepseek-*`). These windows render https://platform.deepseek.com so the user can sign in, mint API keys, and top up without leaving YiYi. They MUST NOT have access to YiYi's IPC, shell, or filesystem — they are pure renderers of third-party web content. Only `core:default` is granted so the window can show + close itself; everything else is denied.",
+  "windows": [
+    "deepseek-*"
+  ],
+  "permissions": [
+    "core:default"
+  ]
+}

@@ -228,8 +228,8 @@ fn parse_google_usage(json: &serde_json::Value) -> Option<crate::engine::usage::
     Some(crate::engine::usage::TokenUsage {
         input_tokens: u["promptTokenCount"].as_u64().unwrap_or(0) as u32,
         output_tokens: u["candidatesTokenCount"].as_u64().unwrap_or(0) as u32,
-        cache_creation_input_tokens: 0,
-        cache_read_input_tokens: u["cachedContentTokenCount"].as_u64().unwrap_or(0) as u32,
+        prompt_cache_miss_tokens: 0,
+        prompt_cache_hit_tokens: u["cachedContentTokenCount"].as_u64().unwrap_or(0) as u32,
     })
 }
 

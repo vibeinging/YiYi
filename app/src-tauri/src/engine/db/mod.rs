@@ -19,7 +19,6 @@ mod quick_actions;
 // Re-export all public types
 pub use sessions::ChatSession;
 pub use messages::ChatMessage;
-pub use providers::CustomProviderRow;
 pub use bots::{BotRow, AgentRouteConfig};
 pub use cronjobs::{ExecutionMode, CronJobRow, CronJobExecutionRow, HeartbeatRow};
 // Memories now live in MemMe (DuckDB). SQLite memories table kept for schema compat only.
@@ -450,7 +449,10 @@ impl Database {
         )
         .map_err(|e| format!("Failed to create code_registry table: {}", e))?;
 
-        // Token usage tracking (per API call, aggregatable by session/time)
+        // Token usage tracking (per API call, aggregatable by session/time).
+        // V4-only build: column names align with DeepSeek's response shape
+        // (prompt_cache_hit_tokens / prompt_cache_miss_tokens). Old DBs are
+        // migrated via ALTER TABLE RENAME COLUMN in `migrate_tables`.
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS token_usage (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -458,8 +460,8 @@ impl Database {
                 model TEXT NOT NULL DEFAULT '',
                 input_tokens INTEGER NOT NULL DEFAULT 0,
                 output_tokens INTEGER NOT NULL DEFAULT 0,
-                cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-                cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+                prompt_cache_hit_tokens INTEGER NOT NULL DEFAULT 0,
+                prompt_cache_miss_tokens INTEGER NOT NULL DEFAULT 0,
                 estimated_cost_usd REAL NOT NULL DEFAULT 0.0,
                 recorded_at INTEGER NOT NULL,
                 source TEXT NOT NULL DEFAULT 'main'
@@ -660,6 +662,23 @@ impl Database {
                 "ALTER TABLE memories ADD COLUMN is_sparkling INTEGER NOT NULL DEFAULT 0;"
             ).map_err(|e| format!("Migration error (memories is_sparkling): {}", e))?;
             log::info!("Migrated memories table: added is_sparkling column (闪光记忆)");
+        }
+
+        // V4-only build: rename token_usage cache columns to DeepSeek semantics
+        // (cache_read_tokens → prompt_cache_hit_tokens,
+        //  cache_write_tokens → prompt_cache_miss_tokens). No data loss —
+        // values are preserved 1:1 since the old "read" was always a hit and
+        // the old "write" was effectively the miss for non-Anthropic models.
+        let has_new_hit: bool = conn
+            .prepare("SELECT prompt_cache_hit_tokens FROM token_usage LIMIT 0")
+            .is_ok();
+        if !has_new_hit {
+            // Old DB: rename columns. SQLite 3.25+ supports RENAME COLUMN.
+            conn.execute_batch(
+                "ALTER TABLE token_usage RENAME COLUMN cache_read_tokens TO prompt_cache_hit_tokens;
+                 ALTER TABLE token_usage RENAME COLUMN cache_write_tokens TO prompt_cache_miss_tokens;"
+            ).map_err(|e| format!("Migration error (token_usage rename cache cols): {}", e))?;
+            log::info!("Migrated token_usage table: renamed cache columns to DeepSeek semantics");
         }
 
         // Quick actions table -- user-defined quick action shortcuts

@@ -248,6 +248,29 @@ where
     const MAX_EMPTY_RETRIES: usize = 3;
     let mut consecutive_empty = 0u8;
 
+    // Per-turn anti-loop guard. Counters reset on every fresh ReAct turn
+    // (i.e. every call to `run_react_with_options_stream`).
+    let mut loop_guard = super::loop_guard::LoopGuard::new();
+
+    // ── Phase J: side-git workspace snapshot (pre-turn) ──
+    // Best-effort: snapshot failure must NEVER block the agent loop.
+    let snapshot_session_id = crate::engine::tools::get_current_session_id();
+    let snapshot_workspace = crate::engine::tools::get_effective_workspace();
+    // Derive turn index from the count of prior user messages in `history`
+    // (the new user message has just been pushed onto `messages`).
+    let snapshot_turn_index: u32 = history.iter().filter(|m| m.role == "user").count() as u32 + 1;
+    if !snapshot_session_id.is_empty() {
+        if let Err(e) = crate::engine::side_git::snapshot_pre_turn(
+            &snapshot_session_id,
+            snapshot_turn_index,
+            &snapshot_workspace,
+        )
+        .await
+        {
+            log::warn!("side-git pre-turn snapshot failed: {}", e);
+        }
+    }
+
     for iteration in 0..max_iter {
         log::info!("ReAct stream iteration {}/{}", iteration + 1, max_iter);
 
@@ -346,6 +369,23 @@ where
             for call in tool_calls {
                 let tool_name = &call.function.name;
                 let tool_input = &call.function.arguments;
+
+                // Anti-loop guard: block identical-call retries before they
+                // hit permission/pre-hook/execute. Synthesize a corrective
+                // tool result and feed it back to the model.
+                let parsed_args: serde_json::Value = serde_json::from_str(tool_input)
+                    .unwrap_or(serde_json::Value::Null);
+                if let super::loop_guard::AttemptDecision::Block(msg) =
+                    loop_guard.record_attempt(tool_name, &parsed_args)
+                {
+                    log::warn!("loop_guard blocked repeated call: tool={} ", tool_name);
+                    prepared.push(PreparedCall {
+                        call: call.clone(), effective_call: call.clone(),
+                        pre_messages: vec![],
+                        denied: Some(msg),
+                    });
+                    continue;
+                }
 
                 // Permission mode check.
                 //
@@ -491,6 +531,9 @@ where
             // ── Phase 3: Sequential post-processing (post-hook + emit + persist + push) ──
             // Also detect tool_search results for dynamic tool injection (Claw Code pattern).
             let mut discovered_tool_names: Vec<String> = Vec::new();
+            // Anti-loop guard signals collected this iteration.
+            let mut guard_warnings: Vec<String> = Vec::new();
+            let mut guard_halt: Option<String> = None;
 
             for (prep, (mut output, images, mut is_error)) in prepared.iter().zip(results.into_iter()) {
                 let tool_name = &prep.call.function.name;
@@ -517,6 +560,22 @@ where
                     }).await.unwrap_or_else(|_| crate::engine::hooks::HookRunResult::allow(vec![]));
                     if post_result.is_blocked() { is_error = true; }
                     output = merge_hook_feedback(post_result.messages(), output, post_result.is_blocked());
+                }
+
+                // Anti-loop guard: record outcome. A tool counts as failed
+                // if `is_error` is set OR the result content starts with
+                // `Error:` (matches built-in tool failure convention).
+                let failed = is_error || super::loop_guard::is_failure_content(&output);
+                match loop_guard.record_outcome(tool_name, !failed) {
+                    super::loop_guard::OutcomeDecision::Continue => {}
+                    super::loop_guard::OutcomeDecision::Warn(msg) => {
+                        log::warn!("loop_guard warn: {}", msg);
+                        guard_warnings.push(msg);
+                    }
+                    super::loop_guard::OutcomeDecision::Halt(msg) => {
+                        log::error!("loop_guard halt: {}", msg);
+                        guard_halt = Some(msg);
+                    }
                 }
 
                 // Detect tool_search results: parse [TOOLS_DISCOVERED:name1,name2] tag
@@ -566,6 +625,22 @@ where
                 });
             }
 
+            // ── Anti-loop guard: apply halt / warn signals collected this iter ──
+            if let Some(halt_msg) = guard_halt {
+                log::error!("Terminating ReAct loop due to loop_guard halt");
+                emit_usage(&on_event, &usage_tracker, config);
+                on_event(AgentStreamEvent::Complete);
+                return Ok(halt_msg);
+            }
+            for warn in guard_warnings {
+                messages.push(LLMMessage {
+                    role: "user".into(),
+                    content: Some(MessageContent::text(&warn)),
+                    tool_calls: None,
+                    tool_call_id: None,
+                });
+            }
+
             // ── Dynamic tool injection (Claw Code pattern) ──
             // When tool_search discovers tools, inject their full definitions into
             // the tools list so the LLM can call them in subsequent iterations.
@@ -597,6 +672,18 @@ where
             if !text.is_empty() {
                 emit_usage(&on_event, &usage_tracker, config);
                 on_event(AgentStreamEvent::Complete);
+                // Phase J: post-turn snapshot (best-effort).
+                if !snapshot_session_id.is_empty() {
+                    if let Err(e) = crate::engine::side_git::snapshot_post_turn(
+                        &snapshot_session_id,
+                        snapshot_turn_index,
+                        &snapshot_workspace,
+                    )
+                    .await
+                    {
+                        log::warn!("side-git post-turn snapshot failed: {}", e);
+                    }
+                }
                 return Ok(text);
             }
 
@@ -610,6 +697,18 @@ where
                 log::error!("LLM returned empty response {} times, giving up", MAX_EMPTY_RETRIES);
                 emit_usage(&on_event, &usage_tracker, config);
                 on_event(AgentStreamEvent::Complete);
+                // Phase J: post-turn snapshot (best-effort).
+                if !snapshot_session_id.is_empty() {
+                    if let Err(e) = crate::engine::side_git::snapshot_post_turn(
+                        &snapshot_session_id,
+                        snapshot_turn_index,
+                        &snapshot_workspace,
+                    )
+                    .await
+                    {
+                        log::warn!("side-git post-turn snapshot failed: {}", e);
+                    }
+                }
                 return Ok(String::new());
             }
 
@@ -647,7 +746,7 @@ fn emit_usage<F: Fn(AgentStreamEvent)>(
     on_event(AgentStreamEvent::Usage {
         input_tokens: cum.input_tokens,
         output_tokens: cum.output_tokens,
-        cache_read_tokens: cum.cache_read_input_tokens,
+        cache_read_tokens: cum.prompt_cache_hit_tokens,
         estimated_cost_usd: cost,
     });
 }

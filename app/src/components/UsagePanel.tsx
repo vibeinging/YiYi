@@ -1,6 +1,12 @@
 import { useState, useEffect } from 'react';
-import { getUsageSummary, getUsageBySession, getUsageDaily, type UsageSummary, type SessionUsage, type DailyUsage } from '../api/usage';
-import { BarChart3, Clock, Layers, TrendingUp } from 'lucide-react';
+import { getUsageSummary, getUsageBySession, getUsageDaily, drainPendingCost, type UsageSummary, type SessionUsage, type DailyUsage } from '../api/usage';
+import { BarChart3, Clock, Layers, TrendingUp, Zap } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+
+// DeepSeek V4 Pro pricing (75% promo through 2026-05-31), USD per 1M tokens.
+// Used to estimate "savings from cache hits" in the live panel.
+const PRO_PROMO_HIT_PER_M = 0.003625;
+const PRO_PROMO_MISS_PER_M = 0.435;
 
 type TimeRange = 'all' | 'today' | '7d' | '30d';
 
@@ -38,11 +44,33 @@ function StatCard({ label, value, sub, icon: Icon }: { label: string; value: str
 }
 
 export function UsagePanel() {
+  const { t } = useTranslation();
   const [range, setRange] = useState<TimeRange>('30d');
   const [summary, setSummary] = useState<UsageSummary | null>(null);
   const [sessions, setSessions] = useState<SessionUsage[]>([]);
   const [daily, setDaily] = useState<DailyUsage[]>([]);
   const [loading, setLoading] = useState(true);
+  const [liveCost, setLiveCost] = useState(0);
+
+  // Side-channel polling: every second, drain the backend's pending-cost pool
+  // and add it to our local "session cost" counter. Background calls
+  // (meditation / growth / heartbeat / compaction / subagent) accrue here too.
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const delta = await drainPendingCost();
+        if (alive && delta > 0) setLiveCost((c) => c + delta);
+      } catch (e) {
+        // Don't spam the console — backend may not be ready yet.
+      }
+    };
+    const id = setInterval(tick, 1000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, []);
 
   // Load per-session breakdown once (not affected by time range)
   useEffect(() => {
@@ -74,11 +102,47 @@ export function UsagePanel() {
 
   const totalTokens = (summary?.total_input_tokens ?? 0) + (summary?.total_output_tokens ?? 0);
   const cacheHitRate = totalTokens > 0
-    ? ((summary?.total_cache_read_tokens ?? 0) / (summary?.total_input_tokens || 1) * 100)
+    ? ((summary?.total_prompt_cache_hit_tokens ?? 0) / (summary?.total_input_tokens || 1) * 100)
     : 0;
+  // Estimated savings from prefix-cache hits — assumes Pro promo pricing for
+  // the headline number (Flash gap is 50× rather than 120×, so this slightly
+  // overstates Flash savings — close enough for a "feel-good" number).
+  const cacheHitTokens = summary?.total_prompt_cache_hit_tokens ?? 0;
+  const cacheSavingsUsd = (cacheHitTokens / 1_000_000) * (PRO_PROMO_MISS_PER_M - PRO_PROMO_HIT_PER_M);
 
   return (
     <div className="space-y-5">
+      {/* Live session cost — driven by drain_pending_cost side-channel. */}
+      <div
+        className="flex items-center gap-3 px-4 py-3 rounded-xl border"
+        style={{
+          borderColor: 'var(--color-border)',
+          background: 'linear-gradient(135deg, var(--color-bg-elevated), var(--color-bg-subtle))',
+        }}
+      >
+        <div className="p-2 rounded-lg" style={{ background: 'var(--color-bg-subtle)' }}>
+          <Zap size={18} style={{ color: 'var(--color-primary)' }} />
+        </div>
+        <div className="flex-1">
+          <div className="text-[11px] uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>
+            {t('usage.liveSessionCost', '本会话累计')}
+          </div>
+          <div className="text-[20px] font-semibold tabular-nums" style={{ color: 'var(--color-text)' }}>
+            ${liveCost.toFixed(4)}
+          </div>
+        </div>
+        {cacheHitRate > 0 && (
+          <div className="text-right">
+            <div className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+              {t('usage.cacheHitShort', '缓存命中')} {cacheHitRate.toFixed(0)}%
+            </div>
+            <div className="text-[12px]" style={{ color: 'var(--color-success, #16a34a)' }}>
+              {t('usage.savedPrefix', '节省')} ${cacheSavingsUsd.toFixed(4)}
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Time range selector */}
       <div className="flex gap-1 p-1 rounded-lg bg-[var(--color-bg-subtle)] w-fit">
         {ranges.map((r) => (
@@ -102,7 +166,7 @@ export function UsagePanel() {
         <StatCard icon={BarChart3} label="总 Tokens" value={formatTokens(totalTokens)} sub={`${summary?.call_count ?? 0} 次调用`} />
         <StatCard icon={TrendingUp} label="总费用" value={formatCost(summary?.total_cost_usd ?? 0)} />
         <StatCard icon={Layers} label="输入 / 输出" value={`${formatTokens(summary?.total_input_tokens ?? 0)} / ${formatTokens(summary?.total_output_tokens ?? 0)}`} />
-        <StatCard icon={Clock} label="缓存命中" value={cacheHitRate > 0 ? `${cacheHitRate.toFixed(0)}%` : '—'} sub={cacheHitRate > 0 ? `${formatTokens(summary?.total_cache_read_tokens ?? 0)} tokens` : '无缓存数据'} />
+        <StatCard icon={Clock} label="缓存命中" value={cacheHitRate > 0 ? `${cacheHitRate.toFixed(0)}%` : '—'} sub={cacheHitRate > 0 ? `${formatTokens(summary?.total_prompt_cache_hit_tokens ?? 0)} tokens` : '无缓存数据'} />
       </div>
 
       {/* Daily trend */}

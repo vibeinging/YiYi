@@ -33,14 +33,10 @@ async fn resolve_llm(state: &AppState) -> Option<LLMConfig> {
         .as_deref()
         .unwrap_or(&p.default_base_url)
         .to_string();
-    let api_key = if let Some(custom) = providers.custom_providers.get(&active.provider_id) {
-        custom.settings.api_key.clone()
-    } else {
-        providers
-            .providers
-            .get(&active.provider_id)
-            .and_then(|s| s.api_key.clone())
-    };
+    let api_key = providers
+        .providers
+        .get(&active.provider_id)
+        .and_then(|s| s.api_key.clone());
     let api_key = api_key.or_else(|| std::env::var(&p.api_key_prefix).ok())?;
 
     let native_tools = crate::state::providers::resolve_native_injections(&p.native_tools, &active.model);

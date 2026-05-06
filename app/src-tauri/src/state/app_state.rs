@@ -472,7 +472,14 @@ pub fn build_memme_llm(providers: &ProvidersState, memme_cfg: &crate::state::con
         return Some(std::sync::Arc::new(memme_llm::openai::OpenAIProvider::new(config)));
     }
 
-    // Fallback: use the main active LLM (may be expensive for frequent background ops)
+    // Fallback: use the active provider's API key but FORCE the model to V4 Flash.
+    //
+    // V4-only build: memory operations (entity extraction, dedup, episode
+    // compaction, contradiction checks) run continuously in the background.
+    // Defaulting them to V4 Pro would burn ~10× more tokens than necessary
+    // — Flash handles these quality-equivalent for the kinds of structured
+    // extraction MemMe does. Users who want Pro can still override via
+    // `memme.memory_llm_model` in config.
     let slot = providers.active_llm.as_ref()?;
     let provider_settings = providers.providers.get(&slot.provider_id)?;
     let api_key = provider_settings.api_key.as_deref().unwrap_or("").to_string();
@@ -483,7 +490,11 @@ pub fn build_memme_llm(providers: &ProvidersState, memme_cfg: &crate::state::con
         return None;
     }
 
-    let model = slot.model.clone();
+    let model = if slot.provider_id == "deepseek" {
+        crate::engine::llm_client::FLASH_MODEL.to_string()
+    } else {
+        slot.model.clone()
+    };
     // Main provider's base_url is typically the API root (e.g. `/v1`); append chat-completions.
     let trimmed = base_url.trim_end_matches('/');
     let url = if trimmed.is_empty() {

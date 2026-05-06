@@ -1,326 +1,162 @@
 /**
- * Models Configuration Page - Quick Setup
+ * Models Page — V4-only build.
+ * Shows DeepSeek V4 connection status and the two bound models (Pro orchestrator, Flash worker).
+ * Pro/Flash routing is handled automatically by the engine — no manual picker.
  */
 
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Loader2,
-  Plus,
-  Package,
-  Upload,
+  Key,
+  ExternalLink,
+  ChevronRight,
+  Check,
+  AlertTriangle,
+  Cpu,
+  Zap,
+  Sparkles,
+  Wallet,
+  RefreshCw,
+  Clipboard,
 } from 'lucide-react';
 import {
   listProviders,
   configureProvider,
   testProvider,
-  createCustomProvider,
-  deleteCustomProvider,
-  addModel,
-  removeModel,
   getActiveLlm,
-  setActiveLlm as setActiveLlmApi,
-  listProviderTemplates,
-  importProviderFromTemplate,
-  importProviderPlugin,
+  setActiveLlm,
   type ProviderDisplay,
-  type ModelInfo,
-  type ProviderTemplate,
-  type ProviderPlugin,
   type TestConnectionResponse,
-  ZHIPU_SITES,
-  type ZhipuSiteKey,
 } from '../api/models';
+import {
+  getDeepSeekBalance,
+  openDeepSeekWindow,
+  tryReadClipboardKey,
+  type DeepSeekBalance,
+} from '../api/deepseek';
 import { PageHeader } from '../components/PageHeader';
-import { toast, confirm } from '../components/Toast';
-import { ActiveModelCard } from '../components/models/ActiveModelCard';
-import { ProviderCard } from '../components/models/ProviderCard';
-import { CustomProviderCard } from '../components/models/CustomProviderCard';
-import { CustomProviderDialog } from '../components/models/CustomProviderDialog';
-import { TemplateImportDialog } from '../components/models/TemplateImportDialog';
-import { JsonImportDialog } from '../components/models/JsonImportDialog';
+import { toast } from '../components/Toast';
 
-interface ProviderMeta {
-  id: string;
-  name: string;
-  desc: string;
-  color: string;
-  baseUrl: string;
-  signupUrl: string;
-  signupLabel: string;
-  models: { id: string; name: string }[];
-  tag?: string;
-  tagColor?: string;
-}
+const PROVIDER_ID = 'deepseek';
+const PROVIDER_COLOR = '#5B6EF5';
+const SIGNUP_URL = 'https://platform.deepseek.com/api_keys';
+const DEFAULT_BASE_URL = 'https://api.deepseek.com/v1';
 
-const PROVIDER_LIST: ProviderMeta[] = [
-  // --- Coding Plan (国内优惠套餐) ---
-  {
-    id: 'coding-plan', name: 'Aliyun Coding Plan', desc: '阿里云编程专属套餐，聚合 8 款主流模型',
-    color: '#FF6A00', baseUrl: 'https://coding.dashscope.aliyuncs.com/v1',
-    signupUrl: 'https://help.aliyun.com/zh/model-studio/developer-reference/aliyun-coding-plan',
-    signupLabel: '了解详情',
-    models: [
-      { id: 'qwen3.5-plus', name: 'Qwen 3.5 Plus' }, { id: 'qwen3-coder-plus', name: 'Qwen3 Coder Plus' },
-      { id: 'qwen3-coder-next', name: 'Qwen3 Coder Next' }, { id: 'qwen3-max-2026-01-23', name: 'Qwen3 Max' },
-      { id: 'glm-5', name: 'GLM-5' }, { id: 'glm-4.7', name: 'GLM-4.7' },
-      { id: 'MiniMax-M2.5', name: 'MiniMax M2.5' }, { id: 'kimi-k2.5', name: 'Kimi K2.5' },
-    ],
-    tag: 'Coding Plan', tagColor: '#FF6A00',
+const MODEL_ROLES: Record<string, { role: string; roleEn: string; desc: string; descEn: string; icon: typeof Cpu }> = {
+  'deepseek-v4-pro': {
+    role: '主控',
+    roleEn: 'Orchestrator',
+    desc: '复杂推理 / 工具调用 / 长上下文',
+    descEn: 'Heavy reasoning, tool calling, long context',
+    icon: Cpu,
   },
-  // --- 国内提供商 ---
-  {
-    id: 'dashscope', name: '通义千问 (DashScope)', desc: 'Qwen Max, Plus, Turbo',
-    color: '#6236FF', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    signupUrl: 'https://dashscope.console.aliyun.com/apiKey',
-    signupLabel: '获取 API Key',
-    models: [
-      { id: 'qwen-max', name: 'Qwen Max' }, { id: 'qwen-plus', name: 'Qwen Plus' }, { id: 'qwen-turbo', name: 'Qwen Turbo' },
-    ],
-    tag: '国内', tagColor: '#6236FF',
+  'deepseek-v4-flash': {
+    role: '工人',
+    roleEn: 'Worker',
+    desc: '高频子任务 / 上下文压缩 / 并行分析',
+    descEn: 'Fast sub-tasks, context compaction, parallel analysis',
+    icon: Zap,
   },
-  {
-    id: 'deepseek', name: 'DeepSeek', desc: 'DeepSeek V3, R1',
-    color: '#5B6EF5', baseUrl: 'https://api.deepseek.com/v1',
-    signupUrl: 'https://platform.deepseek.com/api_keys',
-    signupLabel: '获取 API Key',
-    models: [
-      { id: 'deepseek-chat', name: 'DeepSeek V3' }, { id: 'deepseek-reasoner', name: 'DeepSeek R1' },
-    ],
-    tag: '国内', tagColor: '#5B6EF5',
-  },
-  {
-    id: 'moonshot', name: 'Kimi (Moonshot)', desc: 'Kimi K2.5, Moonshot V1 128K/32K',
-    color: '#1A1A2E', baseUrl: 'https://api.moonshot.cn/v1',
-    signupUrl: 'https://platform.moonshot.cn/console/api-keys',
-    signupLabel: '获取 API Key',
-    models: [
-      { id: 'kimi-k2.5', name: 'Kimi K2.5' }, { id: 'moonshot-v1-128k', name: 'Moonshot V1 128K' },
-      { id: 'moonshot-v1-32k', name: 'Moonshot V1 32K' },
-    ],
-    tag: '国内', tagColor: '#1A1A2E',
-  },
-  {
-    id: 'minimax', name: 'MiniMax', desc: 'MiniMax M2.5, M2.5 Highspeed, M2.1',
-    color: '#FF4F81', baseUrl: 'https://api.minimax.io/v1',
-    signupUrl: 'https://platform.minimax.io/user-center/basic-information/interface-key',
-    signupLabel: '获取 API Key',
-    models: [
-      { id: 'MiniMax-M2.5', name: 'MiniMax M2.5' }, { id: 'MiniMax-M2.5-highspeed', name: 'M2.5 Highspeed' },
-      { id: 'MiniMax-M2.1', name: 'MiniMax M2.1' },
-    ],
-    tag: '国内', tagColor: '#FF4F81',
-  },
-  {
-    id: 'zhipu', name: '智谱 AI', desc: 'GLM-5, GLM-4.7, GLM-4 Plus/Flash',
-    color: '#3366FF', baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-    signupUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
-    signupLabel: '获取 API Key',
-    models: [
-      { id: 'glm-5', name: 'GLM-5' }, { id: 'glm-4.7', name: 'GLM-4.7' },
-      { id: 'glm-4-plus', name: 'GLM-4 Plus' }, { id: 'glm-4-flash', name: 'GLM-4 Flash' },
-    ],
-    tag: '国内', tagColor: '#3366FF',
-  },
-  {
-    id: 'modelscope', name: 'ModelScope', desc: '魔搭社区模型推理',
-    color: '#1890FF', baseUrl: 'https://api-inference.modelscope.cn/v1',
-    signupUrl: 'https://modelscope.cn/my/myaccesstoken',
-    signupLabel: '获取 Token',
-    models: [
-      { id: 'qwen-max', name: 'Qwen Max' }, { id: 'qwen-plus', name: 'Qwen Plus' },
-      { id: 'deepseek-v3', name: 'DeepSeek V3' }, { id: 'deepseek-r1', name: 'DeepSeek R1' },
-    ],
-    tag: '国内', tagColor: '#1890FF',
-  },
-  // --- 国际提供商 ---
-  {
-    id: 'openai', name: 'OpenAI', desc: 'GPT-5, GPT-4.1, o3, o4-mini',
-    color: '#10A37F', baseUrl: 'https://api.openai.com/v1',
-    signupUrl: 'https://platform.openai.com/api-keys',
-    signupLabel: '获取 API Key',
-    models: [
-      { id: 'gpt-5-chat', name: 'GPT-5' }, { id: 'gpt-5-mini', name: 'GPT-5 Mini' },
-      { id: 'gpt-4.1', name: 'GPT-4.1' }, { id: 'gpt-4.1-mini', name: 'GPT-4.1 Mini' },
-      { id: 'o3', name: 'o3' }, { id: 'o4-mini', name: 'o4-mini' },
-    ],
-  },
-  {
-    id: 'anthropic', name: 'Anthropic', desc: 'Claude Opus 4.6, Sonnet 4.6, Haiku 4.5',
-    color: '#D97757', baseUrl: 'https://api.anthropic.com',
-    signupUrl: 'https://console.anthropic.com/settings/keys',
-    signupLabel: '获取 API Key',
-    models: [
-      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' }, { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
-      { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5' },
-    ],
-  },
-  {
-    id: 'google', name: 'Google AI', desc: 'Gemini 2.5 Pro, Flash',
-    color: '#4285F4', baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
-    signupUrl: 'https://aistudio.google.com/apikey',
-    signupLabel: '获取 API Key',
-    models: [
-      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro' }, { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
-    ],
-  },
-];
+};
 
 export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
-  const { t } = useTranslation();
-  const [providers, setProviders] = useState<ProviderDisplay[]>([]);
-  const [activeLlm, setActiveLlm] = useState<{ provider_id: string; model: string } | null>(null);
+  const { t, i18n } = useTranslation();
+  const lang: 'zh' | 'en' = i18n.language?.startsWith('zh') ? 'zh' : 'en';
+
+  const [provider, setProvider] = useState<ProviderDisplay | null>(null);
   const [loading, setLoading] = useState(true);
-  const [testing, setTesting] = useState<string | null>(null);
-  const [saving, setSaving] = useState<string | null>(null);
-  const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
-  const [apiKeyInputs, setApiKeyInputs] = useState<Record<string, string>>({});
-  const [showApiKey, setShowApiKey] = useState<Record<string, boolean>>({});
-  const [baseUrlInputs, setBaseUrlInputs] = useState<Record<string, string>>({});
-  const [customModelInput, setCustomModelInput] = useState<Record<string, string>>({});
-  const [selectedModel, setSelectedModel] = useState<Record<string, string>>({});
+  const [apiKey, setApiKey] = useState('');
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL);
+  const [showBaseUrl, setShowBaseUrl] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<TestConnectionResponse | null>(null);
 
-  // Zhipu site switcher (CN / Intl)
-  const [zhipuSite, setZhipuSite] = useState<ZhipuSiteKey>('cn');
+  // Balance card state. Refreshes every 60s when the page is visible.
+  const [balance, setBalance] = useState<DeepSeekBalance | null>(null);
+  const [balanceLoading, setBalanceLoading] = useState(false);
+  const [balanceError, setBalanceError] = useState<string | null>(null);
 
-  // Custom provider dialog
-  const [showCustomDialog, setShowCustomDialog] = useState(false);
-  const [customForm, setCustomForm] = useState({
-    id: '', name: '', baseUrl: '', apiKey: '', models: [] as { id: string; name: string }[],
-    newModelId: '', newModelName: '',
-  });
-
-  // Template import dialog
-  const [showTemplateDialog, setShowTemplateDialog] = useState(false);
-  const [templates, setTemplates] = useState<ProviderTemplate[]>([]);
-  const [importingTemplate, setImportingTemplate] = useState<string | null>(null);
-
-  // JSON import dialog
-  const [showJsonImportDialog, setShowJsonImportDialog] = useState(false);
-  const [jsonImportText, setJsonImportText] = useState('');
-
-  const loadData = async () => {
+  const refreshBalance = async () => {
+    setBalanceLoading(true);
+    setBalanceError(null);
     try {
-      const [providersData, activeData] = await Promise.all([listProviders(), getActiveLlm()]);
-      setProviders(providersData);
-      // Detect zhipu site from saved base URL
-      const zhipuProvider = providersData.find((p: ProviderDisplay) => p.id === 'zhipu');
-      if (zhipuProvider?.current_base_url?.includes('z.ai')) {
-        setZhipuSite('intl');
+      const b = await getDeepSeekBalance();
+      setBalance(b);
+    } catch (e: any) {
+      setBalanceError(e?.toString() ?? 'failed');
+      setBalance(null);
+    } finally {
+      setBalanceLoading(false);
+    }
+  };
+
+  // Auto-refresh balance every 60s while configured. Don't fetch when no key
+  // is set (provider.has_api_key is the gate).
+  useEffect(() => {
+    if (!provider?.has_api_key) return;
+    refreshBalance();
+    const id = setInterval(() => {
+      if (document.visibilityState === 'visible') refreshBalance();
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [provider?.has_api_key]);
+
+  const load = async () => {
+    try {
+      const [providers, active] = await Promise.all([listProviders(), getActiveLlm()]);
+      const p = providers.find(x => x.id === PROVIDER_ID) ?? null;
+      setProvider(p);
+      if (p?.current_base_url) setBaseUrl(p.current_base_url);
+
+      // Ensure active_llm is set: default to pro if none.
+      if (!active.provider_id || !active.model || active.provider_id !== PROVIDER_ID) {
+        await setActiveLlm(PROVIDER_ID, 'deepseek-v4-pro').catch(() => {});
       }
-      if (activeData.provider_id && activeData.model) {
-        setActiveLlm({ provider_id: activeData.provider_id, model: activeData.model });
-      } else {
-        setActiveLlm(null);
-      }
-    } catch (error) {
-      console.error('Failed to load models:', error);
+    } catch (e) {
+      console.error('Failed to load DeepSeek provider:', e);
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => { loadData(); }, []);
+  useEffect(() => { load(); }, []);
 
-  const handleSaveProvider = async (providerId: string) => {
-    setSaving(providerId);
+  const handleSave = async () => {
+    if (!apiKey.trim()) return;
+    setSaving(true);
     try {
-      const apiKey = apiKeyInputs[providerId];
-      const baseUrl = baseUrlInputs[providerId];
-      await configureProvider(providerId, apiKey || undefined, baseUrl || undefined);
-      await loadData();
-      setApiKeyInputs(prev => { const next = { ...prev }; delete next[providerId]; return next; });
-    } catch (error) {
-      console.error('Failed to save config:', error);
-    } finally { setSaving(null); }
+      await configureProvider(PROVIDER_ID, apiKey.trim(), baseUrl || undefined);
+      setApiKey('');
+      await load();
+      toast.success(lang === 'zh' ? 'API Key 已保存' : 'API Key saved');
+    } catch (e: any) {
+      toast.error(e?.toString() || 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const [testResults, setTestResults] = useState<Record<string, TestConnectionResponse>>({});
-
-  const handleTestConnection = async (providerId: string) => {
-    setTesting(providerId);
-    setTestResults(prev => { const next = { ...prev }; delete next[providerId]; return next; });
+  const handleTest = async () => {
+    setTesting(true);
+    setTestResult(null);
     try {
-      const apiKey = apiKeyInputs[providerId];
-      const baseUrl = baseUrlInputs[providerId];
-      const modelId = selectedModel[providerId] || (activeLlm?.provider_id === providerId ? activeLlm.model : undefined);
-      const result = await testProvider(providerId, apiKey || undefined, baseUrl || undefined, modelId);
-      setTestResults(prev => ({ ...prev, [providerId]: { success: result.success, message: result.message, reply: result.reply } }));
-      if (!result.success) {
-        toast.error(result.message);
-      }
-    } catch (error: any) {
-      const msg = error?.toString() || 'Test failed';
-      setTestResults(prev => ({ ...prev, [providerId]: { success: false, message: msg } }));
+      const result = await testProvider(
+        PROVIDER_ID,
+        apiKey.trim() || undefined,
+        baseUrl || undefined,
+        'deepseek-v4-pro',
+      );
+      setTestResult(result);
+      if (!result.success) toast.error(result.message);
+    } catch (e: any) {
+      const msg = e?.toString() || 'Test failed';
+      setTestResult({ success: false, message: msg });
       toast.error(msg);
-    } finally { setTesting(null); }
-  };
-
-  const handleSetActiveModel = async (providerId: string, modelId: string) => {
-    try { await setActiveLlmApi(providerId, modelId); await loadData(); } catch (error) { console.error(error); }
-  };
-
-  const handleAddModel = async (providerId: string, modelId: string, modelName: string) => {
-    if (!modelId) return;
-    try { await addModel(providerId, modelId, modelName || modelId); await loadData(); } catch (error) { console.error(error); }
-  };
-
-  const handleRemoveModel = async (providerId: string, modelId: string) => {
-    try { await removeModel(providerId, modelId); await loadData(); } catch (error) { console.error(error); }
-  };
-
-  const handleCreateCustomProvider = async () => {
-    if (!customForm.id || !customForm.name) return;
-    try {
-      await createCustomProvider(customForm.id, customForm.name, customForm.baseUrl, '', customForm.models);
-      if (customForm.apiKey) {
-        await configureProvider(customForm.id, customForm.apiKey, customForm.baseUrl || undefined);
-      }
-      await loadData();
-      setShowCustomDialog(false);
-      setCustomForm({ id: '', name: '', baseUrl: '', apiKey: '', models: [], newModelId: '', newModelName: '' });
-    } catch (error) { console.error(error); }
-  };
-
-  const handleDeleteProvider = async (providerId: string) => {
-    if (!(await confirm(`${t('common.delete')}?`))) return;
-    try { await deleteCustomProvider(providerId); await loadData(); } catch (error) { console.error(error); }
-  };
-
-  const handleOpenTemplates = async () => {
-    try {
-      const tpls = await listProviderTemplates();
-      setTemplates(tpls);
-      setShowTemplateDialog(true);
-    } catch (error) { console.error(error); }
-  };
-
-  const handleImportTemplate = async (templateId: string) => {
-    setImportingTemplate(templateId);
-    try {
-      await importProviderFromTemplate(templateId);
-      await loadData();
-      toast.success(t('models.importSuccess'));
-      setShowTemplateDialog(false);
-    } catch (error: any) {
-      toast.error(`${t('models.importError')}: ${error?.toString() || ''}`);
-    } finally { setImportingTemplate(null); }
-  };
-
-  const handleJsonImport = async () => {
-    try {
-      const plugin = JSON.parse(jsonImportText) as ProviderPlugin;
-      if (!plugin.id || !plugin.name) {
-        toast.error('JSON must contain "id" and "name" fields');
-        return;
-      }
-      await importProviderPlugin(plugin);
-      await loadData();
-      toast.success(t('models.importSuccess'));
-      setShowJsonImportDialog(false);
-      setJsonImportText('');
-    } catch (error: any) {
-      toast.error(`${t('models.importError')}: ${error?.toString() || ''}`);
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -332,147 +168,347 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
     );
   }
 
-  // Merge PROVIDER_LIST with backend data + custom providers
-  const customProviders = providers.filter(p => p.is_custom && !PROVIDER_LIST.find(m => m.id === p.id));
-
-  const inputClass = "w-full rounded-xl px-3.5 py-2.5 text-[13px] outline-none transition-shadow";
+  const configured = provider?.has_api_key === true;
 
   const content = (
     <>
-      {!embedded && <PageHeader title={t('models.title')} description={t('models.description')} />}
+      {!embedded && (
+        <PageHeader
+          title={lang === 'zh' ? 'DeepSeek V4' : 'DeepSeek V4'}
+          description={lang === 'zh'
+            ? 'YiYi 已绑定 DeepSeek V4。Pro 与 Flash 双模型由系统自动路由。'
+            : 'YiYi is bound to DeepSeek V4. Pro and Flash are routed automatically by the engine.'}
+        />
+      )}
 
-        {/* Current active model */}
-        {activeLlm && activeLlm.model && (
-          <ActiveModelCard
-            activeLlm={activeLlm}
-            providers={providers}
-            expandedProvider={expandedProvider}
-            setExpandedProvider={setExpandedProvider}
-          />
-        )}
+      <div className="max-w-[760px] mx-auto space-y-5">
+        {/* Status banner */}
+        <div
+          className="rounded-2xl px-5 py-4 flex items-center gap-3"
+          style={{
+            background: configured ? 'rgba(16,185,129,0.06)' : 'rgba(245,158,11,0.06)',
+            border: `1px solid ${configured ? 'rgba(16,185,129,0.2)' : 'rgba(245,158,11,0.2)'}`,
+          }}
+        >
+          {configured
+            ? <Check size={18} style={{ color: 'rgb(16,185,129)' }} />
+            : <AlertTriangle size={18} style={{ color: 'rgb(245,158,11)' }} />}
+          <div className="text-[13px]" style={{ color: 'var(--color-text)' }}>
+            {configured
+              ? (lang === 'zh' ? '已配置 API Key，可正常使用。' : 'API Key configured. Ready to go.')
+              : (lang === 'zh' ? '尚未配置 API Key。请在下方填入。' : 'No API Key configured. Please enter one below.')}
+          </div>
+        </div>
 
-        {/* Provider Cards */}
-        <div className="mb-6">
+        {/* Balance card — shown only when an API key is configured */}
+        {configured && (() => {
+          const cny = balance?.balance_infos.find(b => b.currency === 'CNY');
+          const usd = balance?.balance_infos.find(b => b.currency === 'USD');
+          const cnyValue = cny ? parseFloat(cny.total_balance) : NaN;
+          const lowBalance = !Number.isNaN(cnyValue) && cnyValue < 5;
+          return (
+            <div
+              className="p-5 rounded-2xl border flex items-center gap-4"
+              style={{
+                background: lowBalance ? 'rgba(245,158,11,0.06)' : 'var(--color-bg-elevated)',
+                borderColor: lowBalance ? 'rgba(245,158,11,0.3)' : 'var(--color-border)',
+              }}
+            >
+              <div
+                className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0"
+                style={{
+                  background: lowBalance ? 'rgba(245,158,11,0.15)' : PROVIDER_COLOR + '15',
+                  color: lowBalance ? 'rgb(245,158,11)' : PROVIDER_COLOR,
+                }}
+              >
+                <Wallet size={18} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className="text-[13px] font-semibold" style={{ color: 'var(--color-text)' }}>
+                    {lang === 'zh' ? 'DeepSeek 余额' : 'DeepSeek Balance'}
+                  </span>
+                  {balanceLoading && <Loader2 size={11} className="animate-spin opacity-60" />}
+                  {lowBalance && (
+                    <span
+                      className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
+                      style={{ background: 'rgba(245,158,11,0.15)', color: 'rgb(245,158,11)' }}
+                    >
+                      {lang === 'zh' ? '余额偏低' : 'Low'}
+                    </span>
+                  )}
+                </div>
+                {balanceError ? (
+                  <div className="text-[12px]" style={{ color: 'var(--color-error)' }}>
+                    {balanceError}
+                  </div>
+                ) : balance ? (
+                  <div className="flex items-baseline gap-3">
+                    {cny && (
+                      <span className="text-[18px] font-bold tabular-nums" style={{ color: 'var(--color-text)' }}>
+                        ¥{cny.total_balance}
+                      </span>
+                    )}
+                    {usd && (
+                      <span className="text-[13px] tabular-nums" style={{ color: 'var(--color-text-tertiary)' }}>
+                        ${usd.total_balance}
+                      </span>
+                    )}
+                    {cny && parseFloat(cny.granted_balance) > 0 && (
+                      <span className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+                        {lang === 'zh' ? '含赠送 ¥' : 'incl. granted ¥'}{cny.granted_balance}
+                      </span>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-[12px]" style={{ color: 'var(--color-text-tertiary)' }}>
+                    {lang === 'zh' ? '查询中…' : 'loading…'}
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={refreshBalance}
+                disabled={balanceLoading}
+                title={lang === 'zh' ? '刷新' : 'Refresh'}
+                className="shrink-0 p-2 rounded-lg disabled:opacity-40"
+                style={{ color: 'var(--color-text-muted)' }}
+              >
+                <RefreshCw size={14} className={balanceLoading ? 'animate-spin' : ''} />
+              </button>
+              <button
+                onClick={() => openDeepSeekWindow('top_up')}
+                className="shrink-0 px-4 py-2 rounded-lg text-[13px] font-semibold transition-all"
+                style={{
+                  background: lowBalance ? 'rgb(245,158,11)' : PROVIDER_COLOR,
+                  color: '#fff',
+                }}
+              >
+                {lang === 'zh' ? '立即充值' : 'Top up'}
+              </button>
+            </div>
+          );
+        })()}
+
+        {/* API Key card */}
+        <div
+          className="p-6 rounded-2xl border"
+          style={{ background: 'var(--color-bg-elevated)', borderColor: 'var(--color-border)' }}
+        >
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-[15px] font-bold" style={{ color: 'var(--color-text)' }}>{t('models.quickSetup')}</h2>
             <div className="flex items-center gap-2">
+              <Key size={15} style={{ color: PROVIDER_COLOR }} />
+              <span className="text-[14px] font-semibold" style={{ color: 'var(--color-text)' }}>
+                API Key
+              </span>
+              {provider?.api_key_saved && (
+                <span className="text-[11px] font-mono px-2 py-0.5 rounded-full" style={{
+                  background: 'var(--color-bg-subtle)',
+                  color: 'var(--color-text-tertiary)',
+                }}>
+                  {showApiKey ? provider.api_key_saved : '••••' + (provider.api_key_saved.slice(-4) || '')}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {provider?.api_key_saved && (
+                <button
+                  onClick={() => setShowApiKey(v => !v)}
+                  className="text-[11px] font-medium px-2 py-0.5 rounded"
+                  style={{ color: 'var(--color-text-muted)' }}
+                >
+                  {showApiKey ? (lang === 'zh' ? '隐藏' : 'Hide') : (lang === 'zh' ? '查看' : 'Show')}
+                </button>
+              )}
               <button
-                onClick={handleOpenTemplates}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
-                style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-secondary)' }}
+                onClick={() => openDeepSeekWindow('keys')}
+                className="text-[12px] flex items-center gap-1 font-medium hover:underline"
+                style={{ color: PROVIDER_COLOR }}
               >
-                <Package size={14} />
-                {t('models.fromTemplate')}
-              </button>
-              <button
-                onClick={() => setShowJsonImportDialog(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
-                style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-secondary)' }}
-              >
-                <Upload size={14} />
-                {t('models.fromJson')}
-              </button>
-              <button
-                onClick={() => setShowCustomDialog(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
-                style={{ background: 'var(--color-primary)', color: '#FFFFFF' }}
-              >
-                <Plus size={14} />
-                {t('models.addProvider')}
+                {lang === 'zh' ? '在 YiYi 内获取 Key' : 'Get Key in YiYi'} <ExternalLink size={12} />
               </button>
             </div>
           </div>
 
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-            {PROVIDER_LIST.map(meta => (
-              <ProviderCard
-                key={meta.id}
-                meta={meta}
-                provider={providers.find(p => p.id === meta.id)}
-                activeLlm={activeLlm}
-                expandedProvider={expandedProvider}
-                setExpandedProvider={setExpandedProvider}
-                apiKeyInputs={apiKeyInputs}
-                setApiKeyInputs={setApiKeyInputs}
-                showApiKey={showApiKey}
-                setShowApiKey={setShowApiKey}
-                baseUrlInputs={baseUrlInputs}
-                setBaseUrlInputs={setBaseUrlInputs}
-                customModelInput={customModelInput}
-                setCustomModelInput={setCustomModelInput}
-                selectedModel={selectedModel}
-                setSelectedModel={setSelectedModel}
-                zhipuSite={zhipuSite}
-                setZhipuSite={setZhipuSite}
-                testing={testing}
-                saving={saving}
-                testResults={testResults}
-                onSaveProvider={handleSaveProvider}
-                onTestConnection={handleTestConnection}
-                onSetActiveModel={handleSetActiveModel}
-                onAddModel={handleAddModel}
-                onRemoveModel={handleRemoveModel}
-              />
-            ))}
-
-            {/* Custom providers */}
-            {customProviders.map(provider => (
-              <CustomProviderCard
-                key={provider.id}
-                provider={provider}
-                activeLlm={activeLlm}
-                expandedProvider={expandedProvider}
-                setExpandedProvider={setExpandedProvider}
-                apiKeyInputs={apiKeyInputs}
-                setApiKeyInputs={setApiKeyInputs}
-                showApiKey={showApiKey}
-                setShowApiKey={setShowApiKey}
-                customModelInput={customModelInput}
-                setCustomModelInput={setCustomModelInput}
-                selectedModel={selectedModel}
-                setSelectedModel={setSelectedModel}
-                saving={saving}
-                onSaveProvider={handleSaveProvider}
-                onSetActiveModel={handleSetActiveModel}
-                onAddModel={handleAddModel}
-                onRemoveModel={handleRemoveModel}
-                onDeleteProvider={handleDeleteProvider}
-              />
-            ))}
+          <div className="flex items-center gap-2">
+            <input
+              type="password"
+              value={apiKey}
+              onChange={e => { setApiKey(e.target.value); setTestResult(null); }}
+              placeholder={configured
+                ? (lang === 'zh' ? '输入新 Key 以替换' : 'Enter new key to replace')
+                : (lang === 'zh' ? '粘贴你的 DeepSeek API Key...' : 'Paste your DeepSeek API Key...')}
+              className="flex-1 px-4 py-2.5 rounded-xl text-[13px] outline-none"
+              style={{
+                background: 'var(--color-bg-subtle)',
+                color: 'var(--color-text)',
+                border: '1px solid var(--color-border)',
+              }}
+            />
+            <button
+              onClick={async () => {
+                const k = await tryReadClipboardKey();
+                if (k) {
+                  setApiKey(k);
+                  setTestResult(null);
+                  toast.success(lang === 'zh' ? '已从剪贴板读取 Key' : 'Key read from clipboard');
+                } else {
+                  toast.error(lang === 'zh' ? '剪贴板里没有有效的 sk- 开头 Key' : 'No valid sk- key in clipboard');
+                }
+              }}
+              title={lang === 'zh' ? '从剪贴板读取（仅识别 sk- 开头的 DeepSeek Key）' : 'Read from clipboard (DeepSeek `sk-` keys only)'}
+              className="shrink-0 px-3 py-2.5 rounded-lg text-[12px] font-medium flex items-center gap-1.5 transition-colors"
+              style={{
+                background: 'var(--color-bg-subtle)',
+                color: 'var(--color-text-secondary)',
+                border: '1px solid var(--color-border)',
+              }}
+            >
+              <Clipboard size={13} />
+              {lang === 'zh' ? '从剪贴板' : 'From clipboard'}
+            </button>
           </div>
+
+          {/* Base URL — collapsed by default */}
+          <div className="mt-3">
+            <button
+              onClick={() => setShowBaseUrl(v => !v)}
+              className="text-[11px] font-medium flex items-center gap-1"
+              style={{ color: 'var(--color-text-muted)' }}
+            >
+              <ChevronRight size={11} className={`transition-transform ${showBaseUrl ? 'rotate-90' : ''}`} />
+              {lang === 'zh' ? '高级：自定义 Base URL' : 'Advanced: Custom Base URL'}
+              {!showBaseUrl && (
+                <span className="ml-1 text-[10px] font-normal" style={{ color: 'var(--color-text-tertiary)' }}>
+                  {baseUrl}
+                </span>
+              )}
+            </button>
+            {showBaseUrl && (
+              <input
+                value={baseUrl}
+                onChange={e => { setBaseUrl(e.target.value); setTestResult(null); }}
+                placeholder={DEFAULT_BASE_URL}
+                className="w-full mt-2 px-3.5 py-2 rounded-lg text-[12px] outline-none"
+                style={{
+                  background: 'var(--color-bg-subtle)',
+                  color: 'var(--color-text)',
+                  border: '1px solid var(--color-border)',
+                }}
+              />
+            )}
+          </div>
+
+          {/* Actions */}
+          <div className="flex items-center gap-3 mt-5">
+            <button
+              onClick={handleSave}
+              disabled={!apiKey.trim() || saving}
+              className="px-5 py-2 rounded-lg text-[13px] font-medium transition-all disabled:opacity-40"
+              style={{ background: PROVIDER_COLOR, color: '#fff' }}
+            >
+              {saving
+                ? (lang === 'zh' ? '保存中...' : 'Saving...')
+                : (lang === 'zh' ? '保存' : 'Save')}
+            </button>
+            <button
+              onClick={handleTest}
+              disabled={(!apiKey.trim() && !configured) || testing}
+              className="px-5 py-2 rounded-lg text-[13px] font-medium transition-all disabled:opacity-40 flex items-center gap-2"
+              style={{
+                background: 'var(--color-bg-subtle)',
+                color: 'var(--color-text)',
+                border: '1px solid var(--color-border)',
+              }}
+            >
+              {testing && <Loader2 size={13} className="animate-spin" />}
+              {testing
+                ? (lang === 'zh' ? '测试中...' : 'Testing...')
+                : (lang === 'zh' ? '测试连接' : 'Test Connection')}
+            </button>
+            {testResult && !testing && (
+              <span
+                className="text-[12px] font-medium"
+                style={{ color: testResult.success ? 'var(--color-success)' : 'var(--color-error)' }}
+              >
+                {testResult.success ? `OK · ${testResult.message}` : testResult.message}
+              </span>
+            )}
+          </div>
+          {testResult?.reply && !testing && (
+            <div
+              className="mt-3 p-3 rounded-lg text-[12px] leading-relaxed whitespace-pre-wrap"
+              style={{
+                background: testResult.success ? PROVIDER_COLOR + '08' : 'rgba(239,68,68,0.08)',
+                border: `1px solid ${testResult.success ? PROVIDER_COLOR + '20' : 'rgba(239,68,68,0.2)'}`,
+                color: 'var(--color-text)',
+                maxHeight: '100px',
+                overflowY: 'auto',
+              }}
+            >
+              {testResult.reply}
+            </div>
+          )}
         </div>
 
-      {/* Create custom provider dialog */}
-      {showCustomDialog && (
-        <CustomProviderDialog
-          customForm={customForm}
-          setCustomForm={setCustomForm}
-          onClose={() => setShowCustomDialog(false)}
-          onSubmit={handleCreateCustomProvider}
-          inputClass={inputClass}
-        />
-      )}
+        {/* Bound models card */}
+        <div
+          className="p-6 rounded-2xl border"
+          style={{ background: 'var(--color-bg-elevated)', borderColor: 'var(--color-border)' }}
+        >
+          <div className="flex items-center gap-2 mb-4">
+            <Sparkles size={15} style={{ color: PROVIDER_COLOR }} />
+            <span className="text-[14px] font-semibold" style={{ color: 'var(--color-text)' }}>
+              {lang === 'zh' ? '已绑定模型（自动路由）' : 'Bound Models (Auto-routed)'}
+            </span>
+          </div>
 
-      {/* Template import dialog */}
-      {showTemplateDialog && (
-        <TemplateImportDialog
-          templates={templates}
-          providers={providers}
-          importingTemplate={importingTemplate}
-          onClose={() => setShowTemplateDialog(false)}
-          onImport={handleImportTemplate}
-        />
-      )}
+          <div className="space-y-2.5">
+            {provider?.models.map(m => {
+              const meta = MODEL_ROLES[m.id];
+              const Icon = meta?.icon ?? Cpu;
+              return (
+                <div
+                  key={m.id}
+                  className="flex items-center gap-4 px-4 py-3 rounded-xl border"
+                  style={{ borderColor: 'var(--color-border)', background: 'var(--color-bg-subtle)' }}
+                >
+                  <div
+                    className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+                    style={{ background: PROVIDER_COLOR + '15', color: PROVIDER_COLOR }}
+                  >
+                    <Icon size={16} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[13px] font-semibold" style={{ color: 'var(--color-text)' }}>
+                        {m.name}
+                      </span>
+                      {meta && (
+                        <span
+                          className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                          style={{ background: PROVIDER_COLOR + '15', color: PROVIDER_COLOR }}
+                        >
+                          {lang === 'zh' ? meta.role : meta.roleEn}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[11px] mt-0.5" style={{ color: 'var(--color-text-tertiary)' }}>
+                      {meta ? (lang === 'zh' ? meta.desc : meta.descEn) : m.id}
+                    </div>
+                  </div>
+                  <code className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>{m.id}</code>
+                </div>
+              );
+            })}
+          </div>
 
-      {/* JSON import dialog */}
-      {showJsonImportDialog && (
-        <JsonImportDialog
-          jsonImportText={jsonImportText}
-          setJsonImportText={setJsonImportText}
-          onClose={() => setShowJsonImportDialog(false)}
-          onImport={handleJsonImport}
-        />
-      )}
+          <p className="mt-4 text-[12px] leading-relaxed" style={{ color: 'var(--color-text-tertiary)' }}>
+            {lang === 'zh'
+              ? '系统会根据任务类型自动选择 Pro（重型推理）或 Flash（高频子任务），无需手动切换。'
+              : 'The engine auto-routes between Pro (heavy reasoning) and Flash (fast sub-tasks). No manual switch needed.'}
+          </p>
+        </div>
+      </div>
     </>
   );
 
@@ -480,9 +516,7 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="w-full px-8 py-10">
-        {content}
-      </div>
+      <div className="w-full px-8 py-10">{content}</div>
     </div>
   );
 }

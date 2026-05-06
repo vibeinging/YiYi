@@ -6,7 +6,10 @@ pub mod hooks;
 pub mod permission_mode;
 pub mod compact;
 pub mod usage;
+pub mod pricing;
+pub mod cost_status;
 pub mod prompt_cache;
+pub mod side_git;
 
 // ── Tools: built-in tool system ──
 pub mod tools;

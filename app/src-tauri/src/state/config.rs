@@ -163,6 +163,15 @@ pub struct AgentsConfig {
     /// If None, defaults to ~/Documents/YiYi.
     #[serde(default)]
     pub workspace_dir: Option<String>,
+    /// DeepSeek V4 thinking-mode effort. One of "off" / "high" / "max".
+    /// Maps to the OpenAI-compatible `enable_thinking` request param:
+    ///   "off"        → enable_thinking = false
+    ///   "high"/"max" → enable_thinking = true
+    /// DeepSeek currently exposes only a boolean toggle for thinking; the
+    /// "high" vs "max" distinction is reserved for future API granularity.
+    /// Defaults to "high" (DeepSeek's recommended on-state).
+    #[serde(default)]
+    pub thinking_effort: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

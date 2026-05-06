@@ -1,12 +1,9 @@
 /**
- * Setup Wizard - Shared constants, types, and helper functions
+ * Setup Wizard - Shared constants, types, and helper functions.
+ * V4-only build: only DeepSeek (deepseek-v4-pro / deepseek-v4-flash) is supported.
  */
 
-// Built-in provider IDs from backend (providers.rs builtin_providers)
-export const BUILTIN_PROVIDER_IDS = [
-  'openai', 'anthropic', 'google', 'deepseek', 'dashscope',
-  'modelscope', 'coding-plan', 'moonshot', 'minimax', 'zhipu',
-];
+export const BUILTIN_PROVIDER_IDS = ['deepseek'];
 
 export interface ProviderModel {
   id: string;
@@ -25,208 +22,20 @@ export interface QuickProvider {
   group: string;
 }
 
-// All providers - grouped by region
+// V4-only build: a single locked-in provider entry.
 export const QUICK_PROVIDERS: QuickProvider[] = [
-  // --- Coding Plan 特惠套餐 ---
   {
-    id: 'coding-plan', name: '阿里云百炼',
-    desc: { zh: 'Qwen / GLM / Kimi / MiniMax 聚合', en: 'Qwen / GLM / Kimi / MiniMax bundle' },
-    color: '#FF6A00', baseUrl: 'https://coding.dashscope.aliyuncs.com/v1',
-    signupUrl: 'https://bailian.console.aliyun.com/',
-    models: [
-      { id: 'qwen3.5-plus', name: 'Qwen 3.5 Plus', tag: { zh: '推荐', en: 'Pick' } },
-      { id: 'qwen3-coder-plus', name: 'Qwen3 Coder Plus', tag: null },
-      { id: 'qwen3-coder-next', name: 'Qwen3 Coder Next', tag: null },
-      { id: 'qwen3-max-2026-01-23', name: 'Qwen3 Max', tag: null },
-      { id: 'glm-5', name: 'GLM-5', tag: null },
-      { id: 'glm-4.7', name: 'GLM-4.7', tag: null },
-      { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', tag: null },
-      { id: 'kimi-k2.5', name: 'Kimi K2.5', tag: null },
-    ],
-    group: 'special',
-  },
-  {
-    id: 'zhipu-coding', name: '智谱 GLM',
-    desc: { zh: 'GLM-5 / GLM-4.7 编程套餐', en: 'GLM-5 / GLM-4.7 coding plan' },
-    color: '#4B45E5', baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
-    signupUrl: 'https://bigmodel.cn/glm-coding',
-    models: [
-      { id: 'glm-5', name: 'GLM-5', tag: { zh: '推荐', en: 'Pick' } },
-      { id: 'glm-4.7', name: 'GLM-4.7', tag: null },
-    ],
-    group: 'special',
-  },
-  {
-    id: 'minimax-coding', name: 'MiniMax',
-    desc: { zh: 'M2.5 / M2.1 编程套餐', en: 'M2.5 / M2.1 coding plan' },
-    color: '#1A1A2E', baseUrl: 'https://api.minimaxi.com/v1',
-    signupUrl: 'https://platform.minimaxi.com/docs/coding-plan/intro',
-    models: [
-      { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', tag: { zh: '推荐', en: 'Pick' } },
-      { id: 'MiniMax-M2.1', name: 'MiniMax M2.1', tag: null },
-    ],
-    group: 'special',
-  },
-  {
-    id: 'volc-coding', name: '火山方舟',
-    desc: { zh: '豆包 / DeepSeek / GLM / Kimi', en: 'Doubao / DeepSeek / GLM / Kimi' },
-    color: '#3370FF', baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3',
-    signupUrl: 'https://www.volcengine.com/activity/codingplan',
-    models: [
-      { id: 'doubao-seed-2.0-code', name: 'Doubao Seed 2.0 Code', tag: { zh: '推荐', en: 'Pick' } },
-      { id: 'deepseek-v3.2', name: 'DeepSeek V3.2', tag: null },
-      { id: 'glm-4.7', name: 'GLM-4.7', tag: null },
-      { id: 'kimi-k2', name: 'Kimi K2', tag: null },
-    ],
-    group: 'special',
-  },
-  {
-    id: 'infini-coding', name: '无问芯穹',
-    desc: { zh: 'DeepSeek / MiniMax / Kimi 聚合', en: 'DeepSeek / MiniMax / Kimi bundle' },
-    color: '#7C3AED', baseUrl: 'https://cloud.infini-ai.com/maas/coding/v1',
-    signupUrl: 'https://cloud.infini-ai.com/',
-    models: [
-      { id: 'deepseek-v3.2', name: 'DeepSeek V3.2', tag: { zh: '推荐', en: 'Pick' } },
-      { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', tag: null },
-      { id: 'kimi-k2.5', name: 'Kimi K2.5', tag: null },
-      { id: 'glm-5', name: 'GLM-5', tag: null },
-    ],
-    group: 'special',
-  },
-  {
-    id: 'tencent-coding', name: '腾讯云',
-    desc: { zh: '混元 / GLM / Kimi / MiniMax', en: 'Hunyuan / GLM / Kimi / MiniMax' },
-    color: '#0052D9', baseUrl: 'https://api.lkeap.cloud.tencent.com/v1',
-    signupUrl: 'https://cloud.tencent.com/act/pro/codingplan',
-    models: [
-      { id: 'hunyuan-hy2.0', name: 'Hunyuan HY 2.0', tag: { zh: '推荐', en: 'Pick' } },
-      { id: 'glm-5', name: 'GLM-5', tag: null },
-      { id: 'kimi-k2.5', name: 'Kimi K2.5', tag: null },
-    ],
-    group: 'special',
-  },
-  {
-    id: 'kimi-coding', name: 'Kimi Code',
-    desc: { zh: 'Kimi K2.5 编程专属', en: 'Kimi K2.5 for coding' },
-    color: '#1C1C28', baseUrl: 'https://api.kimi.com/coding/v1',
-    signupUrl: 'https://www.kimi.com/code/docs/benefits.html',
-    models: [
-      { id: 'kimi-for-coding', name: 'Kimi for Coding', tag: { zh: '推荐', en: 'Pick' } },
-    ],
-    group: 'special',
-  },
-  // --- 国内提供商 ---
-  {
-    id: 'dashscope', name: '通义千问 (DashScope)',
-    desc: { zh: 'Qwen Max / Plus / Turbo', en: 'Qwen Max / Plus / Turbo' },
-    color: '#6236FF', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    signupUrl: 'https://dashscope.console.aliyun.com/apiKey',
-    models: [
-      { id: 'qwen-max', name: 'Qwen Max', tag: { zh: '推荐', en: 'Pick' } },
-      { id: 'qwen-plus', name: 'Qwen Plus', tag: null },
-      { id: 'qwen-turbo', name: 'Qwen Turbo', tag: { zh: '快速', en: 'Fast' } },
-    ],
-    group: 'cn',
-  },
-  {
-    id: 'deepseek', name: 'DeepSeek',
-    desc: { zh: 'DeepSeek V3 / R1', en: 'DeepSeek V3 / R1' },
-    color: '#5B6EF5', baseUrl: 'https://api.deepseek.com/v1',
+    id: 'deepseek',
+    name: 'DeepSeek V4',
+    desc: { zh: 'DeepSeek V4 Pro + Flash 双模型自动路由', en: 'DeepSeek V4 Pro + Flash with auto routing' },
+    color: '#5B6EF5',
+    baseUrl: 'https://api.deepseek.com/v1',
     signupUrl: 'https://platform.deepseek.com/api_keys',
     models: [
-      { id: 'deepseek-chat', name: 'DeepSeek V3', tag: { zh: '推荐', en: 'Pick' } },
-      { id: 'deepseek-reasoner', name: 'DeepSeek R1', tag: { zh: '推理', en: 'Reason' } },
+      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', tag: { zh: '主控', en: 'Orchestrator' } },
+      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', tag: { zh: '工人', en: 'Worker' } },
     ],
     group: 'cn',
-  },
-  {
-    id: 'moonshot', name: 'Kimi (Moonshot)',
-    desc: { zh: 'Kimi K2.5 / Moonshot V1', en: 'Kimi K2.5 / Moonshot V1' },
-    color: '#1A1A2E', baseUrl: 'https://api.moonshot.cn/v1',
-    signupUrl: 'https://platform.moonshot.cn/console/api-keys',
-    models: [
-      { id: 'kimi-k2.5', name: 'Kimi K2.5', tag: { zh: '推荐', en: 'Pick' } },
-      { id: 'moonshot-v1-128k', name: 'Moonshot V1 128K', tag: null },
-      { id: 'moonshot-v1-32k', name: 'Moonshot V1 32K', tag: null },
-    ],
-    group: 'cn',
-  },
-  {
-    id: 'minimax', name: 'MiniMax',
-    desc: { zh: 'M2.5 / M2.5 Highspeed / M2.1', en: 'M2.5 / M2.5 Highspeed / M2.1' },
-    color: '#FF4F81', baseUrl: 'https://api.minimax.io/v1',
-    signupUrl: 'https://platform.minimax.io/user-center/basic-information/interface-key',
-    models: [
-      { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', tag: { zh: '推荐', en: 'Pick' } },
-      { id: 'MiniMax-M2.5-highspeed', name: 'M2.5 Highspeed', tag: { zh: '快速', en: 'Fast' } },
-      { id: 'MiniMax-M2.1', name: 'MiniMax M2.1', tag: null },
-    ],
-    group: 'cn',
-  },
-  {
-    id: 'zhipu', name: '智谱 AI',
-    desc: { zh: 'GLM-5 / GLM-4.7 / GLM-4', en: 'GLM-5 / GLM-4.7 / GLM-4' },
-    color: '#3366FF', baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-    signupUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
-    models: [
-      { id: 'glm-5', name: 'GLM-5', tag: { zh: '推荐', en: 'Pick' } },
-      { id: 'glm-4.7', name: 'GLM-4.7', tag: null },
-      { id: 'glm-4-plus', name: 'GLM-4 Plus', tag: null },
-      { id: 'glm-4-flash', name: 'GLM-4 Flash', tag: { zh: '快速', en: 'Fast' } },
-    ],
-    group: 'cn',
-  },
-  {
-    id: 'modelscope', name: 'ModelScope',
-    desc: { zh: '魔搭社区模型推理', en: 'ModelScope Inference' },
-    color: '#1890FF', baseUrl: 'https://api-inference.modelscope.cn/v1',
-    signupUrl: 'https://modelscope.cn/my/myaccesstoken',
-    models: [
-      { id: 'qwen-max', name: 'Qwen Max', tag: null },
-      { id: 'qwen-plus', name: 'Qwen Plus', tag: null },
-      { id: 'deepseek-v3', name: 'DeepSeek V3', tag: null },
-      { id: 'deepseek-r1', name: 'DeepSeek R1', tag: null },
-    ],
-    group: 'cn',
-  },
-  // --- 国际提供商 ---
-  {
-    id: 'openai', name: 'OpenAI',
-    desc: { zh: 'GPT-5 / GPT-4.1 / o3 / o4', en: 'GPT-5 / GPT-4.1 / o3 / o4' },
-    color: '#10A37F', baseUrl: 'https://api.openai.com/v1',
-    signupUrl: 'https://platform.openai.com/api-keys',
-    models: [
-      { id: 'gpt-4.1-mini', name: 'GPT-4.1 Mini', tag: { zh: '推荐', en: 'Pick' } },
-      { id: 'gpt-5-chat', name: 'GPT-5', tag: null },
-      { id: 'gpt-5-mini', name: 'GPT-5 Mini', tag: null },
-      { id: 'gpt-4.1', name: 'GPT-4.1', tag: null },
-      { id: 'o3', name: 'o3', tag: { zh: '推理', en: 'Reason' } },
-      { id: 'o4-mini', name: 'o4-mini', tag: { zh: '推理', en: 'Reason' } },
-    ],
-    group: 'intl',
-  },
-  {
-    id: 'anthropic', name: 'Anthropic',
-    desc: { zh: 'Claude Opus / Sonnet / Haiku', en: 'Claude Opus / Sonnet / Haiku' },
-    color: '#D97757', baseUrl: 'https://api.anthropic.com',
-    signupUrl: 'https://console.anthropic.com/settings/keys',
-    models: [
-      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', tag: { zh: '推荐', en: 'Pick' } },
-      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', tag: null },
-      { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', tag: { zh: '快速', en: 'Fast' } },
-    ],
-    group: 'intl',
-  },
-  {
-    id: 'google', name: 'Google AI',
-    desc: { zh: 'Gemini 2.5 Pro / Flash', en: 'Gemini 2.5 Pro / Flash' },
-    color: '#4285F4', baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
-    signupUrl: 'https://aistudio.google.com/apikey',
-    models: [
-      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', tag: { zh: '推荐', en: 'Pick' } },
-      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', tag: { zh: '快速', en: 'Fast' } },
-    ],
-    group: 'intl',
   },
 ];
 
@@ -246,7 +55,6 @@ export const ROLE_PRESETS = [
   { id: 'custom', emoji: '✨', name: { zh: '自定义', en: 'Custom' }, desc: { zh: '自由定义', en: 'Free-form' } },
 ];
 
-// Step metadata with icons - icons imported separately by consumers
 export const STEP_IDS = ['language', 'model', 'workspace', 'persona', 'memory', 'meditation'] as const;
 export const STEP_LABELS: Record<Step, { zh: string; en: string }> = {
   language: { zh: '语言', en: 'Language' },
@@ -311,14 +119,12 @@ export function buildSoulContent(
 
   const parts: string[] = [];
 
-  // Role description
   if (role === 'custom') {
     if (customDesc.trim()) parts.push(customDesc.trim());
   } else {
     parts.push(roleMap[role]?.[lang] || roleMap.assistant[lang]);
   }
 
-  // Owner
   if (owner) {
     parts.push(
       lang === 'zh'
@@ -327,7 +133,6 @@ export function buildSoulContent(
     );
   }
 
-  // Tone
   if (toneMap[tone]) {
     parts.push(toneMap[tone][lang]);
   }

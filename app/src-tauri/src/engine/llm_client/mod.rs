@@ -12,10 +12,12 @@ mod anthropic;
 mod google;
 mod openai;
 pub mod retry;
+pub mod route;
 mod stream;
 mod types;
 
 // Re-export all public types (maintains backward compatibility)
+pub use route::{apply_hint, apply_source, model_for_source, RouteHint, FLASH_MODEL, PRO_MODEL};
 pub use types::*;
 
 /// User-Agent sent to Coding Plan endpoints that require a recognised coding agent.
@@ -69,14 +71,10 @@ pub fn resolve_config_from_providers(
         .unwrap_or(&provider.default_base_url)
         .to_string();
 
-    let api_key = if let Some(custom) = providers.custom_providers.get(&active.provider_id) {
-        custom.settings.api_key.clone()
-    } else {
-        providers
-            .providers
-            .get(&active.provider_id)
-            .and_then(|s| s.api_key.clone())
-    };
+    let api_key = providers
+        .providers
+        .get(&active.provider_id)
+        .and_then(|s| s.api_key.clone());
 
     let api_key_prefix = provider.api_key_prefix.clone();
     let model = active.model.clone();
@@ -145,17 +143,41 @@ pub async fn chat_completion(
 /// Same as `chat_completion` but auto-records the response's usage to the
 /// persistent `token_usage` table, tagged by `source`. Use this for any
 /// background / off-main-loop LLM call.
+///
+/// V4-only build: auto-routes between Pro and Flash based on `source`.
+/// Heavy sources (Main / Subagent / BuddyDelegate / Eval / Other) → Pro.
+/// Cheap sources (Compaction / Meditation / Growth / Heartbeat / TestConnection) → Flash.
+/// For non-DeepSeek providers (none in V4-only build, but kept for forward compat),
+/// the `config.model` is left unchanged.
 pub async fn chat_completion_tracked(
     source: crate::engine::usage::UsageSource,
     config: &LLMConfig,
     messages: &[LLMMessage],
     tools: &[ToolDefinition],
 ) -> Result<LLMResponse, String> {
-    let resp = chat_completion(config, messages, tools).await?;
+    let mut routed = config.clone();
+    apply_source(&mut routed, source);
+    let resp = chat_completion(&routed, messages, tools).await?;
     if let Some(usage) = resp.usage {
-        crate::engine::usage::record_llm_usage(source, usage, &config.model);
+        crate::engine::usage::record_llm_usage(source, usage, &routed.model);
+        // Live session-cost side-channel — every background call ticks the UI counter too.
+        crate::engine::cost_status::report(&routed.model, &usage);
     }
     Ok(resp)
+}
+
+/// Explicit-hint variant for tool internals that want to force Pro or Flash
+/// regardless of the call site. Used by Phase D Flash-driven tools
+/// (`compact_context`, `parallel_analyze`, …).
+pub async fn chat_completion_with_hint(
+    hint: RouteHint,
+    config: &LLMConfig,
+    messages: &[LLMMessage],
+    tools: &[ToolDefinition],
+) -> Result<LLMResponse, String> {
+    let mut routed = config.clone();
+    apply_hint(&mut routed, hint);
+    chat_completion(&routed, messages, tools).await
 }
 
 /// Streaming chat completion via SSE (auto-detects provider and dispatches)

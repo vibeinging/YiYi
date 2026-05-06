@@ -7,8 +7,8 @@ pub struct UsageRecord {
     pub model: String,
     pub input_tokens: i64,
     pub output_tokens: i64,
-    pub cache_read_tokens: i64,
-    pub cache_write_tokens: i64,
+    pub prompt_cache_hit_tokens: i64,
+    pub prompt_cache_miss_tokens: i64,
     pub estimated_cost_usd: f64,
     pub recorded_at: i64,
 }
@@ -17,8 +17,8 @@ pub struct UsageRecord {
 pub struct UsageSummary {
     pub total_input_tokens: i64,
     pub total_output_tokens: i64,
-    pub total_cache_read_tokens: i64,
-    pub total_cache_write_tokens: i64,
+    pub total_prompt_cache_hit_tokens: i64,
+    pub total_prompt_cache_miss_tokens: i64,
     pub total_cost_usd: f64,
     pub call_count: i64,
 }
@@ -33,8 +33,8 @@ impl super::Database {
         model: &str,
         input_tokens: u32,
         output_tokens: u32,
-        cache_read_tokens: u32,
-        cache_write_tokens: u32,
+        prompt_cache_hit_tokens: u32,
+        prompt_cache_miss_tokens: u32,
         estimated_cost_usd: f64,
     ) {
         self.record_usage_with_source(
@@ -43,8 +43,8 @@ impl super::Database {
             model,
             input_tokens,
             output_tokens,
-            cache_read_tokens,
-            cache_write_tokens,
+            prompt_cache_hit_tokens,
+            prompt_cache_miss_tokens,
             estimated_cost_usd,
         );
     }
@@ -61,16 +61,16 @@ impl super::Database {
         model: &str,
         input_tokens: u32,
         output_tokens: u32,
-        cache_read_tokens: u32,
-        cache_write_tokens: u32,
+        prompt_cache_hit_tokens: u32,
+        prompt_cache_miss_tokens: u32,
         estimated_cost_usd: f64,
     ) {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = super::now_ts();
         conn.execute(
-            "INSERT INTO token_usage (session_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, estimated_cost_usd, recorded_at, source)
+            "INSERT INTO token_usage (session_id, model, input_tokens, output_tokens, prompt_cache_hit_tokens, prompt_cache_miss_tokens, estimated_cost_usd, recorded_at, source)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![session_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, estimated_cost_usd, now, source],
+            params![session_id, model, input_tokens, output_tokens, prompt_cache_hit_tokens, prompt_cache_miss_tokens, estimated_cost_usd, now, source],
         ).ok();
     }
 
@@ -84,7 +84,7 @@ impl super::Database {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = match conn.prepare(
             "SELECT source, SUM(input_tokens), SUM(output_tokens), \
-             SUM(cache_read_tokens), SUM(cache_write_tokens), \
+             SUM(prompt_cache_hit_tokens), SUM(prompt_cache_miss_tokens), \
              SUM(estimated_cost_usd), COUNT(*) \
              FROM token_usage \
              WHERE (?1 IS NULL OR recorded_at >= ?1) AND (?2 IS NULL OR recorded_at <= ?2) \
@@ -100,8 +100,8 @@ impl super::Database {
                 UsageSummary {
                     total_input_tokens: row.get(1)?,
                     total_output_tokens: row.get(2)?,
-                    total_cache_read_tokens: row.get(3)?,
-                    total_cache_write_tokens: row.get(4)?,
+                    total_prompt_cache_hit_tokens: row.get(3)?,
+                    total_prompt_cache_miss_tokens: row.get(4)?,
                     total_cost_usd: row.get(5)?,
                     call_count: row.get(6)?,
                 },
@@ -117,7 +117,7 @@ impl super::Database {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
             "SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), \
-             COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(cache_write_tokens),0), \
+             COALESCE(SUM(prompt_cache_hit_tokens),0), COALESCE(SUM(prompt_cache_miss_tokens),0), \
              COALESCE(SUM(estimated_cost_usd),0.0), COUNT(*) \
              FROM token_usage WHERE (?1 IS NULL OR recorded_at >= ?1) AND (?2 IS NULL OR recorded_at <= ?2)",
             params![since, until],
@@ -125,8 +125,8 @@ impl super::Database {
                 Ok(UsageSummary {
                     total_input_tokens: row.get(0)?,
                     total_output_tokens: row.get(1)?,
-                    total_cache_read_tokens: row.get(2)?,
-                    total_cache_write_tokens: row.get(3)?,
+                    total_prompt_cache_hit_tokens: row.get(2)?,
+                    total_prompt_cache_miss_tokens: row.get(3)?,
                     total_cost_usd: row.get(4)?,
                     call_count: row.get(5)?,
                 })
@@ -139,7 +139,7 @@ impl super::Database {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = match conn.prepare(
             "SELECT session_id, SUM(input_tokens), SUM(output_tokens), \
-             SUM(cache_read_tokens), SUM(cache_write_tokens), \
+             SUM(prompt_cache_hit_tokens), SUM(prompt_cache_miss_tokens), \
              SUM(estimated_cost_usd), COUNT(*) \
              FROM token_usage GROUP BY session_id \
              ORDER BY SUM(estimated_cost_usd) DESC LIMIT ?1"
@@ -153,8 +153,8 @@ impl super::Database {
                 UsageSummary {
                     total_input_tokens: row.get(1)?,
                     total_output_tokens: row.get(2)?,
-                    total_cache_read_tokens: row.get(3)?,
-                    total_cache_write_tokens: row.get(4)?,
+                    total_prompt_cache_hit_tokens: row.get(3)?,
+                    total_prompt_cache_miss_tokens: row.get(4)?,
                     total_cost_usd: row.get(5)?,
                     call_count: row.get(6)?,
                 },
@@ -172,7 +172,7 @@ impl super::Database {
         let mut stmt = match conn.prepare(
             "SELECT date(recorded_at/1000, 'unixepoch', 'localtime') as day, \
              SUM(input_tokens), SUM(output_tokens), \
-             SUM(cache_read_tokens), SUM(cache_write_tokens), \
+             SUM(prompt_cache_hit_tokens), SUM(prompt_cache_miss_tokens), \
              SUM(estimated_cost_usd), COUNT(*) \
              FROM token_usage WHERE recorded_at >= ?1 \
              GROUP BY day ORDER BY day ASC"
@@ -186,8 +186,8 @@ impl super::Database {
                 UsageSummary {
                     total_input_tokens: row.get(1)?,
                     total_output_tokens: row.get(2)?,
-                    total_cache_read_tokens: row.get(3)?,
-                    total_cache_write_tokens: row.get(4)?,
+                    total_prompt_cache_hit_tokens: row.get(3)?,
+                    total_prompt_cache_miss_tokens: row.get(4)?,
                     total_cost_usd: row.get(5)?,
                     call_count: row.get(6)?,
                 },

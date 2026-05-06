@@ -62,14 +62,25 @@ impl UsageSource {
 }
 
 /// Token usage from a single API call.
+///
+/// V4-only build: field names align with DeepSeek's response shape.
+///   * `prompt_cache_hit_tokens` — input tokens served from prefix cache (cheap).
+///   * `prompt_cache_miss_tokens` — input tokens that missed the cache (full price).
+///   * `input_tokens` — total prompt tokens (`hit + miss` when both reported by the
+///     provider; equals `prompt_tokens` for providers that don't break it down).
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TokenUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,
-    #[serde(default)]
-    pub cache_creation_input_tokens: u32,
-    #[serde(default)]
-    pub cache_read_input_tokens: u32,
+    /// DeepSeek `prompt_cache_miss_tokens` — non-cached input portion.
+    /// Old field name was `cache_creation_input_tokens` (Anthropic semantics).
+    /// Aliased on deserialize for backward compat with persisted records.
+    #[serde(default, alias = "cache_creation_input_tokens")]
+    pub prompt_cache_miss_tokens: u32,
+    /// DeepSeek `prompt_cache_hit_tokens` — cached input portion (cheap).
+    /// Old field name was `cache_read_input_tokens` (Anthropic semantics).
+    #[serde(default, alias = "cache_read_input_tokens")]
+    pub prompt_cache_hit_tokens: u32,
 }
 
 impl TokenUsage {
@@ -82,8 +93,8 @@ impl TokenUsage {
     pub fn is_any(&self) -> bool {
         self.input_tokens
             + self.output_tokens
-            + self.cache_creation_input_tokens
-            + self.cache_read_input_tokens
+            + self.prompt_cache_miss_tokens
+            + self.prompt_cache_hit_tokens
             > 0
     }
 }
@@ -92,8 +103,8 @@ impl std::ops::AddAssign for TokenUsage {
     fn add_assign(&mut self, rhs: Self) {
         self.input_tokens += rhs.input_tokens;
         self.output_tokens += rhs.output_tokens;
-        self.cache_creation_input_tokens += rhs.cache_creation_input_tokens;
-        self.cache_read_input_tokens += rhs.cache_read_input_tokens;
+        self.prompt_cache_miss_tokens += rhs.prompt_cache_miss_tokens;
+        self.prompt_cache_hit_tokens += rhs.prompt_cache_hit_tokens;
     }
 }
 
@@ -159,8 +170,8 @@ pub fn record_llm_usage(source: UsageSource, usage: TokenUsage, model: &str) {
         model,
         usage.input_tokens,
         usage.output_tokens,
-        usage.cache_read_input_tokens,
-        usage.cache_creation_input_tokens,
+        usage.prompt_cache_hit_tokens,
+        usage.prompt_cache_miss_tokens,
         cost,
     );
 }
@@ -173,8 +184,8 @@ pub struct UsageAggregateRow {
     pub calls: u32,
     pub input_tokens: u64,
     pub output_tokens: u64,
-    pub cache_creation_input_tokens: u64,
-    pub cache_read_input_tokens: u64,
+    pub prompt_cache_miss_tokens: u64,
+    pub prompt_cache_hit_tokens: u64,
     pub estimated_usd: f64,
 }
 
@@ -182,91 +193,11 @@ pub struct UsageAggregateRow {
 // Pricing
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Model pricing (USD per million tokens).
-#[derive(Debug, Clone, Copy)]
-pub struct ModelPricing {
-    pub input_cost_per_million: f64,
-    pub output_cost_per_million: f64,
-    pub cache_creation_cost_per_million: f64,
-    pub cache_read_cost_per_million: f64,
-}
-
 /// Estimate cost for a given model name.
+/// V4-only build: defers to `pricing::calculate_turn_cost_from_usage` which
+/// honors DeepSeek `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`.
 pub fn estimate_cost(usage: &TokenUsage, model: &str) -> Option<f64> {
-    let pricing = pricing_for_model(model)?;
-    let cost = cost_for_tokens(usage.input_tokens, pricing.input_cost_per_million)
-        + cost_for_tokens(usage.output_tokens, pricing.output_cost_per_million)
-        + cost_for_tokens(usage.cache_creation_input_tokens, pricing.cache_creation_cost_per_million)
-        + cost_for_tokens(usage.cache_read_input_tokens, pricing.cache_read_cost_per_million);
-    Some(cost)
-}
-
-fn cost_for_tokens(tokens: u32, usd_per_million: f64) -> f64 {
-    (tokens as f64 / 1_000_000.0) * usd_per_million
-}
-
-fn pricing_for_model(model: &str) -> Option<ModelPricing> {
-    let m = model.to_lowercase();
-    if m.contains("haiku") {
-        Some(ModelPricing {
-            input_cost_per_million: 1.0,
-            output_cost_per_million: 5.0,
-            cache_creation_cost_per_million: 1.25,
-            cache_read_cost_per_million: 0.1,
-        })
-    } else if m.contains("opus") {
-        Some(ModelPricing {
-            input_cost_per_million: 15.0,
-            output_cost_per_million: 75.0,
-            cache_creation_cost_per_million: 18.75,
-            cache_read_cost_per_million: 1.5,
-        })
-    } else if m.contains("sonnet") || m.contains("claude") {
-        Some(ModelPricing {
-            input_cost_per_million: 3.0,
-            output_cost_per_million: 15.0,
-            cache_creation_cost_per_million: 3.75,
-            cache_read_cost_per_million: 0.3,
-        })
-    } else if m.contains("qwen-turbo") {
-        // ¥0.003/1k in, ¥0.006/1k out → ~USD 0.4/1M in, 0.85/1M out @ 7 CNY/USD
-        Some(ModelPricing {
-            input_cost_per_million: 0.42,
-            output_cost_per_million: 0.85,
-            cache_creation_cost_per_million: 0.42,
-            cache_read_cost_per_million: 0.04,
-        })
-    } else if m.contains("qwen-plus") {
-        Some(ModelPricing {
-            input_cost_per_million: 1.15,
-            output_cost_per_million: 3.42,
-            cache_creation_cost_per_million: 1.15,
-            cache_read_cost_per_million: 0.11,
-        })
-    } else if m.contains("qwen-max") || m.contains("qwen") {
-        Some(ModelPricing {
-            input_cost_per_million: 2.85,
-            output_cost_per_million: 8.57,
-            cache_creation_cost_per_million: 2.85,
-            cache_read_cost_per_million: 0.28,
-        })
-    } else if m.contains("gpt-5-mini") || m.contains("gpt-4.1-mini") || m.contains("gpt-4o-mini") {
-        Some(ModelPricing {
-            input_cost_per_million: 0.25,
-            output_cost_per_million: 2.0,
-            cache_creation_cost_per_million: 0.25,
-            cache_read_cost_per_million: 0.025,
-        })
-    } else if m.contains("gpt-5") || m.contains("gpt-4") {
-        Some(ModelPricing {
-            input_cost_per_million: 5.0,
-            output_cost_per_million: 15.0,
-            cache_creation_cost_per_million: 5.0,
-            cache_read_cost_per_million: 0.5,
-        })
-    } else {
-        None
-    }
+    crate::engine::pricing::calculate_turn_cost_from_usage(model, usage)
 }
 
 #[cfg(test)]
@@ -288,10 +219,10 @@ mod tests {
     }
 
     #[test]
-    fn qwen_pricing_present() {
+    fn deepseek_pricing_present() {
         assert!(estimate_cost(
             &TokenUsage { input_tokens: 1_000_000, output_tokens: 0, ..Default::default() },
-            "qwen-turbo"
+            "deepseek-v4-flash"
         ).is_some());
     }
 }

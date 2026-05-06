@@ -2,12 +2,14 @@
 
 <img src="app/src-tauri/icons/icon.png" width="120" height="120" alt="YiYi" />
 
-# YiYi
+# YiYi · DeepSeek V4 Edition
 
-**与你一起成长的 AI 桌面伙伴**
+**与你一起成长的 AI 桌面伙伴 — 由 DeepSeek V4 双模型驱动**
 
 她不是工具，是伙伴。<br/>
 她能操控你的电脑、记住你的习惯、连接你的世界，并在每一次互动中变得更懂你。
+
+> **🔵 仅支持 DeepSeek V4**：从本版本起，YiYi 深度适配 DeepSeek V4，移除其他模型支持。`v4-pro` 处理复杂推理，`v4-flash` 处理高频子任务，**系统自动路由，用户无感**。仍在使用 OpenAI / Claude / Gemini 等的旧用户请保留旧版本，或在升级前导出会话。
 
 [![GitHub release](https://img.shields.io/github/v/release/vibeinging/YiYi?style=flat-square&color=orange&include_prereleases)](https://github.com/vibeinging/YiYi/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue?style=flat-square)](https://github.com/vibeinging/YiYi/releases)
@@ -47,6 +49,21 @@
 </table>
 
 ---
+
+## ⚡ DeepSeek V4 深度适配
+
+YiYi 不只是接入了 DeepSeek V4，而是围绕它的特性做了完整的工程优化：
+
+| 能力 | 说明 |
+|---|---|
+| **🎚️ Pro / Flash 自动路由** | 主循环走 V4 Pro 做重型推理；压缩 / 冥想 / 心跳 / 测试连接等后台调用走 V4 Flash，省 ~10× 成本。用户视角只有"快"和"准"，无需手动切换。 |
+| **🌪️ Flash 加速工具** | 内置 `compact_context`（压缩长文）和 `parallel_analyze`（N 个 Flash 并发分析）两个原生工具，把繁重的子任务从 Pro 卸载到 Flash。 |
+| **🧱 1M 上下文 + V4-aware 压缩** | 压缩阈值 = 80% 窗口（800K tokens），低于 500K 时自动压缩**禁用**——避免破坏 prefix 缓存。 |
+| **💸 Prefix 缓存计费** | 解析 DeepSeek 返回的 `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`，UI 实时显示缓存命中率与节省金额。Pro 缓存命中价比未命中便宜 **120 倍**。 |
+| **🛑 反鬼打墙守卫** | 同 (tool, args) 调用 3 次自动 block；同工具失败 8 次自动 halt。模型卡住时直接给纠错建议，不再无脑烧 token。 |
+| **💭 思考模式 UI** | 原生流式渲染 V4 reasoning content，可在聊天框 OFF/HIGH/MAX 切换 effort。 |
+| **🕰️ 工作区时光机** | 每个 turn 前后自动生成压缩快照（不动你的 `.git`），任意一步可一键回滚。 |
+| **📊 实时成本面板** | 主循环 + 后台调用统一计入 session 成本，按秒刷新；月度按来源拆分（meditation / growth / heartbeat / …）。 |
 
 ## 她能做什么？
 
@@ -128,9 +145,9 @@ YiYi 原生支持 **MCP (Model Context Protocol)**：
 
 ### 首次使用
 
-1. 打开 YiYi，按引导向导设置语言和 AI 模型
-2. 填入模型提供商的 API Key（OpenAI / Claude / DeepSeek / 智谱 / 通义 / Moonshot / 自定义）
-3. 开始对话。她会渐渐记住你。
+1. 打开 YiYi，按引导向导设置语言。
+2. 在 [DeepSeek 平台](https://platform.deepseek.com/api_keys) 申请 API Key，粘贴到 setup wizard。
+3. 开始对话。她会渐渐记住你。Pro / Flash 路由由系统自动决定，你不需要选模型。
 
 ---
 
@@ -138,12 +155,15 @@ YiYi 原生支持 **MCP (Model Context Protocol)**：
 
 - **前端**：React 18 · TypeScript · Tailwind · Vite · xterm.js
 - **后端**：Rust · Tauri 2.x
-- **Agent 引擎**：ReAct（think → act → observe） + spawn_agents 多 Agent 并行
-- **LLM Client**：统一接口，原生支持 OpenAI / Anthropic / Gemini / DashScope，含 Anthropic prompt-cache 分段优化
+- **Agent 引擎**：ReAct（think → act → observe）+ spawn_agents 多 Agent 并行 + 反鬼打墙守卫（loop_guard）
+- **LLM**：DeepSeek V4 Pro/Flash 双模型 · `UsageSource` 驱动的自动路由 · prefix 缓存命中率追踪 · 思考流式渲染
+- **成本**：`engine/pricing.rs` V4 价格表（含 V4 Pro 75% 折扣到 2026-05-31）· 进程级 cost side-channel 汇总后台 LLM 调用
+- **上下文**：800K 触发自动压缩 · 500K 以下禁用自动压缩以保护 prefix 缓存
+- **工作区**：side-git 快照（tar.zst，每 turn 前后），不动用户 `.git`
 - **数据库**：SQLite (WAL)
 - **向量记忆**：[MemMe](https://github.com/vibeinging/MemMe) 分层记忆 + 冥想巩固
 - **Python 集成**：PyO3 嵌入，内置 pypdf / python-docx / openpyxl / python-pptx
-- **浏览器**：Playwright bridge（交互流） + 系统 Chrome headless（轻量截图 / HTML fetch）
+- **浏览器**：Playwright bridge（交互流）+ 系统 Chrome headless（轻量截图 / HTML fetch）
 
 ## 开发
 

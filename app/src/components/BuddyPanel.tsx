@@ -7,7 +7,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import {
   Brain, Play, Loader2, Eye, EyeOff, Search, Trash2,
-  ShieldCheck, ThumbsUp, ThumbsDown, Shield, Sparkles, Star, ChevronRight,
+  ShieldCheck, ThumbsUp, ThumbsDown, Shield, Sparkles, Star,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
@@ -307,23 +307,7 @@ export function BuddyPanel() {
 
           {/* Memory */}
           <Card>
-            <SectionTitle
-              count={memoryStats?.total}
-              right={
-                <button
-                  onClick={() => {
-                    sessionStorage.setItem('settings_pending_tab', 'memory')
-                    window.dispatchEvent(new CustomEvent('navigate', { detail: 'settings' }))
-                  }}
-                  className="flex items-center gap-1 text-[11px] transition-colors hover:text-[var(--color-text-secondary)] group"
-                  style={{ color: 'var(--color-text-muted)' }}
-                  title="记忆引擎设置"
-                >
-                  <span>引擎设置</span>
-                  <ChevronRight size={11} className="transition-transform group-hover:translate-x-0.5" />
-                </button>
-              }
-            >
+            <SectionTitle count={memoryStats?.total}>
               记忆
             </SectionTitle>
 

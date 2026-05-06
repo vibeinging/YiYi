@@ -14,6 +14,8 @@ mod spawn_tools;
 mod computer_tools;
 mod lsp_tools;
 mod git_tools;
+mod flash_tools;
+mod snapshot_tools;
 pub(crate) mod shell_security;
 pub(crate) mod permission_gate;
 pub(crate) mod output_envelope;
@@ -601,11 +603,7 @@ async fn resolve_llm_config_from_globals() -> Option<super::llm_client::LLMConfi
     let all = providers.get_all_providers();
     let p = all.iter().find(|p| p.id == active.provider_id)?;
     let base_url = p.base_url.as_deref().unwrap_or(&p.default_base_url).to_string();
-    let api_key = if let Some(custom) = providers.custom_providers.get(&active.provider_id) {
-        custom.settings.api_key.clone()
-    } else {
-        providers.providers.get(&active.provider_id).and_then(|s| s.api_key.clone())
-    };
+    let api_key = providers.providers.get(&active.provider_id).and_then(|s| s.api_key.clone());
     let api_key = api_key.or_else(|| std::env::var(&p.api_key_prefix).ok())?;
     let native_tools = crate::state::providers::resolve_native_injections(&p.native_tools, &active.model);
     Some(super::llm_client::LLMConfig {
@@ -967,6 +965,8 @@ pub fn deferred_tools() -> Vec<ToolDefinition> {
         tools.extend(computer_tools::definitions());
         tools.extend(lsp_tools::definitions());
         tools.extend(git_tools::definitions());
+        tools.extend(flash_tools::definitions());
+        tools.extend(snapshot_tools::definitions());
 
         // Buddy delegate tool — consult the user's digital twin
         tools.push(tool_def(
@@ -1365,6 +1365,8 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         "git_log" => git_tools::git_log_tool(&args).await,
         "git_status" => git_tools::git_status_tool(&args).await,
         "code_intelligence" => lsp_tools::code_intelligence_tool(&args).await,
+        "compact_context" => flash_tools::compact_context_tool(&args).await,
+        "parallel_analyze" => flash_tools::parallel_analyze_tool(&args).await,
         "ask_buddy" => {
             let question = args["question"].as_str().unwrap_or("");
             let ctx = args["context"].as_str().unwrap_or("");
@@ -1400,6 +1402,7 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
             }
         }
         "tool_search" => execute_tool_search(&args),
+        "revert_turn" => snapshot_tools::revert_turn_tool(&args).await,
         "computer_control" => {
             let (content, images) = computer_tools::computer_control_tool(&args).await;
             return ToolResult {

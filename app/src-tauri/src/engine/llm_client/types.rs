@@ -118,6 +118,15 @@ pub struct LLMResponse {
     pub usage: Option<crate::engine::usage::TokenUsage>,
 }
 
+// NOTE on DeepSeek V4 native reasoning ("thinking mode"):
+// We do NOT carry `reasoning_content` on `LLMResponse` or `LLMMessage`. Reasoning
+// is surfaced live via `StreamEvent::ReasoningDelta` (see openai.rs streaming path)
+// and consumed by the ReAct agent which forwards it as `AgentStreamEvent::Thinking`
+// for the frontend to render in a collapsible block. Reasoning is not part of
+// conversation history — DeepSeek itself emits it fresh each turn — so storing
+// it on the message would just bloat memory. If a future caller needs the final
+// accumulated trace, hook into `StreamEvent::ReasoningDelta` like the agent does.
+
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
     ContentDelta(String),

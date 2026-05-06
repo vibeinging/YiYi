@@ -65,6 +65,35 @@ fn prepare_messages(config: &LLMConfig, messages: &[LLMMessage]) -> serde_json::
     }
 }
 
+/// Read the user's configured DeepSeek thinking effort.
+/// Returns one of "off" | "high" | "max"; defaults to "high".
+fn current_thinking_effort() -> String {
+    let handle = match crate::engine::tools::APP_HANDLE.get() {
+        Some(h) => h,
+        None => return "high".to_string(),
+    };
+    use tauri::Manager;
+    let app_state = handle.state::<crate::state::AppState>();
+    let config = match app_state.config.try_read() {
+        Ok(c) => c,
+        Err(_) => return "high".to_string(),
+    };
+    config
+        .agents
+        .thinking_effort
+        .clone()
+        .unwrap_or_else(|| "high".to_string())
+}
+
+/// Whether the current model is a DeepSeek model (the only provider that
+/// honours `enable_thinking`). Other OpenAI-compatible providers ignore
+/// unknown request params, but we still gate to keep request bodies clean.
+fn is_deepseek_model(config: &LLMConfig) -> bool {
+    config.provider_id.to_lowercase().contains("deepseek")
+        || config.base_url.contains("deepseek")
+        || config.model.to_lowercase().contains("deepseek")
+}
+
 /// Build request body with model-appropriate token limits
 fn build_body(config: &LLMConfig, messages_value: serde_json::Value, stream: bool) -> serde_json::Value {
     let mut body = serde_json::json!({
@@ -80,6 +109,16 @@ fn build_body(config: &LLMConfig, messages_value: serde_json::Value, stream: boo
         body["stream"] = serde_json::json!(true);
         // Request usage data in stream (OpenAI / compatible providers)
         body["stream_options"] = serde_json::json!({ "include_usage": true });
+    }
+    // DeepSeek V4 thinking-mode toggle. Only sent for DeepSeek providers; other
+    // OpenAI-compatible providers would ignore it but we keep bodies clean.
+    // Mapping: "off" → false; "high"/"max" → true. DeepSeek currently exposes
+    // only a boolean — the "high" vs "max" distinction is wired through for
+    // future API expansion.
+    if is_deepseek_model(config) {
+        let effort = current_thinking_effort();
+        let enabled = matches!(effort.as_str(), "high" | "max");
+        body["enable_thinking"] = serde_json::json!(enabled);
     }
     body
 }
@@ -154,14 +193,33 @@ pub async fn chat_completion(
     })
 }
 
-/// Parse OpenAI usage JSON into TokenUsage.
+/// Parse OpenAI-compatible usage JSON into TokenUsage.
+///
+/// Handles both DeepSeek and standard OpenAI shapes:
+///   * DeepSeek surfaces `prompt_cache_hit_tokens` and `prompt_cache_miss_tokens`
+///     at the top level of `usage`.
+///   * OpenAI / others use `prompt_tokens_details.cached_tokens`.
+/// Miss is derived as `prompt_tokens - hit` when not reported explicitly.
 fn parse_openai_usage(v: &serde_json::Value) -> Option<crate::engine::usage::TokenUsage> {
     if v.is_null() { return None; }
+    let input_tokens = v["prompt_tokens"].as_u64().unwrap_or(0) as u32;
+    let output_tokens = v["completion_tokens"].as_u64().unwrap_or(0) as u32;
+
+    // DeepSeek-specific fields take precedence; fall back to OpenAI's nested shape.
+    let hit = v["prompt_cache_hit_tokens"]
+        .as_u64()
+        .or_else(|| v["prompt_tokens_details"]["cached_tokens"].as_u64())
+        .unwrap_or(0) as u32;
+    let miss = v["prompt_cache_miss_tokens"]
+        .as_u64()
+        .map(|n| n as u32)
+        .unwrap_or_else(|| input_tokens.saturating_sub(hit));
+
     Some(crate::engine::usage::TokenUsage {
-        input_tokens: v["prompt_tokens"].as_u64().unwrap_or(0) as u32,
-        output_tokens: v["completion_tokens"].as_u64().unwrap_or(0) as u32,
-        cache_creation_input_tokens: 0,
-        cache_read_input_tokens: v["prompt_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0) as u32,
+        input_tokens,
+        output_tokens,
+        prompt_cache_miss_tokens: miss,
+        prompt_cache_hit_tokens: hit,
     })
 }
 

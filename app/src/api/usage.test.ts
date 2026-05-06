@@ -17,8 +17,8 @@ describe("usage api", () => {
   const sampleSummary: UsageSummary = {
     total_input_tokens: 100,
     total_output_tokens: 50,
-    total_cache_read_tokens: 10,
-    total_cache_write_tokens: 5,
+    total_prompt_cache_hit_tokens: 10,
+    total_prompt_cache_miss_tokens: 5,
     total_cost_usd: 0.12,
     call_count: 3,
   };

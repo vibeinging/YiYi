@@ -6,8 +6,8 @@ import { UsagePanel } from './UsagePanel';
 const emptySummary = {
   total_input_tokens: 0,
   total_output_tokens: 0,
-  total_cache_read_tokens: 0,
-  total_cache_write_tokens: 0,
+  total_prompt_cache_hit_tokens: 0,
+  total_prompt_cache_miss_tokens: 0,
   total_cost_usd: 0,
   call_count: 0,
 };
@@ -42,8 +42,8 @@ describe('UsagePanel', () => {
       get_usage_summary: vi.fn().mockResolvedValue({
         total_input_tokens: 1500,
         total_output_tokens: 500,
-        total_cache_read_tokens: 300,
-        total_cache_write_tokens: 0,
+        total_prompt_cache_hit_tokens: 300,
+        total_prompt_cache_miss_tokens: 0,
         total_cost_usd: 0.25,
         call_count: 10,
       }),

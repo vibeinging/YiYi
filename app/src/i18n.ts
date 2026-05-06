@@ -543,7 +543,6 @@ const resources = {
         description: '配置应用选项',
         tabGeneral: '通用',
         tabModels: '模型',
-        tabMemory: '记忆',
         tabEnvs: '环境变量',
         workspace: '工作空间',
         workspaceDir: '默认工作目录',
@@ -811,6 +810,12 @@ const resources = {
           userCancelled: '已被用户取消',
           error: '执行出错已停止',
         },
+      },
+      // Usage panel — live cost side-channel + cache stats
+      usage: {
+        liveSessionCost: '本会话累计',
+        cacheHitShort: '缓存命中',
+        savedPrefix: '节省',
       },
     },
   },
@@ -1343,7 +1348,6 @@ const resources = {
         description: 'Configure application options',
         tabGeneral: 'General',
         tabModels: 'Models',
-        tabMemory: 'Memory',
         tabEnvs: 'Environment',
         workspace: 'Workspace',
         workspaceDir: 'Default Workspace',
@@ -1611,6 +1615,12 @@ const resources = {
           userCancelled: 'Cancelled by user',
           error: 'Stopped due to error',
         },
+      },
+      // Usage panel — live cost side-channel + cache stats
+      usage: {
+        liveSessionCost: 'Session',
+        cacheHitShort: 'cache hit',
+        savedPrefix: 'saved',
       },
     },
   },

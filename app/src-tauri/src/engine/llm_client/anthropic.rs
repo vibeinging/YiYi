@@ -183,8 +183,8 @@ fn parse_usage(v: &serde_json::Value) -> Option<crate::engine::usage::TokenUsage
     Some(crate::engine::usage::TokenUsage {
         input_tokens: v["input_tokens"].as_u64().unwrap_or(0) as u32,
         output_tokens: v["output_tokens"].as_u64().unwrap_or(0) as u32,
-        cache_creation_input_tokens: v["cache_creation_input_tokens"].as_u64().unwrap_or(0) as u32,
-        cache_read_input_tokens: v["cache_read_input_tokens"].as_u64().unwrap_or(0) as u32,
+        prompt_cache_miss_tokens: v["cache_creation_input_tokens"].as_u64().unwrap_or(0) as u32,
+        prompt_cache_hit_tokens: v["cache_read_input_tokens"].as_u64().unwrap_or(0) as u32,
     })
 }
 

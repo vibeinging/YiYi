@@ -6,8 +6,8 @@ use crate::state::AppState;
 pub struct UsageSummaryResponse {
     pub total_input_tokens: i64,
     pub total_output_tokens: i64,
-    pub total_cache_read_tokens: i64,
-    pub total_cache_write_tokens: i64,
+    pub total_prompt_cache_hit_tokens: i64,
+    pub total_prompt_cache_miss_tokens: i64,
     pub total_cost_usd: f64,
     pub call_count: i64,
 }
@@ -28,8 +28,8 @@ fn to_response(s: crate::engine::db::usage::UsageSummary) -> UsageSummaryRespons
     UsageSummaryResponse {
         total_input_tokens: s.total_input_tokens,
         total_output_tokens: s.total_output_tokens,
-        total_cache_read_tokens: s.total_cache_read_tokens,
-        total_cache_write_tokens: s.total_cache_write_tokens,
+        total_prompt_cache_hit_tokens: s.total_prompt_cache_hit_tokens,
+        total_prompt_cache_miss_tokens: s.total_prompt_cache_miss_tokens,
         total_cost_usd: s.total_cost_usd,
         call_count: s.call_count,
     }
@@ -92,4 +92,14 @@ pub fn get_usage_daily(
     days: Option<i64>,
 ) -> Result<Vec<DailyUsageResponse>, String> {
     get_usage_daily_impl(&*state, days)
+}
+
+/// Drain the process-wide pending-cost pool and return the accrued USD.
+///
+/// The UI polls this once a second to keep a live "session cost" counter in
+/// sync with background LLM calls (meditation / growth / heartbeat / etc.)
+/// that don't surface through the streaming ReAct loop.
+#[tauri::command]
+pub fn drain_pending_cost() -> f64 {
+    crate::engine::cost_status::drain()
 }

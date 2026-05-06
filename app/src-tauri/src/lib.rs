@@ -215,12 +215,6 @@ pub fn run() {
                 });
             }
 
-            // Load provider plugins from plugins/providers/ directory
-            {
-                let mut providers = tauri::async_runtime::block_on(state.providers.write());
-                providers.load_plugins(&state.working_dir);
-            }
-
             // Start config file watcher
             {
                 let watcher = ConfigWatcher::new(
@@ -229,17 +223,6 @@ pub fn run() {
                 );
                 tauri::async_runtime::spawn(async move {
                     watcher.watch().await;
-                });
-            }
-
-            // Start provider plugin directory watcher
-            {
-                let plugin_watcher = crate::state::providers::PluginWatcher::new(
-                    state.working_dir.clone(),
-                    state.providers.clone(),
-                );
-                tauri::async_runtime::spawn(async move {
-                    plugin_watcher.watch().await;
                 });
             }
 
@@ -329,6 +312,8 @@ pub fn run() {
             commands::system::is_setup_complete,
             commands::system::complete_setup,
             commands::system::save_agents_config,
+            commands::system::get_thinking_effort,
+            commands::system::set_thinking_effort,
             commands::system::get_user_workspace,
             commands::system::set_user_workspace,
             commands::system::check_claude_code_status,
@@ -368,17 +353,8 @@ pub fn run() {
             commands::models::configure_provider,
             commands::models::test_provider,
             commands::models::test_model,
-            commands::models::create_custom_provider,
-            commands::models::delete_custom_provider,
-            commands::models::add_model,
-            commands::models::remove_model,
             commands::models::get_active_llm,
             commands::models::set_active_llm,
-            commands::models::list_provider_templates,
-            commands::models::import_provider_plugin,
-            commands::models::export_provider_config,
-            commands::models::scan_provider_plugins,
-            commands::models::import_provider_from_template,
             // Workspace
             commands::workspace::list_workspace_files,
             commands::workspace::load_workspace_file,
@@ -574,10 +550,16 @@ pub fn run() {
             commands::usage::get_usage_summary,
             commands::usage::get_usage_by_session,
             commands::usage::get_usage_daily,
+            commands::usage::drain_pending_cost,
             // Export
             commands::export::export_conversations,
             commands::export::export_memories,
             commands::export::export_settings,
+            // Side-git workspace snapshots (Phase J)
+            commands::snapshots::list_snapshots,
+            commands::snapshots::restore_snapshot,
+            // DeepSeek platform integration (balance query)
+            commands::deepseek::get_deepseek_balance,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

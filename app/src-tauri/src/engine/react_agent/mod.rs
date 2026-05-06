@@ -1,6 +1,7 @@
 mod compaction;
 mod core;
 mod growth;
+mod loop_guard;
 mod prompt;
 pub mod verification;
 
@@ -148,8 +149,40 @@ impl ToolFilter {
 // ---------------------------------------------------------------------------
 
 pub(crate) const DEFAULT_MAX_ITERATIONS: usize = 200;
-/// Token threshold to trigger context compaction.
-pub(crate) const COMPACT_THRESHOLD: usize = 80_000;
+
+// ---------------------------------------------------------------------------
+// V4-aware compaction thresholds
+// ---------------------------------------------------------------------------
+//
+// YiYi targets DeepSeek V4, which exposes a 1M-token context window and
+// charges dramatically different rates depending on prefix-cache hit/miss:
+//
+//   - Cache hit:  $0.0036 / 1M tokens
+//   - Cache miss: $0.435  / 1M tokens   (≈ 120× more expensive)
+//
+// Compaction *destroys the prefix cache* — every message before the new
+// summary boundary is rewritten, so the next request prefills at miss
+// prices. That makes early/aggressive compaction strictly worse than just
+// carrying the larger context: we both shrink less than we hoped *and* eat
+// a 120× billing event for the rebuilt prefix.
+//
+// Two thresholds (ported from DeepSeek-TUI's `crates/tui/src/compaction.rs`):
+//
+// `COMPACT_THRESHOLD` (800K) — "we should think about compacting now". This
+// is 80% of V4's 1M window; below it we still have headroom and don't need
+// to pay the cache-bust cost.
+//
+// `AUTO_COMPACT_FLOOR` (500K) — hard floor for *automatic* compaction.
+// Below this token count, `should_auto_compact` returns `false` regardless
+// of `token_threshold`: the prefix cache is still healthy and the savings
+// from compaction don't outweigh the miss-priced re-prefill. Manual
+// `/compact` triggers (and overflow-recovery force-compaction) bypass this
+// floor — the user has explicitly accepted the tradeoff.
+/// Token threshold above which automatic compaction will fire (V4: 80% of 1M window).
+pub(crate) const COMPACT_THRESHOLD: usize = 800_000;
+/// Hard floor: below this, automatic compaction is suppressed to preserve prefix cache.
+/// Manual triggers bypass this floor.
+pub(crate) const AUTO_COMPACT_FLOOR: usize = 500_000;
 
 /// Semaphore to limit concurrent background LLM calls (reflections, feedback learning).
 /// Prevents API rate limit exhaustion when many tasks complete simultaneously.
