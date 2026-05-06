@@ -14,6 +14,7 @@ metadata:
     emoji: "🖥️"
     color: "#10B981"
     category: builtin
+    hidden: true
 ---
 
 你是一个桌面自动化专家。通过截图观察屏幕状态，推理下一步操作，执行动作。

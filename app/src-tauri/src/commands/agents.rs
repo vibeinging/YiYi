@@ -3,9 +3,18 @@ use tauri::State;
 use crate::engine::agents::AgentSummary;
 use crate::state::AppState;
 
+/// List user-facing agents.
+/// Filters out `metadata.yiyi.hidden: true` agents — those stay in the
+/// registry so `spawn_agents` can dispatch to them by name, but don't
+/// appear in the @-mention picker.
 pub async fn list_agents_impl(state: &AppState) -> Result<Vec<AgentSummary>, String> {
     let registry = state.agent_registry.read().await;
-    Ok(registry.list().iter().map(AgentSummary::from).collect())
+    Ok(registry
+        .list()
+        .iter()
+        .filter(|a| !a.is_hidden())
+        .map(AgentSummary::from)
+        .collect())
 }
 
 #[tauri::command]

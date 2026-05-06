@@ -74,6 +74,17 @@ impl AgentDefinition {
             .map(|c| c == "builtin")
             .unwrap_or(false)
     }
+
+    /// Hidden agents are still loaded into the registry (so `spawn_agents`
+    /// can dispatch to them by name) but are filtered out of user-facing
+    /// listings such as the @-mention picker. Set `metadata.yiyi.hidden: true`
+    /// in AGENT.md frontmatter to mark.
+    pub fn is_hidden(&self) -> bool {
+        self.metadata
+            .as_ref()
+            .and_then(|m| m["yiyi"]["hidden"].as_bool())
+            .unwrap_or(false)
+    }
 }
 
 /// Serializable summary for frontend listing.
@@ -207,10 +218,7 @@ pub fn parse_agent_md(content: &str, source: &Path) -> Option<AgentDefinition> {
 
 const BUILTIN_AGENTS: &[(&str, &str)] = &[
     ("explore", include_str!("../../../agents/explore/AGENT.md")),
-    ("planner", include_str!("../../../agents/planner/AGENT.md")),
     ("desktop_operator", include_str!("../../../agents/desktop_operator/AGENT.md")),
-    ("memory_curator", include_str!("../../../agents/memory_curator/AGENT.md")),
-    ("bot_coordinator", include_str!("../../../agents/bot_coordinator/AGENT.md")),
 ];
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -227,7 +235,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let registry = AgentRegistry::load(tmp.path(), None);
         let names: Vec<&str> = registry.list().iter().map(|a| a.name.as_str()).collect();
-        for expected in ["explore", "planner", "desktop_operator", "memory_curator", "bot_coordinator"] {
+        for expected in ["explore", "desktop_operator"] {
             assert!(
                 names.contains(&expected),
                 "expected builtin agent '{}' to be registered, got: {:?}",
@@ -238,32 +246,28 @@ mod tests {
     }
 
     #[test]
-    fn agent_registry_loads_memory_curator_and_bot_coordinator() {
+    fn builtin_agents_are_hidden_from_user_listing() {
         let tmp = TempDir::new().unwrap();
         let registry = AgentRegistry::load(tmp.path(), None);
+        for name in ["explore", "desktop_operator"] {
+            let a = registry.get(name).expect("agent registered");
+            assert!(a.is_hidden(), "{name} should be hidden from @-mention picker");
+            // But still resolvable by spawn_agents (registry.get works regardless).
+        }
+    }
 
-        let mc = registry
-            .get("memory_curator")
-            .expect("memory_curator should be registered");
-        assert_eq!(mc.emoji(), "🧠");
-        assert!(mc.is_builtin());
-        let mc_tools = mc.tools.as_ref().expect("memory_curator should have tool allowlist");
-        assert!(mc_tools.iter().any(|t| t == "memory_search"));
-        assert!(mc_tools.iter().any(|t| t == "memory_delete"));
-        assert!(mc_tools.iter().any(|t| t == "memory_add"));
-        assert!(matches!(mc.tool_filter(), ToolFilter::Allow(_)));
+    #[test]
+    fn _legacy_test_kept_as_no_op() {
+        // memory_curator / bot_coordinator removed; they no longer load.
+        let tmp = TempDir::new().unwrap();
+        let registry = AgentRegistry::load(tmp.path(), None);
+        assert!(registry.get("memory_curator").is_none(), "removed agent");
+        assert!(registry.get("bot_coordinator").is_none(), "removed agent");
 
-        let bc = registry
-            .get("bot_coordinator")
-            .expect("bot_coordinator should be registered");
-        assert_eq!(bc.emoji(), "🤝");
-        assert!(bc.is_builtin());
-        let bc_tools = bc.tools.as_ref().expect("bot_coordinator should have tool allowlist");
-        assert!(bc_tools.iter().any(|t| t == "send_bot_message"));
-        assert!(bc_tools.iter().any(|t| t == "list_bot_conversations"));
-        assert!(bc_tools.iter().any(|t| t == "manage_bot"));
-        // bot_coordinator must NOT have write access to filesystem/shell
-        assert!(!bc_tools.iter().any(|t| t == "execute_shell"));
-        assert!(!bc_tools.iter().any(|t| t == "write_file"));
+        // Touch one builtin so the function still uses the symbols.
+        let exp = registry.get("explore").expect("explore registered");
+        assert_eq!(exp.emoji(), "🔍");
+        assert!(exp.is_builtin());
+        assert!(matches!(exp.tool_filter(), ToolFilter::Allow(_)));
     }
 }

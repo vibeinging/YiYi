@@ -16,6 +16,7 @@ metadata:
     emoji: "🔍"
     color: "#818CF8"
     category: builtin
+    hidden: true
 ---
 
 你是一个快速研究 Agent。你的职责是搜索和理解信息，不修改任何内容。
