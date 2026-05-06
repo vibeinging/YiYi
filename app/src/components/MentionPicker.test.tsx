@@ -94,7 +94,8 @@ describe('buildMentionList', () => {
       'prdc',
     );
     expect(items).toHaveLength(1);
-    expect((items[0] as any).file.name).toBe('product-introduction.md');
+    if (items[0].type !== 'file') throw new Error('expected file item');
+    expect(items[0].file.name).toBe('product-introduction.md');
   });
 
   it('exact substring outranks scattered match', () => {
@@ -106,7 +107,8 @@ describe('buildMentionList', () => {
       ],
       'tool',
     );
-    expect((items[0] as any).file.name).toBe('tool.md');
+    if (items[0].type !== 'file') throw new Error('expected file item');
+    expect(items[0].file.name).toBe('tool.md');
   });
 });
 
@@ -127,6 +129,24 @@ describe('MentionPicker file badges', () => {
     );
     expect(screen.getByText('binary')).toBeInTheDocument();
     expect(screen.getByText('large')).toBeInTheDocument();
+  });
+
+  it('omits badges for plain files and directories', () => {
+    render(
+      <MentionPicker
+        bots={[]}
+        files={[
+          file({ name: 'plain.md', path: '/plain.md' }),
+          file({ name: 'src', path: '/src', is_dir: true }),
+        ]}
+        query=""
+        selectedIndex={0}
+        onSelectBot={() => {}}
+        onSelectFile={() => {}}
+      />,
+    );
+    expect(screen.queryByText('binary')).toBeNull();
+    expect(screen.queryByText('large')).toBeNull();
   });
 });
 

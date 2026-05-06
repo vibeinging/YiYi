@@ -5,71 +5,96 @@ use tauri::State;
 use crate::engine::db::{AuthorizedFolderRow, SensitivePathRow};
 use crate::state::AppState;
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct WorkspaceFile {
     pub name: String,
     pub path: String,
     pub size: u64,
     pub is_dir: bool,
     pub modified: Option<u64>,
-    /// True for files over `LARGE_FILE_THRESHOLD_BYTES`. Lets the @ picker
-    /// flag "selecting this will load >1MB into the agent's context".
     #[serde(default)]
     pub is_large: bool,
-    /// True for likely-binary files (image / audio / video / archive / pdf
-    /// / compiled artifact). Agents should not blindly `read_file` these.
     #[serde(default)]
     pub is_binary: bool,
 }
 
-/// Directory names skipped during workspace walks. These are virtually
-/// always auto-generated or vendor and would just spam the @ picker.
-const EXCLUDED_DIRS: &[&str] = &[
-    "node_modules", "target", "dist", "build", ".next", ".nuxt",
-    "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
-    "venv", ".venv", "env", ".env", ".tox",
-    ".cache", ".turbo", ".parcel-cache",
-    "vendor", "Pods",
-    ".idea", ".vscode",
-    ".gradle", ".cargo",
-];
+/// Directories skipped during workspace walks (build artefacts, package
+/// caches, vendor trees). HashSet built once to make the per-entry check
+/// O(1) on workspaces with deep trees.
+///
+/// TODO: this list duplicates similar lists in `engine/side_git.rs`,
+/// `engine/coding/project_tree.rs`, and `engine/tools/file_tools.rs`. Worth
+/// consolidating into a shared `engine::fs_filter` module — separate PR.
+static EXCLUDED_DIRS: std::sync::LazyLock<std::collections::HashSet<&'static str>> =
+    std::sync::LazyLock::new(|| {
+        [
+            "node_modules", "target", "dist", "build", ".next", ".nuxt",
+            "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+            "venv", ".venv", "env", ".env", ".tox",
+            ".cache", ".turbo", ".parcel-cache",
+            "vendor", "Pods",
+            ".idea", ".vscode",
+            ".gradle", ".cargo",
+        ]
+        .into_iter()
+        .collect()
+    });
 
-/// Files at or above this size show a "large" badge in the picker.
-const LARGE_FILE_THRESHOLD_BYTES: u64 = 1 * 1024 * 1024;
-/// Files above this size are dropped entirely from the listing — no point
-/// surfacing a 500MB video as @-mentionable.
+const LARGE_FILE_THRESHOLD_BYTES: u64 = 1024 * 1024;
 const HARD_SIZE_CAP_BYTES: u64 = 50 * 1024 * 1024;
 
-/// Extensions that indicate binary content. Agents shouldn't `read_file`
-/// these — output would be lossy/garbage.
-const BINARY_EXTS: &[&str] = &[
-    // Images
-    "png", "jpg", "jpeg", "gif", "bmp", "webp", "ico", "tiff", "heic", "avif",
-    // Audio
-    "mp3", "wav", "ogg", "flac", "m4a", "aac",
-    // Video
-    "mp4", "mov", "avi", "mkv", "webm", "flv",
-    // Archives
-    "zip", "tar", "gz", "tgz", "bz2", "7z", "rar", "xz",
-    // Documents (binary office formats — text formats like .md / .txt are NOT here)
-    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp",
-    // Compiled artifacts
-    "exe", "dll", "dylib", "so", "a", "o", "obj", "class", "jar", "wasm",
-    // Other binary
-    "db", "sqlite", "sqlite3", "pyc", "pyo", "DS_Store",
-];
+/// Extensions that mark a file as opaque to text tools (image / archive /
+/// office binary / compiled artefact / db). HashSet keeps the lookup O(1).
+static BINARY_EXTS: std::sync::LazyLock<std::collections::HashSet<&'static str>> =
+    std::sync::LazyLock::new(|| {
+        [
+            // Images
+            "png", "jpg", "jpeg", "gif", "bmp", "webp", "ico", "tiff", "heic", "avif",
+            // Audio
+            "mp3", "wav", "ogg", "flac", "m4a", "aac",
+            // Video
+            "mp4", "mov", "avi", "mkv", "webm", "flv",
+            // Archives
+            "zip", "tar", "gz", "tgz", "bz2", "7z", "rar", "xz",
+            // Office binary formats (.md / .txt / source code are NOT here)
+            "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp",
+            // Compiled artefacts
+            "exe", "dll", "dylib", "so", "a", "o", "obj", "class", "jar", "wasm",
+            // Databases / bytecode
+            "db", "sqlite", "sqlite3", "pyc", "pyo",
+        ]
+        .into_iter()
+        .collect()
+    });
 
-fn classify_file(name: &str, size: u64) -> (bool, bool) {
-    let ext = std::path::Path::new(name)
+/// Filenames (no extension) that are always opaque. `Path::extension()`
+/// returns `None` for `.DS_Store` so the extension table never catches it.
+static BINARY_FILENAMES: std::sync::LazyLock<std::collections::HashSet<&'static str>> =
+    std::sync::LazyLock::new(|| [".DS_Store", "Thumbs.db"].into_iter().collect());
+
+/// True if a file name ends in a known binary extension or is a known
+/// binary filename like `.DS_Store`.
+fn is_binary_name(name: &str) -> bool {
+    if BINARY_FILENAMES.contains(name) {
+        return true;
+    }
+    std::path::Path::new(name)
         .extension()
         .and_then(|e| e.to_str())
-        .map(|s| s.to_ascii_lowercase());
-    let is_binary = ext
-        .as_deref()
-        .map(|e| BINARY_EXTS.contains(&e))
-        .unwrap_or(false);
-    let is_large = size >= LARGE_FILE_THRESHOLD_BYTES;
-    (is_binary, is_large)
+        .map(|e| {
+            let mut buf = [0u8; 16];
+            let bytes = e.as_bytes();
+            if bytes.len() > buf.len() {
+                return false;
+            }
+            for (i, b) in bytes.iter().enumerate() {
+                buf[i] = b.to_ascii_lowercase();
+            }
+            std::str::from_utf8(&buf[..bytes.len()])
+                .map(|s| BINARY_EXTS.contains(s))
+                .unwrap_or(false)
+        })
+        .unwrap_or(false)
 }
 
 /// Validate a user-supplied filename/path component to prevent path traversal.
@@ -125,24 +150,24 @@ async fn walk_dir(
             continue;
         }
 
-        let metadata = entry.metadata().await.map_err(|e| e.to_string())?;
-        let is_dir = metadata.is_dir();
+        // Cheaper than `metadata()` — uses dirent's d_type on Unix, no
+        // extra syscall. Lets us reject excluded directories before
+        // paying for a full stat.
+        let file_type = entry.file_type().await.map_err(|e| e.to_string())?;
+        let is_dir = file_type.is_dir();
 
-        // Skip vendor / build / cache directories entirely — they'd just
-        // spam the picker with thousands of irrelevant files.
-        if is_dir && EXCLUDED_DIRS.contains(&name.as_str()) {
+        if is_dir && EXCLUDED_DIRS.contains(name.as_str()) {
             continue;
         }
 
+        let metadata = entry.metadata().await.map_err(|e| e.to_string())?;
         let size = metadata.len();
-        // Drop oversized files completely (videos, dataset dumps, …). The
-        // user can still reach them via the file picker, just not via @.
         if !is_dir && size > HARD_SIZE_CAP_BYTES {
             continue;
         }
 
-        let rel_path = entry
-            .path()
+        let entry_path = entry.path();
+        let rel_path = entry_path
             .strip_prefix(base)
             .map_err(|e| e.to_string())?
             .to_string_lossy()
@@ -157,12 +182,12 @@ async fn walk_dir(
         let (is_binary, is_large) = if is_dir {
             (false, false)
         } else {
-            classify_file(&name, size)
+            (is_binary_name(&name), size >= LARGE_FILE_THRESHOLD_BYTES)
         };
 
         out.push(WorkspaceFile {
-            name: rel_path.clone(),
-            path: entry.path().to_string_lossy().to_string(),
+            path: entry_path.to_string_lossy().to_string(),
+            name: rel_path,
             size,
             is_dir,
             modified,
@@ -171,7 +196,7 @@ async fn walk_dir(
         });
 
         if is_dir {
-            Box::pin(walk_dir(base, &entry.path(), out)).await?;
+            Box::pin(walk_dir(base, &entry_path, out)).await?;
         }
     }
     Ok(())
@@ -733,10 +758,8 @@ async fn list_subdir_md_files(
             name: name.clone(),
             path: entry.path().to_string_lossy().to_string(),
             size: metadata.as_ref().map_or(0, |m| m.len()),
-            is_dir: false,
             modified,
-            is_large: false,
-            is_binary: false,
+            ..Default::default()
         });
     }
     files

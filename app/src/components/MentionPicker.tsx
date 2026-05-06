@@ -1,14 +1,10 @@
 /**
- * MentionPicker — unified @-mention dropdown for agents + bots + workspace files
- * Agents appear first, then bots, then files.
- *
- * File matching: subsequence-fuzzy. Typing `prdc` matches `Product` and
- * `产品介绍` (the latter via path-component fallback). Exact prefix > word
- * prefix > scattered subsequence. Binary / large files still appear but
- * carry a small badge so the user (and reviewer) sees the warning.
+ * MentionPicker — @-mention dropdown for agents + bots + workspace files.
+ * File names are scored with a subsequence fuzzy matcher (exact substring
+ * outranks scattered matches; word boundaries get a bonus).
  */
 
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useMemo } from 'react';
 import { Bot, FileText, Folder, FileCode, Image as ImageIcon } from 'lucide-react';
 import type { WorkspaceFile } from '../api/workspace';
 import type { BotInfo } from '../api/bots';
@@ -34,6 +30,34 @@ function formatSize(bytes: number) {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
+interface FileBadge {
+  label: string;
+  bg: string;
+  fg: string;
+  title: string;
+}
+
+function getFileBadges(file: WorkspaceFile): FileBadge[] {
+  const out: FileBadge[] = [];
+  if (file.is_binary) {
+    out.push({
+      label: 'binary',
+      bg: 'rgba(245,158,11,0.15)',
+      fg: 'rgb(245,158,11)',
+      title: '二进制文件，模型无法读取内容',
+    });
+  }
+  if (file.is_large) {
+    out.push({
+      label: 'large',
+      bg: 'rgba(239,68,68,0.12)',
+      fg: 'rgb(239,68,68)',
+      title: `${formatSize(file.size)} — 选中后会消耗大量上下文`,
+    });
+  }
+  return out;
+}
+
 /** A flattened mention item used for keyboard navigation indexing */
 export type MentionItem =
   | { type: 'agent'; agent: AgentSummary }
@@ -45,36 +69,51 @@ const MAX_BOTS = 5;
 const MAX_FILES = 8;
 
 /**
- * Subsequence fuzzy score (≥ 0 means match, higher is better; -1 = no match).
- *  • Exact substring → big bonus
- *  • Match at word/path boundary → bonus
- *  • Adjacent matched chars → bonus (rewards contiguous spans)
- *  • Earlier matches > later matches
- * Fast enough for thousands of items; runs sync on each keystroke.
+ * Subsequence fuzzy score against a pre-lowercased needle.
+ * Returns >= 0 on match (higher = better) and -1 on miss. Caller MUST pass
+ * the needle already lowercased so we don't re-lowercase per item.
  */
-function fuzzyScore(haystack: string, needle: string): number {
-  if (!needle) return 0;
-  const h = haystack.toLowerCase();
-  const n = needle.toLowerCase();
-  // Exact substring is the strongest signal.
-  const directIdx = h.indexOf(n);
+function fuzzyScoreLower(haystackLower: string, needleLower: string): number {
+  if (!needleLower) return 0;
+  const directIdx = haystackLower.indexOf(needleLower);
   if (directIdx !== -1) {
     return 1000 - directIdx + (directIdx === 0 ? 100 : 0);
   }
-  // Subsequence walk.
   let score = 0;
   let prevMatchedAt = -2;
   let ni = 0;
-  for (let i = 0; i < h.length && ni < n.length; i++) {
-    if (h[i] !== n[ni]) continue;
+  for (let i = 0; i < haystackLower.length && ni < needleLower.length; i++) {
+    if (haystackLower[i] !== needleLower[ni]) continue;
     let bonus = 1;
-    if (i === prevMatchedAt + 1) bonus += 5;          // adjacent chars
-    if (i === 0 || /[\s/_.\-]/.test(h[i - 1])) bonus += 3; // boundary
+    if (i === prevMatchedAt + 1) bonus += 5;
+    if (i === 0 || /[\s/_.\-]/.test(haystackLower[i - 1])) bonus += 3;
     score += bonus;
     prevMatchedAt = i;
     ni++;
   }
-  return ni === n.length ? score : -1;
+  return ni === needleLower.length ? score : -1;
+}
+
+/** Top-K by score (skip sort when there's no query). */
+function rankAndCap<T>(
+  items: T[],
+  q: string,
+  fields: (t: T) => string[],
+  limit: number,
+): T[] {
+  if (!q) return items.slice(0, limit);
+  const needle = q.toLowerCase();
+  const scored: { t: T; s: number }[] = [];
+  for (const t of items) {
+    let best = -1;
+    for (const f of fields(t)) {
+      const s = fuzzyScoreLower(f.toLowerCase(), needle);
+      if (s > best) best = s;
+    }
+    if (best >= 0) scored.push({ t, s: best });
+  }
+  scored.sort((a, b) => b.s - a.s);
+  return scored.slice(0, limit).map(x => x.t);
 }
 
 /** Build the filtered + flattened list used for display and keyboard nav */
@@ -82,36 +121,20 @@ export function buildMentionList(bots: BotInfo[], files: WorkspaceFile[], query:
   const q = query.trim();
   const items: MentionItem[] = [];
 
-  // Agents first
   if (agents) {
-    const scored = agents
-      .map(a => ({ a, s: q ? Math.max(fuzzyScore(a.name, q), fuzzyScore(a.description, q)) : 0 }))
-      .filter(x => !q || x.s >= 0)
-      .sort((a, b) => b.s - a.s)
-      .slice(0, MAX_AGENTS);
-    for (const { a } of scored) items.push({ type: 'agent', agent: a });
+    for (const a of rankAndCap(agents, q, x => [x.name, x.description], MAX_AGENTS)) {
+      items.push({ type: 'agent', agent: a });
+    }
   }
 
-  // Then bots
-  const scoredBots = bots
-    .filter(b => b.enabled)
-    .map(b => ({ b, s: q ? Math.max(fuzzyScore(b.name, q), fuzzyScore(b.platform, q)) : 0 }))
-    .filter(x => !q || x.s >= 0)
-    .sort((a, b) => b.s - a.s)
-    .slice(0, MAX_BOTS);
-  for (const { b } of scoredBots) items.push({ type: 'bot', bot: b });
+  const enabledBots = bots.filter(b => b.enabled);
+  for (const b of rankAndCap(enabledBots, q, x => [x.name, x.platform], MAX_BOTS)) {
+    items.push({ type: 'bot', bot: b });
+  }
 
-  // Then files — fuzzy on full path; tiebreak by directories-first then name.
-  const scoredFiles = files
-    .map(f => ({ f, s: q ? fuzzyScore(f.name, q) : 0 }))
-    .filter(x => !q || x.s >= 0)
-    .sort((a, b) => {
-      if (q) return b.s - a.s;
-      // No query → keep original order from backend (dirs-first, alpha).
-      return 0;
-    })
-    .slice(0, MAX_FILES);
-  for (const { f } of scoredFiles) items.push({ type: 'file', file: f });
+  for (const f of rankAndCap(files, q, x => [x.name], MAX_FILES)) {
+    items.push({ type: 'file', file: f });
+  }
 
   return items;
 }
@@ -130,7 +153,12 @@ interface MentionPickerProps {
 export function MentionPicker({ bots, files, query, selectedIndex, onSelectBot, onSelectFile, agents, onSelectAgent }: MentionPickerProps) {
   const activeRef = useRef<HTMLDivElement>(null);
 
-  const items = buildMentionList(bots, files, query, agents);
+  // buildMentionList scores files on every render — memoize so unrelated
+  // parent re-renders don't re-fuzzy-match the whole list.
+  const items = useMemo(
+    () => buildMentionList(bots, files, query, agents),
+    [bots, files, query, agents],
+  );
 
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: 'nearest' });
@@ -265,24 +293,16 @@ export function MentionPicker({ bots, files, query, selectedIndex, onSelectBot, 
                   >
                     {item.file.name}
                   </span>
-                  {!item.file.is_dir && item.file.is_binary && (
+                  {!item.file.is_dir && getFileBadges(item.file).map(b => (
                     <span
+                      key={b.label}
                       className="text-[10px] shrink-0 px-1.5 py-0.5 rounded font-medium"
-                      style={{ background: 'var(--color-warning-subtle, rgba(245,158,11,0.15))', color: 'var(--color-warning, rgb(245,158,11))' }}
-                      title="二进制文件，模型无法读取内容"
+                      style={{ background: b.bg, color: b.fg }}
+                      title={b.title}
                     >
-                      binary
+                      {b.label}
                     </span>
-                  )}
-                  {!item.file.is_dir && item.file.is_large && (
-                    <span
-                      className="text-[10px] shrink-0 px-1.5 py-0.5 rounded font-medium"
-                      style={{ background: 'rgba(239,68,68,0.12)', color: 'rgb(239,68,68)' }}
-                      title={`${formatSize(item.file.size)} — 选中后会消耗大量上下文`}
-                    >
-                      large
-                    </span>
-                  )}
+                  ))}
                   {!item.file.is_dir && (
                     <span className="text-[11px] shrink-0" style={{ color: 'var(--color-text-muted)' }}>
                       {formatSize(item.file.size)}

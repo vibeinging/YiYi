@@ -243,6 +243,15 @@ mod tests {
                 names
             );
         }
+        // Removed agents must NOT load — the include_str! list shouldn't
+        // grow back without an explicit decision.
+        for removed in ["planner", "memory_curator", "bot_coordinator"] {
+            assert!(
+                registry.get(removed).is_none(),
+                "agent '{}' was removed; should not be in registry",
+                removed
+            );
+        }
     }
 
     #[test]
@@ -252,22 +261,8 @@ mod tests {
         for name in ["explore", "desktop_operator"] {
             let a = registry.get(name).expect("agent registered");
             assert!(a.is_hidden(), "{name} should be hidden from @-mention picker");
-            // But still resolvable by spawn_agents (registry.get works regardless).
+            assert!(a.is_builtin());
+            assert!(matches!(a.tool_filter(), ToolFilter::Allow(_)));
         }
-    }
-
-    #[test]
-    fn _legacy_test_kept_as_no_op() {
-        // memory_curator / bot_coordinator removed; they no longer load.
-        let tmp = TempDir::new().unwrap();
-        let registry = AgentRegistry::load(tmp.path(), None);
-        assert!(registry.get("memory_curator").is_none(), "removed agent");
-        assert!(registry.get("bot_coordinator").is_none(), "removed agent");
-
-        // Touch one builtin so the function still uses the symbols.
-        let exp = registry.get("explore").expect("explore registered");
-        assert_eq!(exp.emoji(), "🔍");
-        assert!(exp.is_builtin());
-        assert!(matches!(exp.tool_filter(), ToolFilter::Allow(_)));
     }
 }
