@@ -701,7 +701,7 @@ pub struct ToolResult {
     pub images: Vec<String>,
 }
 
-fn tool_def(name: &str, desc: &str, params: serde_json::Value) -> ToolDefinition {
+pub(crate) fn tool_def(name: &str, desc: &str, params: serde_json::Value) -> ToolDefinition {
     ToolDefinition {
         r#type: "function".into(),
         function: FunctionDef {
@@ -953,9 +953,11 @@ pub fn core_tools() -> Vec<ToolDefinition> {
     }).clone()
 }
 
-/// Extended tools loaded on demand via tool_search.
-/// Includes ALL tools not in core set.
-pub fn deferred_tools() -> Vec<ToolDefinition> {
+/// Static portion of the deferred-tool pool — same content every call,
+/// safe to cache. Dynamic stubs (deferred MCP servers) are appended by
+/// `deferred_tools()` below since their set changes at runtime as users
+/// install / remove MCP prerequisites.
+fn deferred_tools_static() -> &'static Vec<ToolDefinition> {
     static CACHE: std::sync::OnceLock<Vec<ToolDefinition>> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| {
         let core_names = [
@@ -1016,7 +1018,17 @@ pub fn deferred_tools() -> Vec<ToolDefinition> {
         tools.retain(|t| !core_names.contains(&t.function.name.as_str()));
         tools.retain(|t| !VISION_DISABLED_TOOLS.contains(&t.function.name.as_str()));
         tools
-    }).clone()
+    })
+}
+
+/// Extended tools loaded on demand via tool_search.
+/// Includes ALL tools not in core set, plus runtime-resolved stubs for
+/// any deferred MCP servers (so the agent can plan around capabilities
+/// it doesn't have yet and trigger lazy install on first invocation).
+pub fn deferred_tools() -> Vec<ToolDefinition> {
+    let mut tools = deferred_tools_static().clone();
+    tools.extend(crate::engine::infra::deferred_mcp::stubs_for_active_deferrals());
+    tools
 }
 
 /// All tools (core + deferred). Used by execute_tool dispatch.
@@ -1434,6 +1446,38 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
             };
         }
         _ => {
+            // Deferred-MCP stub interception: if the tool name belongs to
+            // an MCP server that's waiting on a missing prerequisite, ask
+            // the user (via the InstallDialog) to install instead of
+            // failing with an opaque "Unknown tool" error.
+            if let Some(server_id) = crate::engine::infra::deferred_mcp::find_stub_owner(&call.function.name) {
+                if let Some(entry) = crate::engine::infra::deferred_mcp::get_deferred(&server_id) {
+                    if let Some(handle) = APP_HANDLE.get() {
+                        use tauri::Emitter;
+                        let _ = handle.emit(
+                            "mcp://needs_install",
+                            serde_json::json!({
+                                "server_id": &entry.server_id,
+                                "server_name": &entry.server_name,
+                                "missing": &entry.missing,
+                                "triggered_by_tool": &call.function.name,
+                            }),
+                        );
+                    }
+                    return ToolResult {
+                        tool_call_id: call.id.clone(),
+                        content: format!(
+                            "[deferred_mcp_install_requested] Tool `{}` belongs to the `{}` MCP server, \
+                             which needs prerequisites the user hasn't installed yet. \
+                             A consent dialog is now open in the app. Wait for the user; \
+                             once they confirm install + restart, retry this exact tool call.",
+                            call.function.name, entry.server_name
+                        ),
+                        images: vec![],
+                    };
+                }
+            }
+
             // Unified dispatch: look up in GlobalToolRegistry first
             if let Some(registry) = crate::engine::tool_registry_global::global_registry() {
                 let tool_name = &call.function.name;

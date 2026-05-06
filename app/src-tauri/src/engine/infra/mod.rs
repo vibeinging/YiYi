@@ -8,3 +8,4 @@ pub mod pty_manager;
 pub mod config_watcher;
 pub mod dep_check;
 pub mod install_runner;
+pub mod deferred_mcp;

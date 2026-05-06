@@ -170,7 +170,7 @@ pub fn run() {
                     let cfg = tauri::async_runtime::block_on(state.config.read());
                     cfg.mcp.clone()
                 };
-                let app_handle_for_mcp = app.handle().clone();
+                let _app_handle_for_mcp = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     for (key, cfg) in &mcp_config {
                         if !cfg.enabled {
@@ -178,24 +178,19 @@ pub fn run() {
                         }
 
                         // Lazy-install pre-flight: if any required bin is
-                        // missing, surface a `mcp://needs_install` event
-                        // and skip spawn. The frontend's InstallDialog
-                        // listens, prompts the user, and on user consent
-                        // calls `install_deps` + `retry_mcp_server`.
+                        // missing, mark the server deferred (which exposes
+                        // tool stubs to the agent) and skip the spawn.
+                        // The needs_install event is emitted later, only
+                        // when the agent or user actually triggers a stub
+                        // tool — true "lazy" install.
                         let missing = crate::engine::infra::dep_check::missing_deps(&cfg.requires);
                         if !missing.is_empty() {
                             log::info!(
-                                "MCP '{}' has {} missing prerequisite(s); deferring spawn until installed",
+                                "MCP '{}' has {} missing prerequisite(s); registering tool stubs and deferring spawn until first use",
                                 key, missing.len()
                             );
-                            use tauri::Emitter;
-                            let _ = app_handle_for_mcp.emit(
-                                "mcp://needs_install",
-                                serde_json::json!({
-                                    "server_id": key,
-                                    "server_name": cfg.name,
-                                    "missing": missing,
-                                }),
+                            crate::engine::infra::deferred_mcp::mark_deferred(
+                                key, &cfg.name, missing,
                             );
                             continue;
                         }
