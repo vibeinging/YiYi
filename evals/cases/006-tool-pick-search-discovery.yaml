@@ -12,6 +12,17 @@ mode: fixture
 
 user_message: "DeepSeek V4 Pro 现在的价格是多少？"
 
+mock_tool_results:
+  web_search: |
+    Found 3 results for "DeepSeek V4 Pro pricing":
+    1. https://api-docs.deepseek.com/quick_start/pricing — DeepSeek API Pricing
+       Official pricing: V4 Pro $0.435/M input cache miss, $0.0036/M cache hit, $0.87/M output (75% promo until 2026-05-31).
+    2. https://platform.deepseek.com/pricing — DeepSeek Platform
+       Pricing dashboard with current rates.
+    3. https://github.com/deepseek-ai/DeepSeek-V4 — DeepSeek-V4 Repository
+  browser_fetch: |
+    [Mock page content] DeepSeek V4 Pro pricing as of 2026-04: input cache miss $0.435 / 1M tokens, cache hit $0.003625 / 1M, output $0.87 / 1M. 75% promotional discount runs through 2026-05-31 15:59 UTC.
+
 fixture:
   - role: assistant
     content: "我先搜一下官方价格信息。"

@@ -10,6 +10,24 @@ mode: fixture
 
 user_message: "找一下 React 19 的官方 release notes，看看主要新特性是什么。"
 
+mock_tool_results:
+  web_search: |
+    Found 3 results for "React 19 release notes":
+    1. https://react.dev/blog/2024/12/05/react-19 — React v19 (Official Blog)
+       The React team's official announcement of React 19, covering Actions, useActionState, useFormStatus, the use() hook, and Server Components stabilisation.
+    2. https://github.com/facebook/react/releases/tag/v19.0.0 — React 19 Release on GitHub
+    3. https://react.dev/blog/2024/04/25/react-19-upgrade-guide — Upgrade Guide
+  browser_fetch: |
+    React v19 — December 5, 2024
+    Major new features:
+    - Actions: async functions for transitions, replaces useTransition pattern
+    - new hooks: useActionState, useFormStatus, useOptimistic
+    - use() hook: read promises and context inline
+    - Server Components: stable, document loading APIs
+    - ref as a prop: no more forwardRef boilerplate
+    - <Document> metadata support: <title>, <meta>, <link> hoisted automatically
+    Breaking: legacy context removed, string refs removed, defaultProps on function components removed.
+
 fixture:
   - role: assistant
     content: "先搜下 React 19 的 release notes。"

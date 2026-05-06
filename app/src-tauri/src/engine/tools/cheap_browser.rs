@@ -251,7 +251,8 @@ pub(super) async fn browser_screenshot_tool(args: &serde_json::Value) -> (String
 pub(super) fn fetch_def() -> super::ToolDefinition {
     super::tool_def(
         "browser_fetch",
-        "Fetch a URL's rendered HTML via headless Chrome (JS-evaluated DOM, not raw HTTP). Cheap + zero-session. Use for 'read this page'; use `browser_use` for interaction or login-gated pages.",
+        "Fetch a URL's rendered HTML via headless Chrome (JS-evaluated DOM, not raw HTTP). Cheap + zero-session. **READ-ONLY** — cannot click, type, submit forms, log in, or interact in any way. \
+         If the task involves login, clicking, typing, filling a form, leaving a comment, navigating multi-step flows, or anything beyond reading static text → call `browser_enable` instead (one-time install, then unlocks the interactive browser tool set).",
         serde_json::json!({
             "type": "object",
             "properties": {

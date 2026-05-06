@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex};
 use regex::Regex;
 use serde::Deserialize;
 
-use app_lib::engine::llm_client::LLMConfig;
+use app_lib::engine::llm_client::{chat_completion, LLMConfig, LLMMessage, MessageContent};
 use app_lib::engine::react_agent::{run_react_with_options_stream, AgentStreamEvent};
 use app_lib::engine::tools::{builtin_tools, FunctionDef, ToolDefinition};
 
@@ -58,6 +58,14 @@ struct EvalCase {
     setup: Option<serde_yaml::Value>,
     #[serde(default)]
     fixture: Option<Vec<FixtureTurn>>,
+    /// Live-mode tool result mocks. Maps tool name → string returned to
+    /// the agent as the tool's stdout. Lets us decouple "did the LLM
+    /// pick the right tool?" from "do real tool runtimes work in CI?".
+    /// Without this, real tools fail (no APP_HANDLE / DB / providers in
+    /// the eval process) and the agent's recovery behaviour drowns out
+    /// the actual tool-selection signal we wanted to measure.
+    #[serde(default)]
+    mock_tool_results: std::collections::HashMap<String, String>,
     expect: ExpectBlock,
 }
 
@@ -370,6 +378,103 @@ fn referenced_tool_names(case: &EvalCase) -> HashSet<String> {
         names.insert(t.name.clone());
     }
     names
+}
+
+/// Mini ReAct loop for live mode that uses the real LLM but feeds back
+/// **mock** tool results from `case.mock_tool_results` instead of running
+/// the actual built-in tool dispatchers. The eval process has no
+/// AppHandle / DB / providers state so a real `execute_tool` for things
+/// like `browser_fetch` returns "subsystem not initialised" — and the
+/// agent's recovery behaviour (re-search, fallback) drowned out the
+/// tool-selection signal we wanted to measure. Mocking results gives the
+/// agent believable input so its choices stay clean.
+///
+/// Returns the captured tool-call sequence + the final assistant text.
+async fn run_live_with_mocks(
+    config: &LLMConfig,
+    system_prompt: &str,
+    user_message: &str,
+    tools: &[ToolDefinition],
+    mock_results: &std::collections::HashMap<String, String>,
+    max_iter: usize,
+) -> RunOutcome {
+    let mut messages = vec![
+        LLMMessage {
+            role: "system".into(),
+            content: Some(MessageContent::text(system_prompt)),
+            tool_calls: None,
+            tool_call_id: None,
+            reasoning_content: None,
+        },
+        LLMMessage {
+            role: "user".into(),
+            content: Some(MessageContent::text(user_message)),
+            tool_calls: None,
+            tool_call_id: None,
+            reasoning_content: None,
+        },
+    ];
+
+    let mut all_tool_calls: Vec<(String, String)> = Vec::new();
+    let mut final_text = String::new();
+    let mut last_err: Option<String> = None;
+
+    for _ in 0..max_iter {
+        match chat_completion(config, &messages, tools).await {
+            Ok(resp) => {
+                let assistant = resp.message;
+                let calls = assistant.tool_calls.clone();
+                let assistant_text = assistant
+                    .content
+                    .as_ref()
+                    .and_then(|c| c.as_text().map(str::to_string))
+                    .unwrap_or_default();
+
+                if let Some(ref tcs) = calls {
+                    for tc in tcs {
+                        all_tool_calls.push((tc.function.name.clone(), tc.function.arguments.clone()));
+                    }
+                    messages.push(assistant);
+                    // Inject mock results in the same order.
+                    if let Some(ref tcs2) = calls {
+                        for tc in tcs2 {
+                            let result = mock_results
+                                .get(&tc.function.name)
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    format!(
+                                        "[eval mock] {} returned no mock result; \
+                                         add `mock_tool_results.{}` to the YAML to silence this.",
+                                        tc.function.name, tc.function.name
+                                    )
+                                });
+                            messages.push(LLMMessage {
+                                role: "tool".into(),
+                                content: Some(MessageContent::text(result)),
+                                tool_calls: None,
+                                tool_call_id: Some(tc.id.clone()),
+                                reasoning_content: None,
+                            });
+                        }
+                    }
+                } else {
+                    // No tool calls — agent produced a final answer.
+                    final_text = assistant_text;
+                    break;
+                }
+            }
+            Err(e) => {
+                last_err = Some(e);
+                break;
+            }
+        }
+    }
+
+    RunOutcome {
+        tool_calls: all_tool_calls,
+        text: final_text,
+        final_result: last_err.map(Err).unwrap_or_else(|| Ok(String::new())),
+    }
 }
 
 fn dummy_tool(name: &str) -> ToolDefinition {
@@ -856,43 +961,16 @@ async fn live_cases() {
             native_tools: vec![],
         };
 
-        let events = Arc::new(Mutex::new(Vec::<AgentStreamEvent>::new()));
-        let events_cb = events.clone();
-
         eprintln!("  [live] {} — sending real LLM request…", case.id);
-        let result = run_react_with_options_stream(
+        let outcome = run_live_with_mocks(
             &config,
             &system_prompt,
             &case.user_message,
-            &[],
-            &[],
-            Some(3), // allow up to 3 rounds for real agent
-            None,
-            move |e| events_cb.lock().unwrap().push(e),
-            None,
-            None,
-            Some(tools_override),
+            &tools_override,
+            &case.mock_tool_results,
+            3, // max iterations
         )
         .await;
-
-        let events = events.lock().unwrap().clone();
-        let mut tool_calls = Vec::new();
-        let mut text = String::new();
-        for e in &events {
-            match e {
-                AgentStreamEvent::ToolStart { name, args_preview } => {
-                    tool_calls.push((name.clone(), args_preview.clone()));
-                }
-                AgentStreamEvent::Token(t) => text.push_str(t),
-                _ => {}
-            }
-        }
-
-        let outcome = RunOutcome {
-            tool_calls,
-            text,
-            final_result: result,
-        };
         eprintln!(
             "         → tool_calls: {:?}",
             outcome.tool_calls

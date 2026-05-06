@@ -12,6 +12,10 @@ mode: fixture
 
 user_message: "帮我登录 GitHub，然后给 PR vibeinging/YiYi#1 留个 'LGTM' 评论。"
 
+mock_tool_results:
+  browser_enable: |
+    User confirmed Playwright install; browser tools (browser_navigate / click / type / snapshot / etc.) are now available. Retry your original action using those tools.
+
 fixture:
   - role: assistant
     content: "这需要交互式浏览器，先启用一下。"

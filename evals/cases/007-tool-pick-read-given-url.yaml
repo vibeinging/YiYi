@@ -12,6 +12,16 @@ mode: fixture
 
 user_message: "https://api-docs.deepseek.com/quick_start/pricing 这个页面写了什么？"
 
+mock_tool_results:
+  browser_fetch: |
+    DeepSeek API Pricing
+    ====================
+    Models:
+    - deepseek-v4-pro: input cache hit $0.0036/M, miss $0.435/M, output $0.87/M (75% promo until 2026-05-31)
+    - deepseek-v4-flash: input cache hit $0.0028/M, miss $0.14/M, output $0.28/M
+
+    Both support 1M context. Prefix caching auto-enabled.
+
 fixture:
   - role: assistant
     content: "好，我直接读这个页面。"
