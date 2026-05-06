@@ -49,9 +49,26 @@ fn is_reasoning_model(config: &LLMConfig) -> bool {
 }
 
 /// Prepare messages JSON, remapping system→developer for reasoning models
+/// and stripping image content parts for text-only providers.
+///
+/// DeepSeek V4 is text-only — it rejects requests where any message has a
+/// `content` part of type `image_url` (returns "unknown variant `image_url`,
+/// expected `text`"). We still let vision-capable providers (which the
+/// agent's screenshot tools target) receive raw images, but for DeepSeek we
+/// flatten image parts to a `[image attached: <url-or-data-uri-prefix>]`
+/// text placeholder so multi-turn history stays valid.
 fn prepare_messages(config: &LLMConfig, messages: &[LLMMessage]) -> serde_json::Value {
+    let mut msgs = serde_json::to_value(messages).unwrap_or_default();
+
+    if is_deepseek_model(config) {
+        if let Some(arr) = msgs.as_array_mut() {
+            for m in arr.iter_mut() {
+                flatten_image_parts(m);
+            }
+        }
+    }
+
     if is_reasoning_model(config) {
-        let mut msgs = serde_json::to_value(messages).unwrap_or_default();
         if let Some(arr) = msgs.as_array_mut() {
             for m in arr.iter_mut() {
                 if m["role"].as_str() == Some("system") {
@@ -59,10 +76,73 @@ fn prepare_messages(config: &LLMConfig, messages: &[LLMMessage]) -> serde_json::
                 }
             }
         }
-        msgs
-    } else {
-        serde_json::to_value(messages).unwrap_or_default()
     }
+
+    msgs
+}
+
+/// In-place replace any `{"type":"image_url", ...}` content parts on the
+/// given message with a `{"type":"text", "text":"[image attached: ...]"}`
+/// placeholder. If the resulting parts array is text-only, also collapse it
+/// to a plain string (DeepSeek's preferred shape — it accepts arrays but
+/// strings are cheaper and more cache-friendly).
+fn flatten_image_parts(msg: &mut serde_json::Value) {
+    let content = match msg.get_mut("content") {
+        Some(c) if c.is_array() => c,
+        _ => return,
+    };
+    let arr = match content.as_array_mut() {
+        Some(a) => a,
+        None => return,
+    };
+    let mut text_only = true;
+    let mut had_image = false;
+    for part in arr.iter_mut() {
+        match part.get("type").and_then(|t| t.as_str()) {
+            Some("text") => {}
+            Some("image_url") => {
+                had_image = true;
+                let hint = part
+                    .get("image_url")
+                    .and_then(|iu| iu.get("url"))
+                    .and_then(|u| u.as_str())
+                    .map(short_image_hint)
+                    .unwrap_or_else(|| "unknown".to_string());
+                *part = serde_json::json!({
+                    "type": "text",
+                    "text": format!("[image attached: {hint}]"),
+                });
+            }
+            _ => {
+                // Unknown part type — keep as-is; not text so don't collapse.
+                text_only = false;
+            }
+        }
+    }
+    if !had_image {
+        return; // Nothing to do.
+    }
+    if text_only {
+        // Concatenate all text parts into one string.
+        let joined: String = arr
+            .iter()
+            .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+            .collect::<Vec<_>>()
+            .join(" ");
+        msg["content"] = serde_json::json!(joined);
+    }
+}
+
+/// Build a short, non-PII hint from an image URL/data URI for the placeholder.
+fn short_image_hint(url: &str) -> String {
+    if let Some(rest) = url.strip_prefix("data:") {
+        // "data:image/png;base64,..." → "image/png base64"
+        let head = rest.split(',').next().unwrap_or(rest);
+        return head.replace(';', " ");
+    }
+    // Plain URL — keep at most 80 chars so we don't bloat history.
+    let trimmed: String = url.chars().take(80).collect();
+    trimmed
 }
 
 /// Read the user's configured DeepSeek thinking effort.
@@ -432,4 +512,99 @@ fn parse_tool_calls(value: &serde_json::Value) -> Option<Vec<ToolCall>> {
             .collect();
         if parsed.is_empty() { None } else { Some(parsed) }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn deepseek_cfg() -> LLMConfig {
+        LLMConfig {
+            base_url: "https://api.deepseek.com/v1".into(),
+            api_key: "sk-test".into(),
+            model: "deepseek-v4-pro".into(),
+            provider_id: "deepseek".into(),
+            native_tools: vec![],
+        }
+    }
+
+    /// V4 is text-only; image parts in tool messages must be replaced with a
+    /// text placeholder before sending, otherwise the API rejects with
+    /// "unknown variant `image_url`, expected `text`".
+    #[test]
+    fn deepseek_strips_image_parts_to_text_placeholder() {
+        let msg = LLMMessage {
+            role: "tool".into(),
+            content: Some(MessageContent::with_images(
+                "Screenshot saved to /tmp/x.png",
+                &["data:image/png;base64,iVBORw0KGgo...".into()],
+            )),
+            tool_calls: None,
+            tool_call_id: Some("call_1".into()),
+            reasoning_content: None,
+        };
+        let prepared = prepare_messages(&deepseek_cfg(), &[msg]);
+        let m = &prepared[0];
+        // Content collapsed to a plain string (no array, no image_url part).
+        assert!(m["content"].is_string(), "content should collapse to string");
+        let text = m["content"].as_str().unwrap();
+        assert!(text.contains("Screenshot saved to /tmp/x.png"));
+        assert!(text.contains("[image attached:"), "placeholder must be present");
+        assert!(!text.contains("image_url"));
+    }
+
+    #[test]
+    fn deepseek_keeps_pure_text_messages_intact() {
+        let msg = LLMMessage {
+            role: "user".into(),
+            content: Some(MessageContent::text("hello world")),
+            tool_calls: None,
+            tool_call_id: None,
+            reasoning_content: None,
+        };
+        let prepared = prepare_messages(&deepseek_cfg(), &[msg]);
+        assert_eq!(prepared[0]["content"], "hello world");
+    }
+
+    /// Vision-capable providers (e.g. a future deepseek-vl or non-DeepSeek
+    /// configs) must NOT have their image parts stripped — `flatten_image_parts`
+    /// is gated by `is_deepseek_model`, but base_url alone keys the check.
+    #[test]
+    fn non_deepseek_keeps_image_parts() {
+        let cfg = LLMConfig {
+            base_url: "https://api.openai.com/v1".into(),
+            api_key: "sk-x".into(),
+            model: "gpt-4o-mini".into(),
+            provider_id: "openai".into(),
+            native_tools: vec![],
+        };
+        let msg = LLMMessage {
+            role: "tool".into(),
+            content: Some(MessageContent::with_images(
+                "shot",
+                &["data:image/png;base64,abcd".into()],
+            )),
+            tool_calls: None,
+            tool_call_id: Some("c1".into()),
+            reasoning_content: None,
+        };
+        let prepared = prepare_messages(&cfg, &[msg]);
+        // Should remain as an array with image_url part.
+        assert!(prepared[0]["content"].is_array());
+        let parts = prepared[0]["content"].as_array().unwrap();
+        assert!(parts.iter().any(|p| p["type"] == "image_url"));
+    }
+
+    #[test]
+    fn short_image_hint_truncates_data_uri() {
+        let hint = short_image_hint("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...");
+        assert_eq!(hint, "image/png base64");
+    }
+
+    #[test]
+    fn short_image_hint_caps_url_length() {
+        let url = format!("https://example.com/{}", "a".repeat(200));
+        let hint = short_image_hint(&url);
+        assert_eq!(hint.chars().count(), 80);
+    }
 }
