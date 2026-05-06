@@ -29,7 +29,6 @@ expect:
   must_call_tool:
     - name: create_cronjob
   must_not_call_tool:
-    - name: execute_shell
     - name: spawn_agents
 
   rubric:
@@ -40,3 +39,8 @@ expect:
         Agent did NOT claim "我会在 9 点提醒你" without actually
         scheduling — that would be a hollow promise.
       weight: critical
+    - criterion: >
+        Agent did NOT spin up a sub-agent that "sleeps until 9am"
+        instead of using the cron framework.
+      weight: major
+

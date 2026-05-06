@@ -115,24 +115,36 @@ URL given?
   with `browser_fetch` alone and gives up — should call
   `browser_enable`.
 
-## R9. File ops: prefer typed tools over `execute_shell`
+## R9. Typed tools earn their keep — shell is fine when it works
 
-For file operations YiYi has typed tools (`read_file`, `write_file`,
-`edit_file`, `grep_search`, `glob_search`, `list_directory`,
-`project_tree`). These are safer than shell commands (no shell injection,
-permission gate, undo support) and produce structured results.
+YiYi exposes both typed tools (`read_file`, `edit_file`, `git_status`,
+…) and `execute_shell`. The product principle is **practical, not
+puritanical**: shell is universal, well-trained-on, and gets the job
+done; we only insist on a typed tool when it offers a concrete
+advantage shell cannot replicate.
 
-- **Read content** → `read_file`, not `cat` / `head` / `tail`.
-- **Modify part of a file** → `edit_file`, not `sed` / `awk`.
-- **Search a pattern in many files** → `grep_search`, not `grep` /
-  `rg` via shell.
-- **Find files by name** → `glob_search`, not `find`.
-- **List directory** → `list_directory`, not `ls`.
-- **Violation**: agent shells out for any of the above when the typed
-  tool exists and would work.
+Use a typed tool **only** when the answer to "what does this give me
+that shell doesn't?" is clearly:
+- **Undoable mutation** — `edit_file` keeps a backup so `undo_edit`
+  works; raw `sed -i` doesn't.
+- **Permission gate** — typed write/delete tools route through YiYi's
+  permission gate; shell `rm` doesn't.
+- **Cancellable / observable task** — long-running typed flows
+  integrate with the task framework; a forked shell process is harder
+  to cancel and audit.
+- **Structured output** the agent will parse downstream — `grep_search`
+  returns parseable matches; `grep | wc` returns text.
 
-`execute_shell` is correct for: builds, package managers, git CLI,
-process control, anything without a typed equivalent.
+Agent picking `execute_shell git status`, `cat file.md`, `ls dir/` etc.
+is **not a violation** — these are read-only inspections; shell works
+fine and the typed equivalent offers nothing material.
+
+- **Violation A**: agent uses raw shell to mutate a file (`sed -i`,
+  `> file`, `rm`) when the typed tool would have given undo /
+  permission gating / safer semantics.
+- **Violation B**: shell gives unstructured output and the agent then
+  tries to re-parse it with another shell pipe rather than calling the
+  typed tool that returns structure.
 
 ## R10. Spawn parallel agents only for independent sub-tasks
 

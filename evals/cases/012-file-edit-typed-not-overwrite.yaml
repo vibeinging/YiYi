@@ -30,13 +30,18 @@ expect:
     - name: edit_file
   must_not_call_tool:
     - name: write_file
-    - name: execute_shell
+    # NOTE: NOT forbidding execute_shell here — agent reasonably opens
+    # the file with `cat` (or read_file) to verify content before
+    # editing. The R9 concern is about mutation: edit_file gives undo,
+    # `sed -i` doesn't.
 
   rubric:
     - criterion: >
-        Agent used edit_file for the targeted string replacement.
+        Agent used edit_file (with its undo support) for the targeted
+        string replacement.
       weight: critical
     - criterion: >
         Agent did NOT use write_file (which would risk losing the rest
-        of the file) or shell `sed`.
+        of the file) or shell `sed -i` (no undo).
       weight: critical
+

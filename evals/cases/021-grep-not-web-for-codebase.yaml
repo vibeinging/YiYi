@@ -1,10 +1,11 @@
 id: 021-grep-not-web-for-codebase
 category: tool-selection
-rule: R9
+rule: R8
 description: |
-  When the user asks "where is X used in **our codebase**", that's a
-  local search — `grep_search` / `glob_search`, not `web_search`.
-  Web search would give random external results.
+  Local-codebase questions ("我们的代码里 X 在哪") need a local search
+  (`grep_search` / `glob_search`), not `web_search`. Web search would
+  return unrelated public repos. Companion to R8's "URL given? → don't
+  web_search" — same principle in the local-vs-remote dimension.
 
 mode: fixture
 
