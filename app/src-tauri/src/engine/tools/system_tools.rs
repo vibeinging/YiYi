@@ -67,7 +67,9 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
         ),
         super::tool_def(
             "pip_install",
-            "Install Python packages using pip. Packages are installed to the user's local directory (~/.yiyi/python_packages/).",
+            "Install Python packages. Use this directly — do NOT shell out from Python with `subprocess.run(['pip', 'install', ...])` or `subprocess.check_call(['pip', ...])`. \
+             That path misses YiYi's permission gate, isn't shown in the install log, and may install to the wrong site-packages depending on which Python the subprocess inherits. \
+             pip_install routes to YiYi's bundled Python and writes to ~/.yiyi/python_packages/ which `run_python_script` already imports from.",
             serde_json::json!({
                 "type": "object",
                 "properties": {

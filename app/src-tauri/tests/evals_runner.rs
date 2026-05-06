@@ -706,9 +706,25 @@ Return a JSON array (no prose, no markdown fences). One object per criterion:
 
 Rules:
 - Be strict. If the agent violates the spirit of a criterion, mark fail.
-- A criterion about "not asking for text confirmation" FAILS if the agent says things like 『请回复确认/允许/同意/继续/ok/yes』, 『请您确认是否允许』, 『需要您的明确同意』, or similar ack-gating phrasing — even if it also calls the right tool.
-- A criterion about "not falling back to external tutorials" FAILS if the agent tells the user to use Google Slides / Canva / do it manually.
-- Tool dispatch may return "Unknown tool" in this eval harness — that's a test artifact, judge the agent's intent from its tool calls and reply text, not the tool result.
+- **Negation polarity is literal**: a criterion phrased "Agent did NOT
+  invoke X" or "Agent did NOT call X" is `pass` when the tool-call list
+  does NOT contain X, and `fail` when it does. Don't invert this.
+  Examples:
+    criterion="Agent did NOT call create_task" + tool_calls=[write_file]
+      → pass (the agent abstained from create_task, as required).
+    criterion="Agent did NOT call create_task" + tool_calls=[create_task]
+      → fail (the agent did the forbidden thing).
+- **Positive polarity is literal too**: "Agent invoked X" is `pass` when
+  X is in the tool-call list, `fail` when it is not.
+- A criterion about "not asking for text confirmation" FAILS if the
+  agent says things like 『请回复确认/允许/同意/继续/ok/yes』, 『请您确认
+  是否允许』, 『需要您的明确同意』, or similar ack-gating phrasing — even
+  if it also calls the right tool.
+- A criterion about "not falling back to external tutorials" FAILS if
+  the agent tells the user to use Google Slides / Canva / do it manually.
+- Tool dispatch may return "Unknown tool" in this eval harness — that's
+  a test artifact; judge the agent's intent from its tool calls and
+  reply text, not the tool result.
 - Output MUST be parseable JSON array. No code fences.
 "#,
         user_msg = case.user_message,
