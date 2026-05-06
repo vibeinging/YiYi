@@ -83,6 +83,51 @@ describe('buildMentionList', () => {
     const items = buildMentionList([], files, '');
     expect(items.filter((i) => i.type === 'file')).toHaveLength(8);
   });
+
+  it('fuzzy matches non-contiguous query characters', () => {
+    const items = buildMentionList(
+      [],
+      [
+        file({ name: 'product-introduction.md', path: '/p/product-introduction.md' }),
+        file({ name: 'random.txt', path: '/r.txt' }),
+      ],
+      'prdc',
+    );
+    expect(items).toHaveLength(1);
+    expect((items[0] as any).file.name).toBe('product-introduction.md');
+  });
+
+  it('exact substring outranks scattered match', () => {
+    const items = buildMentionList(
+      [],
+      [
+        file({ name: 'agent-tools.ts', path: '/a/agent-tools.ts' }),
+        file({ name: 'tool.md', path: '/tool.md' }),
+      ],
+      'tool',
+    );
+    expect((items[0] as any).file.name).toBe('tool.md');
+  });
+});
+
+describe('MentionPicker file badges', () => {
+  it('renders binary + large badges for flagged files', () => {
+    render(
+      <MentionPicker
+        bots={[]}
+        files={[
+          file({ name: 'photo.png', path: '/p/photo.png', is_binary: true, size: 200_000 }),
+          file({ name: 'huge.json', path: '/h.json', is_large: true, size: 5_000_000 }),
+        ]}
+        query=""
+        selectedIndex={0}
+        onSelectBot={() => {}}
+        onSelectFile={() => {}}
+      />,
+    );
+    expect(screen.getByText('binary')).toBeInTheDocument();
+    expect(screen.getByText('large')).toBeInTheDocument();
+  });
 });
 
 describe('MentionPicker', () => {

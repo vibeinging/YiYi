@@ -1,6 +1,11 @@
 /**
  * MentionPicker — unified @-mention dropdown for agents + bots + workspace files
  * Agents appear first, then bots, then files.
+ *
+ * File matching: subsequence-fuzzy. Typing `prdc` matches `Product` and
+ * `产品介绍` (the latter via path-component fallback). Exact prefix > word
+ * prefix > scattered subsequence. Binary / large files still appear but
+ * carry a small badge so the user (and reviewer) sees the warning.
  */
 
 import { useRef, useEffect } from 'react';
@@ -39,37 +44,74 @@ const MAX_AGENTS = 5;
 const MAX_BOTS = 5;
 const MAX_FILES = 8;
 
+/**
+ * Subsequence fuzzy score (≥ 0 means match, higher is better; -1 = no match).
+ *  • Exact substring → big bonus
+ *  • Match at word/path boundary → bonus
+ *  • Adjacent matched chars → bonus (rewards contiguous spans)
+ *  • Earlier matches > later matches
+ * Fast enough for thousands of items; runs sync on each keystroke.
+ */
+function fuzzyScore(haystack: string, needle: string): number {
+  if (!needle) return 0;
+  const h = haystack.toLowerCase();
+  const n = needle.toLowerCase();
+  // Exact substring is the strongest signal.
+  const directIdx = h.indexOf(n);
+  if (directIdx !== -1) {
+    return 1000 - directIdx + (directIdx === 0 ? 100 : 0);
+  }
+  // Subsequence walk.
+  let score = 0;
+  let prevMatchedAt = -2;
+  let ni = 0;
+  for (let i = 0; i < h.length && ni < n.length; i++) {
+    if (h[i] !== n[ni]) continue;
+    let bonus = 1;
+    if (i === prevMatchedAt + 1) bonus += 5;          // adjacent chars
+    if (i === 0 || /[\s/_.\-]/.test(h[i - 1])) bonus += 3; // boundary
+    score += bonus;
+    prevMatchedAt = i;
+    ni++;
+  }
+  return ni === n.length ? score : -1;
+}
+
 /** Build the filtered + flattened list used for display and keyboard nav */
 export function buildMentionList(bots: BotInfo[], files: WorkspaceFile[], query: string, agents?: AgentSummary[]): MentionItem[] {
-  const q = query.toLowerCase();
+  const q = query.trim();
   const items: MentionItem[] = [];
 
   // Agents first
   if (agents) {
-    const filteredAgents = agents
-      .filter(a => !q || a.name.toLowerCase().includes(q) || a.description.toLowerCase().includes(q))
+    const scored = agents
+      .map(a => ({ a, s: q ? Math.max(fuzzyScore(a.name, q), fuzzyScore(a.description, q)) : 0 }))
+      .filter(x => !q || x.s >= 0)
+      .sort((a, b) => b.s - a.s)
       .slice(0, MAX_AGENTS);
-    for (const agent of filteredAgents) {
-      items.push({ type: 'agent', agent });
-    }
+    for (const { a } of scored) items.push({ type: 'agent', agent: a });
   }
 
   // Then bots
-  const filteredBots = bots
+  const scoredBots = bots
     .filter(b => b.enabled)
-    .filter(b => !q || b.name.toLowerCase().includes(q) || b.platform.toLowerCase().includes(q))
+    .map(b => ({ b, s: q ? Math.max(fuzzyScore(b.name, q), fuzzyScore(b.platform, q)) : 0 }))
+    .filter(x => !q || x.s >= 0)
+    .sort((a, b) => b.s - a.s)
     .slice(0, MAX_BOTS);
-  for (const bot of filteredBots) {
-    items.push({ type: 'bot', bot });
-  }
+  for (const { b } of scoredBots) items.push({ type: 'bot', bot: b });
 
-  // Then files
-  const filteredFiles = files
-    .filter(f => !q || f.name.toLowerCase().includes(q))
+  // Then files — fuzzy on full path; tiebreak by directories-first then name.
+  const scoredFiles = files
+    .map(f => ({ f, s: q ? fuzzyScore(f.name, q) : 0 }))
+    .filter(x => !q || x.s >= 0)
+    .sort((a, b) => {
+      if (q) return b.s - a.s;
+      // No query → keep original order from backend (dirs-first, alpha).
+      return 0;
+    })
     .slice(0, MAX_FILES);
-  for (const file of filteredFiles) {
-    items.push({ type: 'file', file });
-  }
+  for (const { f } of scoredFiles) items.push({ type: 'file', file: f });
 
   return items;
 }
@@ -223,6 +265,24 @@ export function MentionPicker({ bots, files, query, selectedIndex, onSelectBot, 
                   >
                     {item.file.name}
                   </span>
+                  {!item.file.is_dir && item.file.is_binary && (
+                    <span
+                      className="text-[10px] shrink-0 px-1.5 py-0.5 rounded font-medium"
+                      style={{ background: 'var(--color-warning-subtle, rgba(245,158,11,0.15))', color: 'var(--color-warning, rgb(245,158,11))' }}
+                      title="二进制文件，模型无法读取内容"
+                    >
+                      binary
+                    </span>
+                  )}
+                  {!item.file.is_dir && item.file.is_large && (
+                    <span
+                      className="text-[10px] shrink-0 px-1.5 py-0.5 rounded font-medium"
+                      style={{ background: 'rgba(239,68,68,0.12)', color: 'rgb(239,68,68)' }}
+                      title={`${formatSize(item.file.size)} — 选中后会消耗大量上下文`}
+                    >
+                      large
+                    </span>
+                  )}
                   {!item.file.is_dir && (
                     <span className="text-[11px] shrink-0" style={{ color: 'var(--color-text-muted)' }}>
                       {formatSize(item.file.size)}

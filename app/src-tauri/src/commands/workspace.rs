@@ -12,6 +12,64 @@ pub struct WorkspaceFile {
     pub size: u64,
     pub is_dir: bool,
     pub modified: Option<u64>,
+    /// True for files over `LARGE_FILE_THRESHOLD_BYTES`. Lets the @ picker
+    /// flag "selecting this will load >1MB into the agent's context".
+    #[serde(default)]
+    pub is_large: bool,
+    /// True for likely-binary files (image / audio / video / archive / pdf
+    /// / compiled artifact). Agents should not blindly `read_file` these.
+    #[serde(default)]
+    pub is_binary: bool,
+}
+
+/// Directory names skipped during workspace walks. These are virtually
+/// always auto-generated or vendor and would just spam the @ picker.
+const EXCLUDED_DIRS: &[&str] = &[
+    "node_modules", "target", "dist", "build", ".next", ".nuxt",
+    "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+    "venv", ".venv", "env", ".env", ".tox",
+    ".cache", ".turbo", ".parcel-cache",
+    "vendor", "Pods",
+    ".idea", ".vscode",
+    ".gradle", ".cargo",
+];
+
+/// Files at or above this size show a "large" badge in the picker.
+const LARGE_FILE_THRESHOLD_BYTES: u64 = 1 * 1024 * 1024;
+/// Files above this size are dropped entirely from the listing — no point
+/// surfacing a 500MB video as @-mentionable.
+const HARD_SIZE_CAP_BYTES: u64 = 50 * 1024 * 1024;
+
+/// Extensions that indicate binary content. Agents shouldn't `read_file`
+/// these — output would be lossy/garbage.
+const BINARY_EXTS: &[&str] = &[
+    // Images
+    "png", "jpg", "jpeg", "gif", "bmp", "webp", "ico", "tiff", "heic", "avif",
+    // Audio
+    "mp3", "wav", "ogg", "flac", "m4a", "aac",
+    // Video
+    "mp4", "mov", "avi", "mkv", "webm", "flv",
+    // Archives
+    "zip", "tar", "gz", "tgz", "bz2", "7z", "rar", "xz",
+    // Documents (binary office formats — text formats like .md / .txt are NOT here)
+    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp",
+    // Compiled artifacts
+    "exe", "dll", "dylib", "so", "a", "o", "obj", "class", "jar", "wasm",
+    // Other binary
+    "db", "sqlite", "sqlite3", "pyc", "pyo", "DS_Store",
+];
+
+fn classify_file(name: &str, size: u64) -> (bool, bool) {
+    let ext = std::path::Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    let is_binary = ext
+        .as_deref()
+        .map(|e| BINARY_EXTS.contains(&e))
+        .unwrap_or(false);
+    let is_large = size >= LARGE_FILE_THRESHOLD_BYTES;
+    (is_binary, is_large)
 }
 
 /// Validate a user-supplied filename/path component to prevent path traversal.
@@ -68,6 +126,21 @@ async fn walk_dir(
         }
 
         let metadata = entry.metadata().await.map_err(|e| e.to_string())?;
+        let is_dir = metadata.is_dir();
+
+        // Skip vendor / build / cache directories entirely — they'd just
+        // spam the picker with thousands of irrelevant files.
+        if is_dir && EXCLUDED_DIRS.contains(&name.as_str()) {
+            continue;
+        }
+
+        let size = metadata.len();
+        // Drop oversized files completely (videos, dataset dumps, …). The
+        // user can still reach them via the file picker, just not via @.
+        if !is_dir && size > HARD_SIZE_CAP_BYTES {
+            continue;
+        }
+
         let rel_path = entry
             .path()
             .strip_prefix(base)
@@ -81,13 +154,20 @@ async fn walk_dir(
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs());
 
-        let is_dir = metadata.is_dir();
+        let (is_binary, is_large) = if is_dir {
+            (false, false)
+        } else {
+            classify_file(&name, size)
+        };
+
         out.push(WorkspaceFile {
             name: rel_path.clone(),
             path: entry.path().to_string_lossy().to_string(),
-            size: metadata.len(),
+            size,
             is_dir,
             modified,
+            is_large,
+            is_binary,
         });
 
         if is_dir {
@@ -655,6 +735,8 @@ async fn list_subdir_md_files(
             size: metadata.as_ref().map_or(0, |m| m.len()),
             is_dir: false,
             modified,
+            is_large: false,
+            is_binary: false,
         });
     }
     files

@@ -7,6 +7,11 @@ export interface WorkspaceFile {
   size: number;
   is_dir: boolean;
   modified: number;
+  /** Set when size >= 1MB. UI flags it so the user knows the file is heavy. */
+  is_large?: boolean;
+  /** Set when extension indicates binary content (image / archive / pdf / etc).
+   *  Agents shouldn't `read_file` these — output would be garbage. */
+  is_binary?: boolean;
 }
 
 export async function listWorkspaceFiles(): Promise<WorkspaceFile[]> {
