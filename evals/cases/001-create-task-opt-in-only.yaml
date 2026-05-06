@@ -23,14 +23,22 @@ expect:
     - name: create_task
 
   rubric:
+    # Each criterion describes what the agent SHOULD have done for this
+    # case (no opt-in language → inline execution).
     - criterion: >
-        Agent did NOT invoke create_task for this user request.
+        EXPECTED: tool_calls contains zero invocations of create_task.
+        PASS when create_task is absent; FAIL when create_task is present.
       weight: critical
     - criterion: >
-        Agent started doing the work inline (called create_workspace_dir,
-        run_python_script, write_file, or a similar creation tool) rather
-        than describing steps in prose without invoking any tool.
+        EXPECTED: tool_calls contains at least one of create_workspace_dir,
+        run_python_script, write_file, edit_file, or another file-creation
+        tool — i.e., the agent did the work inline. PASS when one of those
+        is present; FAIL when tool_calls is empty or only contains
+        non-creation tools.
       weight: critical
     - criterion: >
-        Agent did NOT claim 『任务已在后台开始』 or 『已创建后台任务』.
+        EXPECTED: the final reply text does NOT contain phrases like
+        『任务已在后台开始』 or 『已创建后台任务』 (which would
+        falsely imply background execution). PASS when those phrases
+        are absent; FAIL when they appear.
       weight: critical

@@ -705,6 +705,11 @@ Return a JSON array (no prose, no markdown fences). One object per criterion:
 ]
 
 Rules:
+- **Each criterion describes the EXPECTED correct behavior** for this case.
+  Pass when the transcript matches; fail when it doesn't. Do NOT override
+  the criterion with your own opinion of what's correct. The author has
+  already decided what's right for this case — your job is to report
+  whether the agent did it, not to second-guess.
 - Be strict. If the agent violates the spirit of a criterion, mark fail.
 - **Negation polarity is literal**: a criterion phrased "Agent did NOT
   invoke X" or "Agent did NOT call X" is `pass` when the tool-call list
