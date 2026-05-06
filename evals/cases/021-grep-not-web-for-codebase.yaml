@@ -1,0 +1,39 @@
+id: 021-grep-not-web-for-codebase
+category: tool-selection
+rule: R9
+description: |
+  When the user asks "where is X used in **our codebase**", that's a
+  local search — `grep_search` / `glob_search`, not `web_search`.
+  Web search would give random external results.
+
+mode: fixture
+
+user_message: "我们的代码里 spawn_agents 这个工具是在哪里实现的？"
+
+mock_tool_results:
+  grep_search: |
+    src/engine/tools/spawn_tools.rs:25:pub fn definitions() -> Vec<ToolDefinition> { ... }
+    src/engine/tools/spawn_tools.rs:152:async fn spawn_agents_tool(...) { ... }
+    src/engine/tools/mod.rs:1322: "spawn_agents" => spawn_tools::spawn_agents_tool(&args).await,
+
+fixture:
+  - role: assistant
+    content: "我搜下代码库。"
+    tool_calls:
+      - name: grep_search
+        arguments: { pattern: "spawn_agents" }
+
+expect:
+  must_call_tool:
+    - name: grep_search
+  must_not_call_tool:
+    - name: web_search
+
+  rubric:
+    - criterion: >
+        Agent searched the local codebase via grep_search.
+      weight: critical
+    - criterion: >
+        Agent did NOT do a web_search for what is clearly a local-code
+        question ("我们的代码里").
+      weight: critical

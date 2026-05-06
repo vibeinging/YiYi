@@ -1389,10 +1389,10 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         "create_workspace_dir" => task_tools::create_workspace_dir_tool(&args).await,
         "report_progress" => task_tools::report_progress_tool(&args).await,
         "query_tasks" => task_tools::query_tasks_tool(&args).await,
-        "pty_spawn_interactive" => system_tools::pty_spawn_interactive_tool(&args).await,
-        "pty_send_input" => system_tools::pty_send_input_tool(&args).await,
-        "pty_read_output" => system_tools::pty_read_output_tool(&args).await,
-        "pty_close_session" => system_tools::pty_close_session_tool(&args).await,
+        "pty_open" => system_tools::pty_spawn_interactive_tool(&args).await,
+        "pty_write" => system_tools::pty_send_input_tool(&args).await,
+        "pty_read" => system_tools::pty_read_output_tool(&args).await,
+        "pty_close" => system_tools::pty_close_session_tool(&args).await,
         "git_commit" => git_tools::git_commit_tool(&args).await,
         "git_create_branch" => git_tools::git_create_branch_tool(&args).await,
         "git_diff" => git_tools::git_diff_tool(&args).await,
@@ -1548,4 +1548,17 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         content,
         images: vec![],
     }
+}
+
+#[cfg(test)]
+#[test]
+#[ignore = "audit-only: run with --ignored to print tool list"]
+fn audit_visible_tools() {
+    let core = core_tools();
+    let deferred = deferred_tools();
+    eprintln!("\nCORE ({}):", core.len());
+    for t in &core { eprintln!("  {} — {}", t.function.name, t.function.description.lines().next().unwrap_or("").chars().take(80).collect::<String>()); }
+    eprintln!("\nDEFERRED ({}):", deferred.len());
+    for t in &deferred { eprintln!("  {} — {}", t.function.name, t.function.description.lines().next().unwrap_or("").chars().take(80).collect::<String>()); }
+    eprintln!("\nTOTAL agent-visible: {}", core.len() + deferred.len());
 }

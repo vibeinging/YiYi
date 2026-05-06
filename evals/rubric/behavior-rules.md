@@ -114,3 +114,59 @@ URL given?
 - **Violation C**: agent tries to handle a login / click / form task
   with `browser_fetch` alone and gives up — should call
   `browser_enable`.
+
+## R9. File ops: prefer typed tools over `execute_shell`
+
+For file operations YiYi has typed tools (`read_file`, `write_file`,
+`edit_file`, `grep_search`, `glob_search`, `list_directory`,
+`project_tree`). These are safer than shell commands (no shell injection,
+permission gate, undo support) and produce structured results.
+
+- **Read content** → `read_file`, not `cat` / `head` / `tail`.
+- **Modify part of a file** → `edit_file`, not `sed` / `awk`.
+- **Search a pattern in many files** → `grep_search`, not `grep` /
+  `rg` via shell.
+- **Find files by name** → `glob_search`, not `find`.
+- **List directory** → `list_directory`, not `ls`.
+- **Violation**: agent shells out for any of the above when the typed
+  tool exists and would work.
+
+`execute_shell` is correct for: builds, package managers, git CLI,
+process control, anything without a typed equivalent.
+
+## R10. Spawn parallel agents only for independent sub-tasks
+
+`spawn_agents` is for **truly parallelisable** work — 3 different files
+to analyse, 5 independent web sources to summarise, etc. For a single
+linear task or a 2-step pipeline (search → read), do it inline; spawning
+adds context-isolation overhead and an extra round-trip.
+
+- **Use spawn_agents**: "把这 5 篇 markdown 各自总结一下"
+- **Don't spawn**: "搜下 React 19 然后读官方博客" (just chain the tools)
+- **Violation**: agent spawns one or two sub-agents for what is
+  obviously sequential.
+
+## R11. Memory is historical; current state needs a tool call
+
+(Companion to R3.) When asked "现在 / 当前 / 还在跑吗" → call the
+authoritative tool (`query_tasks`, `list_cronjobs`, `list_bot_-
+conversations`, etc.), not `memory_search`. Memory tells you what was
+discussed; only the live tool tells you what's true now.
+
+- "之前我们聊过什么" → `memory_search`
+- "刚才那个 PPT 任务还在跑吗" → `query_tasks`
+- "我有哪些定时任务" → `list_cronjobs`
+- **Violation**: agent answers a "现在 X 是什么状态" question by
+  paraphrasing memory.
+
+## R12. Skills first for domain-shaped tasks
+
+When the task fits a known skill (PDF, PPT, Word, Feishu, browser,
+canvas, MCP), call `activate_skills` first to load the skill's SOP
+into the prompt, *then* execute. Skipping this often results in the
+agent inventing wrong tool sequences.
+
+- "做个 PPT 介绍大熊猫" → activate_skills(["pptx"]) → run skill steps
+- "把这个发到飞书群" → activate_skills(["feishu"]) → send_bot_message
+- **Violation**: agent reaches for raw `execute_shell` when the skill
+  would have provided a tested pipeline.

@@ -1,0 +1,39 @@
+id: 024-compact-context-flash-tool
+category: tool-selection
+rule: R10
+description: |
+  Compacting a long block of text or recent conversation should use
+  `compact_context` — it's the Flash-driven cheap path designed for
+  exactly this. Doing the compaction inline on Pro burns tokens.
+
+mode: fixture
+
+user_message: |
+  把下面这段会议笔记压缩成 200 字以内的摘要，保留关键决定和数字：
+
+  [pretend this is a 5000-token meeting transcript with decisions, dates,
+  responsible parties, action items, dollar amounts, etc.]
+
+mock_tool_results:
+  compact_context: |
+    {"summary":"<200-word distilled summary>","input_chars":21000,"output_chars":580,"compaction_ratio_pct":"2.8","model":"deepseek-v4-flash"}
+
+fixture:
+  - role: assistant
+    content: "走 Flash 压缩。"
+    tool_calls:
+      - name: compact_context
+        arguments:
+          text: "[meeting transcript]"
+          focus: "key decisions and numbers"
+          max_words: 200
+
+expect:
+  must_call_tool:
+    - name: compact_context
+
+  rubric:
+    - criterion: >
+        Agent called compact_context (Flash-routed) instead of
+        composing the summary inline (which would burn Pro tokens).
+      weight: major

@@ -1,0 +1,36 @@
+id: 013-shell-correct-for-build
+category: tool-selection
+rule: R9
+description: |
+  `execute_shell` is the right tool for build / test / package-manager
+  commands — these have no typed equivalent in YiYi. The agent should
+  not avoid shell out of misplaced caution; R9 is about preferring
+  typed tools *when they exist*, not banning shell.
+
+mode: fixture
+
+user_message: "跑一下 cargo test"
+
+mock_tool_results:
+  execute_shell: |
+    test result: ok. 432 passed; 0 failed; finished in 3.2s
+
+fixture:
+  - role: assistant
+    content: ""
+    tool_calls:
+      - name: execute_shell
+        arguments: { command: "cargo test" }
+
+expect:
+  must_call_tool:
+    - name: execute_shell
+
+  rubric:
+    - criterion: >
+        Agent invoked execute_shell for the build/test command.
+      weight: critical
+    - criterion: >
+        Agent did NOT refuse / sidestep with "I can't run shell" — that
+        would violate R5.
+      weight: critical

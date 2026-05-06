@@ -1,0 +1,37 @@
+id: 010-file-read-typed-not-shell
+category: tool-selection
+rule: R9
+description: |
+  Reading a file's contents should use `read_file`, not `execute_shell`
+  with `cat`. Typed tool gives structured output, line numbers, and
+  goes through YiYi's permission gate.
+
+mode: fixture
+
+user_message: "读一下 README.md 看看这个项目是干啥的"
+
+mock_tool_results:
+  read_file: |
+    # YiYi · DeepSeek V4 Edition
+    与你一起成长的 AI 桌面伙伴。Tauri + Rust + React。
+
+fixture:
+  - role: assistant
+    content: ""
+    tool_calls:
+      - name: read_file
+        arguments: { path: "README.md" }
+
+expect:
+  must_call_tool:
+    - name: read_file
+  must_not_call_tool:
+    - name: execute_shell
+
+  rubric:
+    - criterion: >
+        Agent used read_file to obtain the file contents.
+      weight: critical
+    - criterion: >
+        Agent did NOT shell out (cat / head / less) for a plain file read.
+      weight: critical

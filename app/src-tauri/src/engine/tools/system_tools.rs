@@ -80,67 +80,14 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
                 "required": ["packages"]
             }),
         ),
-        // --- Document tools (native, no Python/Node.js needed) ---
-        super::tool_def(
-            "read_pdf",
-            "Extract text content from a PDF file. No external dependencies needed.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Absolute path to the PDF file" }
-                },
-                "required": ["path"]
-            }),
-        ),
-        super::tool_def(
-            "read_spreadsheet",
-            "Read data from Excel (.xlsx/.xls) or CSV/TSV files. Returns tabular text.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Absolute path to the spreadsheet file" },
-                    "sheet": { "type": "string", "description": "Sheet name (optional, defaults to first sheet)" },
-                    "max_rows": { "type": "integer", "description": "Maximum rows to return (default: 200)" }
-                },
-                "required": ["path"]
-            }),
-        ),
-        super::tool_def(
-            "create_spreadsheet",
-            "Create an Excel (.xlsx) file from tabular data. Data is a JSON array of arrays (first row = headers).",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Output file path (should end with .xlsx)" },
-                    "data": { "type": "array", "description": "Array of arrays, e.g. [[\"Name\",\"Age\"],[\"Alice\",30]]" },
-                    "sheet_name": { "type": "string", "description": "Sheet name (optional)" }
-                },
-                "required": ["path", "data"]
-            }),
-        ),
-        super::tool_def(
-            "read_docx",
-            "Extract text content from a Word (.docx) file. No external dependencies needed.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Absolute path to the DOCX file" }
-                },
-                "required": ["path"]
-            }),
-        ),
-        super::tool_def(
-            "create_docx",
-            "Create a Word (.docx) file from text content. Supports Markdown-style headings (# ## ###) and bullet lists (- *).",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Output file path (should end with .docx)" },
-                    "content": { "type": "string", "description": "Text content with optional Markdown formatting" }
-                },
-                "required": ["path", "content"]
-            }),
-        ),
+        // Document tools (read_pdf / read_docx / create_docx / read_spreadsheet
+        // / create_spreadsheet) used to live here but were removed from the
+        // agent's tool surface per R12 (skills first for domain-shaped tasks).
+        // The agent should now call activate_skills(["pdf"|"docx"|"xlsx"]) to
+        // load the skill's SOP, then run scripts via run_python_script. The
+        // native implementations remain in `engine/doc_tools.rs` for skills /
+        // internal callers; dispatch arms in `tools/mod.rs` are kept too so
+        // any rare programmatic caller still works.
         super::tool_def(
             "send_notification",
             "Send a macOS system notification to the user immediately.",
@@ -184,7 +131,7 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
             }),
         ),
         super::tool_def(
-            "pty_spawn_interactive",
+            "pty_open",
             "Spawn an interactive PTY session for a CLI tool (e.g. bash, python, claude-code). Returns session_id.",
             serde_json::json!({
                 "type": "object",
@@ -197,7 +144,7 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
             }),
         ),
         super::tool_def(
-            "pty_send_input",
+            "pty_write",
             "Send input to an interactive PTY session and wait for output.",
             serde_json::json!({
                 "type": "object",
@@ -210,7 +157,7 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
             }),
         ),
         super::tool_def(
-            "pty_read_output",
+            "pty_read",
             "Read recent output from a PTY session without sending input.",
             serde_json::json!({
                 "type": "object",
@@ -222,7 +169,7 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
             }),
         ),
         super::tool_def(
-            "pty_close_session",
+            "pty_close",
             "Close an interactive PTY session and kill the process.",
             serde_json::json!({
                 "type": "object",

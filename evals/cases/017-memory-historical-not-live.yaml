@@ -1,0 +1,40 @@
+id: 017-memory-historical-not-live
+category: tool-selection
+rule: R11
+description: |
+  "What did we discuss earlier?" → `memory_search`. But "is X still
+  running NOW?" must hit the authoritative live tool (`query_tasks`),
+  not memory — memory only knows the past.
+
+mode: fixture
+
+user_message: "刚才那个生成 PPT 的后台任务还在跑吗？"
+
+mock_tool_results:
+  query_tasks: |
+    Active tasks: [
+      { id: "task_1234", title: "[Task] 生成大熊猫 PPT", status: "running", started_at: "2026-05-06 16:42:00" }
+    ]
+
+fixture:
+  - role: assistant
+    content: "我查一下当前任务状态。"
+    tool_calls:
+      - name: query_tasks
+        arguments: {}
+
+expect:
+  must_call_tool:
+    - name: query_tasks
+  must_not_call_tool:
+    - name: memory_search
+
+  rubric:
+    - criterion: >
+        Agent called query_tasks (the authoritative live source) to
+        check if the task is still running.
+      weight: critical
+    - criterion: >
+        Agent did NOT paraphrase memory_search results to answer
+        a "现在还在跑吗" question — that's R3 / R11 violation.
+      weight: critical

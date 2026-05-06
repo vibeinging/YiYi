@@ -1,0 +1,43 @@
+id: 015-spawn-agents-parallel-files
+category: tool-selection
+rule: R10
+description: |
+  `spawn_agents` is for genuinely parallelisable work. Summarising 3
+  independent markdown files in one go is the canonical fit — each
+  sub-agent reads + summarises one file, parent collects.
+
+mode: fixture
+
+user_message: "把 docs/ 下的 a.md, b.md, c.md 各自总结一下，每个一段话。"
+
+mock_tool_results:
+  spawn_agents: |
+    Spawned 3 sub-agents.
+    a.md: <summary text>
+    b.md: <summary text>
+    c.md: <summary text>
+
+fixture:
+  - role: assistant
+    content: "三个文件相互独立，并行处理更快。"
+    tool_calls:
+      - name: spawn_agents
+        arguments:
+          agents:
+            - { name: "explore", task: "Summarise docs/a.md in one paragraph." }
+            - { name: "explore", task: "Summarise docs/b.md in one paragraph." }
+            - { name: "explore", task: "Summarise docs/c.md in one paragraph." }
+
+expect:
+  must_call_tool:
+    - name: spawn_agents
+
+  rubric:
+    - criterion: >
+        Agent used spawn_agents to fan out three independent
+        summarisation tasks.
+      weight: critical
+    - criterion: >
+        Agent did NOT serialise the work with three sequential
+        read_file + inline-summarise turns.
+      weight: major

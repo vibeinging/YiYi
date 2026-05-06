@@ -1,0 +1,41 @@
+id: 022-git-typed-not-shell
+category: tool-selection
+rule: R9
+description: |
+  YiYi has typed git tools (`git_status`, `git_diff`, `git_log`).
+  Read-only inspection should use them, not `execute_shell` with `git
+  status`. (For commit / push, current YiYi typically goes through
+  shell — that's outside this case's scope.)
+
+mode: fixture
+
+user_message: "看下 git 当前的修改情况"
+
+mock_tool_results:
+  git_status: |
+    On branch main
+    Changes not staged for commit:
+      modified:   src/engine/tools/cheap_browser.rs
+    Untracked files:
+      tests/eval_runner.rs
+
+fixture:
+  - role: assistant
+    content: ""
+    tool_calls:
+      - name: git_status
+        arguments: {}
+
+expect:
+  must_call_tool:
+    - name: git_status
+  must_not_call_tool:
+    - name: execute_shell
+
+  rubric:
+    - criterion: >
+        Agent used git_status (typed) for the inspection.
+      weight: critical
+    - criterion: >
+        Agent did NOT shell out for what has a typed equivalent.
+      weight: major
