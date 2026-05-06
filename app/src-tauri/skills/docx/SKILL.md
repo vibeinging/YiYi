@@ -13,47 +13,55 @@ metadata:
 
 # Word Document Processing
 
+Drive everything through Python `python-docx` via `run_python_script`.
+If the package isn't present, call `pip_install(["python-docx"])`.
+
 ## Reading DOCX Files
 
-**Use the built-in `read_docx` tool** — no external software needed:
+```python
+# read_docx.py
+import sys
+from docx import Document
 
-```
-read_docx(path="/path/to/document.docx")
+doc = Document(sys.argv[1])
+for p in doc.paragraphs:
+    if p.text.strip():
+        print(p.text)
 ```
 
-Extracts all text content including headings, paragraphs, and lists.
+For richer extraction (headings, lists, tables), inspect `p.style.name`
+and iterate `doc.tables`.
 
 ## Creating DOCX Files
 
-**Use the built-in `create_docx` tool**:
+```python
+# create_docx.py
+from docx import Document
 
+doc = Document()
+doc.add_heading("Report Title", 0)
+doc.add_heading("Introduction", level=1)
+doc.add_paragraph("This is the first paragraph.")
+doc.add_paragraph("Item one", style="List Bullet")
+doc.add_paragraph("Item two", style="List Bullet")
+doc.add_heading("Conclusion", level=1)
+doc.add_paragraph("Final remarks.")
+doc.save("/path/to/output.docx")
 ```
-create_docx(
-  path="/path/to/output.docx",
-  content="# Report Title\n\n## Introduction\n\nThis is the first paragraph.\n\n- Item one\n- Item two\n\n## Conclusion\n\nFinal remarks."
-)
-```
-
-Supported formatting:
-- `# Heading 1`, `## Heading 2`, `### Heading 3`
-- `- ` or `* ` for bullet lists
-- Plain text for regular paragraphs
-- Empty lines for paragraph spacing
 
 ## Workflow Examples
 
 ### Summarize a DOCX
-1. `read_docx(path="report.docx")`
-2. Analyze and summarize the content for the user
+1. Run the read script to extract text.
+2. Analyze and summarize the content for the user.
 
 ### Convert PDF to DOCX
-1. `read_pdf(path="document.pdf")`
-2. `create_docx(path="document.docx", content=<extracted text>)`
+1. Use the `pdf` skill to extract text via `pypdf`.
+2. Use `create_docx.py` to write that text into a new Word document.
 
 ### Create a report from data
-1. `read_spreadsheet(path="data.xlsx")`
-2. Analyze the data
-3. `create_docx(path="report.docx", content=<formatted report>)`
+1. Use the `xlsx` skill to read + aggregate the data.
+2. Use `create_docx.py` to write a formatted report.
 
 ## Advanced Operations
 
@@ -110,8 +118,8 @@ pandoc input.docx -o output.pdf     # DOCX → PDF
 
 | Task | Approach |
 |------|----------|
-| Read/extract text | `read_docx` (built-in) |
-| Create with headings/lists | `create_docx` (built-in) |
+| Read / extract text | Python `python-docx` (`pip_install(["python-docx"])` if missing) |
+| Create with headings/lists | Python `python-docx` |
 | Accept tracked changes | `scripts/accept_changes.py` (requires LibreOffice) |
 | Add comments | `scripts/comment.py` (requires unpack/repack) |
 | Complex formatting | Python python-docx |

@@ -13,45 +13,58 @@ metadata:
 
 # Spreadsheet Processing
 
+Drive everything through Python via `run_python_script`. The agent has
+`pip_install` for any missing dependency. Bundled-friendly libraries:
+`openpyxl` (xlsx read/write/formatting), `pandas` (analysis), `csv` (stdlib).
+
 ## Reading Spreadsheets
 
-**Use the built-in `read_spreadsheet` tool** — no external software needed:
+```python
+# read_xlsx.py
+import sys
+from openpyxl import load_workbook
 
-```
-read_spreadsheet(path="/path/to/file.xlsx")
-read_spreadsheet(path="/path/to/file.xlsx", sheet="Sheet2", max_rows=50)
-read_spreadsheet(path="/path/to/data.csv")
+wb = load_workbook(sys.argv[1], data_only=True)
+sheet = wb[sys.argv[2]] if len(sys.argv) > 2 else wb.active
+for row in sheet.iter_rows(values_only=True):
+    print("\t".join("" if v is None else str(v) for v in row))
 ```
 
-Supports: `.xlsx`, `.xls`, `.xlsm`, `.csv`, `.tsv`
+For CSV/TSV use the stdlib `csv` module — no install needed.
 
 ## Creating Spreadsheets
 
-**Use the built-in `create_spreadsheet` tool**:
+```python
+# create_xlsx.py
+from openpyxl import Workbook
+from openpyxl.styles import Font
 
+wb = Workbook()
+ws = wb.active
+ws.title = "Employees"
+ws.append(["Name", "Age", "City"])
+for cell in ws[1]:
+    cell.font = Font(bold=True)
+ws.append(["Alice", 30, "Beijing"])
+ws.append(["Bob", 25, "Shanghai"])
+wb.save("/path/to/output.xlsx")
 ```
-create_spreadsheet(
-  path="/path/to/output.xlsx",
-  data=[["Name", "Age", "City"], ["Alice", 30, "Beijing"], ["Bob", 25, "Shanghai"]],
-  sheet_name="Employees"
-)
-```
-
-- First row is automatically bolded as headers
-- Numbers are stored as numeric values (not text)
-- Booleans are preserved
 
 ## Data Analysis Workflow
 
-1. Read: `read_spreadsheet(path="data.xlsx")`
-2. Analyze the tabular output (count rows, find patterns, compute stats mentally)
-3. If the user wants a modified version, construct new data and use `create_spreadsheet`
+1. Run a script that reads + computes the answer in one go (don't ask
+   the model to mentally aggregate — push the work into Python).
+2. For aggregation use `pandas`; for simple per-row work, plain
+   `openpyxl` is enough and starts faster.
+3. If the user wants a modified version, write rows into a new
+   workbook and save.
 
 ## Converting Between Formats
 
-- CSV → XLSX: Read with `read_spreadsheet`, write with `create_spreadsheet`
-- XLSX → CSV: Read with `read_spreadsheet`, write text with `write_file`
-- PDF tables → XLSX: Use `read_pdf` to extract, parse, then `create_spreadsheet`
+- CSV → XLSX: read with `csv.reader`, write with `openpyxl`.
+- XLSX → CSV: read with `openpyxl`, write with `csv.writer`.
+- PDF tables → XLSX: use the `pdf` skill to extract text first, parse
+  rows in Python, then write via `openpyxl`.
 
 ## Advanced Operations
 
@@ -92,9 +105,10 @@ summary.to_excel("summary.xlsx")
 
 | Task | Approach |
 |------|----------|
-| Read xlsx/csv | `read_spreadsheet` (built-in) |
-| Create xlsx | `create_spreadsheet` (built-in) |
-| Simple analysis | Read + analyze text output |
+| Read xlsx | Python `openpyxl` (`load_workbook(..., data_only=True)`) |
+| Read csv/tsv | Python stdlib `csv` |
+| Create xlsx | Python `openpyxl` (Workbook + ws.append) |
+| Simple analysis | One Python script: read + compute + print |
 | Recalculate formulas | `scripts/recalc.py` (requires LibreOffice) |
-| Complex formatting | Python openpyxl |
+| Complex formatting | Python openpyxl (Font, Alignment, …) |
 | Data aggregation | Python pandas |

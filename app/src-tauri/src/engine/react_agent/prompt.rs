@@ -213,7 +213,7 @@ For advanced operations (PDF forms, PPTX creation, complex Excel), use run_pytho
 - Summarize the results for the user
 - For multi-step tasks: call `request_continuation` tool when you need more rounds to complete
 - File-creating / long-running work: do it inline. Use `create_task` ONLY when the user explicitly asks for background / scheduled execution (see 『后台任务』 section below).
-- Skills: use `tool_search` + `activate_skills` to load them when needed. You don't see a pre-injected list of skill names — call `tool_search` with a topic keyword to discover what's available.
+- Skills: an `Available Skills` list with names + briefs is injected lower in this prompt. For domain-shaped tasks (PDF / DOCX / XLSX / browser automation / bot setup / …), call `activate_skills([name])` from that list FIRST to load the skill SOP, THEN run the steps. Skipping this almost always produces a worse pipeline than the skill already provides.
 - Code library: you've written scripts that are saved for reuse. Call `search_my_code` to find them by name or topic; don't re-write something that already exists.
 - Memory: durable facts about the user (preferences, decisions, past work) live in a vector store. Call `memory_search` when a user request might have precedent, and `memory_add` to save new learnings.
 - When you need to make a decision about user preferences (tech stack, coding style, quality standards), \
@@ -313,7 +313,7 @@ pub async fn build_system_prompt(
     mcp_tools: Option<&[crate::engine::infra::mcp_runtime::MCPTool]>,
     unavailable_servers: Option<&[String]>,
 ) -> String {
-    let _ = (skill_index, always_active_skills); // kept for API compat — lazy-loaded now
+    let _ = always_active_skills; // not yet used by this build
 
     let lang = language.unwrap_or("zh-CN");
 
@@ -355,6 +355,35 @@ pub async fn build_system_prompt(
          tell them to add the folder in Settings > Workspace.\n\
          Sensitive files (.env, .ssh, .pem, credentials) are always blocked for security.\n",
     ));
+
+    // ── Available Skills ─────────────────────────────────────────────────
+    // The agent can't pick a skill it doesn't know exists. Inject a name
+    // + one-line description list so when the user says "解析下 PDF" the
+    // model recognises that a `pdf` skill is available and calls
+    // `activate_skills(["pdf"])` instead of inventing a pypdf pipeline
+    // from scratch (R12). Keep entries short — full bodies are loaded
+    // on-demand by activate_skills.
+    if !skill_index.is_empty() {
+        prompt.push_str("\n## Available Skills\n");
+        prompt.push_str(
+            "Domain-shaped tasks (PDF / DOCX / XLSX / browser / bot setup / …) \
+             have skills with tested SOPs. **Call `activate_skills([name])` BEFORE \
+             attempting the task** — saves you from inventing a pipeline that's \
+             already been written and battle-tested. Names + briefs:\n\n",
+        );
+        for s in skill_index {
+            let brief: String = s
+                .description
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(120)
+                .collect();
+            prompt.push_str(&format!("- **{}**: {}\n", s.name, brief));
+        }
+        prompt.push('\n');
+    }
 
     // MCP status (count + unavailable server list). Tool definitions are
     // passed via the API tools parameter; we only inject ambient status here.

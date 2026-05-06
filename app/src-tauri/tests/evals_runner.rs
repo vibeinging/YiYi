@@ -888,16 +888,65 @@ async fn build_real_system_prompt() -> String {
     let home = std::env::var("HOME").unwrap_or_default();
     let working_dir = PathBuf::from(&home).join(".yiyi");
     let user_workspace = PathBuf::from(&home).join("Documents/YiYi");
+    let skill_index = load_skill_index_from_disk(&working_dir).await;
     app_lib::engine::react_agent::build_system_prompt(
         &working_dir,
         Some(&user_workspace),
-        &[],
+        &skill_index,
         &[],
         Some("zh-CN"),
         None,
         None,
     )
     .await
+}
+
+/// Mirrors `commands::agent::helpers::load_skill_index` but doesn't need
+/// AppState — eval harness has no app context. Reads SKILL.md files from
+/// `~/.yiyi/active_skills/` and pulls the `description` frontmatter.
+async fn load_skill_index_from_disk(
+    working_dir: &Path,
+) -> Vec<app_lib::commands::agent::SkillIndexEntry> {
+    use app_lib::commands::agent::SkillIndexEntry;
+    let skills_dir = working_dir.join("active_skills");
+    let mut index = Vec::new();
+    let mut entries = match tokio::fs::read_dir(&skills_dir).await {
+        Ok(e) => e,
+        Err(_) => return index,
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        let skill_md = path.join("SKILL.md");
+        let Ok(content) = tokio::fs::read_to_string(&skill_md).await else {
+            continue;
+        };
+        // Tiny frontmatter sniff: extract `description: "..."` from the
+        // YAML preamble. No serde_yaml dep here — keep it simple.
+        let mut description = String::new();
+        if let Some(after_open) = content.strip_prefix("---") {
+            if let Some(yaml_end) = after_open.find("\n---") {
+                let yaml = &after_open[..yaml_end];
+                for line in yaml.lines() {
+                    if let Some(rest) = line.trim_start().strip_prefix("description:") {
+                        description = rest
+                            .trim()
+                            .trim_start_matches('|')
+                            .trim()
+                            .trim_matches('"')
+                            .trim_matches('\'')
+                            .to_string();
+                        break;
+                    }
+                }
+            }
+        }
+        index.push(SkillIndexEntry { name, description });
+    }
+    index
 }
 
 #[tokio::test(flavor = "multi_thread")]

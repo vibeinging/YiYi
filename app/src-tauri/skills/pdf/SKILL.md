@@ -15,19 +15,31 @@ metadata:
 
 ## Reading & Extracting Text
 
-**Use the built-in `read_pdf` tool** — no external software needed:
+Use Python's `pypdf` via `run_python_script`. If `pypdf` isn't installed,
+call `pip_install(["pypdf"])` first.
 
-```
-read_pdf(path="/path/to/document.pdf")
+```python
+# extract_pdf.py
+import sys
+from pypdf import PdfReader
+
+reader = PdfReader(sys.argv[1])
+for i, page in enumerate(reader.pages, 1):
+    text = page.extract_text() or ""
+    print(f"=== Page {i} ===")
+    print(text)
 ```
 
-This extracts all text content from the PDF. Then summarize, analyze, or answer questions about the content.
+Run with `run_python_script(script_path="extract_pdf.py", args=["/path/to/document.pdf"])`.
+Then summarize / analyze / answer questions about the captured stdout.
 
 ## For Tables in PDFs
 
-1. Use `read_pdf` to extract raw text
-2. Parse the tabular structure from the text output
-3. If the user wants it as a spreadsheet, use `create_spreadsheet` to output as .xlsx
+1. Extract raw text with the script above.
+2. Parse the tabular structure from the text output (look for repeating
+   column-aligned rows).
+3. If the user wants it as a spreadsheet, write a Python script that
+   uses `openpyxl` to emit `.xlsx` (see the `xlsx` skill).
 
 ---
 
@@ -251,9 +263,9 @@ See `forms.md` for detailed form-filling workflow (both fillable and non-fillabl
 
 | Task | Approach |
 |------|----------|
-| Read/extract text | `read_pdf` tool (built-in) |
-| Extract tables | `read_pdf` + parse text |
-| Save as spreadsheet | `read_pdf` + `create_spreadsheet` |
+| Read/extract text | Python `pypdf` (`pip_install(["pypdf"])` if missing) |
+| Extract tables | Python pypdf + heuristic row parsing |
+| Save as spreadsheet | Python `openpyxl` (see `xlsx` skill) |
 | **Create professional PDF** | **`create_pdf.py` script** |
 | Merge/split/rotate | Python pypdf |
 | Fill PDF forms | See `forms.md` |
