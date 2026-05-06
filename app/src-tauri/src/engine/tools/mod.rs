@@ -902,6 +902,19 @@ pub fn spawn_task_execution(
 // ============================================================================
 
 /// Core tools — always loaded. Everything else discoverable via tool_search.
+/// Tools whose only purpose is to feed image data back to the model.
+/// V4 build: DeepSeek V4 Pro/Flash are text-only. Until V4 ships
+/// multimodal, we suppress these from the agent's tool surface — the
+/// implementations stay in tree so re-enabling is one-line.
+/// Browser interaction now flows through the Playwright MCP server,
+/// which returns ARIA accessibility snapshots (text) instead of pixels.
+const VISION_DISABLED_TOOLS: &[&str] = &[
+    "desktop_screenshot",
+    "browser_screenshot",
+    "browser_use",
+    "computer_control",
+];
+
 pub fn core_tools() -> Vec<ToolDefinition> {
     static CACHE: std::sync::OnceLock<Vec<ToolDefinition>> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| {
@@ -911,8 +924,9 @@ pub fn core_tools() -> Vec<ToolDefinition> {
             "list_directory", "grep_search", "glob_search",
             // Shell (Claw Code MVP)
             "execute_shell",
-            // Web (cheap tier — system Chrome headless, no Playwright spawn)
-            "web_search", "browser_screenshot", "browser_fetch",
+            // Web (text-only path — DeepSeek V4 has no vision, so
+            // browser_screenshot is suppressed via VISION_DISABLED_TOOLS)
+            "web_search", "browser_fetch",
             // YiYi identity — memory and skills make YiYi who she is
             "memory_search", "memory_add",
             "activate_skills",
@@ -924,7 +938,9 @@ pub fn core_tools() -> Vec<ToolDefinition> {
         all.extend(file_tools::definitions());
         all.extend(system_tools::definitions());
         all.extend(web_tools::definitions());
-        all.push(cheap_browser::screenshot_def());
+        // Screenshot kept registered behind VISION_DISABLED_TOOLS — see
+        // const above. Reinstate the line below once V4 has vision.
+        // all.push(cheap_browser::screenshot_def());
         all.push(cheap_browser::fetch_def());
         all.extend(memory_tools::definitions());
         all.extend(skill_tools::definitions());
@@ -932,6 +948,7 @@ pub fn core_tools() -> Vec<ToolDefinition> {
 
         all.into_iter()
             .filter(|t| core_names.contains(&t.function.name.as_str()))
+            .filter(|t| !VISION_DISABLED_TOOLS.contains(&t.function.name.as_str()))
             .collect()
     }).clone()
 }
@@ -954,7 +971,11 @@ pub fn deferred_tools() -> Vec<ToolDefinition> {
         tools.extend(system_tools::definitions());
         tools.extend(file_tools::definitions());
         tools.extend(web_tools::definitions());
-        tools.extend(browser_tools::definitions());
+        // browser_tools (browser_use) and computer_tools (computer_control)
+        // are vision-dependent. Suppressed via VISION_DISABLED_TOOLS until
+        // V4 has multimodal — agents drive the browser through the
+        // Playwright MCP server (ARIA snapshots) in the meantime.
+        // tools.extend(browser_tools::definitions());
         tools.extend(memory_tools::definitions());
         tools.extend(cron_tools::definitions());
         tools.extend(bot_tools::definitions());
@@ -962,7 +983,7 @@ pub fn deferred_tools() -> Vec<ToolDefinition> {
         tools.extend(task_tools::definitions());
         tools.extend(canvas_tools::definitions());
         tools.extend(spawn_tools::definitions());
-        tools.extend(computer_tools::definitions());
+        // tools.extend(computer_tools::definitions());
         tools.extend(lsp_tools::definitions());
         tools.extend(git_tools::definitions());
         tools.extend(flash_tools::definitions());
@@ -993,6 +1014,7 @@ pub fn deferred_tools() -> Vec<ToolDefinition> {
 
         // Remove core tools (they're already loaded)
         tools.retain(|t| !core_names.contains(&t.function.name.as_str()));
+        tools.retain(|t| !VISION_DISABLED_TOOLS.contains(&t.function.name.as_str()));
         tools
     }).clone()
 }

@@ -360,14 +360,16 @@ impl CliProviderConfig {
 impl Config {
     pub fn load(working_dir: &Path) -> Self {
         let path = working_dir.join("config.json");
-        if path.exists() {
+        let mut cfg: Self = if path.exists() {
             match std::fs::read_to_string(&path) {
                 Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
                 Err(_) => Self::default(),
             }
         } else {
             Self::default()
-        }
+        };
+        cfg.seed_default_mcp_servers();
+        cfg
     }
 
     pub fn save(&self, working_dir: &Path) -> Result<(), String> {
@@ -377,5 +379,69 @@ impl Config {
         std::fs::write(&path, content)
             .map_err(|e| format!("Failed to write config: {}", e))?;
         Ok(())
+    }
+
+    /// Seed MCP entries the V4 build relies on. Idempotent: only inserts
+    /// keys the user hasn't customised. Currently seeds:
+    ///   * `playwright` — Microsoft's Playwright MCP server. Provides ARIA
+    ///     accessibility-tree-based browser interaction (no screenshots),
+    ///     replacing the in-process `browser_use` / `browser_screenshot`
+    ///     tools while DeepSeek V4 lacks vision.
+    fn seed_default_mcp_servers(&mut self) {
+        if !self.mcp.contains_key("playwright") {
+            self.mcp.insert(
+                "playwright".to_string(),
+                MCPClientConfig {
+                    name: "Playwright".to_string(),
+                    description:
+                        "Browser automation via accessibility tree (no vision needed). \
+                         Default install via npx; requires Node.js."
+                            .to_string(),
+                    enabled: true,
+                    transport: "stdio".to_string(),
+                    command: Some("npx".to_string()),
+                    args: vec!["-y".to_string(), "@playwright/mcp@latest".to_string()],
+                    ..Default::default()
+                },
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn load_seeds_playwright_mcp_on_fresh_config() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = Config::load(tmp.path());
+        let pw = cfg.mcp.get("playwright").expect("playwright MCP must be seeded");
+        assert!(pw.enabled);
+        assert_eq!(pw.command.as_deref(), Some("npx"));
+        assert!(pw.args.iter().any(|a| a.contains("@playwright/mcp")));
+    }
+
+    #[test]
+    fn seed_does_not_overwrite_user_customisations() {
+        let tmp = TempDir::new().unwrap();
+        let mut cfg = Config::default();
+        cfg.mcp.insert(
+            "playwright".to_string(),
+            MCPClientConfig {
+                name: "Playwright (custom)".to_string(),
+                command: Some("/usr/local/bin/playwright-mcp".to_string()),
+                enabled: false,
+                ..Default::default()
+            },
+        );
+        cfg.save(tmp.path()).unwrap();
+
+        let reloaded = Config::load(tmp.path());
+        let pw = reloaded.mcp.get("playwright").unwrap();
+        // User's custom command and disabled flag must be preserved.
+        assert_eq!(pw.command.as_deref(), Some("/usr/local/bin/playwright-mcp"));
+        assert!(!pw.enabled);
     }
 }
