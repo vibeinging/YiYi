@@ -1,0 +1,35 @@
+id: 006-tool-pick-search-discovery
+category: tool-selection
+rule: R8
+description: |
+  When the user asks for information by topic and gives NO URL, the
+  agent should reach for `web_search` first. Going straight to
+  `browser_enable` (interactive Playwright) for a read-only discovery
+  task is wasteful — it triggers an install dialog the user doesn't
+  need.
+
+mode: fixture
+
+user_message: "DeepSeek V4 Pro 现在的价格是多少？"
+
+fixture:
+  - role: assistant
+    content: "我先搜一下官方价格信息。"
+    tool_calls:
+      - name: web_search
+        arguments: { query: "DeepSeek V4 Pro pricing" }
+
+expect:
+  must_call_tool:
+    - name: web_search
+  must_not_call_tool:
+    - name: browser_enable
+
+  rubric:
+    - criterion: >
+        Agent invoked web_search to discover the pricing page.
+      weight: critical
+    - criterion: >
+        Agent did NOT call browser_enable for this read-only discovery
+        request — that would needlessly trigger Playwright install.
+      weight: critical

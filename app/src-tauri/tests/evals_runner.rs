@@ -202,7 +202,7 @@ fn every_case_uses_a_known_mode() {
 
 #[test]
 fn every_case_uses_a_known_category() {
-    const CATEGORIES: &[&str] = &["behavior", "capability", "safety", "ui-contract"];
+    const CATEGORIES: &[&str] = &["behavior", "capability", "safety", "ui-contract", "tool-selection"];
     for (path, case) in load_all_cases() {
         assert!(
             CATEGORIES.contains(&case.category.as_str()),

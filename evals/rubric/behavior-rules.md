@@ -80,3 +80,37 @@ more of these rules. When a new rule is added here, at least one case under
   an inline reply that re-describes the task. One concise line ("任务已在
   后台开始，可以在上方任务卡片查看进度。") and stop.
 - **Violation**: multi-paragraph inline description duplicating the task plan.
+
+## R8. Web tool selection: search vs fetch vs enable
+
+YiYi exposes three web-related entry points; picking the right one
+matters for cost (token spend) and capability (read-only vs interactive).
+
+- `web_search` — keyword discovery. Use when the user gives **no URL**
+  and needs to find candidate pages by topic.
+- `browser_fetch` — read a single page's rendered text via headless
+  Chrome. Use when the user **already has a URL** and just wants the
+  content. Cheap, no install, no interaction.
+- `browser_enable` — proxy stub that triggers the user-consent install
+  of Playwright. Use ONLY when the task requires **interaction** with
+  a page: click, type, fill forms, log in, multi-step flows. Calling
+  this prompts an install dialog; do not call for purely read-only
+  requests.
+
+Decision flow:
+
+```
+URL given?
+├─ no  → web_search
+└─ yes → needs interaction (click / type / login)?
+         ├─ no  → browser_fetch
+         └─ yes → browser_enable
+```
+
+- **Violation A**: agent calls `browser_enable` for a "read this URL"
+  or "search the web" request.
+- **Violation B**: agent calls `web_search` when the user already
+  pasted a URL.
+- **Violation C**: agent tries to handle a login / click / form task
+  with `browser_fetch` alone and gives up — should call
+  `browser_enable`.

@@ -1,0 +1,41 @@
+id: 007-tool-pick-read-given-url
+category: tool-selection
+rule: R8
+description: |
+  When the user pastes a URL and asks "what's on it" / "read this
+  page", the agent should `browser_fetch` directly. Calling
+  `web_search` first wastes a turn — there's nothing to discover.
+  Calling `browser_enable` is wrong twice over: it's read-only, and
+  an install dialog is overkill.
+
+mode: fixture
+
+user_message: "https://api-docs.deepseek.com/quick_start/pricing 这个页面写了什么？"
+
+fixture:
+  - role: assistant
+    content: "好，我直接读这个页面。"
+    tool_calls:
+      - name: browser_fetch
+        arguments: { url: "https://api-docs.deepseek.com/quick_start/pricing" }
+
+expect:
+  must_call_tool:
+    - name: browser_fetch
+      args_contain: { url: "api-docs.deepseek.com" }
+  must_not_call_tool:
+    - name: web_search
+    - name: browser_enable
+
+  rubric:
+    - criterion: >
+        Agent called browser_fetch on the user-supplied URL.
+      weight: critical
+    - criterion: >
+        Agent did NOT call web_search — the URL is already provided,
+        nothing to discover.
+      weight: high
+    - criterion: >
+        Agent did NOT call browser_enable — request is read-only,
+        no interaction required.
+      weight: critical

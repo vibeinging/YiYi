@@ -1,0 +1,43 @@
+id: 009-tool-pick-search-then-read
+category: tool-selection
+rule: R8
+description: |
+  Two-step web tasks: discovery → read. The agent should chain
+  `web_search` then `browser_fetch`, NOT use `browser_enable`. This is
+  the most common information-seeking pattern.
+
+mode: fixture
+
+user_message: "找一下 React 19 的官方 release notes，看看主要新特性是什么。"
+
+fixture:
+  - role: assistant
+    content: "先搜下 React 19 的 release notes。"
+    tool_calls:
+      - name: web_search
+        arguments: { query: "React 19 release notes" }
+  # Tool result injected by runner (web_search returns the canonical URL).
+  - role: assistant
+    content: "找到了官方博客，我来读一下。"
+    tool_calls:
+      - name: browser_fetch
+        arguments: { url: "https://react.dev/blog/2024/12/05/react-19" }
+
+expect:
+  must_call_tool:
+    - name: web_search
+    - name: browser_fetch
+  must_not_call_tool:
+    - name: browser_enable
+
+  rubric:
+    - criterion: >
+        Agent invoked web_search FIRST to find the official URL.
+      weight: critical
+    - criterion: >
+        Agent then invoked browser_fetch on the discovered URL —
+        not browser_enable, since the request is purely read-only.
+      weight: critical
+    - criterion: >
+        Agent did NOT call browser_enable — no interaction was needed.
+      weight: critical
