@@ -93,6 +93,42 @@ pub struct ActiveHours {
     pub end: String,
 }
 
+/// Lazy-install dependency declaration. Lets MCP servers (and, in the
+/// future, individual tools) declare what binaries they need so YiYi can
+/// detect a missing prerequisite *before* spawning, surface a consent
+/// dialog to the user, and run the install for them.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DepSpec {
+    /// Bin name to look up via `which` (e.g. `"npx"`, `"node"`).
+    pub bin: String,
+    /// User-facing name shown in the install dialog (e.g. `"Node.js"`).
+    pub display_name: String,
+    /// One-line reason the user is being asked to install this — appears
+    /// in the consent dialog so they can judge "do I want this?".
+    #[serde(default)]
+    pub why: String,
+    /// Ordered list of install options shown to the user. The dialog
+    /// prefers the first option whose `kind` is locally available
+    /// (e.g. brew if Homebrew is installed); falls back to the URL kind.
+    #[serde(default)]
+    pub install: Vec<InstallStep>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct InstallStep {
+    /// "brew" | "winget" | "apt" | "url" | "manual"
+    pub kind: String,
+    /// User-facing label, e.g. "Install via Homebrew".
+    pub label: String,
+    /// Shell command to run (for brew / winget / apt / manual). Mutually
+    /// exclusive with `url`.
+    #[serde(default)]
+    pub command: Option<String>,
+    /// Open this URL in the browser (for "url" kind).
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MCPClientConfig {
     #[serde(default)]
@@ -121,6 +157,9 @@ pub struct MCPClientConfig {
     /// Priority for tool ordering. Higher priority tools appear first. Default 0.
     #[serde(default)]
     pub priority: i32,
+    /// Lazy-install prerequisites — see `DepSpec`. Empty means no checks.
+    #[serde(default)]
+    pub requires: Vec<DepSpec>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -401,6 +440,37 @@ impl Config {
                     transport: "stdio".to_string(),
                     command: Some("npx".to_string()),
                     args: vec!["-y".to_string(), "@playwright/mcp@latest".to_string()],
+                    requires: vec![DepSpec {
+                        bin: "npx".to_string(),
+                        display_name: "Node.js".to_string(),
+                        why: "Playwright MCP runs as an `npx` package, so Node.js (with npm/npx) must be installed. Comes pre-bundled with Node.".to_string(),
+                        install: vec![
+                            InstallStep {
+                                kind: "brew".to_string(),
+                                label: "通过 Homebrew 安装（macOS 推荐）".to_string(),
+                                command: Some("brew install node".to_string()),
+                                ..Default::default()
+                            },
+                            InstallStep {
+                                kind: "winget".to_string(),
+                                label: "通过 winget 安装（Windows）".to_string(),
+                                command: Some("winget install OpenJS.NodeJS.LTS".to_string()),
+                                ..Default::default()
+                            },
+                            InstallStep {
+                                kind: "apt".to_string(),
+                                label: "通过 apt 安装（Debian/Ubuntu）".to_string(),
+                                command: Some("sudo apt-get install -y nodejs npm".to_string()),
+                                ..Default::default()
+                            },
+                            InstallStep {
+                                kind: "url".to_string(),
+                                label: "从 nodejs.org 下载".to_string(),
+                                url: Some("https://nodejs.org/zh-cn/download".to_string()),
+                                ..Default::default()
+                            },
+                        ],
+                    }],
                     ..Default::default()
                 },
             );

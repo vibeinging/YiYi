@@ -170,11 +170,36 @@ pub fn run() {
                     let cfg = tauri::async_runtime::block_on(state.config.read());
                     cfg.mcp.clone()
                 };
+                let app_handle_for_mcp = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     for (key, cfg) in &mcp_config {
                         if !cfg.enabled {
                             continue;
                         }
+
+                        // Lazy-install pre-flight: if any required bin is
+                        // missing, surface a `mcp://needs_install` event
+                        // and skip spawn. The frontend's InstallDialog
+                        // listens, prompts the user, and on user consent
+                        // calls `install_deps` + `retry_mcp_server`.
+                        let missing = crate::engine::infra::dep_check::missing_deps(&cfg.requires);
+                        if !missing.is_empty() {
+                            log::info!(
+                                "MCP '{}' has {} missing prerequisite(s); deferring spawn until installed",
+                                key, missing.len()
+                            );
+                            use tauri::Emitter;
+                            let _ = app_handle_for_mcp.emit(
+                                "mcp://needs_install",
+                                serde_json::json!({
+                                    "server_id": key,
+                                    "server_name": cfg.name,
+                                    "missing": missing,
+                                }),
+                            );
+                            continue;
+                        }
+
                         let result = match cfg.transport.as_str() {
                             "stdio" => mcp.connect_stdio(key, cfg).await,
                             "http" | "streamable_http" => mcp.connect_http(key, cfg).await,
@@ -473,6 +498,8 @@ pub fn run() {
             commands::mcp::update_mcp_client,
             commands::mcp::toggle_mcp_client,
             commands::mcp::delete_mcp_client,
+            commands::mcp::install_deps,
+            commands::mcp::retry_mcp_server,
             // Unified Users — disabled (no frontend consumer, reduces attack surface)
             // commands::unified_users::unified_users_list,
             // commands::unified_users::unified_users_create,

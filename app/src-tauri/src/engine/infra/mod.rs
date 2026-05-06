@@ -6,3 +6,5 @@ pub mod mcp_lifecycle;
 pub mod python_bridge;
 pub mod pty_manager;
 pub mod config_watcher;
+pub mod dep_check;
+pub mod install_runner;

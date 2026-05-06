@@ -119,6 +119,7 @@ pub async fn create_mcp_client_impl(
         cwd: client.cwd,
         skill_override: None,
         priority: 0,
+        requires: Vec::new(),
     };
 
     config.mcp.insert(client_key.clone(), mcp_config.clone());
@@ -166,6 +167,7 @@ pub async fn update_mcp_client_impl(
         cwd: client.cwd,
         skill_override: None,
         priority: 0,
+        requires: Vec::new(),
     };
 
     config.mcp.insert(key.clone(), mcp_config.clone());
@@ -228,4 +230,100 @@ pub async fn delete_mcp_client(
     key: String,
 ) -> Result<serde_json::Value, String> {
     delete_mcp_client_impl(&*state, key).await
+}
+
+// ─── Lazy-install commands ─────────────────────────────────────────────
+
+/// Run a single user-approved install step. Streams stdout / stderr lines
+/// as `mcp://install_progress` events; resolves on completion.
+///
+/// Frontend calls this after the user picks an InstallStep from the
+/// consent dialog (e.g. "Install via Homebrew" → `brew install node`).
+#[tauri::command]
+pub async fn install_deps(
+    app: tauri::AppHandle,
+    server_id: String,
+    step: crate::state::config::InstallStep,
+) -> Result<(), String> {
+    use crate::engine::infra::install_runner::{run_install_step, ProgressStream};
+    use tauri::Emitter;
+
+    let app_for_progress = app.clone();
+    let sid = server_id.clone();
+    run_install_step(&step, move |p| {
+        let _ = app_for_progress.emit(
+            "mcp://install_progress",
+            serde_json::json!({
+                "server_id": sid,
+                "stream": match p.stream {
+                    ProgressStream::Stdout => "stdout",
+                    ProgressStream::Stderr => "stderr",
+                },
+                "line": p.line,
+            }),
+        );
+    })
+    .await
+}
+
+/// Re-attempt to start an MCP server after the user finished installing
+/// its prerequisites. Re-checks `requires`, then dispatches stdio / http.
+/// On success emits `mcp://ready`, on persistent miss re-emits
+/// `mcp://needs_install`.
+#[tauri::command]
+pub async fn retry_mcp_server(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+    server_id: String,
+) -> Result<(), String> {
+    use tauri::Emitter;
+
+    let cfg = {
+        let config = state.config.read().await;
+        config
+            .mcp
+            .get(&server_id)
+            .cloned()
+            .ok_or_else(|| format!("MCP server '{server_id}' not found"))?
+    };
+    if !cfg.enabled {
+        return Err(format!("MCP server '{server_id}' is disabled"));
+    }
+
+    let missing = crate::engine::infra::dep_check::missing_deps(&cfg.requires);
+    if !missing.is_empty() {
+        let _ = app.emit(
+            "mcp://needs_install",
+            serde_json::json!({
+                "server_id": &server_id,
+                "server_name": cfg.name,
+                "missing": missing,
+            }),
+        );
+        return Err(format!(
+            "{} prerequisite(s) still missing — see install dialog",
+            missing.len()
+        ));
+    }
+
+    let mcp = state.mcp_runtime.clone();
+    let result = match cfg.transport.as_str() {
+        "stdio" => mcp.connect_stdio(&server_id, &cfg).await,
+        "http" | "streamable_http" => mcp.connect_http(&server_id, &cfg).await,
+        other => return Err(format!("unknown transport '{other}'")),
+    };
+
+    match result {
+        Ok(tools) => {
+            let _ = app.emit(
+                "mcp://ready",
+                serde_json::json!({
+                    "server_id": &server_id,
+                    "tool_count": tools.len(),
+                }),
+            );
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
 }
