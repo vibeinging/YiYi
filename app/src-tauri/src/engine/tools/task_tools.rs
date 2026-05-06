@@ -5,7 +5,18 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
     vec![
         super::tool_def(
             "create_task",
-            "创建一个独立运行的后台任务。**仅在用户显式要求『后台执行 / 独立任务 / 定时任务』，或任务明显一轮对话做不完（建议先征得用户同意）时使用**。日常请求（包括写文件、写代码、生成文档）应该直接在主对话中完成，不要默认建后台任务。",
+            "创建一个**独立运行的后台任务**。\n\n\
+             **默认不要用这个工具。** 日常请求——写文件、写代码、生成文档/PPT/Excel/PDF、做网页、汇总分析——都应该**在主对话里直接做**，哪怕需要 5-10 步工具调用。ReAct 循环本身就支持多步骤工具调用，你不需要为此创建后台任务。\n\n\
+             **仅在以下两种情况使用**：\n\
+             1. 用户消息包含『在后台 / 后台跑 / 自动执行 / 定时 / 每天 X 点 / 每周』等显式触发词；\n\
+             2. 任务**真的需要数小时或跨天**完成（如：抓取大型数据集、长期监听事件流、夜间批处理）。\n\n\
+             反例 —— 下面这些**都应该 inline，不要 create_task**：\n\
+             - 『创建一个 PPT』『做个 PPT』 → activate_skills(['pptx']) + run_python_script\n\
+             - 『写一个网页 / 网站』 → write_file 多步\n\
+             - 『分析这份 Excel / 数据』 → activate_skills(['xlsx']) + run_python_script\n\
+             - 『写一份报告 / 文档』 → 生成内容 + write_file\n\
+             - 『把 PDF 提取一下』 → activate_skills(['pdf']) + run_python_script\n\n\
+             如果你在想『这任务步骤多，是不是该 create_task』——**答案是否**，直接做。多步在主对话中完成是 YiYi 的常态。",
             serde_json::json!({
                 "type": "object",
                 "properties": {

@@ -1038,7 +1038,9 @@ async fn live_cases() {
             &case.user_message,
             &tools_override,
             &case.mock_tool_results,
-            3, // max iterations
+            6, // max iterations — 3 was too tight for cases that
+               // need activate_skills → run_python → write_file
+               // sequences (003 / 013 / 015 / 018 fall into this).
         )
         .await;
         eprintln!(
