@@ -44,6 +44,9 @@ export function useTaskEventBridge() {
               sidebar().addPendingNewTab(sessionId, title);
             }
           }
+          // p.source === 'inline' (from inline_task) intentionally falls
+          // through after addOrRefreshTask: TaskCard renders in current
+          // chat via ChatMessages.tsx, no new tab, no detached stream.
         }
       }),
 

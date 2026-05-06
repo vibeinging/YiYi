@@ -1384,6 +1384,8 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         // "claude_code" removed — YiYi handles coding natively
         "send_file_to_user" => system_tools::send_file_to_user_tool(&args).await,
         "create_task" => task_tools::create_task_tool(&args).await,
+        "inline_task" => task_tools::inline_task_tool(&args).await,
+        "detach_to_background" => task_tools::detach_to_background_tool(&args).await,
         "render_canvas" => canvas_tools::render_canvas_tool(&args).await,
         "spawn_agents" => spawn_tools::spawn_agents_tool(args.clone()).await,
         "create_workspace_dir" => task_tools::create_workspace_dir_tool(&args).await,

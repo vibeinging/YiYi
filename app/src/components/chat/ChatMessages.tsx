@@ -147,7 +147,7 @@ export function processMessages(messages: ChatMessage[]): ProcessedMsg[] {
       const ptySessions: PtySessionInfo[] = [];
       const sentFiles: SentFile[] = [];
       const regularTools = allTools.filter((tool) => {
-        if (tool.name === 'create_task' && tool.resultPreview) {
+        if (['create_task','inline_task','detach_to_background'].includes(tool.name) && tool.resultPreview) {
           try {
             const parsed = JSON.parse(tool.resultPreview);
             if (parsed.id || parsed.task_id) { taskIds.push(parsed.id || parsed.task_id); return false; }
@@ -622,7 +622,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                     const streamPtySessions: PtySessionInfo[] = [];
                     const streamSentFiles: SentFile[] = [];
                     const filteredTools = activeTools.filter((t) => {
-                      if (t.name === 'create_task' && t.status === 'done' && t.resultPreview) {
+                      if (['create_task','inline_task','detach_to_background'].includes(t.name) && t.status === 'done' && t.resultPreview) {
                         try {
                           const parsed = JSON.parse(t.resultPreview);
                           if (parsed.id || parsed.task_id) { taskCards.push(parsed.id || parsed.task_id); return false; }

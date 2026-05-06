@@ -3,38 +3,65 @@ use tauri::Emitter;
 /// Task management tool definitions.
 pub(super) fn definitions() -> Vec<super::ToolDefinition> {
     vec![
+        // ─── inline_task ─────────────────────────────────────────────────
+        // Replaces the visual "I want to show progress UI" use of the old
+        // create_task. Stays in the current chat session; the frontend
+        // renders a TaskCard inline and the agent keeps calling tools as
+        // normal in the main loop. No detachment, no new session.
         super::tool_def(
-            "create_task",
-            "创建一个**独立运行的后台任务**。\n\n\
-             **默认不要用这个工具。** 日常请求——写文件、写代码、生成文档/PPT/Excel/PDF、做网页、汇总分析——都应该**在主对话里直接做**，哪怕需要 5-10 步工具调用。ReAct 循环本身就支持多步骤工具调用，你不需要为此创建后台任务。\n\n\
-             **仅在以下两种情况使用**：\n\
-             1. 用户消息包含『在后台 / 后台跑 / 自动执行 / 定时 / 每天 X 点 / 每周』等显式触发词；\n\
-             2. 任务**真的需要数小时或跨天**完成（如：抓取大型数据集、长期监听事件流、夜间批处理）。\n\n\
-             反例 —— 下面这些**都应该 inline，不要 create_task**：\n\
-             - 『创建一个 PPT』『做个 PPT』 → activate_skills(['pptx']) + run_python_script\n\
-             - 『写一个网页 / 网站』 → write_file 多步\n\
-             - 『分析这份 Excel / 数据』 → activate_skills(['xlsx']) + run_python_script\n\
-             - 『写一份报告 / 文档』 → 生成内容 + write_file\n\
-             - 『把 PDF 提取一下』 → activate_skills(['pdf']) + run_python_script\n\n\
-             如果你在想『这任务步骤多，是不是该 create_task』——**答案是否**，直接做。多步在主对话中完成是 YiYi 的常态。",
+            "inline_task",
+            "在当前对话中**显示一个进度卡片**，用于多步骤任务的可视化。**不会创建后台任务，也不会切到新会话**——你接下来还在主对话里继续调用工具完成工作。\n\n\
+             用途：当任务有 3 步以上，调这个让用户看到结构化的计划与进度。每完成一步用 `report_progress` 更新状态。\n\n\
+             典型场景：『做个 PPT』『写一个网页』『分析这份 Excel』——你 inline_task 先把计划亮出来，然后正常用 write_file / run_python_script / etc. 一步步做完。\n\n\
+             **不要用 inline_task 当成『后台启动』的同义词**。如果用户明确说『后台 / 自动执行 / 定时』，用 detach_to_background 而非这个。",
             serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "title": {
-                        "type": "string",
-                        "description": "任务标题，简短描述任务内容"
-                    },
-                    "description": {
-                        "type": "string",
-                        "description": "任务的详细描述和需求"
-                    },
+                    "title": { "type": "string", "description": "任务标题，例如 '生成大熊猫介绍 PPT'" },
                     "plan": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "执行阶段列表，如 ['初始化项目', '编写代码', '测试']"
+                        "description": "执行步骤列表（推荐 3-7 步），如 ['加载 pptx skill', '设计幻灯片大纲', '生成 PPT 文件', '保存到工作区']"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "可选的额外说明"
                     }
                 },
-                "required": ["title", "description"]
+                "required": ["title", "plan"]
+            }),
+        ),
+        // ─── detach_to_background ────────────────────────────────────────
+        // Replaces the "I want to detach this from the chat session and
+        // run it asynchronously" use of the old create_task. Strictly
+        // gated: requires `quote_user_consent`, the literal phrase from
+        // the user's message that proves they asked for backgrounding.
+        // The dispatcher rejects calls whose quote doesn't contain a
+        // recognised trigger word, so the model can't self-justify.
+        super::tool_def(
+            "detach_to_background",
+            "**真正脱钩到后台执行**的任务。会创建一个独立的 task session，主对话立即返回，任务在后台跑。\n\n\
+             **强制门槛**：必须传 `quote_user_consent` —— 用户原话里**包含触发词**的引文。触发词允许列表（含一个即可）：\n\
+             - 中文：『后台』『自动执行』『定时』『每天 / 每周 / 每月 / 每小时』『跑完叫我』『独立任务』\n\
+             - 英文：background / scheduled / detach / nightly / daily / weekly / cron\n\n\
+             如果用户没说这些词，**不要调本工具**——用 inline_task 在主对话里做。模型不能为用户『代为同意后台执行』。\n\n\
+             典型场景：用户说『**在后台**抓一下这 50 个网页』、『**定时**每天 9 点提醒我开站会』、『让它**自动**跑直到结束』。",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "quote_user_consent": {
+                        "type": "string",
+                        "description": "**从用户消息原文里截一段**，必须包含一个触发词（后台/定时/自动/每天 等）。例如：『在后台抓一下』『定时每天 9 点提醒』。如果你截不出含触发词的原话——说明用户没要求后台，不要调本工具。"
+                    },
+                    "title": { "type": "string", "description": "任务标题" },
+                    "description": { "type": "string", "description": "任务详细描述" },
+                    "plan": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "执行阶段列表"
+                    }
+                },
+                "required": ["quote_user_consent", "title", "description"]
             }),
         ),
         super::tool_def(
@@ -102,6 +129,132 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
             }),
         ),
     ]
+}
+
+/// Trigger phrases that mark the user as having explicitly opted into
+/// background execution. detach_to_background validates the agent's
+/// `quote_user_consent` parameter against this list — model can't
+/// self-justify by writing its own opt-in text.
+const BACKGROUND_TRIGGERS: &[&str] = &[
+    // Chinese
+    "后台", "自动执行", "自动跑", "定时", "每天", "每周", "每月", "每小时",
+    "跑完叫我", "跑完通知我", "独立任务", "独立跑",
+    // English
+    "background", "scheduled", "detach", "nightly", "daily",
+    "weekly", "monthly", "hourly", "cron",
+];
+
+fn quote_contains_trigger(quote: &str) -> bool {
+    let q = quote.to_lowercase();
+    BACKGROUND_TRIGGERS.iter().any(|t| q.contains(&t.to_lowercase()))
+}
+
+/// `inline_task` — render a progress card in the current chat without
+/// detaching. Reuses create_task's DB / event / TaskRegistry plumbing
+/// but sets `session_id` = parent session and `source` = "inline" so
+/// the frontend's `useTaskEventBridge` doesn't open a new tab.
+pub(super) async fn inline_task_tool(args: &serde_json::Value) -> String {
+    let raw_title = args.get("title").and_then(|v| v.as_str()).unwrap_or("");
+    let title = if raw_title.is_empty() { "新任务".to_string() } else { raw_title.to_string() };
+    let description = args.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    let plan: Vec<String> = args
+        .get("plan")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let parent_session_id = super::get_current_session_id();
+    let total_stages = plan.len() as i32;
+    let now = chrono::Utc::now().timestamp();
+
+    if let Some(db) = super::DATABASE.get() {
+        let plan_json = if plan.is_empty() {
+            None
+        } else {
+            Some(
+                serde_json::to_string(
+                    &plan
+                        .iter()
+                        .map(|s| serde_json::json!({"title": s, "status": "pending"}))
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap_or_default(),
+            )
+        };
+        // Inline tasks live in the parent session — no new task: session.
+        if let Err(e) = db.create_task(
+            &task_id, &title, Some(description), "running",
+            &parent_session_id,
+            Some(&parent_session_id),
+            plan_json.as_deref(),
+            total_stages,
+            now,
+        ) {
+            return format!("Error creating inline task record: {e}");
+        }
+    } else {
+        return "Error: database not available".into();
+    }
+
+    if let Some(reg) = crate::engine::task_registry::global_registry() {
+        let entry = crate::engine::task_registry::TaskEntry::new(
+            &task_id,
+            crate::engine::task_registry::TaskKind::AgentTask {
+                session_id: parent_session_id.clone(),
+                task_name: title.clone(),
+            },
+            description,
+        );
+        reg.register(entry);
+        reg.start(&task_id);
+    }
+
+    if let Some(app) = super::APP_HANDLE.get() {
+        let _ = app.emit(
+            "task://created",
+            serde_json::json!({
+                "task_id": task_id,
+                "session_id": parent_session_id,
+                "parent_session_id": parent_session_id,
+                "title": title,
+                "description": description,
+                "plan": plan,
+                "total_stages": total_stages,
+                "source": "inline",  // frontend bridge skips new-tab logic for this
+            }),
+        );
+    }
+
+    serde_json::json!({
+        "__type": "create_task",  // shared discriminator so existing TaskCard renderer works
+        "id": task_id,
+        "task_id": task_id,
+        "title": title,
+        "mode": "inline",
+    })
+    .to_string()
+}
+
+/// `detach_to_background` — actually detach to a separate session. Strict
+/// gate: rejects calls whose `quote_user_consent` doesn't contain a
+/// recognised trigger word. Forwards to `create_task_tool` on success.
+pub(super) async fn detach_to_background_tool(args: &serde_json::Value) -> String {
+    let quote = args.get("quote_user_consent").and_then(|v| v.as_str()).unwrap_or("");
+    if quote.trim().is_empty() {
+        return serde_json::json!({
+            "error": "detach_to_background 缺 quote_user_consent 参数。它应该是用户原消息里包含『后台/定时/自动/每天』等触发词的引文。如果引不出，说明用户没说要后台 — 用 inline_task。"
+        }).to_string();
+    }
+    if !quote_contains_trigger(quote) {
+        return serde_json::json!({
+            "error": format!(
+                "quote_user_consent (『{}』) 不含任何后台触发词。允许列表：{}。如果用户没说这些，请用 inline_task 在主对话里做。",
+                quote.chars().take(80).collect::<String>(),
+                BACKGROUND_TRIGGERS.join(" / ")
+            )
+        }).to_string();
+    }
+    create_task_tool(args).await
 }
 
 pub(super) async fn create_task_tool(args: &serde_json::Value) -> String {
