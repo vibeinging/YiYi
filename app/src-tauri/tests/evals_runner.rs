@@ -546,7 +546,6 @@ async fn run_fixture_case(case: &EvalCase) -> RunOutcome {
         "You are YiYi, a helpful assistant (eval harness).",
         &case.user_message,
         &[],
-        &[],
         Some(turns.len()), // max iterations = number of scripted turns
         None,
         move |e| events_cb.lock().unwrap().push(e),

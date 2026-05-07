@@ -105,9 +105,8 @@ pub async fn run_react(
     config: &LLMConfig,
     system_prompt: &str,
     user_message: &str,
-    extra_tools: &[ToolDefinition],
 ) -> Result<String, String> {
-    run_react_with_options(config, system_prompt, user_message, extra_tools, &[], None, None).await
+    run_react_with_options(config, system_prompt, user_message, &[], None, None).await
 }
 
 /// Run ReAct loop with conversation history, configurable max iterations,
@@ -116,12 +115,11 @@ pub async fn run_react_with_options(
     config: &LLMConfig,
     system_prompt: &str,
     user_message: &str,
-    extra_tools: &[ToolDefinition],
     history: &[LLMMessage],
     max_iterations: Option<usize>,
     working_dir: Option<&std::path::Path>,
 ) -> Result<String, String> {
-    run_react_with_options_persist(config, system_prompt, user_message, extra_tools, history, max_iterations, working_dir, None).await
+    run_react_with_options_persist(config, system_prompt, user_message, history, max_iterations, working_dir, None).await
 }
 
 /// Run ReAct loop with optional tool persistence callback.
@@ -131,7 +129,6 @@ pub async fn run_react_with_options_persist(
     config: &LLMConfig,
     system_prompt: &str,
     user_message: &str,
-    extra_tools: &[ToolDefinition],
     history: &[LLMMessage],
     max_iterations: Option<usize>,
     working_dir: Option<&std::path::Path>,
@@ -139,7 +136,7 @@ pub async fn run_react_with_options_persist(
 ) -> Result<String, String> {
     // Delegate to streaming path to ensure permission + hook enforcement
     run_react_with_options_stream(
-        config, system_prompt, user_message, extra_tools,
+        config, system_prompt, user_message,
         history, max_iterations, working_dir,
         |_event| {}, // no-op event handler
         None, persist_fn, None,
@@ -162,7 +159,6 @@ pub async fn run_react_with_options_stream<F>(
     config: &LLMConfig,
     system_prompt: &str,
     user_message: &str,
-    extra_tools: &[ToolDefinition],
     history: &[LLMMessage],
     max_iterations: Option<usize>,
     working_dir: Option<&std::path::Path>,
@@ -184,12 +180,19 @@ where
     let mut tools = if let Some(ovr) = tools_override {
         ovr
     } else {
-        // Unified: get all tools from GlobalToolRegistry (built-in + plugin + MCP)
-        let mut t = crate::engine::tool_registry_global::global_registry()
+        // Single source of truth: GlobalToolRegistry (built-in + plugin + MCP).
+        // Registry enforces unique names across sources — collisions are
+        // resolved at registration time (alias) rather than send time.
+        let all = crate::engine::tool_registry_global::global_registry()
             .map(|r| r.all_definitions())
-            .unwrap_or_else(|| builtin_tools()); // startup-only fallback
-        t.extend(extra_tools.iter().cloned());
-        t
+            .unwrap_or_else(builtin_tools); // startup-only fallback
+        // Honour any task-local agent tool filter so the LLM only sees
+        // tools the runtime would actually let it call.
+        if let Some(filter) = crate::engine::tools::current_tool_filter() {
+            filter.apply(&all)
+        } else {
+            all
+        }
     };
 
     let mut messages: Vec<LLMMessage> = vec![LLMMessage {
@@ -835,7 +838,6 @@ pub async fn run_subagent_stream<F>(
     config: &LLMConfig,
     system_prompt: &str,
     user_message: &str,
-    extra_tools: &[ToolDefinition],
     tool_filter: &super::ToolFilter,
     max_iterations: Option<usize>,
     working_dir: Option<&std::path::Path>,
@@ -845,12 +847,18 @@ pub async fn run_subagent_stream<F>(
 where
     F: Fn(AgentStreamEvent) + Send + Clone + 'static,
 {
-    let mut tools = builtin_tools();
-    tools.extend(extra_tools.iter().cloned());
-    let filtered = tool_filter.apply(&tools);
+    // Sub-agents draw from the same registry as the parent agent — sync
+    // MCP first so they see the live tool set, then apply the filter.
+    if let Some(registry) = crate::engine::tool_registry_global::global_registry() {
+        crate::engine::tool_registry_global::sync_mcp_tools(registry).await;
+    }
+    let all_tools = crate::engine::tool_registry_global::global_registry()
+        .map(|r| r.all_definitions())
+        .unwrap_or_else(builtin_tools);
+    let filtered = tool_filter.apply(&all_tools);
 
     run_react_with_options_stream(
-        config, system_prompt, user_message, &[], &[],
+        config, system_prompt, user_message, &[],
         max_iterations, working_dir, on_event, cancelled, None,
         Some(filtered),
     ).await

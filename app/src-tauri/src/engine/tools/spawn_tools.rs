@@ -146,9 +146,6 @@ pub(super) async fn spawn_agents_tool(args: serde_json::Value) -> String {
     } else {
         (vec![], vec![])
     };
-    let skill_overrides = std::collections::HashMap::new();
-    let mcp_extra: Vec<super::ToolDefinition> = super::mcp_tools_as_definitions(&mcp_tools_list, &skill_overrides);
-
     let agent_names: Vec<String> = specs.iter().map(|s| s.name.clone()).collect();
     let agent_tasks: Vec<String> = specs.iter().map(|s| s.task.clone()).collect();
 
@@ -158,7 +155,7 @@ pub(super) async fn spawn_agents_tool(args: serde_json::Value) -> String {
     let cancelled = super::TASK_CANCELLED.try_with(|c| c.clone()).ok();
     spawn_agents_background(
         specs, depth, llm_config, working_dir, app_handle,
-        all_skill_index, all_always_active, mcp_tools_list, unavailable_servers, mcp_extra, session_id, cancelled,
+        all_skill_index, all_always_active, mcp_tools_list, unavailable_servers, session_id, cancelled,
     );
 
     // Return immediately — agents run in background
@@ -184,7 +181,6 @@ fn spawn_agents_background(
     all_always_active: Vec<String>,
     mcp_tools_list: Vec<crate::engine::infra::mcp_runtime::MCPTool>,
     unavailable_servers: Vec<String>,
-    mcp_extra: Vec<super::ToolDefinition>,
     session_id: String,
     cancelled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) {
@@ -196,7 +192,6 @@ fn spawn_agents_background(
         let futures: Vec<_> = specs.into_iter().map(|spec| {
             let config = llm_config.clone();
             let wd = working_dir.clone();
-            let mcp_extra = mcp_extra.clone();
             let skill_idx = all_skill_index.clone();
             let always_active = all_always_active.clone();
             let mcp_tools_for_prompt = mcp_tools_list.clone();
@@ -276,8 +271,9 @@ fn spawn_agents_background(
                     spec.skills.clone()
                 };
 
-                // Apply tool filter to MCP extra tools
-                let mcp_extra = tool_filter.apply(&mcp_extra);
+                // Tool filter is set via with_tool_filter task_local below;
+                // the agent loop reads it and filters the registry-provided
+                // tools list before calling the LLM.
 
                 // Filter skill index
                 let filtered_index: Vec<crate::commands::agent::SkillIndexEntry> = if effective_skills.is_empty() {
@@ -379,7 +375,7 @@ fn spawn_agents_background(
                     DELEGATION_DEPTH.scope(depth, Box::pin(
                         super::with_tool_filter(tool_filter.clone(),
                             super::react_agent::run_react_with_options_stream(
-                                &config, &system_prompt, &spec.task, &mcp_extra,
+                                &config, &system_prompt, &spec.task,
                                 &[], None, Some(&wd), on_event,
                                 cancelled_for_agent.as_ref().map(|c| c.as_ref()), None, None,
                             )
@@ -389,7 +385,7 @@ fn spawn_agents_background(
                     DELEGATION_DEPTH.scope(depth, Box::pin(
                         super::with_tool_filter(tool_filter.clone(),
                             super::react_agent::run_react_with_options(
-                                &config, &system_prompt, &spec.task, &mcp_extra,
+                                &config, &system_prompt, &spec.task,
                                 &[], None, Some(&wd),
                             )
                         )

@@ -7,7 +7,7 @@ use super::IncomingMessage;
 use crate::engine::db::{BotRow, AgentRouteConfig};
 use crate::engine::llm_client::{LLMMessage, MessageContent};
 use crate::engine::react_agent;
-use crate::engine::tools::{mcp_tools_as_definitions, ToolDefinition};
+use crate::engine::tools::ToolDefinition;
 use crate::state::AppState;
 use crate::state::config::AccessPolicy;
 
@@ -746,10 +746,10 @@ async fn process_message(
         }
     }
 
-    // Collect MCP tools
-    let mcp_tools = state.mcp_runtime.get_all_tools().await;
-    let empty_overrides = std::collections::HashMap::new();
-    let extra_tools = mcp_tools_as_definitions(&mcp_tools, &empty_overrides);
+    // Reset MCP description overrides for the bot session (no skill aliases).
+    if let Some(reg) = crate::engine::tool_registry_global::global_registry() {
+        reg.set_mcp_skill_overrides(std::collections::HashMap::new());
+    }
 
     // Apply tool filtering from agent route config using ToolFilter for both definition + runtime
     let route_tool_filter: Option<react_agent::ToolFilter> = if let Some(ref route) = agent_route {
@@ -764,9 +764,14 @@ async fn process_message(
         None
     };
 
+    // Sync MCP into registry so the filter sees the live tool set.
+    if let Some(reg) = crate::engine::tool_registry_global::global_registry() {
+        crate::engine::tool_registry_global::sync_mcp_tools(reg).await;
+    }
     let tools_override: Option<Vec<ToolDefinition>> = route_tool_filter.as_ref().map(|filter| {
-        let mut all_tools = crate::engine::tools::builtin_tools();
-        all_tools.extend(extra_tools.clone());
+        let all_tools = crate::engine::tool_registry_global::global_registry()
+            .map(|r| r.all_definitions())
+            .unwrap_or_else(crate::engine::tools::builtin_tools);
         filter.apply(&all_tools)
     });
 
@@ -912,7 +917,7 @@ async fn process_message(
 
             // Wrap with runtime tool filter for security (prevents prompt-injection bypass)
             let agent_fut = react_agent::run_react_with_options_stream(
-                &config, &system_prompt, &enriched_message, &extra_tools,
+                &config, &system_prompt, &enriched_message,
                 &llm_history, max_iter, Some(agent_working_dir),
                 on_event, None, None, tools_override,
             );

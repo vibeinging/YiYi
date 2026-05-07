@@ -44,6 +44,8 @@ import logoFaceRight from '../../assets/yiyi-logo-face-right.png';
 
 const PtyTerminal = lazy(() => import('../PtyTerminal'));
 
+const TASK_CARD_TOOLS = ['create_task', 'inline_task', 'detach_to_background'];
+
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
 /* ------------------------------------------------------------------ */
@@ -147,7 +149,7 @@ export function processMessages(messages: ChatMessage[]): ProcessedMsg[] {
       const ptySessions: PtySessionInfo[] = [];
       const sentFiles: SentFile[] = [];
       const regularTools = allTools.filter((tool) => {
-        if (['create_task','inline_task','detach_to_background'].includes(tool.name) && tool.resultPreview) {
+        if (TASK_CARD_TOOLS.includes(tool.name) && tool.resultPreview) {
           try {
             const parsed = JSON.parse(tool.resultPreview);
             if (parsed.id || parsed.task_id) { taskIds.push(parsed.id || parsed.task_id); return false; }
@@ -622,7 +624,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                     const streamPtySessions: PtySessionInfo[] = [];
                     const streamSentFiles: SentFile[] = [];
                     const filteredTools = activeTools.filter((t) => {
-                      if (['create_task','inline_task','detach_to_background'].includes(t.name) && t.status === 'done' && t.resultPreview) {
+                      if (TASK_CARD_TOOLS.includes(t.name) && t.status === 'done' && t.resultPreview) {
                         try {
                           const parsed = JSON.parse(t.resultPreview);
                           if (parsed.id || parsed.task_id) { taskCards.push(parsed.id || parsed.task_id); return false; }

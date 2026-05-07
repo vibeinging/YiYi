@@ -19,7 +19,6 @@ use app_lib::engine::llm_client::LLMConfig;
 use app_lib::engine::react_agent::{
     run_react, run_react_with_options, run_react_with_options_stream,
 };
-use app_lib::engine::tools::{FunctionDef, ToolDefinition};
 
 /// Build a minimal LLMConfig pointing at the mock server.
 /// Uses "openai" provider_id so the OpenAI-format adapter is used.
@@ -33,19 +32,6 @@ fn make_llm_config(mock_uri: &str) -> LLMConfig {
     }
 }
 
-/// Build a trivial extra-tool definition (not registered globally — only used
-/// to populate the `tools` argument given to the LLM).
-fn make_dummy_tool(name: &str) -> ToolDefinition {
-    ToolDefinition {
-        r#type: "function".into(),
-        function: FunctionDef {
-            name: name.into(),
-            description: "test tool".into(),
-            parameters: serde_json::json!({"type": "object", "properties": {}}),
-        },
-    }
-}
-
 // ── Happy path: single-chunk response ──────────────────────────────────
 
 #[tokio::test(flavor = "multi_thread")]
@@ -55,7 +41,7 @@ async fn react_agent_returns_final_response_from_stream() {
     mock.mock_chat_completion_stream(&["Hello, world!"]).await;
 
     let config = make_llm_config(&mock.uri());
-    let result = run_react(&config, "you are a test", "say hi", &[])
+    let result = run_react(&config, "you are a test", "say hi")
         .await
         .expect("run_react should succeed");
 
@@ -76,7 +62,7 @@ async fn react_agent_accumulates_multi_chunk_stream() {
         .await;
 
     let config = make_llm_config(&mock.uri());
-    let result = run_react(&config, "sys", "hi", &[]).await.unwrap();
+    let result = run_react(&config, "sys", "hi").await.unwrap();
 
     assert_eq!(result.trim(), "Hello world");
 }
@@ -92,7 +78,7 @@ async fn react_agent_propagates_llm_error() {
     mock.mock_chat_completion_error(401).await;
 
     let config = make_llm_config(&mock.uri());
-    let result = run_react(&config, "sys", "hi", &[]).await;
+    let result = run_react(&config, "sys", "hi").await;
     assert!(result.is_err(), "expected Err on 401, got: {:?}", result);
 }
 
@@ -110,7 +96,7 @@ async fn react_agent_handles_empty_stream() {
     mock.mock_chat_completion_stream(&[]).await;
 
     let config = make_llm_config(&mock.uri());
-    let result = run_react(&config, "sys", "hi", &[]).await;
+    let result = run_react(&config, "sys", "hi").await;
 
     // Should not panic. Either returns Ok("") after exhausting empty retries,
     // or Err (e.g. if the provider-level stream parser rejects an empty body).
@@ -157,7 +143,6 @@ async fn react_agent_respects_max_iterations() {
         &config,
         "sys",
         "hi",
-        &[make_dummy_tool("__definitely_not_a_real_tool__")],
         &[],
         Some(1), // max 1 iteration
         None,
@@ -191,7 +176,6 @@ async fn react_agent_respects_cancellation_flag() {
         &config,
         "sys",
         "hi",
-        &[],
         &[],
         None,
         None,
@@ -233,7 +217,6 @@ async fn react_agent_stream_emits_token_and_complete_events() {
         &config,
         "sys",
         "hi",
-        &[],
         &[],
         None,
         None,
@@ -288,7 +271,7 @@ async fn react_agent_timeout_wrapper_aborts_before_llm_responds() {
 
     let started = std::time::Instant::now();
     let agent_name = "slow_agent";
-    let run_future = run_react(&config, "sys", "hi", &[]);
+    let run_future = run_react(&config, "sys", "hi");
     let timeout_secs: u64 = 1;
 
     let outcome: Result<String, String> = match tokio::time::timeout(

@@ -113,7 +113,7 @@ pub async fn execute_job_task(
                         execute_isolated(spec, config, &prompt, input, db).await
                     } else {
                         // Shared mode (default): run in global context without history
-                        react_agent::run_react(config, &prompt, input, &[]).await
+                        react_agent::run_react(config, &prompt, input).await
                     }
                 }
             }
@@ -216,7 +216,6 @@ async fn execute_isolated(
         config,
         system_prompt,
         input,
-        &[],      // no extra tools
         &history,
         None,     // default max iterations
         None,     // no working_dir for compact summaries

@@ -76,7 +76,6 @@ pub async fn verify_task<F>(
     config: &LLMConfig,
     task_description: &str,
     task_output: &str,
-    extra_tools: &[ToolDefinition],
     working_dir: Option<&std::path::Path>,
     on_event: F,
     cancelled: Option<&std::sync::atomic::AtomicBool>,
@@ -93,7 +92,6 @@ where
         config,
         &prompt,
         "Verify the task output described above. Follow the verification protocol strictly.",
-        extra_tools,
         &tool_filter,
         Some(30), // max 30 iterations — verification should be quick
         working_dir,

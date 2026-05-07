@@ -9,8 +9,6 @@ use crate::engine::llm_client::{LLMConfig, LLMMessage, MessageContent};
 use crate::engine::react_agent;
 use crate::engine::react_agent::PersistToolFn;
 use crate::engine::react_agent::ToolPersistEvent;
-use crate::engine::tools::mcp_tools_as_definitions;
-use crate::engine::tools::ToolDefinition;
 use crate::state::AppState;
 
 use super::{Attachment, SkillIndexEntry};
@@ -306,7 +304,6 @@ pub(super) struct ChatContext {
     pub system_prompt: String,
     pub agent_message: String,
     pub augmented_message: String,
-    pub extra_tools: Vec<ToolDefinition>,
     pub llm_history: Vec<LLMMessage>,
     pub max_iter: Option<usize>,
     pub working_dir: PathBuf,
@@ -394,7 +391,11 @@ pub(super) async fn prepare_chat_context(
         let cfg = state.config.read().await;
         crate::engine::tools::build_mcp_skill_overrides(&cfg.mcp, &working_dir)
     };
-    let extra_tools = mcp_tools_as_definitions(&mcp_tools, &skill_overrides);
+    // Push skill-description overrides into the registry; sync_mcp_tools
+    // (called inside the agent loop) consumes them when registering MCP entries.
+    if let Some(reg) = crate::engine::tool_registry_global::global_registry() {
+        reg.set_mcp_skill_overrides(skill_overrides);
+    }
 
     // Build system prompt with skill index (on-demand) + always-active skills (injected)
     let unavail = if unavailable_servers.is_empty() { None } else { Some(unavailable_servers.as_slice()) };
@@ -430,7 +431,6 @@ pub(super) async fn prepare_chat_context(
         system_prompt,
         agent_message,
         augmented_message,
-        extra_tools,
         llm_history,
         max_iter,
         working_dir,

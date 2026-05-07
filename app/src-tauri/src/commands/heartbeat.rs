@@ -96,7 +96,7 @@ pub async fn send_heartbeat_impl(state: &AppState) -> Result<serde_json::Value, 
         let prompt = react_agent::build_system_prompt(&state.working_dir, None, &[], &[], None, None, None).await;
         match tokio::time::timeout(
             std::time::Duration::from_secs(120),
-            react_agent::run_react(&llm_config, &prompt, &query, &[]),
+            react_agent::run_react(&llm_config, &prompt, &query),
         )
         .await
         {

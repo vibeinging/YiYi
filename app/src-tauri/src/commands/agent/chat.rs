@@ -149,7 +149,6 @@ pub async fn chat(
             &ctx.config,
             &ctx.system_prompt,
             &ctx.agent_message,
-            &ctx.extra_tools,
             &ctx.llm_history,
             ctx.max_iter,
             Some(&ctx.working_dir),
@@ -474,7 +473,6 @@ pub async fn chat_stream_start(
                     &ctx.config,
                     &ctx.system_prompt,
                     &round_message,
-                    &ctx.extra_tools,
                     &history,
                     ctx.max_iter,
                     Some(&ctx.working_dir),
@@ -588,7 +586,7 @@ pub async fn chat_stream_start(
                                     };
                                     match react_agent::verification::verify_task(
                                         &verify_config, &verify_task_desc, &verify_output,
-                                        &[], Some(verify_wd.as_path()), on_event, None,
+                                        Some(verify_wd.as_path()), on_event, None,
                                     ).await {
                                         Ok(report) => {
                                             log::info!("Verification complete: {}", &report.chars().take(200).collect::<String>());

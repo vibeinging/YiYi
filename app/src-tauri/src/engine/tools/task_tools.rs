@@ -3,11 +3,6 @@ use tauri::Emitter;
 /// Task management tool definitions.
 pub(super) fn definitions() -> Vec<super::ToolDefinition> {
     vec![
-        // ─── inline_task ─────────────────────────────────────────────────
-        // Replaces the visual "I want to show progress UI" use of the old
-        // create_task. Stays in the current chat session; the frontend
-        // renders a TaskCard inline and the agent keeps calling tools as
-        // normal in the main loop. No detachment, no new session.
         super::tool_def(
             "inline_task",
             "在当前对话中**显示一个进度卡片**，用于多步骤任务的可视化。**不会创建后台任务，也不会切到新会话**——你接下来还在主对话里继续调用工具完成工作。\n\n\
@@ -31,13 +26,6 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
                 "required": ["title", "plan"]
             }),
         ),
-        // ─── detach_to_background ────────────────────────────────────────
-        // Replaces the "I want to detach this from the chat session and
-        // run it asynchronously" use of the old create_task. Strictly
-        // gated: requires `quote_user_consent`, the literal phrase from
-        // the user's message that proves they asked for backgrounding.
-        // The dispatcher rejects calls whose quote doesn't contain a
-        // recognised trigger word, so the model can't self-justify.
         super::tool_def(
             "detach_to_background",
             "**真正脱钩到后台执行**的任务。会创建一个独立的 task session，主对话立即返回，任务在后台跑。\n\n\
@@ -146,13 +134,10 @@ const BACKGROUND_TRIGGERS: &[&str] = &[
 
 fn quote_contains_trigger(quote: &str) -> bool {
     let q = quote.to_lowercase();
-    BACKGROUND_TRIGGERS.iter().any(|t| q.contains(&t.to_lowercase()))
+    BACKGROUND_TRIGGERS.iter().any(|t| q.contains(t))
 }
 
-/// `inline_task` — render a progress card in the current chat without
-/// detaching. Reuses create_task's DB / event / TaskRegistry plumbing
-/// but sets `session_id` = parent session and `source` = "inline" so
-/// the frontend's `useTaskEventBridge` doesn't open a new tab.
+/// `source` is `"inline"` so the frontend bridge skips new-tab logic.
 pub(super) async fn inline_task_tool(args: &serde_json::Value) -> String {
     let raw_title = args.get("title").and_then(|v| v.as_str()).unwrap_or("");
     let title = if raw_title.is_empty() { "新任务".to_string() } else { raw_title.to_string() };
@@ -235,9 +220,6 @@ pub(super) async fn inline_task_tool(args: &serde_json::Value) -> String {
     .to_string()
 }
 
-/// `detach_to_background` — actually detach to a separate session. Strict
-/// gate: rejects calls whose `quote_user_consent` doesn't contain a
-/// recognised trigger word. Forwards to `create_task_tool` on success.
 pub(super) async fn detach_to_background_tool(args: &serde_json::Value) -> String {
     let quote = args.get("quote_user_consent").and_then(|v| v.as_str()).unwrap_or("");
     if quote.trim().is_empty() {
@@ -585,8 +567,11 @@ pub fn spawn_task_execution(
         } else {
             (vec![], vec![])
         };
-        let skill_overrides = std::collections::HashMap::new();
-        let mcp_extra: Vec<super::ToolDefinition> = super::mcp_tools_as_definitions(&mcp_tools_list, &skill_overrides);
+        // Reset MCP description overrides; sync_mcp_tools (called inside the
+        // agent loop) will pick up the registry MCP entries directly.
+        if let Some(reg) = crate::engine::tool_registry_global::global_registry() {
+            reg.set_mcp_skill_overrides(std::collections::HashMap::new());
+        }
 
         let mcp_ref = if mcp_tools_list.is_empty() { None } else { Some(mcp_tools_list.as_slice()) };
         let unavail_ref = if unavailable_servers.is_empty() { None } else { Some(unavailable_servers.as_slice()) };
@@ -754,14 +739,14 @@ pub fn spawn_task_execution(
         let result: Result<String, String> = if let Some(ref cancel) = cancel_signal {
             super::with_cancelled(cancel.clone(), Box::pin(
                 super::react_agent::run_react_with_options_stream(
-                    &llm_config, &system_prompt, &user_message, &mcp_extra,
+                    &llm_config, &system_prompt, &user_message,
                     &task_history, None, Some(&working_dir), on_event,
                     Some(cancel.as_ref()), persist_fn, None,
                 )
             )).await
         } else {
             super::react_agent::run_react_with_options_stream(
-                &llm_config, &system_prompt, &user_message, &mcp_extra,
+                &llm_config, &system_prompt, &user_message,
                 &task_history, None, Some(&working_dir), on_event,
                 None, persist_fn, None,
             ).await
