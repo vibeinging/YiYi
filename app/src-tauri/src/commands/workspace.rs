@@ -22,7 +22,7 @@ pub struct WorkspaceFile {
 /// caches, vendor trees). HashSet built once to make the per-entry check
 /// O(1) on workspaces with deep trees.
 ///
-/// TODO: this list duplicates similar lists in `engine/side_git.rs`,
+/// TODO: this list duplicates similar lists in `engine/checkpoint.rs`,
 /// `engine/coding/project_tree.rs`, and `engine/tools/file_tools.rs`. Worth
 /// consolidating into a shared `engine::fs_filter` module — separate PR.
 static EXCLUDED_DIRS: std::sync::LazyLock<std::collections::HashSet<&'static str>> =

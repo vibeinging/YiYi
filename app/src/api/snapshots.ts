@@ -1,38 +1,73 @@
-// Side-git workspace snapshot API (Phase J).
+// Workspace checkpoint API.
 //
-// Per-turn snapshots of the user's workspace stored beside YiYi's data dir,
-// allowing rollback of any agent turn without touching the user's real .git.
+// Per-turn shadow-git snapshots of the user's workspace, stored under
+// `~/.yiyi/checkpoints/<workspace_hash>/git/` so the user's real `.git`
+// is never touched. Agent edits can be rolled back without disturbing
+// the user's own version control.
 
 import { invoke } from "@tauri-apps/api/core";
 
-export interface SnapshotInfo {
+export interface CheckpointInfo {
   session_id: string;
   turn_index: number;
   phase: "pre" | "post" | string;
-  path: string;
-  size_bytes: number;
+  commit: string;
+  parent_commit: string | null;
   created_at_ms: number;
+  files_changed: number;
+  insertions: number;
+  deletions: number;
+  changed_files: string[];
 }
 
-export interface RestoreReport {
+export interface CheckpointRestoreReport {
   restored_files: string[];
   removed_files: string[];
+  /** Auto-stash commit oid if hand-edits were captured before restore. */
+  stash_commit: string | null;
 }
 
-/** List all snapshots for a session, sorted by (turn_index, phase, created_at). */
-export async function listSnapshots(sessionId: string): Promise<SnapshotInfo[]> {
-  return invoke<SnapshotInfo[]>("list_snapshots", { sessionId });
+export interface FileDiff {
+  path: string;
+  status: "added" | "modified" | "deleted" | "renamed" | "copied";
+  additions: number;
+  deletions: number;
+  patch: string;
+  truncated: boolean;
 }
 
-/** Restore the workspace to the given (turn_index, phase) snapshot. */
-export async function restoreSnapshot(
+export async function listCheckpoints(sessionId: string): Promise<CheckpointInfo[]> {
+  return invoke<CheckpointInfo[]>("list_checkpoints", { sessionId });
+}
+
+export async function previewCheckpoint(
   sessionId: string,
   turnIndex: number,
-  phase: "pre" | "post" = "pre",
-): Promise<RestoreReport> {
-  return invoke<RestoreReport>("restore_snapshot", {
+  phase: "pre" | "post",
+): Promise<FileDiff[]> {
+  return invoke<FileDiff[]>("preview_checkpoint", { sessionId, turnIndex, phase });
+}
+
+export async function restoreCheckpoint(
+  sessionId: string,
+  turnIndex: number,
+  phase: "pre" | "post",
+  paths?: string[],
+): Promise<CheckpointRestoreReport> {
+  return invoke<CheckpointRestoreReport>("restore_checkpoint", {
     sessionId,
     turnIndex,
     phase,
+    paths: paths ?? null,
+  });
+}
+
+export async function discardCheckpointBranch(
+  sessionId: string,
+  keepThroughTurn: number,
+): Promise<number> {
+  return invoke<number>("discard_checkpoint_branch", {
+    sessionId,
+    keepThroughTurn,
   });
 }

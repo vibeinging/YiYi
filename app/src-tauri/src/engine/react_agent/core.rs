@@ -99,6 +99,22 @@ async fn inject_memme_context(messages: &mut Vec<LLMMessage>) {
 // cached by Anthropic's prompt-cache prefix, instead of being re-appended
 // to the message list every ReAct iteration (which busted the cache).
 
+/// Best-effort post-turn checkpoint. Skips when nothing in this turn
+/// touched the workspace — pure-chat / read-only turns must not clutter
+/// the timeline.
+async fn maybe_post_turn_checkpoint(session_id: &str, turn: u32, workspace: &std::path::Path) {
+    if session_id.is_empty() {
+        return;
+    }
+    let dirty = crate::engine::checkpoint::take_dirty(session_id);
+    if dirty.is_empty() {
+        return;
+    }
+    if let Err(e) = crate::engine::checkpoint::snapshot_post_turn(session_id, turn, workspace).await {
+        log::warn!("checkpoint post-turn failed: {}", e);
+    }
+}
+
 /// Run a ReAct agent loop (single-turn, no history).
 /// Used by channels, scheduler, heartbeat, cronjobs.
 pub async fn run_react(
@@ -258,22 +274,24 @@ where
     // (i.e. every call to `run_react_with_options_stream`).
     let mut loop_guard = super::loop_guard::LoopGuard::new();
 
-    // ── Phase J: side-git workspace snapshot (pre-turn) ──
-    // Best-effort: snapshot failure must NEVER block the agent loop.
+    // Pre-turn workspace checkpoint (best-effort: failure never blocks).
     let snapshot_session_id = crate::engine::tools::get_current_session_id();
     let snapshot_workspace = crate::engine::tools::get_effective_workspace();
     // Derive turn index from the count of prior user messages in `history`
     // (the new user message has just been pushed onto `messages`).
     let snapshot_turn_index: u32 = history.iter().filter(|m| m.role == "user").count() as u32 + 1;
     if !snapshot_session_id.is_empty() {
-        if let Err(e) = crate::engine::side_git::snapshot_pre_turn(
+        // Drain any leftover dirty marks so post-turn counts only what THIS
+        // turn dirties. Pre-turn always snapshots (gives a "before" anchor).
+        let _ = crate::engine::checkpoint::take_dirty(&snapshot_session_id);
+        if let Err(e) = crate::engine::checkpoint::snapshot_pre_turn(
             &snapshot_session_id,
             snapshot_turn_index,
             &snapshot_workspace,
         )
         .await
         {
-            log::warn!("side-git pre-turn snapshot failed: {}", e);
+            log::warn!("checkpoint pre-turn failed: {}", e);
         }
     }
 
@@ -680,18 +698,12 @@ where
             if !text.is_empty() {
                 emit_usage(&on_event, &usage_tracker, config);
                 on_event(AgentStreamEvent::Complete);
-                // Phase J: post-turn snapshot (best-effort).
-                if !snapshot_session_id.is_empty() {
-                    if let Err(e) = crate::engine::side_git::snapshot_post_turn(
-                        &snapshot_session_id,
-                        snapshot_turn_index,
-                        &snapshot_workspace,
-                    )
-                    .await
-                    {
-                        log::warn!("side-git post-turn snapshot failed: {}", e);
-                    }
-                }
+                maybe_post_turn_checkpoint(
+                    &snapshot_session_id,
+                    snapshot_turn_index,
+                    &snapshot_workspace,
+                )
+                .await;
                 return Ok(text);
             }
 
@@ -705,18 +717,12 @@ where
                 log::error!("LLM returned empty response {} times, giving up", MAX_EMPTY_RETRIES);
                 emit_usage(&on_event, &usage_tracker, config);
                 on_event(AgentStreamEvent::Complete);
-                // Phase J: post-turn snapshot (best-effort).
-                if !snapshot_session_id.is_empty() {
-                    if let Err(e) = crate::engine::side_git::snapshot_post_turn(
-                        &snapshot_session_id,
-                        snapshot_turn_index,
-                        &snapshot_workspace,
-                    )
-                    .await
-                    {
-                        log::warn!("side-git post-turn snapshot failed: {}", e);
-                    }
-                }
+                maybe_post_turn_checkpoint(
+                    &snapshot_session_id,
+                    snapshot_turn_index,
+                    &snapshot_workspace,
+                )
+                .await;
                 return Ok(String::new());
             }
 

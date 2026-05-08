@@ -9,7 +9,7 @@ pub mod usage;
 pub mod pricing;
 pub mod cost_status;
 pub mod prompt_cache;
-pub mod side_git;
+pub mod checkpoint;
 
 // ── Tools: built-in tool system ──
 pub mod tools;

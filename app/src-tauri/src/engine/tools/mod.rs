@@ -1152,6 +1152,44 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
 }
 
 /// Execute a tool call and return the result
+/// After a tool returns, report touched paths into the session dirty-set
+/// so the agent loop can decide whether to checkpoint this turn. No-op
+/// for non-mutating tools, failed calls, or when no session is active.
+fn record_dirty_path(name: &str, args: &serde_json::Value, content: &str) {
+    // Cheap match first — most tool calls are reads and exit immediately
+    // before allocating a session-id string.
+    let is_pathful = matches!(
+        name,
+        "write_file" | "edit_file" | "append_file" | "delete_file" | "undo_edit"
+    );
+    let is_shell = matches!(
+        name,
+        "execute_shell" | "run_python" | "run_python_script" | "pip_install"
+    );
+    if !is_pathful && !is_shell {
+        return;
+    }
+    // YiYi tool convention: errors begin with "Error" (case-sensitive).
+    if content.starts_with("Error") {
+        return;
+    }
+    let session = get_current_session_id();
+    if session.is_empty() {
+        return;
+    }
+    if is_pathful {
+        if let Some(p) = args
+            .get("path")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            crate::engine::checkpoint::report_dirty(&session, p);
+        }
+    } else {
+        crate::engine::checkpoint::report_unknown(&session);
+    }
+}
+
 pub async fn execute_tool(call: &ToolCall) -> ToolResult {
     // Startup readiness check — reject tool calls if subsystem not yet initialized
     if !is_ready() {
@@ -1544,6 +1582,8 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
             }
         }
     };
+
+    record_dirty_path(&call.function.name, &args, &content);
 
     ToolResult {
         tool_call_id: call.id.clone(),

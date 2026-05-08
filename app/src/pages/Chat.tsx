@@ -5,7 +5,8 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X } from 'lucide-react';
+import { X, Clock } from 'lucide-react';
+import { TimelinePanel } from '../components/TimelinePanel';
 import {
   chatStreamStart,
   chatStreamStop,
@@ -441,6 +442,7 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
 
   // --- Lightbox ---
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [timelineOpen, setTimelineOpen] = useState(false);
   useEffect(() => {
     if (!lightboxSrc) return;
     const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setLightboxSrc(null); };
@@ -487,9 +489,21 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
       {/* Drag region — replaces the tab bar */}
       <div
         data-tauri-drag-region
-        className="shrink-0 app-drag-region"
+        className="shrink-0 app-drag-region relative"
         style={{ background: 'var(--color-bg)', height: '38px' }}
-      />
+      >
+        {activeSessionId && (
+          <button
+            className="absolute right-3 top-1.5 w-7 h-7 rounded-md flex items-center justify-center hover:bg-[var(--color-hover)]"
+            style={{ color: 'var(--color-text-secondary)' }}
+            onClick={() => setTimelineOpen(true)}
+            aria-label="时间线"
+            title="时间线"
+          >
+            <Clock size={15} />
+          </button>
+        )}
+      </div>
 
       {/* Messages or Welcome */}
       {showWelcome ? (
@@ -534,6 +548,13 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
           onFetchWorkspaceFiles={fetchWorkspaceFiles}
         />
       )}
+
+      <TimelinePanel
+        open={timelineOpen}
+        onClose={() => setTimelineOpen(false)}
+        sessionId={activeSessionId || ''}
+        messages={messages}
+      />
 
       {/* Voice Overlay */}
       <VoiceOverlay />

@@ -577,9 +577,11 @@ pub fn run() {
             commands::export::export_conversations,
             commands::export::export_memories,
             commands::export::export_settings,
-            // Side-git workspace snapshots (Phase J)
-            commands::snapshots::list_snapshots,
-            commands::snapshots::restore_snapshot,
+            // Workspace checkpoints (shadow-git)
+            commands::snapshots::list_checkpoints,
+            commands::snapshots::preview_checkpoint,
+            commands::snapshots::restore_checkpoint,
+            commands::snapshots::discard_checkpoint_branch,
             // DeepSeek platform integration (balance query)
             commands::deepseek::get_deepseek_balance,
         ])
