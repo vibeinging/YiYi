@@ -31,7 +31,8 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
         ),
         super::tool_def(
             "desktop_screenshot",
-            "Take a screenshot of the desktop. Returns base64-encoded PNG.",
+            "Capture the user's desktop and surface it as an inline image card in the chat. \
+             macOS only. Requests Screen Recording permission via the native API on first use.",
             serde_json::json!({
                 "type": "object",
                 "properties": {}
@@ -184,6 +185,27 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
     ]
 }
 
+/// True if `cmd` is invoking `screencapture` (with or without leading `sudo`,
+/// quoting, or a `&&` chain that starts with it). Conservative — only the
+/// first executable token; piping screenshot output further is fine.
+fn is_screencapture_command(cmd: &str) -> bool {
+    let trimmed = cmd.trim_start();
+    let after_sudo = trimmed
+        .strip_prefix("sudo ")
+        .map(|s| s.trim_start())
+        .unwrap_or(trimmed);
+    let first_token: String = after_sudo
+        .chars()
+        .take_while(|c| !c.is_whitespace())
+        .collect();
+    let bare = first_token
+        .rsplit('/')
+        .next()
+        .unwrap_or(&first_token)
+        .trim_matches(|c| c == '"' || c == '\'');
+    bare == "screencapture"
+}
+
 pub(super) async fn execute_shell_tool(args: &serde_json::Value) -> String {
     let command = args["command"].as_str().unwrap_or("");
     let cwd = args["cwd"].as_str();
@@ -191,6 +213,14 @@ pub(super) async fn execute_shell_tool(args: &serde_json::Value) -> String {
 
     if command.is_empty() {
         return "Error: command is required".into();
+    }
+
+    // Intercept `screencapture` — the macOS CLI silently inherits parent TCC
+    // state and never triggers the permission dialog. Returning a structured
+    // error code lets the model self-correct against its tool list (where
+    // `desktop_screenshot` is now visible) without us prescribing a fix.
+    if is_screencapture_command(command) {
+        return "Error: shell_screencapture_blocked (subprocess can't request macOS Screen Recording permission)".into();
     }
 
     // --- Phase 0: Permission-mode-aware bash validation ---
@@ -407,35 +437,94 @@ pub(super) async fn get_current_time_tool() -> String {
     )
 }
 
-pub(super) async fn desktop_screenshot_tool() -> (String, Vec<String>) {
-    // Use macOS screencapture command
-    let tmp = format!("/tmp/yiyi_screenshot_{}.png", uuid::Uuid::new_v4());
-
-    let mut cmd = tokio::process::Command::new("screencapture");
-    cmd.args(["-x", &tmp]);
-
-    match cmd.output().await {
-        Ok(output) => {
-            if output.status.success() {
-                match tokio::fs::read(&tmp).await {
-                    Ok(data) => {
-                        tokio::fs::remove_file(&tmp).await.ok();
-                        use base64::Engine;
-                        let b64 =
-                            base64::engine::general_purpose::STANDARD.encode(&data);
-                        let data_uri = format!("data:image/png;base64,{}", b64);
-                        (
-                            format!("[Screenshot captured successfully, {} bytes]", data.len()),
-                            vec![data_uri],
-                        )
-                    }
-                    Err(e) => (format!("Failed to read screenshot: {}", e), vec![]),
-                }
-            } else {
-                ("Screenshot command failed".into(), vec![])
-            }
+/// Request macOS Screen Recording permission via the native CoreGraphics API.
+/// This is the **only** way to trigger the system permission dialog on first
+/// use — `screencapture` invoked from a subprocess silently inherits the
+/// parent's TCC state and never prompts.
+///
+/// Returns:
+///   `Some(true)`  — permission granted (cached or just approved)
+///   `Some(false)` — explicitly denied earlier; OS will not re-prompt, user
+///                    must toggle it manually in System Settings
+///   `None`        — non-macOS platform (no-op)
+#[cfg(target_os = "macos")]
+fn request_screen_capture_access() -> Option<bool> {
+    extern "C" {
+        fn CGPreflightScreenCaptureAccess() -> bool;
+        fn CGRequestScreenCaptureAccess() -> bool;
+    }
+    unsafe {
+        if CGPreflightScreenCaptureAccess() {
+            return Some(true);
         }
-        Err(e) => (format!("Failed to take screenshot: {}", e), vec![]),
+        // First call: triggers the system dialog. Subsequent calls after a
+        // "deny" return false and do NOT re-prompt — that's an OS limitation,
+        // user has to fix it in Settings.
+        Some(CGRequestScreenCaptureAccess())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn request_screen_capture_access() -> Option<bool> {
+    None
+}
+
+pub(super) async fn desktop_screenshot_tool() -> (String, Vec<String>) {
+    if matches!(request_screen_capture_access(), Some(false)) {
+        return (
+            "Error: macos_screen_recording_permission_denied. \
+             屏幕录制权限未授予，且系统不会再次自动弹窗（macOS 限制：被拒后必须手动开启）。\
+             请引导用户：打开 系统设置 → 隐私与安全性 → 屏幕录制 → 找到 YiYi → 打开开关 → 重启 YiYi。\
+             不要告诉用户『你点了不允许』——可能他们从未见过弹窗。"
+                .into(),
+            vec![],
+        );
+    }
+
+    let tmp = format!("/tmp/yiyi_screenshot_{}.png", uuid::Uuid::new_v4());
+    let output = tokio::process::Command::new("screencapture")
+        .args(["-x", &tmp])
+        .output()
+        .await;
+
+    let output = match output {
+        Ok(o) => o,
+        Err(e) => return (format!("Error: screenshot_spawn_failed ({})", e), vec![]),
+    };
+
+    if !output.status.success() {
+        return ("Error: screenshot_command_failed (screencapture exited non-zero)".into(), vec![]);
+    }
+
+    match tokio::fs::read(&tmp).await {
+        Ok(data) if !data.is_empty() => {
+            tokio::fs::remove_file(&tmp).await.ok();
+            use base64::Engine;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+            let data_uri = format!("data:image/png;base64,{}", b64);
+            // The image flows to the user via the artifact pipeline (core.rs).
+            // For text-only models the engine strips it before reaching the
+            // model context — we don't need to instruct the model here.
+            (
+                format!("[desktop_screenshot ok, {} bytes]", data.len()),
+                vec![data_uri],
+            )
+        }
+        Ok(_) => {
+            // Empty file → almost always missing TCC permission (the Preflight
+            // check above only catches an explicit prior deny; a fresh state
+            // can return true but still fail at capture if the OS state lags).
+            tokio::fs::remove_file(&tmp).await.ok();
+            (
+                "Error: macos_screen_recording_permission_required. \
+                 截图返回空数据。这通常是 macOS 屏幕录制权限未授予导致——\
+                 且系统不会自动弹窗（shell 子进程的 screencapture 不触发 TCC）。\
+                 请引导用户：系统设置 → 隐私与安全性 → 屏幕录制 → 添加 YiYi 并启用 → 重启 YiYi。"
+                    .into(),
+                vec![],
+            )
+        }
+        Err(e) => (format!("Error: read_screenshot_failed ({})", e), vec![]),
     }
 }
 
@@ -848,5 +937,43 @@ pub(super) async fn pty_close_session_tool(args: &serde_json::Value) -> String {
     match mgr.close(session_id).await {
         Ok(()) => format!("PTY session {} closed", session_id),
         Err(e) => format!("Error closing PTY: {}", e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_screencapture_detects_bare_command() {
+        assert!(is_screencapture_command("screencapture -x out.png"));
+    }
+
+    #[test]
+    fn is_screencapture_detects_with_path() {
+        assert!(is_screencapture_command("/usr/sbin/screencapture -x out.png"));
+    }
+
+    #[test]
+    fn is_screencapture_detects_with_sudo() {
+        assert!(is_screencapture_command("sudo screencapture -x out.png"));
+    }
+
+    #[test]
+    fn is_screencapture_detects_with_leading_whitespace() {
+        assert!(is_screencapture_command("  screencapture -x out.png"));
+    }
+
+    #[test]
+    fn is_screencapture_rejects_unrelated_commands() {
+        assert!(!is_screencapture_command("ls -la"));
+        assert!(!is_screencapture_command("echo screencapture"));
+        assert!(!is_screencapture_command("git commit"));
+    }
+
+    #[test]
+    fn is_screencapture_rejects_substring_match() {
+        // "screencapture-helper" should NOT match — it's a different binary
+        assert!(!is_screencapture_command("screencapture-helper foo"));
     }
 }

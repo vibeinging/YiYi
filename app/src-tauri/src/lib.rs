@@ -334,6 +334,8 @@ pub fn run() {
             commands::system::save_agents_config,
             commands::system::get_thinking_effort,
             commands::system::set_thinking_effort,
+            commands::system::open_path,
+            commands::system::reveal_path,
             commands::system::get_user_workspace,
             commands::system::set_user_workspace,
             commands::system::check_claude_code_status,
@@ -430,6 +432,8 @@ pub fn run() {
             commands::agent::chat::chat_stream_stop,
             commands::agent::chat::chat_stream_state,
             commands::agent::chat::get_history,
+            commands::agent::chat::read_artifact_data_uri,
+            commands::agent::chat::read_file_preview,
             commands::agent::chat::clear_history,
             commands::agent::chat::delete_message,
             // Sessions

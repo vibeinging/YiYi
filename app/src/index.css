@@ -176,6 +176,22 @@
   animation: cursor-blink 1s step-end infinite;
 }
 
+/* Inline streaming caret — attaches to the end of the last text-bearing
+ * descendant so it never breaks onto its own line when markdown ends with
+ * a block element (paragraph, list, etc.). */
+.yiyi-stream-cursor > *:last-child::after,
+.yiyi-stream-cursor:not(:has(> *))::after {
+  content: '';
+  display: inline-block;
+  width: 2px;
+  height: 0.95em;
+  margin-left: 3px;
+  vertical-align: text-bottom;
+  background: var(--color-primary);
+  border-radius: 1px;
+  animation: cursor-blink 1s step-end infinite;
+}
+
 /* Legacy compat: keep .yiyi-working and .yiyi-dots working for ThinkingBlock */
 .yiyi-working {
   display: flex;

@@ -645,17 +645,59 @@ where
                     result_preview: output.chars().take(2000).collect(),
                 });
 
+                // Save tool-produced visual artifacts (screenshots, generated
+                // images, charts) to disk and emit a ToolArtifact event so the
+                // UI can render inline cards. This is independent of whether
+                // the model needs the images as multimodal input below — UI
+                // visibility is a separate concern from model context.
+                let artifacts: Vec<crate::engine::react_agent::ToolArtifact> = if !images.is_empty() {
+                    let internal_dir = crate::engine::tools::APP_HANDLE
+                        .get()
+                        .map(|h| {
+                            use tauri::Manager;
+                            h.state::<crate::state::AppState>().working_dir.clone()
+                        });
+                    let session_id = crate::engine::tools::get_current_session_id();
+                    if let (Some(dir), false) = (internal_dir, session_id.is_empty()) {
+                        images
+                            .iter()
+                            .filter_map(|uri| {
+                                crate::engine::artifacts::save_tool_artifact(
+                                    &dir, &session_id, tool_name, uri,
+                                )
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
+                };
+                if !artifacts.is_empty() {
+                    on_event(AgentStreamEvent::ToolArtifact {
+                        tool_call_id: prep.call.id.clone(),
+                        artifacts: artifacts.clone(),
+                    });
+                }
+
                 // Persist
                 if let Some(ref pfn) = persist_fn {
                     pfn(ToolPersistEvent::ToolResult {
                         tool_call_id: prep.call.id.clone(),
                         tool_name: tool_name.clone(),
                         result_content: output.chars().take(2000).collect(),
+                        artifacts: artifacts.clone(),
                     });
                 }
 
-                // Push to messages
-                let content = if images.is_empty() {
+                // Push to messages. Only feed images into the model context
+                // when the model can actually see them — for text-only models
+                // (DeepSeek V4) the artifact pipeline already showed the image
+                // to the user; injecting an `image_url` placeholder here just
+                // tempts the model to invent a description it can't have.
+                let content = if images.is_empty()
+                    || !crate::engine::llm_client::model_has_vision(config)
+                {
                     MessageContent::text(output)
                 } else {
                     MessageContent::with_images(&output, &images)

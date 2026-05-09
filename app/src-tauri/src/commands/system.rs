@@ -1347,3 +1347,43 @@ pub async fn set_thinking_effort(
     config.save(&state.working_dir)
 }
 
+/// Open a file or directory in the OS default handler. Bypasses the
+/// `tauri-plugin-shell` default-deny scope (which would otherwise require
+/// per-pattern validators) — the agent loop's permission gate has already
+/// vetted the path, and the user-initiated UI button is a separate trust
+/// surface anyway.
+#[tauri::command]
+pub async fn open_path(path: String) -> Result<(), String> {
+    let p = std::path::PathBuf::from(&path);
+    if !p.exists() {
+        return Err(format!("path does not exist: {}", path));
+    }
+    let result = if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg(&p).spawn()
+    } else if cfg!(target_os = "windows") {
+        std::process::Command::new("cmd").args(["/C", "start", "", path.as_str()]).spawn()
+    } else {
+        std::process::Command::new("xdg-open").arg(&p).spawn()
+    };
+    result.map(|_| ()).map_err(|e| format!("spawn failed: {}", e))
+}
+
+/// Reveal a file in the OS file manager (highlight, don't open).
+#[tauri::command]
+pub async fn reveal_path(path: String) -> Result<(), String> {
+    let p = std::path::PathBuf::from(&path);
+    if !p.exists() {
+        return Err(format!("path does not exist: {}", path));
+    }
+    let result = if cfg!(target_os = "macos") {
+        std::process::Command::new("open").args(["-R", path.as_str()]).spawn()
+    } else if cfg!(target_os = "windows") {
+        std::process::Command::new("explorer").arg(format!("/select,{}", path)).spawn()
+    } else {
+        // No standard "highlight" action on Linux — open the parent dir.
+        let parent = p.parent().unwrap_or(&p).to_path_buf();
+        std::process::Command::new("xdg-open").arg(parent).spawn()
+    };
+    result.map(|_| ()).map_err(|e| format!("spawn failed: {}", e))
+}
+

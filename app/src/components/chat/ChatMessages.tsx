@@ -27,7 +27,7 @@ import { open } from '@tauri-apps/plugin-shell';
 
 import { ToolCallPanel, HistorySpawnAgentsPanel, getToolLabel } from '../ToolCallPanel';
 import { TaskCard } from '../TaskCard';
-import { FileCard, type SentFile } from '../FileCard';
+import { FileCard, isMediaFilename, isMediaMime, type SentFile } from '../FileCard';
 import { LongTaskProgressPanel, RoundDivider } from '../LongTaskPanel';
 import { RetryStatusBar } from './RetryStatusBar';
 import { SpawnAgentPanel } from '../SpawnAgentPanel';
@@ -37,7 +37,8 @@ import { CronJobSessionView } from '../CronJobSessionView';
 import { useChatStreamStore, type LastUsage } from '../../stores/chatStreamStore';
 import { useTaskStore } from '../../stores/taskStore';
 import { cancelTask, pauseTask, openTaskFolder } from '../../api/tasks';
-import type { ChatMessage, Attachment } from '../../api/agent';
+import type { ChatMessage, Attachment, ToolArtifact } from '../../api/agent';
+import { ToolArtifactCard } from '../ToolArtifactCard';
 
 import type { SpawnAgent, TaskStreamState } from '../../stores/chatStreamStore';
 import logoFaceRight from '../../assets/yiyi-logo-face-right.png';
@@ -62,6 +63,9 @@ export interface ProcessedMsg {
   taskIds?: string[];
   ptySessions?: PtySessionInfo[];
   sentFiles?: SentFile[];
+  /** Tool-produced visual artifacts collected from preceding `tool` role
+   *  messages while merging the assistant's tool-call chain. */
+  historyArtifacts?: ToolArtifact[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -114,16 +118,10 @@ function ThinkingBlock({ content, streaming }: { content: string; streaming?: bo
       </button>
       {!collapsed && (
         <div
-          className="px-3 pb-2 whitespace-pre-wrap break-words leading-relaxed"
+          className={`px-3 pb-2 whitespace-pre-wrap break-words leading-relaxed${streaming ? ' yiyi-stream-cursor' : ''}`}
           style={{ color: 'var(--color-text-muted)', maxHeight: '200px', overflowY: 'auto' }}
         >
           {content}
-          {streaming && (
-            <span className="yiyi-working">
-              <img src={logoFaceRight} alt="" width={24} height={24} />
-              <span className="yiyi-dots"><span /><span /><span /></span>
-            </span>
-          )}
         </div>
       )}
     </div>
@@ -143,6 +141,7 @@ export function processMessages(messages: ChatMessage[]): ProcessedMsg[] {
 
     if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
       const allTools: ProcessedMsg['historyTools'] & {} = [];
+      const allArtifacts: ToolArtifact[] = [];
       let toolIdCounter = 0;
       let j = i;
 
@@ -164,6 +163,9 @@ export function processMessages(messages: ChatMessage[]): ProcessedMsg[] {
               // blobs that must round-trip through JSON.parse for inline cards).
               resultPreview: toolMsg?.content?.slice(0, 2000),
             });
+            if (toolMsg?.tool_artifacts?.length) {
+              allArtifacts.push(...toolMsg.tool_artifacts);
+            }
           }
           j++;
         } else if (cur.role === 'tool') {
@@ -220,6 +222,7 @@ export function processMessages(messages: ChatMessage[]): ProcessedMsg[] {
           taskIds: taskIds.length > 0 ? taskIds : undefined,
           ptySessions: ptySessions.length > 0 ? ptySessions : undefined,
           sentFiles: sentFiles.length > 0 ? sentFiles : undefined,
+          historyArtifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
         });
         i = j + 1;
       } else {
@@ -229,6 +232,7 @@ export function processMessages(messages: ChatMessage[]): ProcessedMsg[] {
           taskIds: taskIds.length > 0 ? taskIds : undefined,
           ptySessions: ptySessions.length > 0 ? ptySessions : undefined,
           sentFiles: sentFiles.length > 0 ? sentFiles : undefined,
+          historyArtifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
         });
         i = j;
       }
@@ -343,6 +347,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
   const streamingContent = useChatStreamStore((s) => s.streamingContent);
   const streamingThinking = useChatStreamStore((s) => s.streamingThinking);
   const lastUsage = useChatStreamStore((s) => s.lastUsage);
+  const streamingArtifacts = useChatStreamStore((s) => s.streamingArtifacts);
   const activeTools = useChatStreamStore((s) => s.activeTools);
   const claudeCode = useChatStreamStore((s) => s.claudeCode);
   const spawnAgents = useChatStreamStore((s) => s.spawnAgents);
@@ -487,7 +492,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
           ) : null // Welcome screen handled by parent
         ) : (
           <div className="w-full py-6 px-8 space-y-6">
-            {processedMessages.map(({ msg, historyTools, historyAgents, taskIds, ptySessions, sentFiles }, idx) => {
+            {processedMessages.map(({ msg, historyTools, historyAgents, taskIds, ptySessions, sentFiles, historyArtifacts }, idx) => {
               if (msg.role === 'context_reset') {
                 return (
                   <div key={idx} className="flex items-center gap-3 py-3 px-4">
@@ -499,6 +504,23 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                   </div>
                 );
               }
+              // Media (image / video / audio) renders INSIDE the assistant
+              // bubble so it visually belongs to the message ("here is the
+              // screenshot I took"). Non-media stays as sibling cards — those
+              // carry their own metadata + actions UI that doesn't fit inside
+              // a chat bubble.
+              const mediaFiles: SentFile[] = [];
+              const docFiles: SentFile[] = [];
+              for (const f of sentFiles ?? []) {
+                (isMediaFilename(f.filename) ? mediaFiles : docFiles).push(f);
+              }
+              const mediaArtifacts: ToolArtifact[] = [];
+              const docArtifacts: ToolArtifact[] = [];
+              for (const a of historyArtifacts ?? []) {
+                (isMediaMime(a.mime_type) ? mediaArtifacts : docArtifacts).push(a);
+              }
+              const hasInlineMedia = mediaFiles.length > 0 || mediaArtifacts.length > 0;
+
               return (
                 <div key={idx} className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'} group`}>
                   {msg.role === 'assistant' && (
@@ -516,9 +538,16 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                         {taskIds.map((tid) => <TaskCard key={tid} taskId={tid} />)}
                       </div>
                     )}
-                    {sentFiles && sentFiles.length > 0 && (
+                    {docFiles.length > 0 && (
                       <div className="space-y-2">
-                        {sentFiles.map((f, i) => <FileCard key={`${f.path}-${i}`} file={f} />)}
+                        {docFiles.map((f, i) => <FileCard key={`${f.path}-${i}`} file={f} />)}
+                      </div>
+                    )}
+                    {docArtifacts.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {docArtifacts.map((a, i) => (
+                          <ToolArtifactCard key={`${a.path}-${i}`} artifact={a} />
+                        ))}
                       </div>
                     )}
                     {ptySessions && ptySessions.length > 0 && ptySessions.map((pty) => (
@@ -546,6 +575,19 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                         border: '1px solid var(--color-border)', borderBottomLeftRadius: '6px',
                       }}
                     >
+                      {/* Inline media (screenshots, generated images) belongs
+                       *   inside the bubble: visually anchored to the
+                       *   assistant message that's about to describe them. */}
+                      {msg.role === 'assistant' && hasInlineMedia && (
+                        <div className={`flex flex-wrap gap-2 ${msg.content ? 'mb-2.5' : ''}`}>
+                          {mediaFiles.map((f, i) => (
+                            <FileCard key={`mf-${f.path}-${i}`} file={f} />
+                          ))}
+                          {mediaArtifacts.map((a, i) => (
+                            <ToolArtifactCard key={`ma-${a.path}-${i}`} artifact={a} />
+                          ))}
+                        </div>
+                      )}
                       {/* Attachments */}
                       {msg.attachments && msg.attachments.length > 0 && (() => {
                         const images = msg.attachments.filter(a => isImageMime(a.mimeType));
@@ -702,10 +744,18 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                     );
                   })()}
 
+                  {streamingArtifacts.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {streamingArtifacts.map((a, i) => (
+                        <ToolArtifactCard key={`${a.path}-${i}`} artifact={a} />
+                      ))}
+                    </div>
+                  )}
+
                   {streamingThinking && <ThinkingBlock content={streamingThinking} streaming />}
 
                   {streamingContent ? (
-                    <div className="py-2.5 px-4 rounded-2xl text-[14px] leading-relaxed markdown-body"
+                    <div className="py-2.5 px-4 rounded-2xl text-[14px] leading-relaxed markdown-body yiyi-stream-cursor"
                       style={{
                         background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)',
                         borderBottomLeftRadius: '6px', color: 'var(--color-text)',
@@ -713,7 +763,6 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                       <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
                         {streamingContent}
                       </ReactMarkdown>
-                      <span className="yiyi-cursor" />
                     </div>
                   ) : !streamingThinking ? (
                     <div className="py-3 px-4 rounded-2xl"

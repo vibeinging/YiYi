@@ -98,6 +98,23 @@ pub fn resolve_config_from_providers(
 
 // ── Provider format detection (Strategy selection) ──────────────────
 
+/// Whether this model can ingest image inputs. Currently DeepSeek V4 Pro/Flash
+/// are text-only; everything else (Anthropic, OpenAI 4o/4.1, Gemini, Qwen-VL)
+/// supports vision via OpenAI-compatible `image_url` content parts.
+///
+/// Engine code consults this to decide whether to feed tool-produced images
+/// (screenshots, generated charts) into the model's context. The artifact
+/// pipeline is independent — images always reach the user regardless.
+pub fn model_has_vision(config: &LLMConfig) -> bool {
+    let id = config.provider_id.to_lowercase();
+    let url = config.base_url.to_lowercase();
+    let model = config.model.to_lowercase();
+    if id.contains("deepseek") || url.contains("deepseek") || model.contains("deepseek") {
+        return false;
+    }
+    true
+}
+
 /// Determine API format from provider_id or base_url
 fn api_format(config: &LLMConfig) -> &'static str {
     match config.provider_id.as_str() {

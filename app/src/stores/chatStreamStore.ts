@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { CanvasEvent } from '../api/canvas';
+import type { ToolArtifact } from '../api/agent';
 
 export type LongTaskStatus = 'idle' | 'running' | 'paused' | 'completed' | 'stopped';
 
@@ -74,6 +75,7 @@ export interface LastUsage {
   estimatedCostUsd: number;
 }
 
+
 export interface PermissionRequestState {
   requestId: string;
   permissionType: string;
@@ -108,12 +110,17 @@ interface ChatStreamState {
   // Updated by chat://usage event; reset on startStream.
   lastUsage: LastUsage | null;
 
+  // Visual artifacts produced by tools during this turn (screenshots, charts,
+  // generated images). Updated by chat://tool_artifact event; reset on startStream.
+  streamingArtifacts: ToolArtifact[];
+
   // Actions
   setSessionId: (id: string) => void;
   startStream: () => void;
   appendChunk: (text: string) => void;
   appendThinking: (text: string) => void;
   setUsage: (usage: LastUsage) => void;
+  appendArtifacts: (artifacts: ToolArtifact[]) => void;
   toolStart: (name: string, preview: string) => void;
   toolEnd: (name: string, preview: string) => void;
   endStream: () => void;
@@ -208,6 +215,7 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
   activePermission: null,
   canvases: [],
   lastUsage: null,
+  streamingArtifacts: [],
   setSessionId: (id) => set({ sessionId: id }),
 
   startStream: () => set({
@@ -223,9 +231,14 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
     retryStatus: null,
     activePermission: null,
     lastUsage: null,
+    streamingArtifacts: [],
   }),
 
   setUsage: (usage) => set({ lastUsage: usage }),
+
+  appendArtifacts: (artifacts) => set((state) => ({
+    streamingArtifacts: [...state.streamingArtifacts, ...artifacts],
+  })),
 
   appendChunk: (text) => set((state) => ({
     streamingContent: state.streamingContent + text,

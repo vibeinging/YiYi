@@ -10,6 +10,7 @@ pub mod pricing;
 pub mod cost_status;
 pub mod prompt_cache;
 pub mod checkpoint;
+pub mod artifacts;
 
 // ── Tools: built-in tool system ──
 pub mod tools;

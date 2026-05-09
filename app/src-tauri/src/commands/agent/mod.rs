@@ -99,6 +99,11 @@ pub struct ChatMessage {
     pub spawn_agents: Option<Vec<SpawnAgentResult>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
+    /// Visual artifacts produced by this tool message (screenshots, generated
+    /// images). Path is relative to the internal data dir; resolved at render
+    /// time via the `read_artifact_data_uri` Tauri command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_artifacts: Option<Vec<crate::engine::react_agent::ToolArtifact>>,
 }
 
 // Agent CRUD commands removed — switched to dynamic agent spawning.

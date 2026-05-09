@@ -724,12 +724,15 @@ pub fn spawn_task_execution(
                         }).to_string();
                         db.push_message_with_metadata(&sid, "assistant", &content, Some(&metadata)).ok();
                     }
-                    super::react_agent::ToolPersistEvent::ToolResult { tool_call_id, tool_name, result_content } => {
-                        let metadata = serde_json::json!({
+                    super::react_agent::ToolPersistEvent::ToolResult { tool_call_id, tool_name, result_content, artifacts } => {
+                        let mut meta = serde_json::json!({
                             "tool_call_id": tool_call_id,
                             "tool_name": tool_name,
-                        }).to_string();
-                        db.push_message_with_metadata(&sid, "tool", &result_content, Some(&metadata)).ok();
+                        });
+                        if !artifacts.is_empty() {
+                            meta["tool_artifacts"] = serde_json::to_value(&artifacts).unwrap_or_default();
+                        }
+                        db.push_message_with_metadata(&sid, "tool", &result_content, Some(&meta.to_string())).ok();
                     }
                 }
             }) as super::react_agent::PersistToolFn)

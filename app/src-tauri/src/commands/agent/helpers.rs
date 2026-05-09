@@ -121,12 +121,15 @@ pub(super) fn make_persist_fn(db: Arc<db::Database>, session_id: String) -> Pers
                 }).to_string();
                 db.push_message_with_metadata(&session_id, "assistant", &content, Some(&metadata)).ok();
             }
-            ToolPersistEvent::ToolResult { tool_call_id, tool_name, result_content } => {
-                let metadata = serde_json::json!({
+            ToolPersistEvent::ToolResult { tool_call_id, tool_name, result_content, artifacts } => {
+                let mut meta = serde_json::json!({
                     "tool_call_id": tool_call_id,
                     "tool_name": tool_name,
-                }).to_string();
-                db.push_message_with_metadata(&session_id, "tool", &result_content, Some(&metadata)).ok();
+                });
+                if !artifacts.is_empty() {
+                    meta["tool_artifacts"] = serde_json::to_value(&artifacts).unwrap_or_default();
+                }
+                db.push_message_with_metadata(&session_id, "tool", &result_content, Some(&meta.to_string())).ok();
             }
         }
     })

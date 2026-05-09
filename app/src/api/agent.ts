@@ -41,6 +41,15 @@ export interface SpawnAgentResult {
   summary?: string;
 }
 
+export interface ToolArtifact {
+  /** MIME type, e.g. "image/png". */
+  mime_type: string;
+  /** Path relative to YiYi's internal data dir (e.g. "artifacts/<sid>/<uuid>.png"). */
+  path: string;
+  /** Display name (e.g. "desktop_screenshot.png"). */
+  name: string;
+}
+
 export interface ChatMessage {
   id?: number;
   role: 'user' | 'assistant' | 'system' | 'tool' | 'context_reset';
@@ -55,6 +64,30 @@ export interface ChatMessage {
   tool_name?: string;
   spawn_agents?: SpawnAgentResult[];
   thinking?: string;
+  tool_artifacts?: ToolArtifact[];
+}
+
+export async function readArtifactDataUri(path: string, mimeType: string): Promise<string> {
+  return await invoke('read_artifact_data_uri', { path, mimeType });
+}
+
+export type FilePreview =
+  | { kind: 'image'; data_uri: string }
+  | { kind: 'video'; data_uri: string }
+  | { kind: 'audio'; data_uri: string }
+  | { kind: 'text'; content: string; truncated: boolean }
+  | { kind: 'unsupported' };
+
+export async function readFilePreview(path: string): Promise<FilePreview> {
+  return await invoke('read_file_preview', { path });
+}
+
+export async function openPath(path: string): Promise<void> {
+  await invoke('open_path', { path });
+}
+
+export async function revealPath(path: string): Promise<void> {
+  await invoke('reveal_path', { path });
 }
 
 export interface ChatSession {

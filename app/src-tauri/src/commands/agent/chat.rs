@@ -372,6 +372,18 @@ pub async fn chat_stream_start(
                         }
                     }
                 }
+                react_agent::AgentStreamEvent::ToolArtifact { tool_call_id, artifacts } => {
+                    handle
+                        .emit(
+                            "chat://tool_artifact",
+                            serde_json::json!({
+                                "session_id": sid_for_event,
+                                "tool_call_id": tool_call_id,
+                                "artifacts": artifacts,
+                            }),
+                        )
+                        .ok();
+                }
                 react_agent::AgentStreamEvent::ContextOverflowRetry => {
                     // Reset accumulated text so the retry doesn't produce duplicate content
                     handle.emit("chat://stream_reset", serde_json::json!({
@@ -1000,6 +1012,18 @@ pub async fn get_history_impl(
                 mv["thinking"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_string())
             });
 
+            // Extract tool-produced visual artifacts (screenshots, generated
+            // images). Only meaningful on `tool` role messages.
+            let tool_artifacts = if m.role == "tool" {
+                meta.as_ref().and_then(|mv| {
+                    let arts: Vec<crate::engine::react_agent::ToolArtifact> =
+                        serde_json::from_value(mv["tool_artifacts"].clone()).ok()?;
+                    if arts.is_empty() { None } else { Some(arts) }
+                })
+            } else {
+                None
+            };
+
             ChatMessage {
                 id: Some(m.id),
                 role: m.role,
@@ -1012,6 +1036,7 @@ pub async fn get_history_impl(
                 tool_name,
                 spawn_agents,
                 thinking,
+                tool_artifacts,
             }
         })
         .collect())
@@ -1024,6 +1049,103 @@ pub async fn get_history(
     limit: Option<usize>,
 ) -> Result<Vec<ChatMessage>, String> {
     get_history_impl(&*state, session_id, limit).await
+}
+
+/// Read a tool-produced visual artifact off disk and return it as a `data:`
+/// URI. Path is the relative reference stored in tool message metadata; only
+/// paths under the internal data dir's `artifacts/` are accepted (no escapes).
+#[tauri::command]
+pub async fn read_artifact_data_uri(
+    state: State<'_, AppState>,
+    path: String,
+    mime_type: String,
+) -> Result<String, String> {
+    if !path.starts_with("artifacts/") || path.contains("..") {
+        return Err("Error: artifact_path_outside_scope".into());
+    }
+    let full = state.working_dir.join(&path);
+    let bytes = tokio::fs::read(&full).await.map_err(|e| format!("read failed: {}", e))?;
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{};base64,{}", mime_type, b64))
+}
+
+/// Tagged preview of a local file, sized for inline rendering in chat.
+///
+/// `Image` / `Video` / `Audio` carry a self-contained data URI so the webview
+/// renders without an asset-protocol bridge. `Text` carries a UTF-8 head,
+/// optionally truncated. `Unsupported` falls back to icon + label.
+#[derive(serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FilePreview {
+    Image { data_uri: String },
+    Video { data_uri: String },
+    Audio { data_uri: String },
+    Text { content: String, truncated: bool },
+    Unsupported,
+}
+
+/// Per-kind size caps. Larger files fall through to `Unsupported` so the
+/// webview doesn't choke on a 200MB data URI round-trip.
+const IMAGE_MAX_BYTES: u64 = 8 * 1024 * 1024;
+const VIDEO_MAX_BYTES: u64 = 50 * 1024 * 1024;
+const AUDIO_MAX_BYTES: u64 = 20 * 1024 * 1024;
+const TEXT_MAX_BYTES: u64 = 64 * 1024;
+
+#[tauri::command]
+pub async fn read_file_preview(path: String) -> Result<FilePreview, String> {
+    let p = std::path::Path::new(&path);
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
+    let meta = tokio::fs::metadata(p).await.map_err(|e| format!("stat failed: {}", e))?;
+    let len = meta.len();
+
+    let (mime, cap) = match ext.as_str() {
+        "png" => ("image/png", IMAGE_MAX_BYTES),
+        "jpg" | "jpeg" => ("image/jpeg", IMAGE_MAX_BYTES),
+        "gif" => ("image/gif", IMAGE_MAX_BYTES),
+        "webp" => ("image/webp", IMAGE_MAX_BYTES),
+        "svg" => ("image/svg+xml", IMAGE_MAX_BYTES),
+        "bmp" => ("image/bmp", IMAGE_MAX_BYTES),
+        "mp4" | "m4v" => ("video/mp4", VIDEO_MAX_BYTES),
+        "webm" => ("video/webm", VIDEO_MAX_BYTES),
+        "mov" => ("video/quicktime", VIDEO_MAX_BYTES),
+        "mp3" => ("audio/mpeg", AUDIO_MAX_BYTES),
+        "wav" => ("audio/wav", AUDIO_MAX_BYTES),
+        "m4a" => ("audio/mp4", AUDIO_MAX_BYTES),
+        "ogg" => ("audio/ogg", AUDIO_MAX_BYTES),
+        "txt" | "md" | "markdown" | "json" | "log" | "csv" | "yaml" | "yml" | "toml"
+        | "ini" | "rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "java" | "kt"
+        | "swift" | "sh" | "bash" | "zsh" | "fish" | "html" | "css" | "scss" | "xml"
+        | "sql" => {
+            // Bounded read: log files / data dumps can be hundreds of MB. We
+            // only ever show the first 64 KB, so don't slurp the whole file.
+            use tokio::io::AsyncReadExt;
+            let mut f = tokio::fs::File::open(p).await.map_err(|e| format!("open failed: {}", e))?;
+            let mut buf = Vec::with_capacity(TEXT_MAX_BYTES as usize);
+            (&mut f).take(TEXT_MAX_BYTES).read_to_end(&mut buf).await
+                .map_err(|e| format!("read failed: {}", e))?;
+            let truncated = len > TEXT_MAX_BYTES;
+            let content = String::from_utf8_lossy(&buf).to_string();
+            return Ok(FilePreview::Text { content, truncated });
+        }
+        _ => return Ok(FilePreview::Unsupported),
+    };
+    if len > cap {
+        return Ok(FilePreview::Unsupported);
+    }
+    let bytes = tokio::fs::read(p).await.map_err(|e| format!("read failed: {}", e))?;
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let data_uri = format!("data:{};base64,{}", mime, b64);
+    Ok(match ext.as_str() {
+        "mp4" | "m4v" | "webm" | "mov" => FilePreview::Video { data_uri },
+        "mp3" | "wav" | "m4a" | "ogg" => FilePreview::Audio { data_uri },
+        _ => FilePreview::Image { data_uri },
+    })
 }
 
 pub async fn chat_stream_stop_impl(state: &AppState) -> Result<(), String> {

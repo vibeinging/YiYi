@@ -369,6 +369,7 @@ fn spawn_agents_background(
                             | super::react_agent::AgentStreamEvent::Error
                             | super::react_agent::AgentStreamEvent::Thinking(_)
                             | super::react_agent::AgentStreamEvent::ContextOverflowRetry
+                            | super::react_agent::AgentStreamEvent::ToolArtifact { .. }
                             | super::react_agent::AgentStreamEvent::Usage { .. } => {}
                         }
                     };

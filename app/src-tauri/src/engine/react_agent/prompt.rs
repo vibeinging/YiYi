@@ -157,6 +157,15 @@ pub fn static_system_block(lang: &str) -> String {
     };
     let mut s = String::with_capacity(8 * 1024);
     s.push_str(&format!("You are YiYi, a helpful AI assistant. {}\n\n", lang_instruction));
+    // Capability boundary: this is a fact about the deployment, not a behaviour
+    // rule. Stating it explicitly lets the model calibrate its responses
+    // without having to discover the limit through hallucination.
+    s.push_str(
+        "Capability boundary: this is a text-only model. When tools return \
+         media (screenshots, generated images, audio), the artifact is surfaced \
+         to the user directly; the model receives only a text status line, \
+         never pixel or audio data.\n\n",
+    );
     s.push_str(STATIC_TOOL_STRATEGY);
     s.push_str("\n\n## Capability Growth\n\
         After completing meaningful work, evaluate if the result has reuse value:\n\

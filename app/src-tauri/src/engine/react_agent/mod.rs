@@ -21,6 +21,18 @@ pub use prompt::{build_system_prompt, seed_default_templates};
 
 use std::sync::Arc;
 
+/// A visual artifact produced by a tool (screenshot, generated image, chart, …).
+/// Stored on disk under `<internal_dir>/artifacts/<session>/` and referenced
+/// here by relative path so it survives session reloads.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ToolArtifact {
+    pub mime_type: String,
+    /// Path relative to the internal data dir (e.g. `artifacts/<sid>/<uuid>.png`).
+    pub path: String,
+    /// Display name shown to the user (e.g. `desktop_screenshot.png`).
+    pub name: String,
+}
+
 /// Events emitted for persisting tool calls to the database.
 #[derive(Debug, Clone)]
 pub enum ToolPersistEvent {
@@ -34,6 +46,7 @@ pub enum ToolPersistEvent {
         tool_call_id: String,
         tool_name: String,
         result_content: String, // truncated
+        artifacts: Vec<ToolArtifact>,
     },
 }
 
@@ -80,6 +93,10 @@ pub enum AgentStreamEvent {
     Thinking(String),
     ToolStart { name: String, args_preview: String },
     ToolEnd { name: String, result_preview: String },
+    /// Visual artifacts (screenshots, generated images, charts) produced by a
+    /// tool. Emitted alongside ToolEnd when the tool returned non-empty
+    /// `images`. UI surfaces these as inline cards in the message stream.
+    ToolArtifact { tool_call_id: String, artifacts: Vec<ToolArtifact> },
     /// Context overflow detected — UI should reset streamed content before retry.
     ContextOverflowRetry,
     /// Cumulative token usage for this agent run.

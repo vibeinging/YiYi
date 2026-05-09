@@ -907,14 +907,16 @@ pub fn spawn_task_execution(
 // ============================================================================
 
 /// Core tools — always loaded. Everything else discoverable via tool_search.
-/// Tools whose only purpose is to feed image data back to the model.
-/// V4 build: DeepSeek V4 Pro/Flash are text-only. Until V4 ships
-/// multimodal, we suppress these from the agent's tool surface — the
-/// implementations stay in tree so re-enabling is one-line.
-/// Browser interaction now flows through the Playwright MCP server,
-/// which returns ARIA accessibility snapshots (text) instead of pixels.
+/// Tools whose only purpose is to feed image data BACK INTO the model.
+/// V4 build: DeepSeek V4 Pro/Flash are text-only — surfacing these tools
+/// would have the model "look" at things it can't actually see.
+///
+/// `desktop_screenshot` is intentionally NOT in this list. Even with a
+/// text-only model the tool is useful: the artifact pipeline saves the PNG
+/// and shows it to the *user* as an inline card. The model itself just gets
+/// a text confirmation. (See `desktop_screenshot_tool` — its result text
+/// instructs the model to acknowledge, not describe.)
 const VISION_DISABLED_TOOLS: &[&str] = &[
-    "desktop_screenshot",
     "browser_screenshot",
     "browser_use",
     "computer_control",

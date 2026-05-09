@@ -69,6 +69,16 @@ export function useChatEventBridge() {
 
       listen<{
         session_id: string;
+        tool_call_id: string;
+        artifacts: { mime_type: string; path: string; name: string }[];
+      }>('chat://tool_artifact', (event) => {
+        if (cancelled) return;
+        if (event.payload.session_id !== store().sessionId) return;
+        store().appendArtifacts(event.payload.artifacts);
+      }),
+
+      listen<{
+        session_id: string;
         input_tokens: number;
         output_tokens: number;
         cache_read_tokens: number;
