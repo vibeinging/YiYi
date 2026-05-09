@@ -22,7 +22,7 @@ A desktop AI assistant. Wired to DeepSeek V4 only — but wired deep. Keeps note
 
 A desktop AI assistant — one that gets work done (read PDFs, write scripts, generate spreadsheets, handle email, run scheduled jobs, deploy as a chat-platform bot) and also lives with you across sessions: it keeps track of your preferences, remembers the corrections you've made, and quietly reviews its own interactions overnight to get better at how you actually want things done.
 
-YiYi doesn't try to be model-agnostic. It commits to DeepSeek V4. That's a deliberate trade — when the model is fixed, the adaptation can go deep: prefix caching, parallel tool calls, error-code backoff strategy, thinking-chain UI, vision-aware routing. These don't survive intact under a generic multi-model abstraction.
+YiYi doesn't try to be model-agnostic. It commits to whichever DeepSeek model has the best price-to-capability ratio at the time. That's a deliberate trade — once the choice is narrowed, the adaptation can go deep: prefix caching, parallel tool calls, error-code backoff strategy, thinking-chain UI, vision-aware routing. These don't survive intact under a generic multi-model abstraction.
 
 The other axis — "leave it running, let it grow" — needs the model to be good enough to drive the main loop and cheap enough to leave thinking about itself in the background. Both are true at this generation of V4.
 
