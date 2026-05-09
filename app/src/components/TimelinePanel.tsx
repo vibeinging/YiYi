@@ -292,10 +292,8 @@ function TimelineRowItem({
                 📝 {f}
               </div>
             ))}
-            {stats.changed_files.length > 3 && (
-              <div className="text-[11px]">
-                + {stats.changed_files.length - 3} more
-              </div>
+            {stats.files_changed > 3 && (
+              <div className="text-[11px]">+ {stats.files_changed - 3} more</div>
             )}
           </div>
         )}

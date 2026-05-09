@@ -11,9 +11,7 @@
 
 use git2::{IndexAddOption, Oid, Repository, RepositoryInitOptions, Signature};
 use serde::{Deserialize, Serialize};
-use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
@@ -112,11 +110,22 @@ fn yiyi_data_root() -> PathBuf {
         })
 }
 
+/// Stable FNV-1a 64-bit hash of the canonical workspace path.
+///
+/// Hand-rolled (not `DefaultHasher`) because `DefaultHasher`'s output is
+/// **not** stable across Rust toolchain releases. A toolchain bump would
+/// otherwise relocate every user's checkpoint dir and orphan their entire
+/// timeline. FNV-1a is a documented, reproducible algorithm — safe to
+/// pin into on-disk paths.
 fn workspace_id(workspace: &Path) -> String {
     let canon = workspace.canonicalize().unwrap_or_else(|_| workspace.to_path_buf());
-    let mut h = DefaultHasher::new();
-    canon.to_string_lossy().hash(&mut h);
-    format!("{:016x}", h.finish())
+    let s = canon.to_string_lossy();
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in s.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{:016x}", h)
 }
 
 fn repo_dir(workspace: &Path) -> PathBuf {
@@ -191,27 +200,82 @@ fn should_skip_path(rel: &Path, workspace: &Path) -> bool {
     false
 }
 
+/// Build a commit whose tree reflects the workspace state.
+///
+/// `dirty_paths`:
+///   - `None` → full snapshot: walk the entire workspace, hash everything
+///     (modulo `EXCLUDE_DIRS` / `MAX_FILE_BYTES`). Used for pre-turn baseline.
+///   - `Some(set)` → incremental: seed the index from `parent`'s tree, then
+///     re-add only the dirty paths and remove paths that were deleted.
+///     Avoids stat'ing 10k unchanged files on every post-turn commit. Falls
+///     back to full when there's no parent or when the set contains the
+///     `<unknown>` sentinel from path-blind tools (execute_shell/scripts).
 fn build_commit(
     repo: &Repository,
     workspace: &Path,
     parent: Option<Oid>,
     message: &str,
+    dirty_paths: Option<&HashSet<PathBuf>>,
 ) -> Result<Oid, String> {
     let mut index = repo.index().map_err(|e| format!("repo index: {e}"))?;
-    index.clear().map_err(|e| format!("index clear: {e}"))?;
 
-    let workspace_owned = workspace.to_path_buf();
-    let mut cb = |path: &Path, _matched: &[u8]| -> i32 {
-        if should_skip_path(path, &workspace_owned) {
-            1 // skip
-        } else {
-            0 // include
-        }
+    let unknown_sentinel = PathBuf::from(DIRTY_UNKNOWN);
+    let incremental = match (parent, dirty_paths) {
+        (Some(p), Some(set)) if !set.is_empty() && !set.contains(&unknown_sentinel) => Some((p, set)),
+        _ => None,
     };
 
-    index
-        .add_all(["*"].iter(), IndexAddOption::DEFAULT, Some(&mut cb))
-        .map_err(|e| format!("index add_all: {e}"))?;
+    if let Some((parent_oid, paths)) = incremental {
+        let parent_tree = repo
+            .find_commit(parent_oid)
+            .and_then(|c| c.tree())
+            .map_err(|e| format!("parent tree: {e}"))?;
+        index
+            .read_tree(&parent_tree)
+            .map_err(|e| format!("index read_tree: {e}"))?;
+
+        let workspace_owned = workspace.to_path_buf();
+        let mut cb = |path: &Path, _matched: &[u8]| -> i32 {
+            if should_skip_path(path, &workspace_owned) {
+                1
+            } else {
+                0
+            }
+        };
+        let pathspecs: Vec<String> = paths
+            .iter()
+            .filter(|p| *p != &unknown_sentinel)
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        if !pathspecs.is_empty() {
+            index
+                .add_all(pathspecs.iter(), IndexAddOption::DEFAULT, Some(&mut cb))
+                .map_err(|e| format!("index add_all (incremental): {e}"))?;
+        }
+        // Files deleted on disk are silently skipped by add_all; remove them
+        // from the index explicitly so the new tree drops them.
+        for rel in paths {
+            if rel == &unknown_sentinel {
+                continue;
+            }
+            if !workspace.join(rel).exists() {
+                let _ = index.remove_path(rel);
+            }
+        }
+    } else {
+        index.clear().map_err(|e| format!("index clear: {e}"))?;
+        let workspace_owned = workspace.to_path_buf();
+        let mut cb = |path: &Path, _matched: &[u8]| -> i32 {
+            if should_skip_path(path, &workspace_owned) {
+                1
+            } else {
+                0
+            }
+        };
+        index
+            .add_all(["*"].iter(), IndexAddOption::DEFAULT, Some(&mut cb))
+            .map_err(|e| format!("index add_all: {e}"))?;
+    }
     index.write().map_err(|e| format!("index write: {e}"))?;
 
     let tree_oid = index.write_tree().map_err(|e| format!("write tree: {e}"))?;
@@ -259,6 +323,7 @@ async fn snapshot(
     turn_index: u32,
     phase: Phase,
     workspace: &Path,
+    dirty_paths: Option<HashSet<PathBuf>>,
 ) -> Result<CheckpointInfo, String> {
     let session_id = session_id.to_string();
     let workspace = workspace.to_path_buf();
@@ -270,7 +335,7 @@ async fn snapshot(
         let repo = open_or_init(&workspace)?;
         let parent = last_commit_oid(&repo, &session_id);
         let msg = format!("checkpoint {turn_index} {}", phase.as_str());
-        let oid = build_commit(&repo, &workspace, parent, &msg)?;
+        let oid = build_commit(&repo, &workspace, parent, &msg, dirty_paths.as_ref())?;
 
         let refname = ref_name(&session_id, turn_index, phase);
         repo.reference(&refname, oid, true, &msg)
@@ -321,9 +386,12 @@ fn compute_stats(repo: &Repository, parent: Option<Oid>, child: Oid) -> CommitSt
         out.insertions = stats.insertions() as u32;
         out.deletions = stats.deletions() as u32;
     }
+    // Cap at 50 paths to bound IPC payload (a long path can be hundreds of
+    // bytes). `files_changed` is the authoritative total — UI computes
+    // overflow as `files_changed - changed_files.len()`.
     let _ = diff.foreach(
         &mut |delta, _| {
-            if out.changed_files.len() >= 8 {
+            if out.changed_files.len() >= 50 {
                 return true;
             }
             let p = delta
@@ -348,15 +416,27 @@ pub async fn snapshot_pre_turn(
     turn_index: u32,
     workspace: &Path,
 ) -> Result<CheckpointInfo, String> {
-    snapshot(session_id, turn_index, Phase::Pre, workspace).await
+    // Pre-turn is the safety baseline: we don't know what drifted since the
+    // last checkpoint, so always do a full snapshot.
+    let result = snapshot(session_id, turn_index, Phase::Pre, workspace, None).await;
+    // Opportunistic GC piggybacks on pre-turn — runs at most once per 24h
+    // per workspace, no-op the rest of the time. Spawned so it never blocks
+    // the agent loop even if it does decide to run.
+    let ws = workspace.to_path_buf();
+    tokio::spawn(async move { maybe_gc(&ws).await });
+    result
 }
 
 pub async fn snapshot_post_turn(
     session_id: &str,
     turn_index: u32,
     workspace: &Path,
+    dirty_paths: HashSet<PathBuf>,
 ) -> Result<CheckpointInfo, String> {
-    snapshot(session_id, turn_index, Phase::Post, workspace).await
+    // Post-turn knows exactly which paths the agent's tools touched. Pass
+    // them through so build_commit can do an incremental commit instead of
+    // restat'ing the entire workspace.
+    snapshot(session_id, turn_index, Phase::Post, workspace, Some(dirty_paths)).await
 }
 
 /// Restore the workspace to the given checkpoint. If `paths` is `Some`,
@@ -479,7 +559,7 @@ fn stash_uncommitted(repo: &Repository, workspace: &Path, session_id: &str) -> O
     }
 
     let msg = format!("stash before restore @ {}", now_ms());
-    let oid = build_commit(repo, workspace, Some(parent), &msg).ok()?;
+    let oid = build_commit(repo, workspace, Some(parent), &msg, None).ok()?;
     if oid == parent {
         return None;
     }
@@ -583,6 +663,94 @@ pub async fn preview_diff(
     })
     .await
     .map_err(|e| format!("preview_diff join error: {e}"))?
+}
+
+/// Default retention window for stale refs. Commits older than this lose
+/// their refs and become candidates for libgit2's loose-object collection
+/// on next pack.
+pub const DEFAULT_GC_RETENTION_DAYS: u64 = 30;
+
+/// Delete every `refs/yiyi/...` ref pointing to a commit older than
+/// `max_age_secs`. Returns the number of refs removed. Caller decides when
+/// to run this — see `maybe_gc` for the debounced auto-trigger.
+pub async fn gc_stale_refs(
+    workspace: &Path,
+    max_age_secs: u64,
+) -> Result<u32, String> {
+    let workspace = workspace.to_path_buf();
+    tokio::task::spawn_blocking(move || -> Result<u32, String> {
+        let repo = open_or_init(&workspace)?;
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let cutoff = now_secs.saturating_sub(max_age_secs);
+
+        let to_remove: Vec<String> = {
+            let refs = repo
+                .references_glob("refs/yiyi/*")
+                .map_err(|e| format!("references_glob: {e}"))?;
+            refs.flatten()
+                .filter_map(|r| {
+                    let name = r.name()?.to_string();
+                    let target = r.target()?;
+                    let commit = repo.find_commit(target).ok()?;
+                    let when = commit.time().seconds() as u64;
+                    // `<=` (not `<`): with `max_age_secs == 0` we want to
+                    // prune everything not strictly in the future, and
+                    // commits born in the same second as the GC pass count
+                    // as "at the cutoff" — they should still be eligible.
+                    if when <= cutoff {
+                        Some(name)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+
+        let mut deleted = 0u32;
+        for name in to_remove {
+            if let Ok(mut r) = repo.find_reference(&name) {
+                if r.delete().is_ok() {
+                    deleted += 1;
+                }
+            }
+        }
+        Ok(deleted)
+    })
+    .await
+    .map_err(|e| format!("gc join error: {e}"))?
+}
+
+/// Best-effort, debounced GC. Runs `gc_stale_refs` at most once per 24h
+/// per workspace, gated by the mtime of `<repo_dir>/.last_gc`. Cheap to
+/// call from hot paths (pre-turn snapshot) — typical case is a single
+/// `metadata()` syscall and an early return.
+pub async fn maybe_gc(workspace: &Path) {
+    let dir = repo_dir(workspace);
+    let marker = dir.join(".last_gc");
+
+    let should_run = match std::fs::metadata(&marker).and_then(|m| m.modified()) {
+        Ok(modified) => std::time::SystemTime::now()
+            .duration_since(modified)
+            .map(|e| e.as_secs() >= 24 * 60 * 60)
+            .unwrap_or(true),
+        Err(_) => true,
+    };
+    if !should_run {
+        return;
+    }
+
+    // Touch marker BEFORE running so concurrent callers don't pile up.
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(&marker, b"");
+
+    if let Ok(removed) = gc_stale_refs(workspace, DEFAULT_GC_RETENTION_DAYS * 24 * 60 * 60).await {
+        if removed > 0 {
+            log::info!("checkpoint gc: pruned {removed} refs older than {DEFAULT_GC_RETENTION_DAYS}d");
+        }
+    }
 }
 
 /// Discard the abandoned-branch refs created when the user restored to
@@ -847,7 +1015,7 @@ mod tests {
         std::fs::write(workspace.join("x"), "1").unwrap();
 
         snapshot_pre_turn("s3", 1, &workspace).await.unwrap();
-        snapshot_post_turn("s3", 1, &workspace).await.unwrap();
+        snapshot_post_turn("s3", 1, &workspace, HashSet::new()).await.unwrap();
         snapshot_pre_turn("s3", 2, &workspace).await.unwrap();
 
         let snaps = list_snapshots("s3", &workspace);
@@ -895,7 +1063,7 @@ mod tests {
 
         std::fs::write(workspace.join("a.txt"), "line1\nline2\nline3\n").unwrap();
         std::fs::write(workspace.join("b.txt"), "newfile\n").unwrap();
-        snapshot_post_turn("ss", 1, &workspace).await.unwrap();
+        snapshot_post_turn("ss", 1, &workspace, HashSet::new()).await.unwrap();
 
         let snaps = list_snapshots("ss", &workspace);
         let post = snaps.iter().find(|s| s.phase == Phase::Post).unwrap();
@@ -917,7 +1085,7 @@ mod tests {
         snapshot_pre_turn("sp", 1, &workspace).await.unwrap();
 
         std::fs::write(workspace.join("a.txt"), "alpha\nbeta\n").unwrap();
-        snapshot_post_turn("sp", 1, &workspace).await.unwrap();
+        snapshot_post_turn("sp", 1, &workspace, HashSet::new()).await.unwrap();
 
         let diffs = preview_diff("sp", 1, Phase::Post, &workspace).await.unwrap();
         assert_eq!(diffs.len(), 1);
@@ -938,7 +1106,7 @@ mod tests {
         snapshot_pre_turn("st", 1, &workspace).await.unwrap();
 
         std::fs::write(workspace.join("a.txt"), "v2").unwrap();
-        snapshot_post_turn("st", 1, &workspace).await.unwrap();
+        snapshot_post_turn("st", 1, &workspace, HashSet::new()).await.unwrap();
 
         // User hand-edits AFTER the agent's last commit — must survive
         // as a stash ref when we restore.
@@ -963,7 +1131,7 @@ mod tests {
         for t in 1..=4 {
             std::fs::write(workspace.join("a"), format!("{t}")).unwrap();
             snapshot_pre_turn("sd", t, &workspace).await.unwrap();
-            snapshot_post_turn("sd", t, &workspace).await.unwrap();
+            snapshot_post_turn("sd", t, &workspace, HashSet::new()).await.unwrap();
         }
         let before = list_snapshots("sd", &workspace).len();
         let removed = discard_branch_after("sd", 2, &workspace).await.unwrap();
@@ -972,6 +1140,113 @@ mod tests {
         assert_eq!(after, before - removed as usize);
         // Turns 1,2 still listed
         assert!(list_snapshots("sd", &workspace).iter().all(|s| s.turn_index <= 2));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn workspace_id_is_stable_for_same_path() {
+        let p = std::env::temp_dir();
+        let a = workspace_id(&p);
+        let b = workspace_id(&p);
+        assert_eq!(a, b);
+        // Known FNV-1a 64-bit value for the empty string. Guards against
+        // someone "improving" the hash and silently relocating every user's
+        // checkpoint dir.
+        assert_eq!(
+            {
+                let s = "";
+                let mut h: u64 = 0xcbf29ce484222325;
+                for b in s.as_bytes() {
+                    h ^= *b as u64;
+                    h = h.wrapping_mul(0x100000001b3);
+                }
+                format!("{:016x}", h)
+            },
+            "cbf29ce484222325"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn incremental_post_turn_preserves_unrelated_files() {
+        let tmp = temp_root();
+        std::env::set_var("YIYI_WORKING_DIR", &tmp);
+        let workspace = tmp.join("ws_inc");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("touched.txt"), "v1").unwrap();
+        std::fs::write(workspace.join("untouched.txt"), "STAYS").unwrap();
+        std::fs::create_dir_all(workspace.join("sub")).unwrap();
+        std::fs::write(workspace.join("sub/deep.txt"), "DEEP").unwrap();
+
+        snapshot_pre_turn("inc", 1, &workspace).await.unwrap();
+
+        // Agent edits exactly one file.
+        std::fs::write(workspace.join("touched.txt"), "v2").unwrap();
+        let mut dirty = HashSet::new();
+        dirty.insert(PathBuf::from("touched.txt"));
+        snapshot_post_turn("inc", 1, &workspace, dirty).await.unwrap();
+
+        // Restoring to the post-turn state must still see the un-touched
+        // files exactly as the parent had them — proving incremental mode
+        // didn't accidentally drop unrelated entries from the tree.
+        std::fs::write(workspace.join("touched.txt"), "MUTATED_AFTER").unwrap();
+        std::fs::write(workspace.join("untouched.txt"), "ALSO_MUTATED").unwrap();
+        std::fs::write(workspace.join("sub/deep.txt"), "ALSO_MUTATED").unwrap();
+
+        restore("inc", 1, Phase::Post, &workspace, None).await.unwrap();
+        assert_eq!(std::fs::read_to_string(workspace.join("touched.txt")).unwrap(), "v2");
+        assert_eq!(std::fs::read_to_string(workspace.join("untouched.txt")).unwrap(), "STAYS");
+        assert_eq!(std::fs::read_to_string(workspace.join("sub/deep.txt")).unwrap(), "DEEP");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn incremental_post_turn_records_deletions() {
+        let tmp = temp_root();
+        std::env::set_var("YIYI_WORKING_DIR", &tmp);
+        let workspace = tmp.join("ws_inc_del");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("doomed.txt"), "bye").unwrap();
+        std::fs::write(workspace.join("kept.txt"), "stays").unwrap();
+        snapshot_pre_turn("ind", 1, &workspace).await.unwrap();
+
+        std::fs::remove_file(workspace.join("doomed.txt")).unwrap();
+        let mut dirty = HashSet::new();
+        dirty.insert(PathBuf::from("doomed.txt"));
+        snapshot_post_turn("ind", 1, &workspace, dirty).await.unwrap();
+
+        // Recreate doomed.txt then restore post — it should be removed
+        // because the post-turn tree did NOT contain it.
+        std::fs::write(workspace.join("doomed.txt"), "ghost").unwrap();
+        restore("ind", 1, Phase::Post, &workspace, None).await.unwrap();
+        assert!(!workspace.join("doomed.txt").exists(), "deletion not recorded by incremental commit");
+        assert_eq!(std::fs::read_to_string(workspace.join("kept.txt")).unwrap(), "stays");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn gc_stale_refs_prunes_only_old_commits() {
+        let tmp = temp_root();
+        std::env::set_var("YIYI_WORKING_DIR", &tmp);
+        let workspace = tmp.join("ws_gc");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("a"), "x").unwrap();
+        snapshot_pre_turn("g", 1, &workspace).await.unwrap();
+        snapshot_pre_turn("g", 2, &workspace).await.unwrap();
+
+        // max_age=0 → every commit (created seconds ago) is "stale".
+        let removed = gc_stale_refs(&workspace, 0).await.unwrap();
+        assert!(removed >= 2, "expected all refs pruned, got {removed}");
+        assert!(list_snapshots("g", &workspace).is_empty());
+
+        // Re-snapshot then run GC with a 1h window — fresh refs survive.
+        std::fs::write(workspace.join("a"), "y").unwrap();
+        snapshot_pre_turn("g", 3, &workspace).await.unwrap();
+        let removed_again = gc_stale_refs(&workspace, 3600).await.unwrap();
+        assert_eq!(removed_again, 0, "fresh refs must survive GC");
+        assert_eq!(list_snapshots("g", &workspace).len(), 1);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
