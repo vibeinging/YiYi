@@ -538,7 +538,10 @@ pub(super) async fn run_python_tool(args: &serde_json::Value) -> String {
     }
     match python_bridge::run_python(code).await {
         Ok(result) => super::truncate_output(&result, 8000),
-        Err(e) => format!("Python error: {}", e),
+        // python_bridge already prefixes its Err with "Python error:" — pass
+        // through as-is, otherwise we get the double-prefix that surfaces in
+        // the chat as "Python error: Python error: Traceback ...".
+        Err(e) => e,
     }
 }
 
@@ -570,7 +573,9 @@ pub(super) async fn run_python_script_tool(args: &serde_json::Value) -> String {
 
     match result {
         Ok(output) => super::truncate_output(&output, 8000),
-        Err(e) => format!("Python script error: {}", e),
+        // python_bridge::run_script already prefixes "Script error:" — see
+        // the run_python_tool comment for the same double-prefix story.
+        Err(e) => e,
     }
 }
 

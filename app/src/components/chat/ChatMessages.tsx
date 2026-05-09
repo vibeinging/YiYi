@@ -17,6 +17,7 @@ import {
   Brain,
   Clock,
   X,
+  ShieldAlert,
 } from 'lucide-react';
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -566,15 +567,38 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                       <ThinkingBlock content={msg.thinking} />
                     )}
 
+                    {/* Mark assistant replies that are just an echoed tool
+                     *   error trace — model shouldn't be doing this, but
+                     *   when it slips through we surface it as an error
+                     *   card instead of styling it like normal prose. */}
+                    {(() => {
+                      const isErrorEcho =
+                        msg.role === 'assistant' &&
+                        /^\s*(Error:|Python error:|Python script error:|Script error:|Traceback)/i.test(msg.content);
+                      return (
                     <div
                       className="py-2.5 px-4 rounded-2xl text-[14px] leading-relaxed"
                       style={msg.role === 'user' ? {
                         background: 'var(--color-primary)', color: '#FFFFFF', borderBottomRightRadius: '6px',
+                      } : isErrorEcho ? {
+                        background: 'color-mix(in srgb, var(--color-error) 8%, var(--color-bg-elevated))',
+                        color: 'var(--color-text)',
+                        border: '1px solid color-mix(in srgb, var(--color-error) 35%, var(--color-border))',
+                        borderBottomLeftRadius: '6px',
                       } : {
                         background: 'var(--color-bg-elevated)', color: 'var(--color-text)',
                         border: '1px solid var(--color-border)', borderBottomLeftRadius: '6px',
                       }}
                     >
+                      {isErrorEcho && (
+                        <div
+                          className="flex items-center gap-1.5 mb-2 text-[11.5px] font-medium uppercase tracking-wider"
+                          style={{ color: 'var(--color-error)' }}
+                        >
+                          <ShieldAlert size={12} />
+                          工具错误
+                        </div>
+                      )}
                       {/* Inline media (screenshots, generated images) belongs
                        *   inside the bubble: visually anchored to the
                        *   assistant message that's about to describe them. */}
@@ -654,6 +678,8 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                         </div>
                       )}
                     </div>
+                      );
+                    })()}
 
                     {/* Meta */}
                     <div className={`flex items-center gap-2 mt-1 px-1 ${msg.role === 'user' ? 'justify-end' : ''}`}>

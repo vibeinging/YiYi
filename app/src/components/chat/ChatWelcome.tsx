@@ -19,6 +19,14 @@ interface ChatWelcomeProps {
   onSendPrompt: (prompt: string) => void;
 }
 
+/**
+ * Stop a button's mousedown from stealing focus from the contentEditable
+ * MentionInput in ChatInput. Without this, when the user has typed text
+ * (input is focused), mousedown on a welcome card blurs the editor and
+ * the browser swallows the resulting click — user has to click twice.
+ */
+const preventFocusSteal = (e: React.MouseEvent) => e.preventDefault();
+
 export function ChatWelcome({ aiName, onSendPrompt }: ChatWelcomeProps) {
   const { t, i18n } = useTranslation();
   const [expandedAction, setExpandedAction] = useState<number | null>(null);
@@ -104,6 +112,7 @@ export function ChatWelcome({ aiName, onSendPrompt }: ChatWelcomeProps) {
                   e.stopPropagation();
                   setExpandedAction(isActive ? null : idx);
                 }}
+                onMouseDown={preventFocusSteal}
                 className="text-left rounded-2xl"
                 style={{
                   background: 'var(--color-bg-elevated)',
@@ -181,6 +190,7 @@ export function ChatWelcome({ aiName, onSendPrompt }: ChatWelcomeProps) {
                           color: 'var(--color-text-secondary)',
                           transition: 'background 140ms ease, color 140ms ease',
                         }}
+                        onMouseDown={preventFocusSteal}
                         onClick={(e) => {
                           e.stopPropagation();
                           setExpandedAction(null);
