@@ -497,10 +497,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                 color: thinkingEffort === 'off' ? 'var(--color-text-muted)' : 'var(--color-primary)',
                 background: thinkingEffort === 'off' ? 'transparent' : 'var(--color-bg-muted)',
               }}
-              title={t('chat.thinkingEffort.tooltip', '思考模式：点击切换 off / high / max')}
+              title={t('chat.thinkingEffort.tooltip', '深度思考：开了之后回答更慢但更稳，关掉则快速回复')}
             >
               <Brain size={14} />
-              <span style={{ textTransform: 'uppercase' }}>{thinkingEffort}</span>
+              <span>
+                {thinkingEffort === 'off' ? t('chat.thinkingEffort.off', '不思考')
+                  : thinkingEffort === 'high' ? t('chat.thinkingEffort.high', '思考')
+                  : t('chat.thinkingEffort.max', '深思')}
+              </span>
             </button>
 
             <button type="button" aria-label={t('chat.quick.title', 'Quick actions')} onClick={() => setShowQuickActions((v) => !v)}

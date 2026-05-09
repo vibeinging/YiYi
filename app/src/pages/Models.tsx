@@ -45,17 +45,17 @@ const DEFAULT_BASE_URL = 'https://api.deepseek.com/v1';
 
 const MODEL_ROLES: Record<string, { role: string; roleEn: string; desc: string; descEn: string; icon: typeof Cpu }> = {
   'deepseek-v4-pro': {
-    role: '主控',
-    roleEn: 'Orchestrator',
-    desc: '复杂推理 / 工具调用 / 长上下文',
-    descEn: 'Heavy reasoning, tool calling, long context',
+    role: '深度',
+    roleEn: 'Deep',
+    desc: '处理复杂任务、长篇分析、深度思考',
+    descEn: 'Handles complex tasks, long-form analysis, deep thinking',
     icon: Cpu,
   },
   'deepseek-v4-flash': {
-    role: '工人',
-    roleEn: 'Worker',
-    desc: '高频子任务 / 上下文压缩 / 并行分析',
-    descEn: 'Fast sub-tasks, context compaction, parallel analysis',
+    role: '轻量',
+    roleEn: 'Fast',
+    desc: '后台轻活、快速回复、批量处理',
+    descEn: 'Background work, quick replies, batch processing',
     icon: Zap,
   },
 };
@@ -174,10 +174,10 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
     <>
       {!embedded && (
         <PageHeader
-          title={lang === 'zh' ? 'DeepSeek V4' : 'DeepSeek V4'}
+          title={lang === 'zh' ? '账户' : 'Account'}
           description={lang === 'zh'
-            ? 'YiYi 已绑定 DeepSeek V4。Pro 与 Flash 双模型由系统自动路由。'
-            : 'YiYi is bound to DeepSeek V4. Pro and Flash are routed automatically by the engine.'}
+            ? '余额、用量、API 接入。YiYi 自己决定何时用深度版、何时用轻量版，你只管说话。'
+            : 'Balance, usage, and API connection. YiYi decides when to use the deep or fast model — just talk to it.'}
         />
       )}
 
@@ -504,8 +504,8 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
 
           <p className="mt-4 text-[12px] leading-relaxed" style={{ color: 'var(--color-text-tertiary)' }}>
             {lang === 'zh'
-              ? '系统会根据任务类型自动选择 Pro（重型推理）或 Flash（高频子任务），无需手动切换。'
-              : 'The engine auto-routes between Pro (heavy reasoning) and Flash (fast sub-tasks). No manual switch needed.'}
+              ? 'YiYi 自动按任务繁重程度选用深度或轻量版本，你不需要手动切换。'
+              : 'YiYi picks the deep or fast variant on its own based on the task — no manual switching required.'}
           </p>
         </div>
       </div>

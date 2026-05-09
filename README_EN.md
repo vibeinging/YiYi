@@ -2,7 +2,7 @@
 
 <img src="app/src-tauri/icons/icon.png" width="120" height="120" alt="YiYi" />
 
-# YiYi · DeepSeek V4 Edition
+# YiYi
 
 A desktop AI assistant. Wired to DeepSeek V4 only — but wired deep. Keeps notes, reflects nightly, gets sharper the longer you use it.
 
@@ -18,15 +18,13 @@ A desktop AI assistant. Wired to DeepSeek V4 only — but wired deep. Keeps note
 
 ---
 
-## Why this exists
+## What YiYi is
 
-Most desktop agents today are Claude Code wrappers. Swap an API key, ship it. The problems:
+A desktop AI assistant — one that gets work done (read PDFs, write scripts, generate spreadsheets, handle email, run scheduled jobs, deploy as a chat-platform bot) and also lives with you across sessions: it keeps track of your preferences, remembers the corrections you've made, and quietly reviews its own interactions overnight to get better at how you actually want things done.
 
-- Model adaptation is generic — nobody bothers tuning a single model deeply
-- Every chat starts from zero — corrections from last week are forgotten
-- Claude / GPT pricing makes "leave it running 24/7" economically painful
+YiYi doesn't try to be model-agnostic. It commits to DeepSeek V4. That's a deliberate trade — when the model is fixed, the adaptation can go deep: prefix caching, parallel tool calls, error-code backoff strategy, thinking-chain UI, vision-aware routing. These don't survive intact under a generic multi-model abstraction.
 
-YiYi takes the opposite bet. It commits to DeepSeek V4 (well-funded; Pro cache hits cost 120× less than misses) and pushes the adaptation into the engine. Cheap inference is what makes long-term memory and reflection actually pay off.
+The other axis — "leave it running, let it grow" — needs the model to be good enough to drive the main loop and cheap enough to leave thinking about itself in the background. Both are true at this generation of V4.
 
 ## See it
 
@@ -96,7 +94,20 @@ Wrapper agents solve "one task." Every new chat starts from scratch. YiYi's othe
 - **Capability profile** — visible deltas of where she's getting stronger or weaker
 - **Failure reflection** — repeated tool failures and loop_guard halts get written into reflections; next similar task starts by checking those notes
 
-The 120× cache discount isn't just a cost number. It's what makes "run long-running growth loops in the background" affordable in the first place.
+This loop needs to keep running quietly in the background — correcting, reflecting, consolidating — so it has to be cheap enough to forget about. That's the second reason YiYi picks V4.
+
+---
+
+## About money
+
+YiYi has no subscription. What you pay for is the inference YiYi uses on your behalf — paid directly to DeepSeek, by usage.
+
+In practice:
+
+- **Top-ups happen inside the app**: when balance is low, click the prompt — a sandboxed webview opens DeepSeek's official top-up page (your DeepSeek session lives there, not in YiYi's backend)
+- **Balance and usage are always visible**: each reply shows a small footer with what the turn cost; the account page tracks running balance and recent spend
+- **Casual chatting goes a long way on a few dollars**: the model is priced cheap to begin with, the engine reuses cached prefixes, and lightweight background jobs run on the smaller variant — actual mileage depends on how you use it
+- **No need to learn "model" or "token"**: YiYi picks the heavy or light variant on its own; you just talk to it
 
 ---
 
