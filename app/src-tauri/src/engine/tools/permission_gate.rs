@@ -49,6 +49,32 @@ fn session_allowed() -> &'static Mutex<HashSet<String>> {
     SESSION_ALLOWED.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
+/// Sessions where the user clicked "approve all for this conversation".
+/// Auto-approves every subsequent permission request in the same chat session
+/// (until app restart). Stored separately from `SESSION_ALLOWED` because the
+/// scope is "an entire conversation" rather than "an exact (type, path) pair".
+static SESSION_BLANKET: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn session_blanket() -> &'static Mutex<HashSet<String>> {
+    SESSION_BLANKET.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Mark a chat session so all future permission requests inside it
+/// auto-approve without prompting.
+pub async fn grant_session_blanket(session_id: &str) {
+    if session_id.is_empty() {
+        return;
+    }
+    session_blanket().lock().await.insert(session_id.to_string());
+}
+
+async fn is_session_blanket(session_id: &str) -> bool {
+    if session_id.is_empty() {
+        return false;
+    }
+    session_blanket().lock().await.contains(session_id)
+}
+
 /// Maximum entries in session memory to prevent unbounded growth.
 const MAX_SESSION_ENTRIES: usize = 5000;
 
@@ -88,6 +114,16 @@ async fn remember_approval(permission_type: &str, path: &str) {
 /// For non-persistent types (shell_block, shell_warn, sensitive_path), approvals
 /// are remembered for the session so the user is not asked again for the same item.
 pub async fn request_permission(req: PermissionRequest) -> bool {
+    // Blanket approval: user clicked "approve all" earlier in this chat.
+    let session_id = super::get_current_session_id();
+    if is_session_blanket(&session_id).await {
+        log::info!(
+            "Permission gate: blanket-approved (session={}) '{}' for '{}'",
+            session_id, req.permission_type, req.path
+        );
+        return true;
+    }
+
     // Check session memory — skip dialog if user already approved this
     let rememberable = matches!(
         req.permission_type.as_str(),
@@ -189,6 +225,33 @@ mod tests {
     async fn respond_without_pending_is_noop() {
         // Should not panic when the request_id is not in the pending map.
         respond("nonexistent-id", true).await;
+    }
+
+    #[tokio::test]
+    async fn blanket_grant_then_check_returns_true() {
+        let sid = "blanket_test_session_a";
+        assert!(!is_session_blanket(sid).await);
+        grant_session_blanket(sid).await;
+        assert!(is_session_blanket(sid).await);
+    }
+
+    #[tokio::test]
+    async fn blanket_is_isolated_per_session() {
+        let granted = "blanket_test_session_b1";
+        let other = "blanket_test_session_b2";
+        grant_session_blanket(granted).await;
+        assert!(is_session_blanket(granted).await);
+        // Granting one session must NOT auto-approve another.
+        assert!(!is_session_blanket(other).await);
+    }
+
+    #[tokio::test]
+    async fn blanket_empty_session_id_is_noop() {
+        // Defensive: cron / detached tasks may not have a session_id; an empty
+        // string must never be treated as a real session, otherwise a single
+        // call would auto-approve permissions for every contextless caller.
+        grant_session_blanket("").await;
+        assert!(!is_session_blanket("").await);
     }
 }
 

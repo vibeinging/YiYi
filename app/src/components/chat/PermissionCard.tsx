@@ -5,7 +5,7 @@
 
 import { useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Shield, ShieldAlert, ShieldCheck, ShieldX, FolderOpen, Terminal, FileWarning, Monitor } from 'lucide-react';
+import { Shield, ShieldAlert, ShieldCheck, ShieldX, ShieldEllipsis, FolderOpen, Terminal, FileWarning, Monitor } from 'lucide-react';
 import { useChatStreamStore, type PermissionRequestState } from '../../stores/chatStreamStore';
 
 const TYPE_CONFIG: Record<string, {
@@ -52,7 +52,9 @@ export function PermissionCard({ request }: { request: PermissionRequestState })
   const Icon = config.icon;
   const isResolved = request.status !== 'pending';
 
-  const handleResponse = async (approved: boolean) => {
+  const sessionId = useChatStreamStore((s) => s.sessionId);
+
+  const handleResponse = async (approved: boolean, blanket: boolean = false) => {
     if (responding || isResolved) return;
     setResponding(true);
 
@@ -76,6 +78,7 @@ export function PermissionCard({ request }: { request: PermissionRequestState })
         approved,
         addFolder,
         upgradePermission,
+        blanketSession: blanket && approved && sessionId ? sessionId : null,
       });
     } catch {
       // Backend may have timed out
@@ -126,24 +129,38 @@ export function PermissionCard({ request }: { request: PermissionRequestState })
 
       {/* Actions */}
       {!isResolved && (
-        <div className="flex gap-2 px-3 pb-2">
+        <div className="flex flex-col gap-1.5 px-3 pb-2">
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleResponse(true)}
+              disabled={responding}
+              className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-50"
+              style={{ background: 'var(--color-primary)', color: '#FFFFFF' }}
+            >
+              <ShieldCheck size={12} />
+              允许
+            </button>
+            <button
+              onClick={() => handleResponse(false)}
+              disabled={responding}
+              className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-50"
+              style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-secondary)' }}
+            >
+              <ShieldX size={12} />
+              拒绝
+            </button>
+          </div>
           <button
-            onClick={() => handleResponse(true)}
+            onClick={() => handleResponse(true, true)}
             disabled={responding}
-            className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-50"
-            style={{ background: 'var(--color-primary)', color: '#FFFFFF' }}
+            className="flex items-center justify-center gap-1.5 py-1 rounded-lg text-[11px] font-medium transition-colors disabled:opacity-50"
+            style={{ background: 'transparent', color: 'var(--color-text-muted)' }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; e.currentTarget.style.color = 'var(--color-text-secondary)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--color-text-muted)'; }}
+            title="本次对话内所有后续权限请求都自动允许（重启后失效）"
           >
-            <ShieldCheck size={12} />
-            允许
-          </button>
-          <button
-            onClick={() => handleResponse(false)}
-            disabled={responding}
-            className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-50"
-            style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-secondary)' }}
-          >
-            <ShieldX size={12} />
-            拒绝
+            <ShieldEllipsis size={11} />
+            本次对话全部允许
           </button>
         </div>
       )}

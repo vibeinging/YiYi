@@ -330,20 +330,14 @@ export function QuickActionsOverlay({ onSelectPrompt, onClose }: QuickActionsOve
             {allActions.map((action, idx) => {
               const Icon = action.icon;
               const isExpanded = expandedAction === idx;
-              const isHidden = expandedAction !== null && !isExpanded;
               const isCustom = !!action.customId;
 
               return (
                 <div
                   key={action.customId || idx}
-                  className="transition-all duration-500 ease-out group relative"
+                  className="transition-all duration-300 ease-out group relative"
                   style={{
                     gridColumn: isExpanded ? '1 / -1' : undefined,
-                    opacity: isHidden ? 0 : 1,
-                    transform: isHidden ? 'scale(0.95)' : 'scale(1)',
-                    pointerEvents: isHidden ? 'none' : 'auto',
-                    maxHeight: isHidden ? 0 : '400px',
-                    overflow: 'hidden',
                   }}
                 >
                   <button

@@ -523,6 +523,10 @@ pub async fn add_authorized_folder(
     add_authorized_folder_impl(&*state, path, label, permission).await
 }
 
+/// Respond to a pending permission request.
+///
+/// When `blanket_session` is set, mark that chat session as blanket-approved
+/// — all subsequent permission requests inside it auto-approve until restart.
 #[tauri::command]
 pub async fn respond_permission_request(
     state: State<'_, AppState>,
@@ -530,6 +534,7 @@ pub async fn respond_permission_request(
     approved: bool,
     add_folder: Option<String>,
     upgrade_permission: Option<String>,
+    blanket_session: Option<String>,
 ) -> Result<(), String> {
     if approved {
         if let Some(folder_path) = add_folder {
@@ -549,6 +554,10 @@ pub async fn respond_permission_request(
                 let all = state.db.list_authorized_folders();
                 crate::engine::tools::refresh_authorized_folders(all).await;
             }
+        }
+
+        if let Some(sid) = blanket_session {
+            crate::engine::tools::permission_gate::grant_session_blanket(&sid).await;
         }
     }
 

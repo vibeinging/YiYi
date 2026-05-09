@@ -40,6 +40,15 @@ interface ChatInputProps {
   onFetchWorkspaceFiles: () => void;
 }
 
+/**
+ * Stop a button's mousedown from stealing focus from the contentEditable
+ * MentionInput. Without this, mousedown blurs the editor before click fires;
+ * the browser swallows the click as a "dismiss focus" gesture and the user
+ * has to click again. Apply to every action button that lives inside the
+ * input bar.
+ */
+const preventFocusSteal = (e: React.MouseEvent) => e.preventDefault();
+
 export interface ChatInputHandle {
   focus: () => void;
   insertText: (text: string) => void;
@@ -450,6 +459,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             <input ref={fileInputRef} type="file" multiple className="hidden"
               onChange={(e) => { if (e.target.files) addAttachments(e.target.files); e.target.value = ''; }} />
             <button type="button" onClick={() => fileInputRef.current?.click()}
+              onMouseDown={preventFocusSteal}
               aria-label={t('chat.addFile', 'Add file')}
               disabled={loading || pendingImages.length >= MAX_ATTACHMENTS}
               className="w-9 h-9 flex items-center justify-center rounded-xl shrink-0 transition-all disabled:opacity-30"
@@ -466,6 +476,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                   if (path) inputRef.current?.insertText(path);
                 } catch { /* user cancelled */ }
               }}
+              onMouseDown={preventFocusSteal}
               disabled={loading}
               className="w-9 h-9 flex items-center justify-center rounded-xl shrink-0 transition-all disabled:opacity-30"
               style={{ color: 'var(--color-text-muted)' }}
@@ -479,6 +490,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               type="button"
               aria-label={t('chat.thinkingEffort.label', '思考强度')}
               onClick={cycleThinkingEffort}
+              onMouseDown={preventFocusSteal}
               disabled={loading}
               className="h-9 px-2 flex items-center gap-1 rounded-xl shrink-0 transition-all disabled:opacity-30 text-xs font-medium"
               style={{
@@ -492,6 +504,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             </button>
 
             <button type="button" aria-label={t('chat.quick.title', 'Quick actions')} onClick={() => setShowQuickActions((v) => !v)}
+              onMouseDown={preventFocusSteal}
               disabled={loading}
               className="w-9 h-9 flex items-center justify-center rounded-xl shrink-0 transition-all disabled:opacity-30"
               style={{ color: showQuickActions ? 'var(--color-primary)' : 'var(--color-text-muted)' }}
@@ -515,14 +528,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             />
 
             {loading ? (
-              <button type="button" onClick={onStop}
+              <button type="button" onClick={onStop} onMouseDown={preventFocusSteal}
                 className="w-9 h-9 flex items-center justify-center rounded-xl shrink-0 transition-all"
                 style={{ background: 'var(--color-error)', color: 'var(--color-bg)' }}
                 title={t('chat.stop', '停止')}>
                 <Square size={14} fill="currentColor" />
               </button>
             ) : (
-              <button type="submit"
+              <button type="submit" onMouseDown={preventFocusSteal}
                 disabled={!message.trim() && pendingImages.length === 0}
                 className="w-9 h-9 flex items-center justify-center rounded-xl shrink-0 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
                 style={{

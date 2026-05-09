@@ -1,5 +1,10 @@
 /**
- * ChatWelcome — Empty state welcome screen with quick action cards.
+ * ChatWelcome — Empty state with quick action cards.
+ *
+ * Card grid stays static; clicking a card slides an expansion panel out
+ * below the grid. Switching cards swaps content in-place (no fold/unfold
+ * round-trip). Height animates via the `grid-template-rows: 0fr ↔ 1fr`
+ * trick so the panel matches its actual content size.
  */
 
 import { useState, useEffect } from 'react';
@@ -20,8 +25,8 @@ export function ChatWelcome({ aiName, onSendPrompt }: ChatWelcomeProps) {
   const [morningGreeting, setMorningGreeting] = useState<string | null>(null);
 
   const quickActions = getQuickActions(t);
+  const expanded = expandedAction !== null ? quickActions[expandedAction] : null;
 
-  // Fetch morning greeting once
   useEffect(() => {
     getMorningGreeting()
       .then(g => { if (g) setMorningGreeting(g); })
@@ -34,52 +39,43 @@ export function ChatWelcome({ aiName, onSendPrompt }: ChatWelcomeProps) {
       onClick={() => expandedAction !== null && setExpandedAction(null)}
     >
       <div className="max-w-[520px] w-full">
-        {/* Hero: Mascot + Greeting */}
-        <div
-          className="transition-all duration-500 ease-out"
-          style={{
-            opacity: expandedAction !== null ? 0 : 1,
-            maxHeight: expandedAction !== null ? 0 : '280px',
-            overflow: 'hidden',
-          }}
-        >
-          <div className="flex items-center gap-4 mb-8">
-            <div className="relative shrink-0">
-              <img
-                src={logoImg}
-                alt="YiYi"
-                className="w-14 h-14 rounded-2xl"
-                style={{ boxShadow: '0 4px 20px rgba(255, 180, 80, 0.2)' }}
-              />
-              <div
-                className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full flex items-center justify-center"
-                style={{ background: 'var(--color-success)', boxShadow: '0 0 0 2.5px var(--color-bg)' }}
-              >
-                <div className="w-[5px] h-[5px] rounded-full bg-white" />
-              </div>
+        {/* Hero */}
+        <div className="flex items-center gap-4 mb-8">
+          <div className="relative shrink-0">
+            <img
+              src={logoImg}
+              alt="YiYi"
+              className="w-14 h-14 rounded-2xl"
+              style={{ boxShadow: '0 4px 20px rgba(255, 180, 80, 0.2)' }}
+            />
+            <div
+              className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full flex items-center justify-center"
+              style={{ background: 'var(--color-success)', boxShadow: '0 0 0 2.5px var(--color-bg)' }}
+            >
+              <div className="w-[5px] h-[5px] rounded-full bg-white" />
             </div>
-            <div>
-              <h1
-                className="text-[22px] font-bold tracking-tight"
-                style={{ fontFamily: 'var(--font-display)', color: 'var(--color-text)' }}
-              >
-                {(() => {
-                  const h = new Date().getHours();
-                  const greeting = h < 6 ? '夜深了' : h < 12 ? '早上好' : h < 18 ? '下午好' : '晚上好';
-                  return `${greeting} 👋`;
-                })()}
-              </h1>
-              <p className="text-[13.5px] mt-0.5" style={{ color: 'var(--color-text-secondary)' }}>
-                {(t('chat.empty.description') as string).replace('YiYi', aiName).replace(/我是.*?。/, '')}
-              </p>
-            </div>
+          </div>
+          <div>
+            <h1
+              className="text-[22px] font-bold tracking-tight"
+              style={{ fontFamily: 'var(--font-display)', color: 'var(--color-text)' }}
+            >
+              {(() => {
+                const h = new Date().getHours();
+                const greeting = h < 6 ? '夜深了' : h < 12 ? '早上好' : h < 18 ? '下午好' : '晚上好';
+                return `${greeting} 👋`;
+              })()}
+            </h1>
+            <p className="text-[13.5px] mt-0.5" style={{ color: 'var(--color-text-secondary)' }}>
+              {(t('chat.empty.description') as string).replace('YiYi', aiName).replace(/我是.*?。/, '')}
+            </p>
           </div>
         </div>
 
         {/* Morning greeting from Growth System */}
-        {morningGreeting && expandedAction === null && (
+        {morningGreeting && (
           <div
-            className="mb-4 p-3.5 rounded-xl text-[13px] leading-relaxed transition-all"
+            className="mb-4 p-3.5 rounded-xl text-[13px] leading-relaxed"
             style={{
               background: 'linear-gradient(135deg, rgba(175,82,222,0.06), rgba(88,86,214,0.06))',
               border: '1px solid rgba(175,82,222,0.15)',
@@ -96,124 +92,134 @@ export function ChatWelcome({ aiName, onSendPrompt }: ChatWelcomeProps) {
           </div>
         )}
 
-        {/* Quick action cards */}
-        <div className="grid grid-cols-3 gap-2.5 mb-5">
+        {/* Quick action grid — always static, no reflow */}
+        <div className="grid grid-cols-3 gap-2.5 mb-2">
           {quickActions.map((action, idx) => {
             const Icon = action.icon;
-            const isExpanded = expandedAction === idx;
-            const isHidden = expandedAction !== null && !isExpanded;
-
+            const isActive = expandedAction === idx;
             return (
-              <div
+              <button
                 key={idx}
-                className="transition-all duration-500 ease-out"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setExpandedAction(isActive ? null : idx);
+                }}
+                className="text-left rounded-2xl"
                 style={{
-                  gridColumn: isExpanded ? '1 / -1' : undefined,
-                  opacity: isHidden ? 0 : 1,
-                  transform: isHidden ? 'scale(0.95)' : 'scale(1)',
-                  pointerEvents: isHidden ? 'none' : 'auto',
-                  maxHeight: isHidden ? 0 : '400px',
-                  overflow: 'hidden',
+                  background: 'var(--color-bg-elevated)',
+                  boxShadow: isActive
+                    ? `0 4px 18px ${action.color}1a, 0 0 0 1px ${action.color}33`
+                    : '0 1px 3px rgba(0,0,0,0.04)',
+                  transition: 'box-shadow 220ms cubic-bezier(0.4, 0, 0.2, 1), transform 180ms cubic-bezier(0.4, 0, 0.2, 1)',
+                }}
+                onMouseEnter={(e) => {
+                  if (!isActive) e.currentTarget.style.transform = 'translateY(-1px)';
+                }}
+                onMouseLeave={(e) => {
+                  if (!isActive) e.currentTarget.style.transform = 'translateY(0)';
                 }}
               >
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setExpandedAction(isExpanded ? null : idx);
-                  }}
-                  className="w-full text-left rounded-2xl transition-all duration-300"
-                  style={{
-                    background: 'var(--color-bg-elevated)',
-                    boxShadow: isExpanded
-                      ? `0 8px 32px ${action.color}15, 0 0 0 1px ${action.color}25`
-                      : '0 1px 3px rgba(0,0,0,0.04)',
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!isExpanded) {
-                      e.currentTarget.style.transform = 'translateY(-1px)';
-                      e.currentTarget.style.boxShadow = `0 4px 16px ${action.color}12, 0 0 0 1px ${action.color}18`;
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!isExpanded) {
-                      e.currentTarget.style.transform = 'translateY(0)';
-                      e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.04)';
-                    }
-                  }}
-                >
-                  <div className="flex items-center gap-3 p-3">
-                    <div
-                      className="w-8 h-8 rounded-[10px] flex items-center justify-center shrink-0 transition-all duration-500"
-                      style={{ background: isExpanded ? `${action.color}18` : `${action.color}0C` }}
-                    >
-                      <Icon size={15} style={{ color: action.color }} />
-                    </div>
-                    <span className="text-[13px] font-semibold flex-1" style={{ color: 'var(--color-text)' }}>
-                      {action.label}
-                    </span>
-                    <div
-                      className="transition-transform duration-500"
-                      style={{ transform: isExpanded ? 'rotate(45deg)' : 'rotate(0)', color: 'var(--color-text-tertiary)' }}
-                    >
-                      <Plus size={13} />
-                    </div>
+                <div className="flex items-center gap-3 p-3">
+                  <div
+                    className="w-8 h-8 rounded-[10px] flex items-center justify-center shrink-0"
+                    style={{
+                      background: isActive ? `${action.color}22` : `${action.color}0C`,
+                      transition: 'background 220ms cubic-bezier(0.4, 0, 0.2, 1)',
+                    }}
+                  >
+                    <Icon size={15} style={{ color: action.color }} />
                   </div>
-
-                  {isExpanded && (
-                    <div className="px-3 pb-3 space-y-1 animate-fade-in">
-                      <p className="text-[12px] px-1 mb-2" style={{ color: 'var(--color-text-muted)' }}>
-                        {action.desc}
-                      </p>
-                      {action.examples.map((ex, eidx) => (
-                        <div
-                          key={eidx}
-                          className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-[13px] transition-all duration-150 cursor-pointer"
-                          style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-secondary)' }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setExpandedAction(null);
-                            onSendPrompt(ex);
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.background = `${action.color}0E`;
-                            e.currentTarget.style.color = 'var(--color-text)';
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.background = 'var(--color-bg-subtle)';
-                            e.currentTarget.style.color = 'var(--color-text-secondary)';
-                          }}
-                        >
-                          <span className="w-1 h-1 rounded-full shrink-0" style={{ background: action.color, opacity: 0.5 }} />
-                          <span>{ex}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </button>
-              </div>
+                  <span className="text-[13px] font-semibold flex-1 truncate" style={{ color: 'var(--color-text)' }}>
+                    {action.label}
+                  </span>
+                  <Plus
+                    size={13}
+                    style={{
+                      color: 'var(--color-text-tertiary)',
+                      transform: isActive ? 'rotate(45deg)' : 'rotate(0)',
+                      transition: 'transform 220ms cubic-bezier(0.4, 0, 0.2, 1)',
+                    }}
+                  />
+                </div>
+              </button>
             );
           })}
         </div>
 
-        {/* Keyboard hints */}
+        {/* Expansion panel — content swaps in place; height auto-fits via
+         *   grid-rows trick. No `maxHeight: 400px` guesswork. */}
         <div
-          className="text-[12px] text-center transition-all duration-500 ease-out"
+          className="grid mb-3"
           style={{
-            color: 'var(--color-text-tertiary)',
-            opacity: expandedAction !== null ? 0 : 0.6,
-            maxHeight: expandedAction !== null ? 0 : '40px',
-            overflow: 'hidden',
+            gridTemplateRows: expanded ? '1fr' : '0fr',
+            transition: 'grid-template-rows 280ms cubic-bezier(0.4, 0, 0.2, 1)',
           }}
         >
-          <span>{t('chat.empty.tip1')}</span>
+          <div style={{ overflow: 'hidden', minHeight: 0 }}>
+            <div
+              key={expandedAction ?? 'none'}
+              className="rounded-2xl p-3 mt-1"
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                background: expanded ? `${expanded.color}08` : 'transparent',
+                border: expanded ? `1px solid ${expanded.color}22` : '1px solid transparent',
+                animation: expanded ? 'welcome-panel-in 220ms cubic-bezier(0.4, 0, 0.2, 1) both' : undefined,
+              }}
+            >
+              {expanded && (
+                <>
+                  <p className="text-[12px] px-1 mb-2" style={{ color: 'var(--color-text-muted)' }}>
+                    {expanded.desc}
+                  </p>
+                  <div className="space-y-1">
+                    {expanded.examples.map((ex, eidx) => (
+                      <div
+                        key={eidx}
+                        className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-[13px] cursor-pointer"
+                        style={{
+                          background: 'var(--color-bg-subtle)',
+                          color: 'var(--color-text-secondary)',
+                          transition: 'background 140ms ease, color 140ms ease',
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setExpandedAction(null);
+                          onSendPrompt(ex);
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = `${expanded.color}10`;
+                          e.currentTarget.style.color = 'var(--color-text)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = 'var(--color-bg-subtle)';
+                          e.currentTarget.style.color = 'var(--color-text-secondary)';
+                        }}
+                      >
+                        <span className="w-1 h-1 rounded-full shrink-0" style={{ background: expanded.color, opacity: 0.5 }} />
+                        <span>{ex}</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         </div>
 
-        {expandedAction !== null && (
-          <div className="text-[11px] text-center animate-fade-in" style={{ color: 'var(--color-text-tertiary)', opacity: 0.5 }}>
-            {t('chat.empty.backHint')}
-          </div>
-        )}
+        <div
+          className="text-[12px] text-center"
+          style={{ color: 'var(--color-text-tertiary)', opacity: 0.6 }}
+        >
+          {expanded ? t('chat.empty.backHint') : t('chat.empty.tip1')}
+        </div>
       </div>
+
+      <style>{`
+        @keyframes welcome-panel-in {
+          0%   { opacity: 0; transform: translateY(-4px); }
+          100% { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
     </div>
   );
 }
