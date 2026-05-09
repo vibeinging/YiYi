@@ -180,11 +180,12 @@ const primaryNav: { id: Page; icon: React.ComponentType<any>; labelKey: string }
   { id: 'buddy', icon: Sparkles, labelKey: 'nav.buddy' },
   { id: 'extensions', icon: Puzzle, labelKey: 'nav.extensions' },
   { id: 'bots', icon: Bot, labelKey: 'nav.bots' },
+  { id: 'cronjobs', icon: Clock, labelKey: 'nav.cronjobs' },
   { id: 'settings', icon: Settings, labelKey: 'nav.settings' },
 ];
 
-// Empty on purpose — growth/mcp/cronjobs/workspace are reachable from their
-// respective entry points (Buddy page, Extensions page, task detail).
+// growth / mcp / workspace are reachable from their respective entry points
+// (Buddy page, Extensions page, task detail) and don't need a dedicated nav slot.
 const moreNavItems: { id: Page; icon: React.ComponentType<any>; labelKey: string }[] = [];
 
 // --- More Popover ---
