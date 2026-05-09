@@ -45,7 +45,7 @@ struct Hit {
 fn web_client() -> &'static reqwest::Client {
     static C: std::sync::LazyLock<reqwest::Client> = std::sync::LazyLock::new(|| {
         reqwest::Client::builder()
-            .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+            .user_agent(super::BROWSER_UA)
             .build()
             .unwrap_or_default()
     });

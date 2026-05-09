@@ -61,6 +61,23 @@ fn load_permission_mode() -> PermissionMode {
 
 /// Check if an LLM error is a context overflow that we can recover from
 /// by force-compacting the conversation history.
+/// Read the user's configured language ("zh-CN" / "en" / …) for terminal
+/// reply formatting. Defaults to "zh-CN" — matches `static_system_block`
+/// when no config is present.
+fn current_user_language() -> String {
+    let handle = match crate::engine::tools::APP_HANDLE.get() {
+        Some(h) => h,
+        None => return "zh-CN".to_string(),
+    };
+    use tauri::Manager;
+    let app_state = handle.state::<crate::state::AppState>();
+    let cfg = match app_state.config.try_read() {
+        Ok(c) => c,
+        Err(_) => return "zh-CN".to_string(),
+    };
+    cfg.agents.language.clone().unwrap_or_else(|| "zh-CN".to_string())
+}
+
 fn is_context_overflow_error(err: &str) -> bool {
     parse_context_overflow(err).is_some()
         || err.contains("context length")
@@ -110,7 +127,9 @@ async fn maybe_post_turn_checkpoint(session_id: &str, turn: u32, workspace: &std
     if dirty.is_empty() {
         return;
     }
-    if let Err(e) = crate::engine::checkpoint::snapshot_post_turn(session_id, turn, workspace).await {
+    if let Err(e) =
+        crate::engine::checkpoint::snapshot_post_turn(session_id, turn, workspace, dirty).await
+    {
         log::warn!("checkpoint post-turn failed: {}", e);
     }
 }
@@ -557,7 +576,7 @@ where
             let mut discovered_tool_names: Vec<String> = Vec::new();
             // Anti-loop guard signals collected this iteration.
             let mut guard_warnings: Vec<String> = Vec::new();
-            let mut guard_halt: Option<String> = None;
+            let mut guard_halt: Option<(String, u32)> = None;
 
             for (prep, (mut output, images, mut is_error)) in prepared.iter().zip(results.into_iter()) {
                 let tool_name = &prep.call.function.name;
@@ -596,9 +615,9 @@ where
                         log::warn!("loop_guard warn: {}", msg);
                         guard_warnings.push(msg);
                     }
-                    super::loop_guard::OutcomeDecision::Halt(msg) => {
-                        log::error!("loop_guard halt: {}", msg);
-                        guard_halt = Some(msg);
+                    super::loop_guard::OutcomeDecision::Halt { tool, count } => {
+                        log::error!("loop_guard halt: tool='{}' failures={}", tool, count);
+                        guard_halt = Some((tool, count));
                     }
                 }
 
@@ -651,11 +670,12 @@ where
             }
 
             // ── Anti-loop guard: apply halt / warn signals collected this iter ──
-            if let Some(halt_msg) = guard_halt {
+            if let Some((tool, count)) = guard_halt {
                 log::error!("Terminating ReAct loop due to loop_guard halt");
                 emit_usage(&on_event, &usage_tracker, config);
                 on_event(AgentStreamEvent::Complete);
-                return Ok(halt_msg);
+                let lang = current_user_language();
+                return Ok(super::prompt::loop_halted_reply(&lang, &tool, count));
             }
             for warn in guard_warnings {
                 messages.push(LLMMessage {

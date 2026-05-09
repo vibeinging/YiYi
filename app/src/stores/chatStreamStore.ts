@@ -67,6 +67,13 @@ export interface FocusedTask {
   sessionId: string;
 }
 
+export interface LastUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  estimatedCostUsd: number;
+}
+
 export interface PermissionRequestState {
   requestId: string;
   permissionType: string;
@@ -97,11 +104,16 @@ interface ChatStreamState {
   // Canvas state
   canvases: CanvasEvent[];
 
+  // Last-turn token usage (DeepSeek prefix cache hits surface here).
+  // Updated by chat://usage event; reset on startStream.
+  lastUsage: LastUsage | null;
+
   // Actions
   setSessionId: (id: string) => void;
   startStream: () => void;
   appendChunk: (text: string) => void;
   appendThinking: (text: string) => void;
+  setUsage: (usage: LastUsage) => void;
   toolStart: (name: string, preview: string) => void;
   toolEnd: (name: string, preview: string) => void;
   endStream: () => void;
@@ -195,6 +207,7 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
   focusedTask: null,
   activePermission: null,
   canvases: [],
+  lastUsage: null,
   setSessionId: (id) => set({ sessionId: id }),
 
   startStream: () => set({
@@ -209,7 +222,10 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
     errorMessage: null,
     retryStatus: null,
     activePermission: null,
+    lastUsage: null,
   }),
+
+  setUsage: (usage) => set({ lastUsage: usage }),
 
   appendChunk: (text) => set((state) => ({
     streamingContent: state.streamingContent + text,

@@ -111,23 +111,60 @@ fn preflight(url: &str) -> Result<PathBuf, String> {
 }
 
 /// Common Chrome CLI flags that make a headless, isolated, short-lived run.
-fn base_args() -> Vec<&'static str> {
+///
+/// The custom `--user-agent` (see `super::BROWSER_UA`) overrides Chrome's
+/// default `HeadlessChrome/...` UA, which gets blanket-403'd by Cloudflare,
+/// Akamai, and most Chinese CDN-protected sites.
+fn base_args() -> Vec<String> {
     vec![
-        "--headless",
-        "--disable-gpu",
-        "--incognito",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-extensions",
-        "--disable-background-networking",
-        "--disable-sync",
-        "--disable-translate",
-        "--disable-client-side-phishing-detection",
-        "--disable-default-apps",
-        "--hide-scrollbars",
-        "--mute-audio",
-        "--no-pings",
+        "--headless=new".into(),
+        "--disable-gpu".into(),
+        "--incognito".into(),
+        "--no-first-run".into(),
+        "--no-default-browser-check".into(),
+        "--disable-extensions".into(),
+        "--disable-background-networking".into(),
+        "--disable-sync".into(),
+        "--disable-translate".into(),
+        "--disable-client-side-phishing-detection".into(),
+        "--disable-default-apps".into(),
+        "--disable-blink-features=AutomationControlled".into(),
+        "--hide-scrollbars".into(),
+        "--mute-audio".into(),
+        "--no-pings".into(),
+        format!("--user-agent={}", super::BROWSER_UA),
+        "--accept-lang=zh-CN,zh;q=0.9,en;q=0.8".into(),
     ]
+}
+
+/// Detect if the fetched HTML is actually a bot-challenge / access-denied
+/// page rather than the requested content. These pages have HTTP 200 but
+/// contain no useful information — returning them as "success" causes the
+/// agent to either summarize garbage or retry the same URL in a loop.
+fn detect_bot_block(body: &str) -> Option<&'static str> {
+    let head = body.chars().take(4096).collect::<String>().to_lowercase();
+    if head.contains("just a moment") && head.contains("cloudflare") {
+        return Some("cloudflare_challenge");
+    }
+    if head.contains("attention required") && head.contains("cloudflare") {
+        return Some("cloudflare_block");
+    }
+    if head.contains("access denied") && (head.contains("akamai") || head.contains("reference #")) {
+        return Some("akamai_block");
+    }
+    if head.contains("verify you are a human") || head.contains("are you a robot") {
+        return Some("captcha_challenge");
+    }
+    if head.contains("<title>403") || head.contains("403 forbidden") {
+        return Some("http_403");
+    }
+    if head.contains("<title>451") || head.contains("unavailable for legal reasons") {
+        return Some("http_451");
+    }
+    if body.trim().len() < 200 && (head.contains("blocked") || head.contains("denied") || head.contains("forbidden")) {
+        return Some("short_block_page");
+    }
+    None
 }
 
 // ── browser_screenshot ─────────────────────────────────────────────────────
@@ -172,15 +209,10 @@ pub(super) async fn browser_screenshot_tool(args: &serde_json::Value) -> (String
     let tmp_str = tmp.to_string_lossy().to_string();
 
     let mut args_v = base_args();
-    let screenshot_arg = format!("--screenshot={}", tmp_str);
-    let window_arg = format!("--window-size={},{}", width, height);
-    let time_arg = format!("--virtual-time-budget={}", wait_ms);
-    args_v.extend([
-        screenshot_arg.as_str(),
-        window_arg.as_str(),
-        time_arg.as_str(),
-        &url,
-    ]);
+    args_v.push(format!("--screenshot={}", tmp_str));
+    args_v.push(format!("--window-size={},{}", width, height));
+    args_v.push(format!("--virtual-time-budget={}", wait_ms));
+    args_v.push(url.clone());
 
     let total_timeout = Duration::from_millis(wait_ms + DEFAULT_TIMEOUT_MS);
 
@@ -275,13 +307,12 @@ pub(super) async fn browser_fetch_tool(args: &serde_json::Value) -> String {
         Err(e) => return e,
     };
 
-    let wait_ms = args["wait_ms"].as_u64().unwrap_or(3000).min(MAX_TIMEOUT_MS);
+    let wait_ms = args["wait_ms"].as_u64().unwrap_or(5000).min(MAX_TIMEOUT_MS);
 
     let mut args_v = base_args();
-    args_v.push("--dump-dom");
-    let time_arg = format!("--virtual-time-budget={}", wait_ms);
-    args_v.push(time_arg.as_str());
-    args_v.push(&url);
+    args_v.push("--dump-dom".into());
+    args_v.push(format!("--virtual-time-budget={}", wait_ms));
+    args_v.push(url.clone());
 
     let total_timeout = Duration::from_millis(wait_ms + DEFAULT_TIMEOUT_MS);
 
@@ -334,6 +365,14 @@ pub(super) async fn browser_fetch_tool(args: &serde_json::Value) -> String {
     };
 
     let raw = String::from_utf8_lossy(&bytes).to_string();
+
+    if let Some(reason) = detect_bot_block(&raw) {
+        return format!(
+            "Error: browser_fetch_blocked (url={}, reason={}). The site returned a bot-challenge / access-denied page, not real content. Do NOT retry the same URL — switch tactic: try `web_search` for a different source, fetch a different domain, or ask the user for an alternate URL.",
+            url, reason
+        );
+    }
+
     let (final_body, truncated) = if raw.chars().count() > MAX_DOM_CHARS {
         let trimmed: String = raw.chars().take(MAX_DOM_CHARS).collect();
         (trimmed, true)

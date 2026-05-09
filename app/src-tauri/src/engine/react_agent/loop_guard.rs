@@ -33,10 +33,13 @@ pub enum AttemptDecision {
 pub enum OutcomeDecision {
     /// Continue the loop normally.
     Continue,
-    /// Continue but append the warning as a corrective user message.
+    /// Continue but append the warning as a corrective user message
+    /// (LLM-facing — the string is injected into the conversation as guidance).
     Warn(String),
-    /// Halt the ReAct loop with the given reason.
-    Halt(String),
+    /// Halt the ReAct loop. Carries structured data so the caller can render
+    /// a user-facing message in the right language; loop_guard does not own
+    /// terminal copy.
+    Halt { tool: String, count: u32 },
 }
 
 /// Per-turn loop guard. Counters reset between turns by re-instantiating.
@@ -86,11 +89,7 @@ impl LoopGuard {
         *entry += 1;
         let count = *entry;
         if count >= FAILURE_HALT_THRESHOLD {
-            OutcomeDecision::Halt(format!(
-                "Loop halted: tool '{}' failed {} times in this turn. \
-                 Stopping to avoid wasted tokens.",
-                tool, count
-            ))
+            OutcomeDecision::Halt { tool: tool.to_string(), count }
         } else if count >= FAILURE_WARN_THRESHOLD {
             OutcomeDecision::Warn(format!(
                 "Warning: tool '{}' has failed {} times in this turn. \
@@ -238,7 +237,10 @@ mod tests {
             last = g.record_outcome("t", false);
         }
         match last {
-            OutcomeDecision::Halt(msg) => assert!(msg.contains("Loop halted")),
+            OutcomeDecision::Halt { tool, count } => {
+                assert_eq!(tool, "t");
+                assert_eq!(count, FAILURE_HALT_THRESHOLD);
+            }
             other => panic!("expected Halt, got {:?}", other),
         }
     }

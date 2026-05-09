@@ -34,7 +34,7 @@ import { SpawnAgentPanel } from '../SpawnAgentPanel';
 import { CanvasRenderer } from '../canvas/CanvasRenderer';
 import type { CanvasActionHandler } from '../../api/canvas';
 import { CronJobSessionView } from '../CronJobSessionView';
-import { useChatStreamStore } from '../../stores/chatStreamStore';
+import { useChatStreamStore, type LastUsage } from '../../stores/chatStreamStore';
 import { useTaskStore } from '../../stores/taskStore';
 import { cancelTask, pauseTask, openTaskFolder } from '../../api/tasks';
 import type { ChatMessage, Attachment } from '../../api/agent';
@@ -68,8 +68,36 @@ export interface ProcessedMsg {
 /*  ThinkingBlock                                                      */
 /* ------------------------------------------------------------------ */
 
+function UsageFooter({ usage }: { usage: LastUsage }) {
+  const { inputTokens, outputTokens, cacheReadTokens } = usage;
+  // Hit ratio is over total input — DeepSeek's `prompt_cache_hit_tokens` is
+  // the portion of input served from prefix cache (priced ~10x cheaper).
+  const hitPct = inputTokens > 0 ? Math.round((cacheReadTokens / inputTokens) * 100) : 0;
+  return (
+    <div
+      className="text-[11px] flex items-center gap-2 px-1"
+      style={{ color: 'var(--color-text-muted)' }}
+    >
+      <span>↑ {inputTokens.toLocaleString()}</span>
+      <span>↓ {outputTokens.toLocaleString()}</span>
+      {cacheReadTokens > 0 && (
+        <span
+          className="px-1.5 py-0.5 rounded"
+          style={{
+            background: 'var(--color-bg-muted)',
+            color: 'var(--color-primary)',
+          }}
+          title={`${cacheReadTokens.toLocaleString()} of ${inputTokens.toLocaleString()} input tokens served from DeepSeek prefix cache`}
+        >
+          缓存命中 {hitPct}%
+        </span>
+      )}
+    </div>
+  );
+}
+
 function ThinkingBlock({ content, streaming }: { content: string; streaming?: boolean }) {
-  const [collapsed, setCollapsed] = useState(true);
+  const [collapsed, setCollapsed] = useState(!streaming);
   return (
     <div
       className="rounded-xl text-[13px] overflow-hidden"
@@ -314,6 +342,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
   const streamLoading = useChatStreamStore((s) => s.loading);
   const streamingContent = useChatStreamStore((s) => s.streamingContent);
   const streamingThinking = useChatStreamStore((s) => s.streamingThinking);
+  const lastUsage = useChatStreamStore((s) => s.lastUsage);
   const activeTools = useChatStreamStore((s) => s.activeTools);
   const claudeCode = useChatStreamStore((s) => s.claudeCode);
   const spawnAgents = useChatStreamStore((s) => s.spawnAgents);
@@ -686,7 +715,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                       </ReactMarkdown>
                       <span className="yiyi-cursor" />
                     </div>
-                  ) : (
+                  ) : !streamingThinking ? (
                     <div className="py-3 px-4 rounded-2xl"
                       style={{
                         background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)',
@@ -702,7 +731,9 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                         <div className="yiyi-skeleton-line" />
                       </div>
                     </div>
-                  )}
+                  ) : null}
+
+                  {lastUsage && lastUsage.inputTokens > 0 && <UsageFooter usage={lastUsage} />}
                 </div>
               </div>
             )}

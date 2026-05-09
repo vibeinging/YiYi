@@ -190,6 +190,9 @@ fn build_body(config: &LLMConfig, messages_value: serde_json::Value, stream: boo
         // Request usage data in stream (OpenAI / compatible providers)
         body["stream_options"] = serde_json::json!({ "include_usage": true });
     }
+    // OpenAI defaults this to true, but DeepSeek-compatible endpoints have been
+    // observed serializing tool_calls without it set explicitly.
+    body["parallel_tool_calls"] = serde_json::json!(true);
     // DeepSeek V4 thinking-mode toggle. Only sent for DeepSeek providers; other
     // OpenAI-compatible providers would ignore it but we keep bodies clean.
     // Mapping: "off" → false; "high"/"max" → true. DeepSeek currently exposes

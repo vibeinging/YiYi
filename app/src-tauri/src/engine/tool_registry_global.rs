@@ -126,16 +126,22 @@ impl GlobalToolRegistry {
         self.tools.read().unwrap().get(name).map(|e| e.dispatch_name.clone())
     }
 
-    /// Get all tool definitions for the LLM API.
+    /// Get all tool definitions for the LLM API, sorted by name.
+    ///
+    /// Sort is critical for DeepSeek prefix-cache hits: the model's implicit
+    /// KV cache requires byte-stable `tools` field across requests, and a
+    /// `HashMap::values()` walk yields a different order on every run.
     pub fn all_definitions(&self) -> Vec<ToolDefinition> {
-        self.tools.read().unwrap().values()
+        let mut v: Vec<ToolDefinition> = self.tools.read().unwrap().values()
             .map(|e| e.definition.clone())
-            .collect()
+            .collect();
+        v.sort_by(|a, b| a.function.name.cmp(&b.function.name));
+        v
     }
 
-    /// Get tool definitions filtered by source type.
+    /// Get tool definitions filtered by source type, sorted by name.
     pub fn definitions_by_source(&self, source_type: &str) -> Vec<ToolDefinition> {
-        self.tools.read().unwrap().values()
+        let mut v: Vec<ToolDefinition> = self.tools.read().unwrap().values()
             .filter(|e| match (&e.source, source_type) {
                 (ToolSource::BuiltIn, "builtin") => true,
                 (ToolSource::Plugin { .. }, "plugin") => true,
@@ -143,7 +149,9 @@ impl GlobalToolRegistry {
                 _ => false,
             })
             .map(|e| e.definition.clone())
-            .collect()
+            .collect();
+        v.sort_by(|a, b| a.function.name.cmp(&b.function.name));
+        v
     }
 
     /// List all tool entries (for frontend display).

@@ -67,6 +67,23 @@ export function useChatEventBridge() {
         store().endStreamWithError(event.payload.text);
       }),
 
+      listen<{
+        session_id: string;
+        input_tokens: number;
+        output_tokens: number;
+        cache_read_tokens: number;
+        estimated_cost_usd?: number;
+      }>('chat://usage', (event) => {
+        if (cancelled) return;
+        if (event.payload.session_id !== store().sessionId) return;
+        store().setUsage({
+          inputTokens: event.payload.input_tokens,
+          outputTokens: event.payload.output_tokens,
+          cacheReadTokens: event.payload.cache_read_tokens,
+          estimatedCostUsd: event.payload.estimated_cost_usd ?? 0,
+        });
+      }),
+
       // Stream reset (context overflow recovery — clear partial content before retry)
       listen<{ session_id: string; reason: string }>('chat://stream_reset', (event) => {
         if (cancelled) return;

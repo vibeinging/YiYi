@@ -204,6 +204,16 @@ const ClaudeCodePanel = memo(function ClaudeCodePanel({ state }: { state: Claude
 const ToolLine = memo(function ToolLine({ tool }: { tool: ToolStatus }) {
   const [expanded, setExpanded] = useState(false);
   const isRunning = tool.status === 'running';
+  // Tool result strings starting with "Error:" come from Rust tool returns
+  // (cheap_browser, web_tools, etc.) — surface them visually so users can
+  // scan a long tool list and immediately spot which calls failed.
+  //
+  // Check both fields because snapshot-recovery paths store the result in
+  // `preview` while live/history paths store it in `resultPreview`.
+  const isError = !isRunning && (
+    tool.resultPreview?.startsWith('Error:') ||
+    tool.preview?.startsWith('Error:')
+  );
   const label = getToolLabel(tool.name, tool.status);
   const preview = truncate(tool.preview);
   const hasResult = !isRunning && tool.resultPreview;
@@ -223,14 +233,18 @@ const ToolLine = memo(function ToolLine({ tool }: { tool: ToolStatus }) {
         {/* Status dot */}
         <div className="shrink-0" style={{
           width: '6px', height: '6px', borderRadius: '50%',
-          background: isRunning ? 'var(--color-primary)' : 'var(--color-success)',
+          background: isError
+            ? 'var(--color-error)'
+            : isRunning ? 'var(--color-primary)' : 'var(--color-success)',
           boxShadow: isRunning ? '0 0 6px var(--color-primary)' : 'none',
           transition: 'all 0.3s',
         }} />
 
         {/* Label */}
         <span style={{
-          color: isRunning ? 'var(--color-text)' : 'var(--color-text-secondary)',
+          color: isError
+            ? 'var(--color-error)'
+            : isRunning ? 'var(--color-text)' : 'var(--color-text-secondary)',
           fontWeight: 500, whiteSpace: 'nowrap',
         }}>
           {label}
@@ -238,7 +252,11 @@ const ToolLine = memo(function ToolLine({ tool }: { tool: ToolStatus }) {
 
         {/* Preview */}
         {preview && (
-          <span className="truncate" style={{ color: 'var(--color-text-muted)', fontWeight: 400 }}>
+          <span className="truncate" style={{
+            color: isError ? 'var(--color-error)' : 'var(--color-text-muted)',
+            fontWeight: 400,
+            opacity: isError ? 0.85 : 1,
+          }}>
             {preview}
           </span>
         )}

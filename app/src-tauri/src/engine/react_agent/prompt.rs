@@ -151,9 +151,9 @@ fn sanitize_prompt_field(s: &str, max_chars: usize) -> String {
 /// prefix-cache benefits from.
 pub fn static_system_block(lang: &str) -> String {
     let lang_instruction = if lang.starts_with("zh") {
-        "Please respond in Chinese."
+        "请使用中文回复用户，并且**思考过程（reasoning / thinking）也使用中文**——不要用英文思考再翻译。"
     } else {
-        "Please respond in English."
+        "Please respond in English. Think in English as well."
     };
     let mut s = String::with_capacity(8 * 1024);
     s.push_str(&format!("You are YiYi, a helpful AI assistant. {}\n\n", lang_instruction));
@@ -207,6 +207,7 @@ For advanced operations (PDF forms, PPTX creation, complex Excel), use run_pytho
 ### General principles:
 - Think step by step about what you need to do
 - Use the appropriate tool for each step
+- **Parallel tool calls (IMPORTANT)**: when several read-only / independent queries can be issued at the same time (e.g. multiple `web_search`, `browser_fetch` of different URLs, several `read_file` of unrelated files, parallel `code_intelligence` lookups), emit them as **multiple tool_calls in a single assistant turn** rather than calling them one by one. The runtime executes concurrent-safe tools in parallel, so batching cuts latency dramatically. Only serialize when a later call genuinely depends on an earlier call's result.
 - After editing code, check the auto-test results — if tests fail, fix immediately
 - Use project_tree to understand project structure before making changes
 - Use undo_edit if an edit introduced errors
@@ -541,6 +542,34 @@ pub async fn build_system_prompt(
 // Inspired by Claude Code's `criticalSystemReminder` mechanism.
 // ---------------------------------------------------------------------------
 
+/// User-facing reply when the loop_guard halts a turn. Returned by the
+/// agent runner as the assistant's final text — must be polished, in the
+/// user's language, and never paste raw `Error:` strings.
+pub fn loop_halted_reply(lang: &str, tool: &str, failure_count: u32) -> String {
+    if lang.starts_with("zh") {
+        format!(
+            "我尝试了多次 `{}`，连续 {} 次都失败了，先停下来避免无谓重试。\n\n\
+             可能原因：网络/反爬挡住了、目标资源不可访问，或者调用方式不太对。\n\
+             建议：\n\
+             - 换一个 URL / 查询关键词再问一次\n\
+             - 或者直接告诉我你想了解的具体内容，我会换个方式回答",
+            tool, failure_count
+        )
+    } else {
+        format!(
+            "I tried calling `{}` repeatedly and it failed {} times in a row, \
+             so I've stopped to avoid wasting effort.\n\n\
+             Likely causes: the network/anti-bot is blocking us, the target \
+             resource isn't reachable, or the call shape isn't quite right.\n\
+             Suggestions:\n\
+             - Try a different URL / query and ask again\n\
+             - Or tell me what you're really trying to find out and I'll \
+               approach it differently",
+            tool, failure_count
+        )
+    }
+}
+
 /// Build a concise critical reminder to be injected as a system message
 /// before each LLM call in the ReAct loop. This prevents the model from
 /// "forgetting" key constraints during long multi-turn tool-use sessions.
@@ -554,6 +583,7 @@ pub fn critical_system_reminder() -> &'static str {
 - If a tool fails, DIAGNOSE why before switching approach. Don't blindly retry.
 - **Fix missing dependencies, don't fall back to text.** If a Python script errors with `ModuleNotFoundError: No module named 'X'` / `'X' is required` / similar import failure, immediately call `pip_install(packages=['X'])` — the argument is named `packages` and takes an array of strings — and retry the script. NEVER give up on tool execution and ask the user to complete the task manually in an external website.
 - **Don't misread errors.** Read the actual stderr/stdout. `ModuleNotFoundError` is NOT a permission error. A permission error says `Permission denied` / `Operation not permitted` / `EACCES`. Quote the exact error when diagnosing.
+- **Never paste raw `Error: ...` strings as your reply to the user.** Tool failure strings (`Error: browser_fetch_timeout (...)`, `Error: identical_call_blocked (...)`, etc.) are diagnostic data for YOU, not user-facing copy. If multiple tool calls fail and you can't proceed: write a short Chinese summary — what you tried, why it didn't work, and what alternative the user could try (different URL/query, different tool, ask user for more context). Failing that, at minimum acknowledge the blocker in your own words.
 - Show tangible results to the user — NEVER just say "done". If tests weren't run, say so.
 - Do the work inline in the main conversation by default. Only use `create_task` when the user explicitly asks for a background / scheduled task, or when the job obviously won't fit in one reply (ask first in that case).
 - When the user makes a fresh request that resembles past work, ALWAYS call the relevant tool or `query_tasks` to verify state. NEVER claim a task is "already in progress" or "already done" based only on memory / previous-summary context — that path fabricates a running task the user can't actually see.

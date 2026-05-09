@@ -64,6 +64,11 @@ static MEMME_STORE: std::sync::OnceLock<Arc<memme_core::MemoryStore>> = std::syn
 /// Shared MemMe user ID constant. All memory operations use this as the user scope.
 pub(crate) const MEMME_USER_ID: &str = "yiyi_default_user";
 
+/// User-Agent string used by all built-in web fetchers (web_search, browser_fetch).
+/// Matches a real Chrome 131 build — anything containing `HeadlessChrome` triggers
+/// blanket 403s on Cloudflare/Akamai/Chinese CDN-protected sites.
+pub(super) const BROWSER_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
 /// Global branch lock registry for concurrent agent file coordination.
 static BRANCH_LOCKS: std::sync::OnceLock<std::sync::Mutex<crate::engine::coding::branch_lock::BranchLockRegistry>> = std::sync::OnceLock::new();
 

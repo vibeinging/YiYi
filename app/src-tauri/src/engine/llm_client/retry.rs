@@ -13,6 +13,10 @@ use serde::Serialize;
 
 pub const MAX_RETRIES: u32 = 3;
 const BASE_DELAY_MS: u64 = 1000;
+/// Server-busy / queue-style 5xx (DeepSeek peak-hour, "Server busy, please
+/// try again later") cool down on the order of seconds — a 1s base wastes
+/// retries inside the same congestion window.
+const SERVER_BUSY_BASE_DELAY_MS: u64 = 5000;
 const MAX_DELAY_MS: u64 = 32_000;
 const JITTER_FACTOR: f64 = 0.25;
 
@@ -24,8 +28,17 @@ const JITTER_FACTOR: f64 = 0.25;
 pub enum ApiErrorCategory {
     /// Short-lived server issue (500, 502, 503, 529, connection error).
     /// The retry engine handles these automatically.
+    ///
+    /// `is_server_busy` is true when the body indicates a queue/capacity
+    /// signal ("Server busy", "服务繁忙", DeepSeek peak-hour pattern) — the
+    /// retry engine uses a longer base delay so we don't burn all retries
+    /// inside the congestion window.
     #[serde(rename = "transient")]
-    Transient { retry_after_ms: Option<u64> },
+    Transient {
+        retry_after_ms: Option<u64>,
+        #[serde(default)]
+        is_server_busy: bool,
+    },
 
     /// Rate-limited (429). `is_quota_exhausted` distinguishes between a brief
     /// spike and a hard quota ceiling (hours-long cooldown).
@@ -51,15 +64,47 @@ pub enum ApiErrorCategory {
     },
 }
 
+/// Detect server-busy / queue-style signals in the response body. Common
+/// across OpenAI-compatible providers — DeepSeek surfaces this most often
+/// during peak hours with `"Server busy, please try again later"`.
+fn looks_server_busy(body: &str) -> bool {
+    let lower = body.to_lowercase();
+    lower.contains("server busy")
+        || lower.contains("server is busy")
+        || body.contains("服务繁忙")
+        || body.contains("服务忙")
+        || lower.contains("please retry")
+        || lower.contains("please try again later")
+}
+
+/// Detect insufficient-balance / payment-required signals. DeepSeek and
+/// other Chinese providers commonly return HTTP 402 or a 200/4xx body
+/// containing these markers when the user's account is out of credit.
+fn looks_insufficient_balance(body: &str) -> bool {
+    let lower = body.to_lowercase();
+    lower.contains("insufficient_balance")
+        || lower.contains("insufficient balance")
+        || body.contains("余额不足")
+        || body.contains("账户余额")
+}
+
 /// Classify an HTTP status + response body into an `ApiErrorCategory`.
 pub fn classify_error(status: u16, body: &str) -> ApiErrorCategory {
     match status {
+        // 402 Payment Required is DeepSeek's primary "out of credit" signal.
+        // Treat as a hard quota ceiling so retry stops and the user sees a
+        // clear "top up" message instead of a generic 4xx.
+        402 => ApiErrorCategory::RateLimited {
+            retry_after_ms: None,
+            is_quota_exhausted: true,
+        },
         429 => {
             // Long retry-after (>60 s) or explicit "quota" / "exceeded" wording
             // → likely quota exhaustion rather than a transient spike.
             let is_quota = body.contains("quota")
                 || body.contains("exceeded")
-                || body.contains("billing");
+                || body.contains("billing")
+                || looks_insufficient_balance(body);
             ApiErrorCategory::RateLimited {
                 retry_after_ms: None, // filled in by caller from header
                 is_quota_exhausted: is_quota,
@@ -80,6 +125,7 @@ pub fn classify_error(status: u16, body: &str) -> ApiErrorCategory {
         }
         s if s >= 500 => ApiErrorCategory::Transient {
             retry_after_ms: None,
+            is_server_busy: looks_server_busy(body),
         },
         _ => ApiErrorCategory::ClientError {
             message: sanitize_error_body(body),
@@ -132,16 +178,24 @@ pub fn parse_context_overflow(body: &str) -> Option<(u64, u64)> {
 
 // ── Retry delay calculation ────────────────────────────────────────────
 
-/// Compute the wait duration for a given attempt, respecting `Retry-After`.
-pub fn retry_delay(attempt: u32, retry_after_header: Option<&str>) -> Duration {
+/// Compute the wait duration for a given attempt, respecting `Retry-After`
+/// and provider hints (server-busy uses a longer base delay).
+pub fn retry_delay(
+    attempt: u32,
+    retry_after_header: Option<&str>,
+    category: &ApiErrorCategory,
+) -> Duration {
     // Retry-After header takes priority
     if let Some(header) = retry_after_header {
         if let Ok(secs) = header.parse::<u64>() {
             return Duration::from_secs(secs);
         }
     }
-    // Exponential backoff with jitter
-    let base = (BASE_DELAY_MS * 2u64.pow(attempt)).min(MAX_DELAY_MS);
+    let base_delay_ms = match category {
+        ApiErrorCategory::Transient { is_server_busy: true, .. } => SERVER_BUSY_BASE_DELAY_MS,
+        _ => BASE_DELAY_MS,
+    };
+    let base = (base_delay_ms * 2u64.pow(attempt)).min(MAX_DELAY_MS);
     let jitter = (base as f64 * JITTER_FACTOR * rand_f64()) as u64;
     Duration::from_millis(base + jitter)
 }
@@ -250,7 +304,7 @@ where
                             ApiErrorCategory::RateLimited {
                                 retry_after_ms, ..
                             } => *retry_after_ms = Some(secs * 1000),
-                            ApiErrorCategory::Transient { retry_after_ms } => {
+                            ApiErrorCategory::Transient { retry_after_ms, .. } => {
                                 *retry_after_ms = Some(secs * 1000)
                             }
                             _ => {}
@@ -259,7 +313,7 @@ where
                 }
 
                 if is_retryable(&category) && attempt < MAX_RETRIES {
-                    let delay = retry_delay(attempt, retry_after.as_deref());
+                    let delay = retry_delay(attempt, retry_after.as_deref(), &category);
                     let evt = RetryEvent {
                         attempt: attempt + 1,
                         max_retries: MAX_RETRIES,
@@ -278,22 +332,23 @@ where
                     );
                     emit_retry_event(&evt);
                     tokio::time::sleep(delay).await;
-                    last_err = humanize_api_error(status, &body);
+                    last_err = humanize_api_error(status, &body, &category);
                     continue;
                 }
 
                 // Non-retryable or retries exhausted
-                let err_msg = humanize_api_error(status, &body);
+                let err_msg = humanize_api_error(status, &body, &category);
                 log::error!("{}", err_msg);
                 return Err((err_msg, category));
             }
             Err(e) => {
                 // Network / timeout errors are always retryable
                 if attempt < MAX_RETRIES {
-                    let delay = retry_delay(attempt, None);
                     let category = ApiErrorCategory::Transient {
                         retry_after_ms: None,
+                        is_server_busy: false,
                     };
+                    let delay = retry_delay(attempt, None, &category);
                     let evt = RetryEvent {
                         attempt: attempt + 1,
                         max_retries: MAX_RETRIES,
@@ -321,6 +376,7 @@ where
                     err_msg,
                     ApiErrorCategory::Transient {
                         retry_after_ms: None,
+                        is_server_busy: false,
                     },
                 ));
             }
@@ -331,6 +387,7 @@ where
         last_err,
         ApiErrorCategory::Transient {
             retry_after_ms: None,
+            is_server_busy: false,
         },
     ))
 }
@@ -355,20 +412,28 @@ pub fn compute_adjusted_max_tokens(input_tokens: u64, context_limit: u64) -> Opt
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
-/// Convert raw API errors into user-friendly messages.
-fn humanize_api_error(status: u16, body: &str) -> String {
-    match status {
-        429 => {
-            if body.contains("quota") || body.contains("billing") || body.contains("exceeded") {
-                "API 额度已用完，请检查账户余额或升级套餐".into()
-            } else {
-                "请求过于频繁，请稍后再试".into()
-            }
+const MSG_INSUFFICIENT_BALANCE: &str =
+    "DeepSeek 账户余额不足，请前往 platform.deepseek.com 充值后重试";
+
+/// Convert a classified API error into a user-friendly message. Reuses
+/// `category`'s already-parsed signals so we don't rescan the body.
+fn humanize_api_error(status: u16, body: &str, category: &ApiErrorCategory) -> String {
+    match (status, category) {
+        (402, _) => MSG_INSUFFICIENT_BALANCE.into(),
+        (429, ApiErrorCategory::RateLimited { is_quota_exhausted: true, .. }) => {
+            // 429 with the quota flag covers both DeepSeek balance and other
+            // providers' "monthly quota exceeded". The balance copy points
+            // users at the right fix; quota-exceeded users will recognise it.
+            MSG_INSUFFICIENT_BALANCE.into()
         }
-        401 => "API 密钥无效或已过期，请在设置中检查".into(),
-        403 => "API 访问被拒绝，请检查密钥权限".into(),
-        500 | 502 | 503 => "AI 服务暂时不可用，请稍后再试".into(),
-        408 | 504 => "请求超时，请稍后再试".into(),
+        (429, _) => "请求过于频繁，请稍后再试".into(),
+        (401, _) => "API 密钥无效或已过期，请在设置中检查".into(),
+        (403, _) => "API 访问被拒绝，请检查密钥权限".into(),
+        (500 | 502 | 503, ApiErrorCategory::Transient { is_server_busy: true, .. }) => {
+            "DeepSeek 服务繁忙，正在自动排队重试…".into()
+        }
+        (500 | 502 | 503, _) => "AI 服务暂时不可用，请稍后再试".into(),
+        (408 | 504, _) => "请求超时，请稍后再试".into(),
         _ => {
             // Try to extract a human-readable message from JSON body
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
@@ -402,5 +467,86 @@ fn sanitize_error_body(body: &str) -> String {
         format!("{}...", &body[..500])
     } else {
         body.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_error_502_with_server_busy_marks_transient_busy() {
+        let body = r#"{"error":{"message":"Server busy, please try again later"}}"#;
+        match classify_error(503, body) {
+            ApiErrorCategory::Transient { is_server_busy: true, .. } => {}
+            other => panic!("expected Transient {{ is_server_busy: true }}, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn classify_error_500_without_busy_marker_stays_transient_normal() {
+        match classify_error(500, "Internal Server Error") {
+            ApiErrorCategory::Transient { is_server_busy: false, .. } => {}
+            other => panic!("expected non-busy Transient, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn classify_error_chinese_busy_phrase_detected() {
+        match classify_error(503, "服务繁忙，请稍后重试") {
+            ApiErrorCategory::Transient { is_server_busy: true, .. } => {}
+            other => panic!("expected Transient busy on Chinese phrase, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn classify_error_402_treated_as_quota_exhausted() {
+        match classify_error(402, "Insufficient Balance") {
+            ApiErrorCategory::RateLimited { is_quota_exhausted: true, .. } => {}
+            other => panic!("expected quota-exhausted RateLimited, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn is_retryable_402_balance_error_is_not_retried() {
+        let cat = classify_error(402, "");
+        assert!(!is_retryable(&cat), "402 must not auto-retry");
+    }
+
+    #[test]
+    fn retry_delay_uses_longer_base_when_server_busy() {
+        let busy = ApiErrorCategory::Transient { retry_after_ms: None, is_server_busy: true };
+        // Same attempt; busy delay must dominate normal delay even with jitter.
+        // Lower bound for busy at attempt=0 is SERVER_BUSY_BASE_DELAY_MS;
+        // upper bound for normal at attempt=0 is BASE_DELAY_MS * (1 + JITTER_FACTOR).
+        let busy_delay = retry_delay(0, None, &busy).as_millis() as u64;
+        let normal_delay_max = (BASE_DELAY_MS as f64 * (1.0 + JITTER_FACTOR)) as u64;
+        assert!(busy_delay >= SERVER_BUSY_BASE_DELAY_MS, "busy={busy_delay}");
+        assert!(busy_delay > normal_delay_max, "busy {busy_delay} ≤ normal-max {normal_delay_max}");
+    }
+
+    #[test]
+    fn humanize_402_mentions_topup() {
+        let cat = classify_error(402, "");
+        let msg = humanize_api_error(402, "", &cat);
+        assert!(msg.contains("余额不足"), "got: {msg}");
+        assert!(msg.contains("platform.deepseek.com"), "got: {msg}");
+    }
+
+    #[test]
+    fn humanize_503_busy_uses_deepseek_specific_copy() {
+        let body = "Server busy, please try again later";
+        let cat = classify_error(503, body);
+        let msg = humanize_api_error(503, body, &cat);
+        assert!(msg.contains("DeepSeek"), "got: {msg}");
+        assert!(msg.contains("繁忙"), "got: {msg}");
+    }
+
+    #[test]
+    fn humanize_500_without_busy_marker_falls_back_to_generic_copy() {
+        let cat = classify_error(500, "Internal Server Error");
+        let msg = humanize_api_error(500, "Internal Server Error", &cat);
+        assert!(!msg.contains("DeepSeek"), "should not surface DeepSeek copy: {msg}");
+        assert!(msg.contains("AI 服务"), "got: {msg}");
     }
 }
