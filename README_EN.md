@@ -118,7 +118,7 @@ Install more from the skill market, or have YiYi generate one.
 
 **Bot deployment**
 
-Run YiYi as a bot on Discord · QQ · Telegram · DingTalk · Lark · WeCom · Webhook. Same agent, same memory, anywhere you live.
+Run YiYi as a bot on QQ · DingTalk · Lark · WeCom · Discord · Telegram · Webhook. Same agent, same memory, anywhere you live.
 
 **MCP**
 

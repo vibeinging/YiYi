@@ -118,7 +118,7 @@ think → act → observe 循环。60+ 内置工具：Shell、文件读写、浏
 
 **多平台 Bot**
 
-部署成 Bot 接入：Discord · QQ · Telegram · 钉钉 · 飞书 · 企业微信 · Webhook。同一个 YiYi、同一份记忆。
+部署成 Bot 接入：QQ · 钉钉 · 飞书 · 企业微信 · Discord · Telegram · Webhook。同一个 YiYi、同一份记忆。
 
 **MCP 协议**
 
