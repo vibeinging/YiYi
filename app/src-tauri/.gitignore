@@ -9,3 +9,7 @@
 
 # Agent working data
 /memory/
+
+# Playwright MCP runtime — per-session console logs and page snapshots,
+# regenerated on every run, can grow to multiple MB.
+.playwright-mcp/
