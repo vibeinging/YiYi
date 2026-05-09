@@ -193,6 +193,34 @@ impl super::Database {
         })
     }
 
+    /// Single-session lookup by id. Returns `Ok(None)` if not found —
+    /// callers that don't care to distinguish "missing" from "DB error"
+    /// can `.ok().flatten()`.
+    pub fn get_session(&self, id: &str) -> Result<Option<ChatSession>, String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, created_at, updated_at, source, source_meta \
+                 FROM sessions WHERE id = ?1 LIMIT 1",
+            )
+            .map_err(|e| format!("Query error: {}", e))?;
+        let mut rows = stmt
+            .query(params![id])
+            .map_err(|e| format!("Query error: {}", e))?;
+        if let Some(row) = rows.next().map_err(|e| format!("Row error: {}", e))? {
+            Ok(Some(ChatSession {
+                id: row.get(0).map_err(|e| e.to_string())?,
+                name: row.get(1).map_err(|e| e.to_string())?,
+                created_at: row.get(2).map_err(|e| e.to_string())?,
+                updated_at: row.get(3).map_err(|e| e.to_string())?,
+                source: row.get::<_, String>(4).unwrap_or_else(|_| "chat".into()),
+                source_meta: row.get(5).map_err(|e| e.to_string())?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn rename_session(&self, id: &str, name: &str) -> Result<(), String> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(

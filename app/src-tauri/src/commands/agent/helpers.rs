@@ -400,11 +400,19 @@ pub(super) async fn prepare_chat_context(
         reg.set_mcp_skill_overrides(skill_overrides);
     }
 
+    // Per-session output dir: keeps each conversation's generated files in its
+    // own folder under <workspace>/sessions/, instead of dumping everything
+    // into the workspace root and producing a junkyard over time.
+    let session_dir = derive_session_output_dir(&state.db, &user_workspace, sid);
+    if let Some(ref d) = session_dir {
+        let _ = std::fs::create_dir_all(d);
+    }
+
     // Build system prompt with skill index (on-demand) + always-active skills (injected)
     let unavail = if unavailable_servers.is_empty() { None } else { Some(unavailable_servers.as_slice()) };
     let mut system_prompt = react_agent::build_system_prompt(
         &working_dir, Some(&user_workspace), &skill_index, &always_active_skills,
-        lang.as_deref(), Some(&mcp_tools), unavail,
+        lang.as_deref(), Some(&mcp_tools), unavail, session_dir.as_deref(),
     ).await;
 
     // Inject session context for special session types (e.g. cron jobs)
@@ -477,6 +485,63 @@ pub(super) async fn handle_command(
         }
         _ => None,
     }
+}
+
+/// Per-session output directory under `<workspace>/sessions/<title>_<sid6>/`.
+/// Falls back to `unnamed_<sid6>/` when the session has no friendly name yet
+/// (the auto-rename runs after the first model reply, so message #1 lands in
+/// the unnamed dir; message #2+ in the renamed one). Returns `None` for
+/// non-chat sessions (cron / task / bot) — those have their own dir
+/// conventions and shouldn't be remapped.
+pub(super) fn derive_session_output_dir(
+    db: &db::Database,
+    user_workspace: &Path,
+    sid: &str,
+) -> Option<PathBuf> {
+    if sid.starts_with("cron:") || sid.starts_with("task:") || sid.starts_with("bot:") {
+        return None;
+    }
+    let session = db.get_session(sid).ok().flatten()?;
+    let sid_short: String = sid.chars().rev().take(6).collect::<String>().chars().rev().collect();
+    let raw_name = if session.name.is_empty() || session.name == sid {
+        "unnamed".to_string()
+    } else {
+        session.name
+    };
+    let folder = sanitize_folder_name(&raw_name, 30);
+    Some(user_workspace.join("sessions").join(format!("{}_{}", folder, sid_short)))
+}
+
+/// Make a string safe to use as a single-segment folder name on macOS /
+/// Windows / Linux: drop separators, control chars, and OS-reserved
+/// punctuation; collapse runs of `_`; truncate to `max_chars`.
+fn sanitize_folder_name(raw: &str, max_chars: usize) -> String {
+    let mapped: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let mut out = String::with_capacity(mapped.len());
+    let mut last_underscore = false;
+    for c in mapped.chars() {
+        if c == '_' {
+            if !last_underscore {
+                out.push(c);
+            }
+            last_underscore = true;
+        } else {
+            out.push(c);
+            last_underscore = false;
+        }
+    }
+    let trimmed: String = out.chars().take(max_chars).collect();
+    let trimmed = trimmed.trim_matches(|c: char| c == '_' || c.is_whitespace() || c == '.').to_string();
+    if trimmed.is_empty() { "unnamed".to_string() } else { trimmed }
 }
 
 // --- Attachment helpers ---
@@ -660,4 +725,52 @@ pub(super) fn read_attachment_as_base64(internal_dir: &Path, workspace_dir: &Pat
 fn attachment_ref_to_data_uri(internal_dir: &Path, workspace_dir: &Path, att: &AttachmentRef) -> Option<String> {
     let b64 = read_attachment_as_base64(internal_dir, workspace_dir, &att.path)?;
     Some(format!("data:{};base64,{}", att.mime_type, b64))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_drops_path_separators() {
+        assert!(!sanitize_folder_name("a/b\\c", 30).contains('/'));
+        assert!(!sanitize_folder_name("a/b\\c", 30).contains('\\'));
+    }
+
+    #[test]
+    fn sanitize_drops_windows_reserved() {
+        for c in ":*?\"<>|".chars() {
+            let s = format!("name{}with{}reserved", c, c);
+            let cleaned = sanitize_folder_name(&s, 64);
+            assert!(!cleaned.contains(c), "char '{}' should be replaced: {}", c, cleaned);
+        }
+    }
+
+    #[test]
+    fn sanitize_collapses_underscore_runs() {
+        // "//" → "__" after replace, then collapsed → "_"
+        assert_eq!(sanitize_folder_name("a//b", 30), "a_b");
+        assert_eq!(sanitize_folder_name("a/\\:b", 30), "a_b");
+    }
+
+    #[test]
+    fn sanitize_truncates_to_max_chars() {
+        let long = "x".repeat(100);
+        let out = sanitize_folder_name(&long, 10);
+        assert_eq!(out.chars().count(), 10);
+    }
+
+    #[test]
+    fn sanitize_empty_after_strip_falls_back_to_unnamed() {
+        assert_eq!(sanitize_folder_name("///", 30), "unnamed");
+        assert_eq!(sanitize_folder_name("   ", 30), "unnamed");
+        assert_eq!(sanitize_folder_name("", 30), "unnamed");
+    }
+
+    #[test]
+    fn sanitize_strips_leading_dots() {
+        // Hidden-file convention on Unix; we don't want session dirs to
+        // be hidden by accident.
+        assert!(!sanitize_folder_name(".hidden", 30).starts_with('.'));
+    }
 }

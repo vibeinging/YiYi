@@ -705,7 +705,7 @@ async fn process_message(
     // Build system prompt using global config
     let user_ws = state.user_workspace();
     let mut system_prompt = react_agent::build_system_prompt(
-        &state.working_dir, Some(&user_ws), &skill_index, &always_active_skills, lang.as_deref(), None, None,
+        &state.working_dir, Some(&user_ws), &skill_index, &always_active_skills, lang.as_deref(), None, None, None,
     ).await;
 
     // Remove the bot-tools guidance that confuses the agent in this context

@@ -93,7 +93,7 @@ pub async fn send_heartbeat_impl(state: &AppState) -> Result<serde_json::Value, 
 
     // Try to run with agent if LLM is configured
     let (success, message) = if let Some(llm_config) = resolve_llm(state).await {
-        let prompt = react_agent::build_system_prompt(&state.working_dir, None, &[], &[], None, None, None).await;
+        let prompt = react_agent::build_system_prompt(&state.working_dir, None, &[], &[], None, None, None, None).await;
         match tokio::time::timeout(
             std::time::Duration::from_secs(120),
             react_agent::run_react(&llm_config, &prompt, &query),

@@ -322,6 +322,11 @@ pub async fn build_system_prompt(
     language: Option<&str>,
     mcp_tools: Option<&[crate::engine::infra::mcp_runtime::MCPTool]>,
     unavailable_servers: Option<&[String]>,
+    // session_output_dir: optional per-session subdirectory (e.g.
+    // ~/Documents/YiYi/sessions/<title>_<sid>/). When present, becomes the
+    // model's "default output directory" so each conversation's files land
+    // in their own folder instead of cluttering the workspace root.
+    session_output_dir: Option<&std::path::Path>,
 ) -> String {
     let _ = always_active_skills; // not yet used by this build
 
@@ -339,9 +344,13 @@ pub async fn build_system_prompt(
 
     // ── DYNAMIC BLOCK ────────────────────────────────────────────────────
 
-    // Workspace & authorized folders information
-    let output_dir = user_workspace
+    // Workspace & authorized folders information.
+    // Prefer the session-scoped dir when provided so the model's default
+    // output is per-conversation, keeping the workspace root from filling
+    // up with hundreds of one-off scripts/charts across sessions.
+    let output_dir = session_output_dir
         .map(|p| p.to_string_lossy().to_string())
+        .or_else(|| user_workspace.map(|p| p.to_string_lossy().to_string()))
         .unwrap_or_else(|| working_dir.to_string_lossy().to_string());
     let authorized_paths = crate::engine::tools::get_all_authorized_paths().await;
     let authorized_info = if authorized_paths.is_empty() {
@@ -749,6 +758,7 @@ mod tests {
             Some("en-US"),
             None,
             None,
+            None,
         )
         .await;
         assert!(prompt.contains("You are YiYi"));
@@ -767,6 +777,7 @@ mod tests {
             &[],
             &[],
             Some("zh-CN"),
+            None,
             None,
             None,
         )
@@ -822,6 +833,7 @@ mod tests {
             Some("en"),
             None,
             None,
+            None,
         )
         .await;
         assert!(!prompt.contains("UNIQUE_PERSONA_MARKER"));
@@ -844,6 +856,7 @@ mod tests {
             &[],
             &[],
             Some("en"),
+            None,
             None,
             None,
         )
@@ -872,6 +885,7 @@ mod tests {
             Some("en"),
             Some(&[mcp_tool]),
             Some(&unavail),
+            None,
         )
         .await;
         assert!(prompt.contains("MCP server tool"));
@@ -898,6 +912,7 @@ mod tests {
             Some("en"),
             None,
             None,
+            None,
         )
         .await;
         assert!(!prompt.contains("Skills: writer, coder"));
@@ -916,6 +931,7 @@ mod tests {
             &[],
             &[],
             Some("en"),
+            None,
             None,
             None,
         )
@@ -938,7 +954,7 @@ mod cache_size_tests {
 
         let static_zh = static_system_block("zh");
         let static_en = static_system_block("en");
-        let full = build_system_prompt(dir.path(), None, &[], &[], Some("zh"), None, None).await;
+        let full = build_system_prompt(dir.path(), None, &[], &[], Some("zh"), None, None, None).await;
 
         let (before, after) = full.split_once("<!-- yiyi:cache_boundary -->").unwrap_or((&full, ""));
 

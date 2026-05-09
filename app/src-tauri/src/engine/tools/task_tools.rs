@@ -578,7 +578,7 @@ pub fn spawn_task_execution(
 
         // Build system prompt
         let base_prompt = super::react_agent::build_system_prompt(
-            &working_dir, None, &skill_index, &always_active_skills, None, mcp_ref, unavail_ref,
+            &working_dir, None, &skill_index, &always_active_skills, None, mcp_ref, unavail_ref, None,
         ).await;
 
         let plan_text = if plan.is_empty() {

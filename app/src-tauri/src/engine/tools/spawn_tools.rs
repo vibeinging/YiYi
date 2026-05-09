@@ -288,7 +288,7 @@ fn spawn_agents_background(
                 let unavail_ref = if unavail_for_prompt.is_empty() { None } else { Some(unavail_for_prompt.as_slice()) };
 
                 let base_prompt = super::react_agent::build_system_prompt(
-                    &wd, None, &filtered_index, &always_active, None, mcp_ref, unavail_ref,
+                    &wd, None, &filtered_index, &always_active, None, mcp_ref, unavail_ref, None,
                 ).await;
 
                 // Build system prompt: agent definition instructions take priority
