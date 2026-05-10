@@ -31,6 +31,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # YiYi's Cargo.toml uses path = "../../../MemMe/..." sibling deps,
+      # so MemMe must live at $RUNNER_WORKSPACE/MemMe (sibling to the YiYi
+      # checkout, NOT inside it). actions/checkout v4 can't write outside
+      # GITHUB_WORKSPACE; clone manually.
+      - name: Clone MemMe sibling
+        shell: bash
+        run: |
+          if [ ! -d "$RUNNER_WORKSPACE/MemMe" ]; then
+            git clone --depth 1 https://github.com/vibeinging/MemMe.git "$RUNNER_WORKSPACE/MemMe"
+          fi
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
