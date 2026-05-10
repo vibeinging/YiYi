@@ -592,14 +592,18 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
+            // RunEvent::Reopen is macOS-only (Dock icon click). Gate at
+            // compile time so Windows / Linux builds don't see the variant.
+            #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = event {
-                // macOS: clicking Dock icon should show the main window
                 if let Some(window) = app_handle.get_webview_window("main") {
                     window.show().ok();
                     window.unminimize().ok();
                     window.set_focus().ok();
                 }
             }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app_handle, event);
         });
 }
 
