@@ -394,84 +394,41 @@ pub async fn dispatch_job_result(
 }
 
 /// Send a plain system notification (fire-and-forget, no click handling).
+///
+/// `.show()` can briefly block on platform IPC (NSUserNotification on macOS,
+/// DBus on Linux); offload to a worker thread so async callers don't stall.
 pub fn send_system_notification(title: &str, body: &str) {
-    use tauri_plugin_notification::NotificationExt;
-    if let Some(handle) = crate::engine::tools::get_app_handle() {
+    let Some(handle) = crate::engine::tools::get_app_handle() else { return };
+    let title = title.to_string();
+    let body = body.to_string();
+    std::thread::spawn(move || {
+        use tauri_plugin_notification::NotificationExt;
         if let Err(e) = handle.notification().builder().title(title).body(body).show() {
             log::warn!("Failed to send system notification: {}", e);
         }
-    }
+    });
 }
 
-/// Send a system notification with navigation context.
-/// When the user clicks the notification, the frontend navigates to the specified page.
+/// Send a system notification with navigation context. Frontend consumes the
+/// pending context on next window focus (see App.tsx `notification://pending`).
 ///
-/// On macOS, uses `mac-notification-sys` directly with `wait_for_click(true)` to
-/// block until user interaction, then emits a navigation event on click.
+/// Always shows the notification — explicit user-set cron reminders must fire
+/// even when the window is focused, otherwise the user is staring at YiYi and
+/// the reminder silently never appears. Prior focus-suppression broke this.
+///
+/// macOS history: the old path used `mac-notification-sys` with
+/// `wait_for_click`, whose helper-bundle round-trip got the parent SIGKILL'd
+/// after click. Now everything goes through `tauri_plugin_notification`
+/// (non-blocking).
 pub fn send_notification_with_context(
     title: &str,
     body: &str,
     context: serde_json::Value,
 ) {
-    // Only send notification when the window is NOT focused (minimized, hidden, or in background).
-    // Don't bother the user when they're actively looking at the app.
-    if let Some(handle) = crate::engine::tools::get_app_handle() {
-        use tauri::Manager;
-        if let Some(window) = handle.get_webview_window("main") {
-            if window.is_focused().unwrap_or(false) {
-                return;
-            }
-        }
-    }
-
-    let title = title.to_string();
-    let body = body.to_string();
-
-    // Spawn a blocking OS thread — mac-notification-sys blocks until user interacts.
-    std::thread::spawn(move || {
-        #[cfg(target_os = "macos")]
-        {
-            use mac_notification_sys::{MainButton, Notification, NotificationResponse};
-
-            let mut notif = Notification::new();
-            notif
-                .title(&title)
-                .message(&body)
-                .main_button(MainButton::SingleAction("查看"))
-                .wait_for_click(true);
-
-            match notif.send() {
-                Ok(
-                    NotificationResponse::Click | NotificationResponse::ActionButton(_),
-                ) => {
-                    if let Some(handle) = crate::engine::tools::get_app_handle() {
-                        use tauri::{Emitter, Manager};
-                        if let Some(window) = handle.get_webview_window("main") {
-                            let _: Result<(), _> = window.set_focus();
-                            let _: Result<(), _> = window.unminimize();
-                        }
-                        handle.emit("notification://navigate", &context).ok();
-                    }
-                }
-                Ok(_) => {} // Dismissed — do nothing
-                Err(e) => log::warn!("Failed to send system notification: {}", e),
-            }
-        }
-
-        #[cfg(not(target_os = "macos"))]
-        {
-            // Non-macOS: send notification + emit pending context.
-            // Clicking a notification brings the app to foreground (focus).
-            // The frontend detects the focus event and navigates if a pending
-            // context exists within a short time window.
-            use tauri_plugin_notification::NotificationExt;
-            if let Some(handle) = crate::engine::tools::get_app_handle() {
-                let _ = handle.notification().builder().title(&title).body(&body).show();
-                use tauri::Emitter;
-                handle.emit("notification://pending", &context).ok();
-            }
-        }
-    });
+    let Some(handle) = crate::engine::tools::get_app_handle() else { return };
+    send_system_notification(title, body);
+    use tauri::Emitter;
+    handle.emit("notification://pending", &context).ok();
 }
 
 pub struct CronScheduler {

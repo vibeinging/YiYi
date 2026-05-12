@@ -77,7 +77,7 @@ export function CronJobsPage({ consumeNotifContext }: CronJobsPageProps) {
     mode: 'create',
     id: '',
     name: '',
-    cron: '0 * * * *',
+    cron: '0 0 * * * *',
     scheduleType: 'cron',
     delayMinutes: '30',
     scheduleAt: '',
@@ -148,7 +148,7 @@ export function CronJobsPage({ consumeNotifContext }: CronJobsPageProps) {
       mode: 'create',
       id: `job-${Date.now()}`,
       name: '',
-      cron: '0 * * * *',
+      cron: '0 0 * * * *',
       scheduleType: 'cron',
       delayMinutes: '30',
       scheduleAt: defaultScheduleAt,
@@ -336,13 +336,16 @@ export function CronJobsPage({ consumeNotifContext }: CronJobsPageProps) {
     );
   };
 
-  // Cron presets
+  // Cron presets — backend is `tokio-cron-scheduler` which requires 6-field
+  // expressions (sec min hour day-of-month month day-of-week). 5-field strings
+  // silently fail to register.
   const cronPresets = [
-    { label: 'Hourly', value: '0 * * * *' },
-    { label: 'Daily 0am', value: '0 0 * * *' },
-    { label: 'Daily 9am', value: '0 9 * * *' },
-    { label: 'Mon 9am', value: '0 9 * * 1' },
-    { label: 'Monthly 1st', value: '0 0 1 * *' },
+    { label: '每 20 分钟（工作时段）', value: '0 0/20 9-17 * * 1-5' },
+    { label: '每小时整点', value: '0 0 * * * *' },
+    { label: '每天 9:00', value: '0 0 9 * * *' },
+    { label: '工作日 9:00', value: '0 0 9 * * 1-5' },
+    { label: '周一 10:00', value: '0 0 10 * * 1' },
+    { label: '每月 1 号 0:00', value: '0 0 0 1 * *' },
   ];
 
   return (
