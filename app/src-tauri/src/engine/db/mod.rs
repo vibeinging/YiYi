@@ -13,6 +13,7 @@ mod workspace;
 mod users;
 mod tasks;
 mod growth;
+mod inbox;
 pub mod usage;
 mod quick_actions;
 
@@ -26,6 +27,7 @@ pub use workspace::{AuthorizedFolderRow, SensitivePathRow};
 pub use users::{UnifiedUserRow, UserIdentityRow};
 pub use tasks::TaskInfo;
 pub use growth::{MeditationSession, BuddyDecision, TrustStats, PersonalitySignal, PersonalitySignalRow, SparklingMemory, RecallCandidate, PERSONALITY_BASE_STAT, invalidate_personality_cache};
+pub use inbox::{InboxItem, NewInboxItem};
 pub use quick_actions::QuickActionRow;
 
 pub struct Database {
@@ -490,6 +492,31 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_buddy_decisions_ctx ON buddy_decisions(context);",
         )
         .map_err(|e| format!("Failed to create buddy_decisions table: {}", e))?;
+
+        // Growth V3 — Inbox: agent 提议的成长草稿，等用户审阅
+        // 主动行为（skill 创建/合并/归档、principle 添加）走这里。
+        // pending 项不影响线上行为，approve/reject 后落到对应主体（文件 / DB）。
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS inbox_items (
+                id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,                     -- 'skill_create' | 'skill_merge' | 'skill_archive' | 'principle_add'
+                status TEXT NOT NULL DEFAULT 'pending', -- 'pending' | 'approved' | 'rejected' | 'withdrawn' | 'edited'
+                draft_json TEXT NOT NULL,               -- 草稿内容，结构按 kind 区分
+                source TEXT NOT NULL,                   -- 'meditation' | 'user_request'
+                reason TEXT NOT NULL,                   -- agent 给的理由（人类可读）
+                confidence REAL NOT NULL DEFAULT 0.5,   -- agent 自评置信度
+                evidence_json TEXT,                     -- 证据：session_ids、命中次数等
+                created_at INTEGER NOT NULL,
+                reviewed_at INTEGER,
+                applied_at INTEGER,
+                user_action TEXT,                       -- 'approve' | 'reject' | 'edit_approve' | 'withdraw'
+                user_edited_json TEXT,                  -- 用户编辑后的版本
+                user_note TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_inbox_status ON inbox_items(status, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_inbox_kind ON inbox_items(kind, status);",
+        )
+        .map_err(|e| format!("Failed to create inbox_items table: {}", e))?;
 
         Ok(())
     }

@@ -6,15 +6,15 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import {
-  Brain, Play, Loader2, Eye, EyeOff, Search, Trash2,
-  ShieldCheck, ThumbsUp, ThumbsDown, Shield, Sparkles, Star,
+  Play, Loader2, Search, Trash2,
+  ThumbsUp, ThumbsDown, Sparkles, Star, Settings,
+  ChevronDown, ChevronUp,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useBuddyStore } from '../stores/buddyStore'
 import { useMeditationStore } from '../stores/meditationStore'
 import {
-  toggleBuddyHosted,
   getMemoryStats, listRecentMemories, searchMemories, deleteMemory,
   listRecentEpisodes,
   listCorrections, listMeditationSessions,
@@ -24,7 +24,18 @@ import {
 } from '../api/buddy'
 import { getSpeciesLabel, STAT_LABELS, STAT_NAMES, type StatName } from '../utils/buddy'
 import { PersonalityOrb } from './buddy/PersonalityOrb'
+import { InboxPanel } from './buddy/InboxPanel'
+import { BuddySettingsDrawer } from './buddy/BuddySettingsDrawer'
 import { toast } from './Toast'
+
+// Personality stat → emoji (used in the Hero stats bar).
+const STAT_EMOJI: Record<StatName, string> = {
+  ENERGY: '⚡',
+  WARMTH: '🤗',
+  MISCHIEF: '😈',
+  WIT: '🧠',
+  SASS: '💋',
+}
 
 const ORB_SIZE = 180
 
@@ -50,8 +61,12 @@ const Card: React.FC<{ children: React.ReactNode; className?: string }> = ({ chi
 
 export function BuddyPanel() {
   const { t } = useTranslation()
-  const { companion, bones, config, setMuted, aiName, hostedMode, setHostedMode } = useBuddyStore()
+  const { companion, bones, config, aiName } = useBuddyStore()
 
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [decisionsExpanded, setDecisionsExpanded] = useState(false)
+  const [personalityExpanded, setPersonalityExpanded] = useState(false)
+  const [episodesExpanded, setEpisodesExpanded] = useState(false)
   const [meditationEnabled, setMeditationEnabled] = useState(false)
   const [meditationStart, setMeditationStart] = useState('02:00')
   const [meditationNotify, setMeditationNotify] = useState(true)
@@ -145,10 +160,22 @@ export function BuddyPanel() {
     try { await deleteMemory(id); setRecentMemories(p => p.filter(m => m.id !== id)); if (searchResults) setSearchResults(p => p!.filter(m => m.id !== id)); if (memoryStats) setMemoryStats({ ...memoryStats, total: memoryStats.total - 1 }); toast.success('记忆已删除') }
     catch { toast.error('删除失败') }
   }
-  const muted = config?.muted ?? false
   const notHatched = !companion || !bones
   const daysSinceHatch = companion?.hatchedAt ? Math.floor((Date.now() - companion.hatchedAt) / 86400000) : 0
   const from = companion?.palette.from ?? 'var(--color-primary)'
+
+  // Mood quote: extracted from the most recent meditation summary's first sentence.
+  // Falls back to a gentle placeholder when no meditation has run yet.
+  const moodQuote = useMemo(() => {
+    const summary = meditationLast?.summary?.trim()
+    if (summary) {
+      // Split on Chinese or English sentence terminators; keep it short.
+      const first = summary.split(/[。.!?！？\n]/).filter(Boolean)[0]
+      if (first && first.length <= 60) return first.trim()
+      if (first) return first.trim().slice(0, 50) + '...'
+    }
+    return null
+  }, [meditationLast])
 
   const pMap = useMemo(() => {
     const m: Record<string, { value: number; delta: number }> = {}
@@ -176,16 +203,16 @@ export function BuddyPanel() {
   return (
     <div className="space-y-5">
 
-      {/* ═══ Hero: companion identity card ═══ */}
+      {/* ═══ Hero: 她 ═══ */}
       <Card>
-        <div className="flex items-center gap-6">
+        <div className="flex items-start gap-6">
           {/* Personality-driven orb — shape morphs with the 5 personality stats */}
           <div className="shrink-0" style={{ width: ORB_SIZE, height: ORB_SIZE, animation: 'buddy-breathe 3.5s ease-in-out infinite' }}>
             <PersonalityOrb stats={radarStats} from={companion.palette.from} to={companion.palette.to} shiny={companion.shiny} />
           </div>
 
           {/* Identity */}
-          <div className="flex-1 min-w-0">
+          <div className="flex-1 min-w-0 pt-1">
             <div className="flex items-baseline gap-2 mb-1">
               <h1 className="text-[22px] font-bold tracking-tight" style={{ color: 'var(--color-text)' }}>{companion.name}</h1>
               {companion.shiny && <span>✨</span>}
@@ -193,9 +220,18 @@ export function BuddyPanel() {
                 {companion.palette.name} · {getSpeciesLabel(companion.species)}
               </span>
             </div>
-            <p className="text-[13px] mb-4 leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>
-              {companion.personality}
-            </p>
+
+            {/* Mood quote — her current "心情" pulled from latest meditation */}
+            {moodQuote ? (
+              <p className="text-[13px] mb-2 leading-relaxed italic" style={{ color: 'var(--color-text-secondary)' }}>
+                <span className="opacity-50 mr-1">「</span>{moodQuote}<span className="opacity-50 ml-1">」</span>
+              </p>
+            ) : (
+              <p className="text-[13px] mb-2 leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>
+                {companion.personality}
+              </p>
+            )}
+
             {identityTraits.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
                 {identityTraits.slice(0, 6).map((trait, i) => (
@@ -210,106 +246,192 @@ export function BuddyPanel() {
             )}
           </div>
 
-          {/* Meta */}
-          <div className="shrink-0 flex gap-6 pl-6" style={{ borderLeft: '1px solid var(--color-bg-subtle)' }}>
-            <div className="text-center">
-              <div className="text-[22px] font-semibold tabular-nums" style={{ color: 'var(--color-text)' }}>{daysSinceHatch}</div>
-              <div className="text-[11px] mt-1" style={{ color: 'var(--color-text-muted)' }}>天</div>
-            </div>
-            <div className="text-center">
-              <div className="text-[22px] font-semibold tabular-nums" style={{ color: 'var(--color-text)' }}>{config?.interaction_count ?? 0}</div>
-              <div className="text-[11px] mt-1" style={{ color: 'var(--color-text-muted)' }}>对话</div>
-            </div>
+          {/* ⚙ Settings button — the only Hero control */}
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="shrink-0 p-2 rounded-lg transition-colors hover:bg-[var(--color-bg-subtle)]"
+            title="她的设置"
+          >
+            <Settings size={16} style={{ color: 'var(--color-text-muted)' }} />
+          </button>
+        </div>
+
+        {/* Meta + emoji stats — one unified row */}
+        <div className="mt-5 pt-4" style={{ borderTop: '1px solid var(--color-bg-subtle)' }}>
+          {/* Meta line */}
+          <div className="flex items-center gap-4 text-[12px] mb-3" style={{ color: 'var(--color-text-muted)' }}>
+            <span>
+              <span className="font-semibold tabular-nums" style={{ color: 'var(--color-text-secondary)' }}>{daysSinceHatch}</span> 天
+            </span>
+            <span>·</span>
+            <span>
+              <span className="font-semibold tabular-nums" style={{ color: 'var(--color-text-secondary)' }}>{config?.interaction_count ?? 0}</span> 次对话
+            </span>
             {trustStats && trustStats.total > 0 && (
-              <div className="text-center">
-                <div className="text-[22px] font-semibold tabular-nums" style={{ color: 'var(--color-text)' }}>{Math.round(trustStats.accuracy * 100)}<span className="text-[14px]">%</span></div>
-                <div className="text-[11px] mt-1" style={{ color: 'var(--color-text-muted)' }}>信任</div>
+              <>
+                <span>·</span>
+                <span>
+                  <span className="font-semibold tabular-nums" style={{ color: 'var(--color-text-secondary)' }}>{Math.round(trustStats.accuracy * 100)}%</span> 信任
+                </span>
+              </>
+            )}
+          </div>
+
+          {/* Emoji stats — horizontal row, compact */}
+          <div className="grid grid-cols-5 gap-3">
+            {STAT_NAMES.map(stat => {
+              const key = stat.toLowerCase()
+              const val = pMap[key]?.value ?? companion.stats[stat]
+              const delta = pMap[key]?.delta ?? 0
+              const deltaColor = delta > 2 ? 'var(--color-success)' : delta < -2 ? 'var(--color-error)' : 'var(--color-text)'
+              return (
+                <div key={stat} className="flex flex-col items-center gap-1.5" title={STAT_LABELS[stat]}>
+                  <div className="text-[18px] leading-none">{STAT_EMOJI[stat]}</div>
+                  <div className="text-[13px] font-semibold tabular-nums" style={{ color: deltaColor }}>
+                    {val}
+                    {Math.abs(delta) > 2 && (
+                      <span className="text-[10px] ml-0.5">
+                        {delta > 0 ? '↑' : '↓'}
+                      </span>
+                    )}
+                  </div>
+                  <div className="w-full h-1 rounded-full overflow-hidden" style={{ background: 'var(--color-bg-subtle)' }}>
+                    <div className="h-full rounded-full transition-all duration-700" style={{
+                      width: `${val}%`,
+                      background: `linear-gradient(90deg, ${from}, ${companion.palette.to})`,
+                    }} />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      </Card>
+
+      {/* ═══ 冥想 — 紧贴 Hero，她的核心动作 ═══ */}
+      <Card className="relative overflow-hidden">
+        {meditationTriggering && (
+          <div className="absolute inset-0 pointer-events-none" style={{
+            background: `radial-gradient(circle at 50% 30%, ${from}18, transparent 70%)`,
+            animation: 'buddy-breathe 2s ease-in-out infinite',
+          }} />
+        )}
+        <div className="relative flex items-start gap-4">
+          {/* Moon emoji or in-progress */}
+          <div className="shrink-0 text-[24px] leading-none mt-0.5">
+            {meditationTriggering ? '🌙' : '🌙'}
+          </div>
+
+          <div className="flex-1 min-w-0">
+            {/* Title + state */}
+            <div className="flex items-baseline gap-2 mb-1">
+              <h2 className="text-[14px] font-semibold" style={{ color: 'var(--color-text)' }}>
+                {meditationTriggering ? `${companion.name}正在冥想中...` : '冥想'}
+              </h2>
+              {!meditationTriggering && meditationLast?.date && (
+                <span className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+                  上次 · {meditationLast.date}
+                </span>
+              )}
+            </div>
+
+            {/* Last summary */}
+            {meditationLast && meditationLast.summary ? (
+              <p className="text-[12px] leading-relaxed mb-2" style={{ color: 'var(--color-text-secondary)' }}>
+                <span className="opacity-60">她想到：</span>{meditationLast.summary}
+              </p>
+            ) : (
+              <p className="text-[12px] leading-relaxed mb-2" style={{ color: 'var(--color-text-muted)' }}>
+                让她回顾对话、提炼记忆、感受自己性格的变化。
+              </p>
+            )}
+
+            {/* Schedule note (read-only here; toggle lives in drawer) */}
+            {meditationEnabled && !meditationTriggering && (
+              <div className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+                每天 {meditationStart} 自动冥想 ·
+                <button
+                  onClick={() => setSettingsOpen(true)}
+                  className="ml-1 underline-offset-2 hover:underline"
+                  style={{ color: 'var(--color-text-muted)' }}
+                >
+                  改设置
+                </button>
               </div>
             )}
           </div>
 
-          {/* Controls */}
-          <div className="shrink-0 flex gap-1">
-            <button onClick={() => useBuddyStore.getState().setMuted(!muted)}
-              className="p-2 rounded-lg transition-colors hover:bg-[var(--color-bg-subtle)]" title={muted ? '唤醒' : '休眠'}>
-              {muted ? <EyeOff size={15} style={{ color: 'var(--color-text-muted)' }} /> : <Eye size={15} style={{ color: 'var(--color-text-secondary)' }} />}
-            </button>
-            <button onClick={() => { const v = !hostedMode; setHostedMode(v); toggleBuddyHosted(v) }}
-              className="p-2 rounded-lg transition-colors hover:bg-[var(--color-bg-subtle)]" title="托管模式">
-              <Shield size={15} style={{ color: hostedMode ? from : 'var(--color-text-muted)' }} />
-            </button>
-          </div>
+          {/* Action button */}
+          <button
+            onClick={handleTriggerMeditation}
+            disabled={meditationTriggering}
+            className="shrink-0 flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[12px] font-semibold transition-all hover:scale-[1.02] active:scale-[0.98] disabled:cursor-not-allowed"
+            style={{
+              background: meditationTriggering ? `${from}20` : from,
+              color: meditationTriggering ? from : '#fff',
+              boxShadow: meditationTriggering ? 'none' : `0 1px 4px ${from}40`,
+            }}
+          >
+            {meditationTriggering ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
+            {meditationTriggering ? '冥想中' : '叫她开始冥想'}
+          </button>
         </div>
 
-        {/* Stats bar */}
-        <div className="mt-5 pt-5 grid grid-cols-5 gap-4" style={{ borderTop: '1px solid var(--color-bg-subtle)' }}>
-          {STAT_NAMES.map(stat => {
-            const key = stat.toLowerCase()
-            const val = pMap[key]?.value ?? companion.stats[stat]
-            const delta = pMap[key]?.delta ?? 0
-            return (
-              <div key={stat}>
-                <div className="flex items-baseline justify-between mb-1.5">
-                  <span className="text-[12px]" style={{ color: 'var(--color-text-muted)' }}>{STAT_LABELS[stat]}</span>
-                  <span className="text-[13px] font-semibold tabular-nums" style={{
-                    color: delta > 2 ? 'var(--color-success)' : delta < -2 ? 'var(--color-error)' : 'var(--color-text)',
-                  }}>{val}</span>
-                </div>
-                <div className="h-1 rounded-full overflow-hidden" style={{ background: 'var(--color-bg-subtle)' }}>
-                  <div className="h-full rounded-full transition-all duration-700" style={{
-                    width: `${val}%`,
-                    background: `linear-gradient(90deg, ${from}, ${companion.palette.to})`,
-                  }} />
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      </Card>
-
-      {/* ═══ Two columns ═══ */}
-      <div className="grid gap-5" style={{ gridTemplateColumns: '1fr 340px' }}>
-
-        {/* ── LEFT: Growth + Memory ── */}
-        <div className="space-y-5">
-
-          {/* Growth */}
-          <Card>
-            <SectionTitle count={personalityTimeline.length || undefined}>成长轨迹</SectionTitle>
-            {personalityTimeline.length > 0 ? (
-              <div className="relative pl-5 max-h-[400px] overflow-y-auto" style={{ borderLeft: `2px solid ${from}25` }}>
-                {personalityTimeline.slice(0, 20).map((sig, i) => {
+        {/* 性格变化 — 冥想的产物，作为可折叠子区贴在冥想卡底部 */}
+        {personalityTimeline.length > 0 && (
+          <div className="relative mt-4 pt-4" style={{ borderTop: '1px solid var(--color-bg-subtle)' }}>
+            <button
+              onClick={() => setPersonalityExpanded(v => !v)}
+              className="flex items-center gap-1 text-[11px] mb-2 transition-colors hover:opacity-100"
+              style={{ color: 'var(--color-text-muted)' }}
+            >
+              {personalityExpanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+              她最近变了什么（{personalityTimeline.length} 处）
+            </button>
+            {personalityExpanded && (
+              <div className="relative pl-5 max-h-[260px] overflow-y-auto" style={{ borderLeft: `2px solid ${from}25` }}>
+                {personalityTimeline.slice(0, 20).map(sig => {
                   const isPos = sig.delta > 0
                   return (
-                    <div key={sig.id} className="relative pb-4 last:pb-0">
+                    <div key={sig.id} className="relative pb-3 last:pb-0">
                       <div className="absolute -left-[calc(1.25rem+4px)] top-1.5 w-2 h-2 rounded-full" style={{
                         background: isPos ? from : 'var(--color-error)',
                       }} />
                       <div className="flex items-baseline gap-2 mb-0.5">
-                        <span className="text-[13px] font-medium" style={{ color: isPos ? from : 'var(--color-error)' }}>
+                        <span className="text-[12px] font-medium" style={{ color: isPos ? from : 'var(--color-error)' }}>
                           {STAT_LABELS[sig.trait_name.toUpperCase() as StatName] || sig.trait_name} {isPos ? '+' : ''}{sig.delta.toFixed(1)}
                         </span>
-                        <span className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+                        <span className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
                           {new Date(sig.created_at).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}
                         </span>
                       </div>
-                      <div className="text-[12px] leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>{sig.evidence}</div>
+                      <div className="text-[11px] leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>{sig.evidence}</div>
                     </div>
                   )
                 })}
               </div>
-            ) : (
-              <div className="text-[13px] py-2 leading-relaxed" style={{ color: 'var(--color-text-muted)' }}>
-                每一次对话都在塑造 {companion.name} 的性格。冥想时，这些细微的变化会被记录下来。
-              </div>
             )}
-          </Card>
+          </div>
+        )}
+      </Card>
+
+      {/* ═══ Inbox — 她想跟你商量的事（仅在有候选时显示） ═══ */}
+      <InboxPanel accent={from} buddyName={companion.name} />
+
+      {/* ═══ 两栏：她记得 / 行为准则 ═══ */}
+      <div className="grid gap-5" style={{ gridTemplateColumns: '1fr 1fr' }}>
+
+        {/* ── 第一栏: 她记得 ── */}
+        <div className="space-y-5">
 
           {/* Memory */}
           <Card>
             <SectionTitle count={memoryStats?.total}>
-              记忆
+              她记得
             </SectionTitle>
+            <div className="text-[11px] mb-3 -mt-2" style={{ color: 'var(--color-text-muted)' }}>
+              她记下了你说过的事
+            </div>
 
             {(!memoryStats || memoryStats.total === 0) ? (
               <div className="py-4">
@@ -448,129 +570,66 @@ export function BuddyPanel() {
                 )}
               </>
             )}
-          </Card>
 
-          {/* ── Episodes (Compact summaries) ── */}
-          {episodes.length > 0 && (
-            <Card>
-              <SectionTitle count={episodes.length}>最近对话摘要</SectionTitle>
-              <div className="space-y-2 max-h-[320px] overflow-y-auto">
-                {episodes.map(ep => (
-                  <div key={ep.episode_id} className="p-3 rounded-lg" style={{ background: 'var(--color-bg-subtle)' }}>
-                    <div className="flex items-center justify-between mb-1">
-                      <div className="text-[13px] font-medium truncate" style={{ color: 'var(--color-text)' }}>{ep.title || '(无标题)'}</div>
-                      <div className="text-[11px] shrink-0 ml-2" style={{ color: 'var(--color-text-muted)' }}>
-                        {ep.started_at ? new Date(ep.started_at).toLocaleDateString('zh-CN') : ''}
-                      </div>
-                    </div>
-                    {ep.summary && (
-                      <div className="text-[12px] leading-relaxed line-clamp-3" style={{ color: 'var(--color-text-secondary)' }}>
-                        {ep.summary}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </Card>
-          )}
-        </div>
-
-        {/* ── RIGHT: Meditation + System ── */}
-        <div className="space-y-5">
-
-          {/* Meditation */}
-          <Card className="relative overflow-hidden">
-            {meditationTriggering && (
-              <div className="absolute inset-0 pointer-events-none" style={{
-                background: `radial-gradient(circle at 50% 30%, ${from}18, transparent 70%)`,
-                animation: 'buddy-breathe 2s ease-in-out infinite',
-              }} />
-            )}
-            <div className="relative">
-              <SectionTitle right={
-                <button onClick={handleTriggerMeditation} disabled={meditationTriggering}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-all hover:scale-[1.02] active:scale-[0.98]"
-                  style={{ background: meditationTriggering ? `${from}20` : from, color: meditationTriggering ? from : '#fff' }}>
-                  {meditationTriggering ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
-                  {meditationTriggering ? '冥想中...' : '开始冥想'}
+            {/* 最近的对话回忆 — 折叠在「她记得」卡底部 */}
+            {episodes.length > 0 && (
+              <div className="mt-4 pt-4" style={{ borderTop: '1px solid var(--color-bg-subtle)' }}>
+                <button
+                  onClick={() => setEpisodesExpanded(v => !v)}
+                  className="flex items-center gap-1 text-[11px] mb-2 transition-colors hover:opacity-100"
+                  style={{ color: 'var(--color-text-muted)' }}
+                >
+                  {episodesExpanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                  她回忆里的对话（{episodes.length} 段）
                 </button>
-              }>冥想</SectionTitle>
-
-              {(meditationLast && meditationLast.summary) ? (
-                <div className="mb-4 p-3 rounded-lg" style={{ background: 'var(--color-bg-subtle)' }}>
-                  {meditationLast.date && (
-                    <div className="text-[11px] mb-1" style={{ color: 'var(--color-text-muted)' }}>{meditationLast.date}</div>
-                  )}
-                  <div className="text-[12px] leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>{meditationLast.summary}</div>
-                </div>
-              ) : (
-                <div className="mb-4 text-[13px] leading-relaxed" style={{ color: 'var(--color-text-muted)' }}>
-                  让 {companion.name} 回顾对话，提炼记忆，感受性格的变化。
-                </div>
-              )}
-
-              <div className="space-y-2 text-[12px]">
-                <div className="flex items-center justify-between">
-                  <span style={{ color: 'var(--color-text-secondary)' }}>定时冥想</span>
-                  <button onClick={() => { const v = !meditationEnabled; setMeditationEnabled(v); saveMedConfig(v) }}
-                    className="text-[11px] px-2.5 py-1 rounded-md font-medium" style={{
-                      background: meditationEnabled ? `${from}18` : 'var(--color-bg-subtle)',
-                      color: meditationEnabled ? from : 'var(--color-text-muted)',
-                    }}>{meditationEnabled ? '开启' : '关闭'}</button>
-                </div>
-                {meditationEnabled && (
-                  <div className="flex items-center justify-between">
-                    <span style={{ color: 'var(--color-text-secondary)' }}>时间</span>
-                    <input type="time" value={meditationStart}
-                      onChange={e => { setMeditationStart(e.target.value); saveMedConfig(meditationEnabled, e.target.value) }}
-                      className="text-[11px] px-2 py-1 rounded-md" style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text)', border: 'none' }} />
+                {episodesExpanded && (
+                  <div className="space-y-2 max-h-[320px] overflow-y-auto">
+                    {episodes.map(ep => (
+                      <div key={ep.episode_id} className="p-3 rounded-lg" style={{ background: 'var(--color-bg-subtle)' }}>
+                        <div className="flex items-center justify-between mb-1">
+                          <div className="text-[12px] font-medium truncate" style={{ color: 'var(--color-text)' }}>{ep.title || '(无标题)'}</div>
+                          <div className="text-[10px] shrink-0 ml-2" style={{ color: 'var(--color-text-muted)' }}>
+                            {ep.started_at ? new Date(ep.started_at).toLocaleDateString('zh-CN') : ''}
+                          </div>
+                        </div>
+                        {ep.summary && (
+                          <div className="text-[11px] leading-relaxed line-clamp-3" style={{ color: 'var(--color-text-secondary)' }}>
+                            {ep.summary}
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
-
-              {/* Diary */}
-              {meditationSessions.length > 0 && (
-                <div className="mt-4 pt-4" style={{ borderTop: '1px solid var(--color-bg-subtle)' }}>
-                  <div className="text-[11px] font-medium mb-2" style={{ color: 'var(--color-text-muted)' }}>冥想日记</div>
-                  <div className="space-y-1 max-h-[180px] overflow-y-auto">
-                    {meditationSessions.slice(0, 5).map(s => (
-                      <button key={s.id} onClick={() => setExpandedJournal(expandedJournal === s.id ? null : s.id)}
-                        className="w-full text-left p-2 rounded-md transition-colors hover:bg-[var(--color-bg-subtle)]">
-                        <div className="flex items-center justify-between text-[11px]">
-                          <span style={{ color: 'var(--color-text-secondary)' }}>
-                            {new Date(s.started_at > 1e12 ? s.started_at : s.started_at * 1000).toLocaleDateString('zh-CN')}
-                          </span>
-                          <span style={{ color: 'var(--color-text-muted)' }}>记忆 +{s.memories_updated}</span>
-                        </div>
-                        {expandedJournal === s.id && s.journal && (
-                          <div className="mt-2 text-[11px] leading-relaxed whitespace-pre-wrap" style={{ color: 'var(--color-text-muted)' }}>
-                            {s.journal}
-                          </div>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
+            )}
           </Card>
+        </div>
 
-          {/* Growth report */}
-          {meditationSessions.length > 0 && meditationSessions[0]?.growth_synthesis && (
-            <Card className="relative overflow-hidden">
-              <div className="absolute top-0 left-0 bottom-0 w-[3px]" style={{ background: from }} />
-              <SectionTitle>最新报告</SectionTitle>
-              <div className="text-[12px] leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>
-                {meditationSessions[0].growth_synthesis}
-              </div>
-            </Card>
-          )}
+        {/* ── 第二栏：行为准则 ── */}
+        <div className="space-y-5">
 
-          {/* Corrections */}
-          {corrections.length > 0 && (
-            <Card>
-              <SectionTitle count={corrections.length}>学到的规矩</SectionTitle>
-              <div className="space-y-2 max-h-[160px] overflow-y-auto">
+          {/* 行为准则 — corrections (规则) + decisions (历史判例，折叠) */}
+          <Card>
+            <SectionTitle
+              count={corrections.length || undefined}
+              right={
+                trustStats && trustStats.total > 0 ? (
+                  <span className="text-[12px] font-semibold tabular-nums" style={{ color: from }}>
+                    信任 {Math.round(trustStats.accuracy * 100)}%
+                  </span>
+                ) : undefined
+              }
+            >
+              行为准则
+            </SectionTitle>
+            <div className="text-[11px] mb-3 -mt-2" style={{ color: 'var(--color-text-muted)' }}>
+              她必须遵守的规则，由你写下
+            </div>
+
+            {/* 规则列表 */}
+            {corrections.length > 0 ? (
+              <div className="space-y-2 max-h-[280px] overflow-y-auto">
                 {corrections.map((c, i) => (
                   <div key={i} className="p-2 rounded-md text-[11px]" style={{ background: 'var(--color-bg-subtle)' }}>
                     <div style={{ color: 'var(--color-text-muted)' }}>当 {c.trigger}</div>
@@ -578,35 +637,65 @@ export function BuddyPanel() {
                   </div>
                 ))}
               </div>
-            </Card>
-          )}
-
-          {/* Decisions */}
-          {decisions.length > 0 && trustStats && trustStats.total > 0 && (
-            <Card>
-              <SectionTitle right={<span className="text-[12px] font-medium" style={{ color: from }}>{Math.round(trustStats.accuracy * 100)}%</span>}>
-                决策
-              </SectionTitle>
-              <div className="space-y-1 max-h-[140px] overflow-y-auto">
-                {decisions.slice(0, 6).map(d => (
-                  <div key={d.id} className="group flex items-center gap-2 py-1 text-[11px]">
-                    <span className="flex-1 truncate" style={{ color: 'var(--color-text-secondary)' }}>{d.question}</span>
-                    <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button onClick={() => handleFeedback(d.id, 'good')} className="p-0.5 rounded">
-                        <ThumbsUp size={11} style={{ color: d.user_feedback === 'good' ? 'var(--color-success)' : 'var(--color-text-muted)' }} />
-                      </button>
-                      <button onClick={() => handleFeedback(d.id, 'bad')} className="p-0.5 rounded">
-                        <ThumbsDown size={11} style={{ color: d.user_feedback === 'bad' ? 'var(--color-error)' : 'var(--color-text-muted)' }} />
-                      </button>
-                    </div>
-                  </div>
-                ))}
+            ) : (
+              <div className="text-[13px] py-2 leading-relaxed" style={{ color: 'var(--color-text-muted)' }}>
+                还没有准则。和她对话时说「应该 X，不要 Y」，她会记下来。
               </div>
-            </Card>
-          )}
+            )}
+
+            {/* 决策历史（折叠） */}
+            {decisions.length > 0 && trustStats && trustStats.total > 0 && (
+              <div className="mt-4 pt-4" style={{ borderTop: '1px solid var(--color-bg-subtle)' }}>
+                <button
+                  onClick={() => setDecisionsExpanded(v => !v)}
+                  className="flex items-center gap-1 text-[11px] mb-2 transition-colors hover:opacity-100"
+                  style={{ color: 'var(--color-text-muted)' }}
+                >
+                  {decisionsExpanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                  她按准则做过的决策（{decisions.length} 件）
+                </button>
+                {decisionsExpanded && (
+                  <>
+                    <div className="text-[10px] mb-2" style={{ color: 'var(--color-text-muted)' }}>
+                      悬停一行 → 告诉她做得对不对
+                    </div>
+                    <div className="space-y-1 max-h-[180px] overflow-y-auto">
+                      {decisions.slice(0, 12).map(d => (
+                        <div key={d.id} className="group flex items-center gap-2 py-1 text-[11px]">
+                          <span className="flex-1 truncate" style={{ color: 'var(--color-text-secondary)' }}>{d.question}</span>
+                          <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button onClick={() => handleFeedback(d.id, 'good')} className="p-0.5 rounded">
+                              <ThumbsUp size={11} style={{ color: d.user_feedback === 'good' ? 'var(--color-success)' : 'var(--color-text-muted)' }} />
+                            </button>
+                            <button onClick={() => handleFeedback(d.id, 'bad')} className="p-0.5 rounded">
+                              <ThumbsDown size={11} style={{ color: d.user_feedback === 'bad' ? 'var(--color-error)' : 'var(--color-text-muted)' }} />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </Card>
 
         </div>
       </div>
+
+      {/* ═══ Settings drawer ═══ */}
+      <BuddySettingsDrawer
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        accent={from}
+        meditationEnabled={meditationEnabled}
+        meditationStart={meditationStart}
+        onMeditationConfigChange={(enabled, startTime) => {
+          setMeditationEnabled(enabled)
+          setMeditationStart(startTime)
+          saveMedConfig(enabled, startTime)
+        }}
+      />
     </div>
   )
 }

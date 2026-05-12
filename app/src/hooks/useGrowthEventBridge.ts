@@ -1,48 +1,33 @@
 import { listen } from '@tauri-apps/api/event';
 import { useEffect } from 'react';
-import { useGrowthSuggestionsStore, type SuggestionType } from '../stores/growthSuggestionsStore';
-
-interface PersistSuggestionPayload {
-  type: SuggestionType;
-  name: string;
-  description: string;
-  reason?: string;
-  session_id?: string;
-  task_id?: string;
-}
+import { useInboxStore } from '../stores/inboxStore';
 
 /**
- * Bridge `growth://persist_suggestion` events from Rust into the growth
- * suggestions inbox (persisted store). UI is rendered by
- * `<GrowthSuggestionsBubble />` near the Buddy sprite.
+ * Bridges Rust → frontend inbox refresh: any backend insert/update emits
+ * `inbox://updated`; we refetch pending items so the Buddy badge and bubble
+ * stay in sync without polling.
  *
- * This intentionally does NOT toast — the event is a decision request,
- * not a notification. See stores/growthSuggestionsStore.ts for the
- * dedup + daily-cap rules that guard against notification fatigue.
+ * Replaces the older `growth://persist_suggestion` localStorage path. The
+ * single source of truth for growth proposals is now `inbox_items` (SQLite).
  */
 export function useGrowthEventBridge() {
   useEffect(() => {
     let cancelled = false;
-    const add = useGrowthSuggestionsStore.getState().add;
+    // One-time cleanup of the pre-B legacy localStorage key (replaced by
+    // inbox_items SQLite + useInboxStore). Stale entries had low quality and
+    // we agreed to drop them rather than migrate. Safe to leave indefinitely.
+    try { localStorage.removeItem('yiyi-growth-suggestions'); } catch { /* ignore */ }
+    const refresh = useInboxStore.getState().refresh;
+    refresh();
 
-    const unlisteners = [
-      listen<PersistSuggestionPayload>('growth://persist_suggestion', (event) => {
-        if (cancelled) return;
-        const p = event.payload;
-        if (!p?.name || !p?.type) return;
-        add({
-          type: p.type,
-          name: p.name,
-          description: p.description || '',
-          reason: p.reason,
-          sessionId: p.session_id,
-          taskId: p.task_id,
-        });
-      }),
-    ];
+    const unlistener = listen('inbox://updated', () => {
+      if (cancelled) return;
+      refresh();
+    });
+
     return () => {
       cancelled = true;
-      unlisteners.forEach((pr) => pr.then((fn) => fn()));
+      unlistener.then((fn) => fn());
     };
   }, []);
 }

@@ -33,6 +33,7 @@ pub mod scheduler;
 pub mod agents;
 pub mod plugins;
 pub mod skills_hub;
+pub mod skill_proposer;
 
 // ── Infrastructure: DB, LLM, MCP, Python, PTY, config ──
 pub mod db;
