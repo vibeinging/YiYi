@@ -511,7 +511,10 @@ impl CronScheduler {
         let working_dir = state.working_dir.clone();
         let db = state.db.clone();
 
-        let job = Job::new_async(cron_expr.as_str(), move |_uuid, _lock| {
+        // Interpret cron in the user's LOCAL timezone — not UTC. Without
+        // this, `0 0 10 * * 1` becomes 10:00 UTC (= 18:00 CST) instead of
+        // the 10:00 local-time the user obviously meant.
+        let job = Job::new_async_tz(cron_expr.as_str(), chrono::Local, move |_uuid, _lock| {
             let spec = spec_clone.clone();
             let llm_config = llm_config.clone();
             let working_dir = working_dir.clone();
@@ -705,7 +708,8 @@ impl CronScheduler {
         let wd = working_dir.clone();
         let db_clone = db.clone();
 
-        let job = Job::new_async(cron_expr.as_str(), move |_uuid, _lock| {
+        // Same local-timezone fix as the primary scheduler.add_job path.
+        let job = Job::new_async_tz(cron_expr.as_str(), chrono::Local, move |_uuid, _lock| {
             let spec = spec_clone.clone();
             let llm_config = llm_config.clone();
             let wd = wd.clone();
