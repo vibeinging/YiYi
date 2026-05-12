@@ -153,13 +153,13 @@ export function PermissionCard({ request }: { request: PermissionRequestState })
           <button
             onClick={() => handleResponse(true, true)}
             disabled={responding}
-            className="flex items-center justify-center gap-1.5 py-1 rounded-lg text-[11px] font-medium transition-colors disabled:opacity-50"
-            style={{ background: 'transparent', color: 'var(--color-text-muted)' }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; e.currentTarget.style.color = 'var(--color-text-secondary)'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--color-text-muted)'; }}
+            className="flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-50"
+            style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-secondary)' }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; e.currentTarget.style.color = 'var(--color-text)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--color-bg-subtle)'; e.currentTarget.style.color = 'var(--color-text-secondary)'; }}
             title="本次对话内所有后续权限请求都自动允许（重启后失效）"
           >
-            <ShieldEllipsis size={11} />
+            <ShieldEllipsis size={13} />
             本次对话全部允许
           </button>
         </div>

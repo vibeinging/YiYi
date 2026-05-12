@@ -101,8 +101,26 @@ function UsageFooter({ usage }: { usage: LastUsage }) {
   );
 }
 
+const THINKING_STICK_THRESHOLD_PX = 16;
+
 function ThinkingBlock({ content, streaming }: { content: string; streaming?: boolean }) {
   const [collapsed, setCollapsed] = useState(!streaming);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
+
+  useEffect(() => {
+    if (!streaming || collapsed) return;
+    const el = scrollRef.current;
+    if (el && stickToBottomRef.current) el.scrollTop = el.scrollHeight;
+  }, [content, streaming, collapsed]);
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickToBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < THINKING_STICK_THRESHOLD_PX;
+  };
+
   return (
     <div
       className="rounded-xl text-[13px] overflow-hidden"
@@ -119,6 +137,8 @@ function ThinkingBlock({ content, streaming }: { content: string; streaming?: bo
       </button>
       {!collapsed && (
         <div
+          ref={scrollRef}
+          onScroll={onScroll}
           className={`px-3 pb-2 whitespace-pre-wrap break-words leading-relaxed${streaming ? ' yiyi-stream-cursor' : ''}`}
           style={{ color: 'var(--color-text-muted)', maxHeight: '200px', overflowY: 'auto' }}
         >
@@ -183,7 +203,11 @@ export function processMessages(messages: ChatMessage[]): ProcessedMsg[] {
         if (TASK_CARD_TOOLS.includes(tool.name) && tool.resultPreview) {
           try {
             const parsed = JSON.parse(tool.resultPreview);
-            if (parsed.id || parsed.task_id) { taskIds.push(parsed.id || parsed.task_id); return false; }
+            const tid = parsed.id || parsed.task_id;
+            if (tid) {
+              if (!taskIds.includes(tid)) taskIds.push(tid);
+              return false;
+            }
           } catch { /* keep */ }
         }
         if (tool.name === 'pty_spawn_interactive' && tool.resultPreview) {
@@ -296,7 +320,25 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
   const processedMessages = useMemo(() => processMessages(messages), [messages]);
 
   // Custom markdown components: open links in external browser
-  const markdownComponents = useMemo(() => ({
+  const markdownComponents = useMemo(() => {
+    const nodeText = (nodes: React.ReactNode): string => {
+      if (nodes == null || typeof nodes === 'boolean') return '';
+      if (typeof nodes === 'string' || typeof nodes === 'number') return String(nodes);
+      if (Array.isArray(nodes)) return nodes.map(nodeText).join('');
+      if (React.isValidElement(nodes)) return nodeText((nodes.props as { children?: React.ReactNode }).children);
+      return '';
+    };
+    // Fast-path for the common non-empty-row case: bail on first non-whitespace
+    // char instead of walking and joining the whole subtree.
+    const hasNonBlankText = (nodes: React.ReactNode): boolean => {
+      if (nodes == null || typeof nodes === 'boolean') return false;
+      if (typeof nodes === 'string') return /\S/.test(nodes);
+      if (typeof nodes === 'number') return true;
+      if (Array.isArray(nodes)) return nodes.some(hasNonBlankText);
+      if (React.isValidElement(nodes)) return hasNonBlankText((nodes.props as { children?: React.ReactNode }).children);
+      return false;
+    };
+    return {
     a: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
       <a
         {...props}
@@ -310,18 +352,16 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
         {children}
       </a>
     ),
+    tr: (props: React.HTMLAttributes<HTMLTableRowElement>) => {
+      // Drop tr whose every cell is blank — models sometimes emit a trailing
+      // "|  |  |" row that GFM renders as a visible empty striped row.
+      return hasNonBlankText(props.children) ? <tr {...props} /> : null;
+    },
     pre: (props: React.HTMLAttributes<HTMLPreElement>) => {
       const child = React.Children.toArray(props.children)[0] as React.ReactElement<any> | undefined;
       const childClass = (child?.props?.className as string | undefined) ?? '';
       const lang = childClass.match(/language-(\w+)/)?.[1];
-      const collectText = (nodes: React.ReactNode): string => {
-        if (nodes == null || typeof nodes === 'boolean') return '';
-        if (typeof nodes === 'string' || typeof nodes === 'number') return String(nodes);
-        if (Array.isArray(nodes)) return nodes.map(collectText).join('');
-        if (React.isValidElement(nodes)) return collectText((nodes.props as { children?: React.ReactNode }).children);
-        return '';
-      };
-      const rawText = collectText(child?.props?.children);
+      const rawText = nodeText(child?.props?.children);
       return (
         <div className="code-block">
           <div className="code-block-bar">
@@ -341,7 +381,8 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
         </div>
       );
     },
-  }), []);
+    };
+  }, []);
 
   // Stream state from store
   const streamLoading = useChatStreamStore((s) => s.loading);
