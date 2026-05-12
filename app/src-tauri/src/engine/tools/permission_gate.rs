@@ -127,7 +127,7 @@ pub async fn request_permission(req: PermissionRequest) -> bool {
     // Check session memory — skip dialog if user already approved this
     let rememberable = matches!(
         req.permission_type.as_str(),
-        "shell_block" | "shell_warn" | "sensitive_path" | "computer_control"
+        "shell_block" | "shell_warn" | "sensitive_path"
     );
     if rememberable && is_session_approved(&req.permission_type, &req.path).await {
         log::info!(

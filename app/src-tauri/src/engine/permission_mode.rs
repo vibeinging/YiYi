@@ -91,7 +91,6 @@ pub fn tool_permission_requirements() -> Vec<ToolPermission> {
         tp("execute_shell", PermissionMode::Full),
         tp("run_python", PermissionMode::Full),
         tp("run_python_script", PermissionMode::Full),
-        tp("computer_control", PermissionMode::Full),
         tp("claude_code", PermissionMode::Full),
         tp("browser_use", PermissionMode::Full),
     ]

@@ -87,7 +87,6 @@ git2 = { version = "0.19", default-features = false, features = ["vendored-libgi
 cocoa = "0.26"
 window-vibrancy = "0.5"
 mac-notification-sys = "0.6"
-core-graphics = "0.24"
 
 [profile.release]
 strip = true

@@ -459,7 +459,7 @@ where
                 if let PermissionOutcome::NeedsConfirmation { reason } = &perm_outcome {
                     // Buddy hosted mode: auto-approve non-destructive tools
                     let high_risk = matches!(tool_name.as_str(),
-                        "execute_shell" | "delete_file" | "computer_control");
+                        "execute_shell" | "delete_file");
                     if crate::engine::buddy_delegate::is_hosted() && !high_risk {
                         let friendly = humanize_tool_action(tool_name, tool_input);
                         log::info!("Buddy auto-approved: {}", friendly);
@@ -860,10 +860,6 @@ fn humanize_tool_action(tool_name: &str, tool_input: &str) -> String {
         "delete_file" => {
             let path = args["path"].as_str().unwrap_or("文件");
             format!("删除文件: {}", truncate(path, 60))
-        }
-        "computer_control" => {
-            let action = args["action"].as_str().unwrap_or("操作");
-            format!("电脑控制: {}", action)
         }
         "spawn_agents" => "启动子智能体".into(),
         "manage_bot" => "管理 Bot 配置".into(),

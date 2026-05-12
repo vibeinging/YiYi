@@ -427,6 +427,62 @@ impl Config {
     ///     replacing the in-process `browser_use` / `browser_screenshot`
     ///     tools while DeepSeek V4 lacks vision.
     fn seed_default_mcp_servers(&mut self) {
+        // cua-driver (macOS-only): background computer-use via SkyLight pid-scoped
+        // event posting — doesn't steal cursor, focus, or Space from the user.
+        // Replaces the prior in-process `computer_control` tool (CGEvent-based)
+        // which had to be disabled because (a) DeepSeek V4 lacks vision and
+        // (b) HID injection conflicts with the user actively using the Mac.
+        //
+        // Seeded disabled by default — the user must install `cua-driver` and
+        // grant Accessibility + Screen Recording perms before flipping it on.
+        if !self.mcp.contains_key("cua-driver") {
+            self.mcp.insert(
+                "cua-driver".to_string(),
+                MCPClientConfig {
+                    name: "Computer Use (macOS)".to_string(),
+                    description:
+                        "Background macOS desktop control: screenshot, click, type, \
+                         window/app control. Does NOT steal cursor/focus/Space from \
+                         the user. macOS only — requires `cua-driver` binary + \
+                         Accessibility & Screen Recording permissions."
+                            .to_string(),
+                    enabled: false,
+                    transport: "stdio".to_string(),
+                    command: Some("cua-driver".to_string()),
+                    args: vec!["mcp".to_string()],
+                    requires: vec![DepSpec {
+                        bin: "cua-driver".to_string(),
+                        display_name: "cua-driver".to_string(),
+                        why: "macOS background computer-use driver from trycua/cua. \
+                              Uses SkyLight private SPIs to dispatch events to a target \
+                              pid without moving the cursor or switching Space."
+                            .to_string(),
+                        install: vec![
+                            InstallStep {
+                                kind: "shell".to_string(),
+                                label: "通过官方脚本安装（macOS）".to_string(),
+                                command: Some(
+                                    "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.sh)\""
+                                        .to_string(),
+                                ),
+                                ..Default::default()
+                            },
+                            InstallStep {
+                                kind: "url".to_string(),
+                                label: "查看 trycua/cua 仓库".to_string(),
+                                url: Some(
+                                    "https://github.com/trycua/cua/tree/main/libs/cua-driver"
+                                        .to_string(),
+                                ),
+                                ..Default::default()
+                            },
+                        ],
+                    }],
+                    ..Default::default()
+                },
+            );
+        }
+
         if !self.mcp.contains_key("playwright") {
             self.mcp.insert(
                 "playwright".to_string(),
