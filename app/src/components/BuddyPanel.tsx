@@ -415,7 +415,7 @@ export function BuddyPanel() {
         )}
       </Card>
 
-      {/* ═══ Inbox — 她想跟你商量的事（仅在有候选时显示） ═══ */}
+      {/* ═══ 成长建议 — 她想跟你商量的事（仅在有候选时显示） ═══ */}
       <InboxPanel accent={from} buddyName={companion.name} />
 
       {/* ═══ 两栏：她记得 / 行为准则 ═══ */}

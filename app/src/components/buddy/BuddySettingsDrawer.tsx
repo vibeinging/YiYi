@@ -139,7 +139,7 @@ export function BuddySettingsDrawer({
             </div>
             <div className="text-[11px] leading-relaxed" style={{ color: 'var(--color-text-muted)' }}>
               看看有没有可以固化为技能的工作流程。
-              她想到的会进 Inbox 等你审。
+              她想到的会作为成长建议等你审。
             </div>
           </button>
 
