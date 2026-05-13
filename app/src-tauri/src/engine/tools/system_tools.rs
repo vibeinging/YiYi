@@ -499,12 +499,9 @@ pub(super) async fn desktop_screenshot_tool() -> (String, Vec<String>) {
     match tokio::fs::read(&tmp).await {
         Ok(data) if !data.is_empty() => {
             tokio::fs::remove_file(&tmp).await.ok();
-            use base64::Engine;
-            let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
-            let data_uri = format!("data:image/png;base64,{}", b64);
-            // The image flows to the user via the artifact pipeline (core.rs).
-            // For text-only models the engine strips it before reaching the
-            // model context — we don't need to instruct the model here.
+            // Re-encode PNG → JPEG q85 to save ~60% bytes (= LLM tokens) per
+            // screenshot. Falls back to PNG on decode failure.
+            let data_uri = super::screenshot_codec::png_bytes_to_jpeg_data_uri(&data);
             (
                 format!("[desktop_screenshot ok, {} bytes]", data.len()),
                 vec![data_uri],

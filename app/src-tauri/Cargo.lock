@@ -9124,6 +9124,7 @@ dependencies = [
  "futures-util",
  "git2",
  "glob",
+ "image",
  "include_dir",
  "lazy_static",
  "libc",

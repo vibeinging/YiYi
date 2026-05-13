@@ -51,6 +51,10 @@ tokio-cron-scheduler = "0.13"
 cron = "0.15"
 futures = "0.3"
 base64 = "0.22"
+# Minimal image codec — PNG decode + JPEG encode for screenshot re-encoding.
+# Each screenshot data-URI passed to LLMs counts ~1500 tokens; JPEG q85 cuts
+# bytes by ~60% vs the raw PNG screencapture/Chrome emits.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 axum = "0.8"
 tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
 async-trait = "0.1"

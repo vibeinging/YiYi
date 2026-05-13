@@ -18,6 +18,7 @@ mod snapshot_tools;
 pub(crate) mod shell_security;
 pub(crate) mod permission_gate;
 pub(crate) mod output_envelope;
+pub(crate) mod screenshot_codec;
 pub(crate) mod url_guard;
 
 // Imports used by this module and sub-modules via `super::`

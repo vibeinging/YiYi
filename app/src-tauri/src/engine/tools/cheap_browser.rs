@@ -264,8 +264,8 @@ pub(super) async fn browser_screenshot_tool(args: &serde_json::Value) -> (String
             };
             let _ = tokio::fs::remove_file(&tmp).await;
 
-            let b64 = base64_encode_png(&bytes);
-            let data_uri = format!("data:image/png;base64,{}", b64);
+            // Re-encode PNG → JPEG q85 (single source of truth in screenshot_codec).
+            let data_uri = super::screenshot_codec::png_bytes_to_jpeg_data_uri(&bytes);
             let summary = format!(
                 "Screenshot captured: {} bytes, {}x{} from {}. (Image attached; analyze visually.)",
                 bytes.len(),
