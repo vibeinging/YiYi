@@ -3,7 +3,12 @@ use super::{AgentStreamEvent, PersistToolFn, ToolPersistEvent, DEFAULT_MAX_ITERA
 use crate::engine::hooks::{HookRunner, HookConfig, merge_hook_feedback};
 use crate::engine::permission_mode::{PermissionMode, PermissionPolicy, PermissionOutcome};
 
-use crate::engine::llm_client::{chat_completion_stream, LLMConfig, LLMMessage, MessageContent, StreamEvent};
+use crate::engine::llm_client::{chat_completion_stream, evict_old_screenshots, LLMConfig, LLMMessage, MessageContent, StreamEvent};
+
+/// Max screenshots to keep in conversation history. Older ones become text
+/// placeholders. Each PNG ≈ 1500 tokens → a 20-step computer-use task
+/// without this would push 600k tokens of stale visual context.
+const MAX_KEEP_SCREENSHOTS: usize = 3;
 use crate::engine::llm_client::retry::parse_context_overflow;
 use crate::engine::tools::{builtin_tools, execute_tool, get_current_session_id, resolve_deferred_tools, ToolDefinition};
 
@@ -325,6 +330,10 @@ where
         if cancelled.map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
             return Err("cancelled".to_string());
         }
+
+        // Evict old screenshots before each LLM call — the agent has already
+        // reasoned about them, dragging the raw PNG along is dead weight.
+        evict_old_screenshots(&mut messages, MAX_KEEP_SCREENSHOTS);
 
         let response = match chat_completion_stream(config, &messages, &tools, {
             let cb = on_event.clone();
