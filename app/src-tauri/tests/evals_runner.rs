@@ -17,6 +17,23 @@
 //! harness would layer on TempDb + MockEmitter; not implemented yet.
 //!
 //! See `../../evals/README.md` for the two-mode design.
+//!
+//! ## Test tier
+//!
+//! Schema-lint + fixture-mode tests are hermetic (use `wiremock`) and run
+//! under the default `cargo test --features test-support`. The `live_cases`
+//! harness, however, calls a real LLM API and is **gated by the
+//! `test-integration` cargo feature** — without it, that function is not
+//! compiled in. Run via:
+//!
+//! ```bash
+//! YIYI_EVAL_LIVE=1 DASHSCOPE_API_KEY=sk-... \
+//!     cargo test --features test-support,test-integration \
+//!     --test evals_runner live_cases -- --nocapture
+//! ```
+//!
+//! Even with the feature on, missing env vars short-circuit the body so
+//! CI / dev machines without credentials still skip cleanly.
 
 use std::collections::HashSet;
 use std::fs;
@@ -890,6 +907,7 @@ async fn fixture_cases_all_pass() {
 // fix behavior bugs. Dummy tool definitions stub dispatch — we only care
 // whether the LLM *chooses* the right tool, not what happens after.
 
+#[cfg(feature = "test-integration")]
 fn live_env() -> Option<(String, String, String, String)> {
     if std::env::var("YIYI_EVAL_LIVE").ok().as_deref() != Some("1") {
         return None;
@@ -904,6 +922,10 @@ fn live_env() -> Option<(String, String, String, String)> {
     Some((api_key, base_url, model, provider_id))
 }
 
+// Helpers below are consumed only by the `live_cases` harness — gate
+// them on the same feature so the default `cargo test` build doesn't
+// flag them as dead code.
+#[cfg(feature = "test-integration")]
 async fn build_real_system_prompt() -> String {
     let home = std::env::var("HOME").unwrap_or_default();
     let working_dir = PathBuf::from(&home).join(".yiyi");
@@ -925,6 +947,7 @@ async fn build_real_system_prompt() -> String {
 /// Mirrors `commands::agent::helpers::load_skill_index` but doesn't need
 /// AppState — eval harness has no app context. Reads SKILL.md files from
 /// `~/.yiyi/active_skills/` and pulls the `description` frontmatter.
+#[cfg(feature = "test-integration")]
 async fn load_skill_index_from_disk(
     working_dir: &Path,
 ) -> Vec<app_lib::commands::agent::SkillIndexEntry> {
@@ -970,11 +993,19 @@ async fn load_skill_index_from_disk(
     index
 }
 
+/// Live-LLM eval harness — gated by the `test-integration` feature so the
+/// default `cargo test --features test-support` run stays hermetic. Even
+/// with the feature enabled, the body still skips when `YIYI_EVAL_LIVE=1`
+/// + an API key aren't both set — that way CI can keep the feature on
+/// without forcing every developer to provision credentials.
+#[cfg(feature = "test-integration")]
 #[tokio::test(flavor = "multi_thread")]
 async fn live_cases() {
     let Some((api_key, base_url, model, provider_id)) = live_env() else {
         eprintln!("YIYI_EVAL_LIVE not set — skipping live harness.");
-        eprintln!("To run: YIYI_EVAL_LIVE=1 DASHSCOPE_API_KEY=sk-xxx cargo test --features test-support --test evals_runner live_cases -- --nocapture");
+        eprintln!("To run: YIYI_EVAL_LIVE=1 DASHSCOPE_API_KEY=sk-xxx \
+            cargo test --features test-support,test-integration \
+            --test evals_runner live_cases -- --nocapture");
         return;
     };
 

@@ -19,6 +19,15 @@ test-support = [
     "tokio/test-util",
     "tauri/test",
 ]
+# Opt-in marker for tests that hit real external dependencies (a live
+# LLM API, future cua-driver, real Chrome, etc.). Default `cargo test`
+# stays fast and self-contained; CI runs the heavier set in a separate
+# job that sets this feature.
+#
+# Example:
+#   cargo test --features test-support                  # fast / hermetic
+#   cargo test --features test-support,test-integration # also runs live cases
+test-integration = []
 
 [lib]
 name = "app_lib"
