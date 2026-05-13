@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod doctor;
 pub mod engine;
 pub mod state;
 mod tray;
