@@ -72,7 +72,13 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
         ),
         super::tool_def(
             "undo_edit",
-            "Undo the last edit to a file by restoring from backup. Use when an edit introduced errors.",
+            "Restore a single file from its most recent automatic backup. \
+             Backups are written before every write_file / edit_file / \
+             append_file / delete_file call (one revision per path). \
+             For delete_file, this re-materialises the file. Use this \
+             when a single tool call introduced an error you want to \
+             reverse — for multi-file or whole-turn rollback, restore \
+             from the turn-level checkpoint instead.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -134,6 +140,55 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
             }),
         ),
     ]
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Central single-file backup (P2.1)
+//
+// Every file-mutating tool (write_file / edit_file / append_file /
+// delete_file) snapshots the current contents into one shared backup
+// store before touching the file. `undo_edit` then has a uniform
+// recovery surface: regardless of which tool clobbered a file, one
+// rollback path covers it.
+//
+// Backup layout: `~/.yiyi/backups/<path_with_/_encoded_as___>.backup`.
+// Single revision per path — a second mutation overwrites the prior
+// backup. The shadow-git checkpoint module (engine::checkpoint) still
+// owns turn-level multi-file rollback; this exists for the in-turn,
+// "oops, undo that one tool call" surface.
+// ────────────────────────────────────────────────────────────────────
+
+/// Stable on-disk slot for a path's backup. Public so undo_edit and
+/// tests can locate the same file the writers used.
+pub(super) fn backup_slot_for(path: &str) -> Option<std::path::PathBuf> {
+    let home = dirs::home_dir()?;
+    let safe_name = path.replace(['/', '\\'], "__");
+    Some(home.join(".yiyi").join("backups").join(format!("{}.backup", safe_name)))
+}
+
+/// Take a single-revision snapshot of `path` so undo_edit can roll
+/// back the next mutation. Best-effort: returns `Some(backup_path)`
+/// on success, `None` when the source doesn't exist or the backup
+/// directory can't be created — neither case should block the caller.
+pub(super) async fn backup_to_central(path: &str) -> Option<std::path::PathBuf> {
+    // Source must exist to be worth backing up — delete/edit/write on
+    // a missing path means "create from scratch", no prior bytes to
+    // preserve.
+    let content = tokio::fs::read(path).await.ok()?;
+    let slot = backup_slot_for(path)?;
+    if let Some(parent) = slot.parent() {
+        if let Err(e) = tokio::fs::create_dir_all(parent).await {
+            log::warn!("backup_to_central: create_dir_all({}) failed: {}", parent.display(), e);
+            return None;
+        }
+    }
+    match tokio::fs::write(&slot, &content).await {
+        Ok(_) => Some(slot),
+        Err(e) => {
+            log::warn!("backup_to_central: write({}) failed: {}", slot.display(), e);
+            None
+        }
+    }
 }
 
 pub(super) async fn read_file_tool(args: &serde_json::Value) -> String {
@@ -269,10 +324,11 @@ pub(super) async fn write_file_tool(args: &serde_json::Value) -> String {
         }
     }
 
-    // Auto-backup before overwriting existing files (use already-loaded content, no second disk read)
-    if let Some(ref orig) = original {
-        let bak = format!("{}.bak", path);
-        tokio::fs::write(&bak, orig).await.ok();
+    // P2.1: route every pre-write snapshot through the central store so
+    // `undo_edit` can roll write_file changes back the same way it rolls
+    // edit_file changes back.
+    if original.is_some() {
+        let _ = backup_to_central(path).await;
     }
 
     match tokio::fs::write(path, content).await {
@@ -348,17 +404,9 @@ pub(super) async fn edit_file_tool(args: &serde_json::Value) -> String {
                     match_count, path
                 );
             }
-            // Create backup in ~/.yiyi/backups/ (not next to source file)
-            if let Some(home) = dirs::home_dir() {
-                let backup_dir = home.join(".yiyi").join("backups");
-                tokio::fs::create_dir_all(&backup_dir).await.ok();
-                // Encode path as filename: replace / with __
-                let safe_name = path.replace(['/', '\\'], "__");
-                let backup_path = backup_dir.join(format!("{}.backup", safe_name));
-                if let Err(e) = tokio::fs::write(&backup_path, &content).await {
-                    log::warn!("Failed to create backup for {}: {}", path, e);
-                }
-            }
+            // P2.1: same central backup slot as write_file / append_file /
+            // delete_file — undo_edit reads from this single location.
+            let _ = backup_to_central(path).await;
             let new_content = if replace_all {
                 content.replace(old_text, new_text)
             } else {
@@ -400,6 +448,10 @@ pub(super) async fn append_file_tool(args: &serde_json::Value) -> String {
     if let Err(e) = super::access_check(path, true).await {
         return format!("Error: {}", e);
     }
+
+    // P2.1: snapshot pre-append contents so undo_edit can restore the file
+    // to its state-before-this-append. No-op when path doesn't exist yet.
+    let _ = backup_to_central(path).await;
 
     use tokio::io::AsyncWriteExt;
     match tokio::fs::OpenOptions::new()
@@ -453,11 +505,17 @@ pub(super) async fn delete_file_tool(args: &serde_json::Value) -> String {
                 path
             );
         }
+        // Directory deletion has no single-file backup analogue — the
+        // turn-level checkpoint (engine::checkpoint) covers this case
+        // via `restore` if the user reverts the whole turn.
         match tokio::fs::remove_dir_all(&resolved).await {
             Ok(_) => format!("Deleted directory '{}'", path),
             Err(e) => format!("Error deleting directory: {}", e),
         }
     } else {
+        // P2.1: capture contents before deletion so undo_edit can
+        // resurrect the file by writing the backup blob back.
+        let _ = backup_to_central(path).await;
         match tokio::fs::remove_file(&resolved).await {
             Ok(_) => format!("Deleted file '{}'", path),
             Err(e) => format!("Error deleting file: {}", e),
@@ -490,31 +548,62 @@ pub(super) async fn undo_edit_tool(args: &serde_json::Value) -> String {
         return "Error: path is required".into();
     }
 
-    let safe_name = path.replace(['/', '\\'], "__");
-    let backup_path = dirs::home_dir()
-        .unwrap_or_default()
-        .join(".yiyi")
-        .join("backups")
-        .join(format!("{}.backup", safe_name));
+    let Some(backup_path) = backup_slot_for(path) else {
+        return "Error: could not determine home directory for backup lookup".into();
+    };
 
     if !backup_path.exists() {
-        return format!("Error: no backup found for {}. Backups are created automatically when edit_file is used.", path);
+        return format!(
+            "Error: no backup found for {}. Backups are written automatically by \
+             write_file / edit_file / append_file / delete_file — one per path, \
+             single revision. Nothing to roll back here.",
+            path
+        );
     }
 
-    match tokio::fs::read_to_string(&backup_path).await {
-        Ok(backup_content) => {
-            // Read current content for diff
-            let current = tokio::fs::read_to_string(path).await.unwrap_or_default();
+    let backup_content = match tokio::fs::read(&backup_path).await {
+        Ok(b) => b,
+        Err(e) => return format!("Error reading backup: {}", e),
+    };
 
-            match tokio::fs::write(path, &backup_content).await {
-                Ok(_) => {
-                    let diff = generate_diff(&current, &backup_content, path);
+    // The path may not exist anymore (delete_file was the last tool to touch
+    // it). Create parent dirs so the restore re-materialises the file.
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        if let Err(e) = tokio::fs::create_dir_all(parent).await {
+            return format!("Error preparing parent dir for restore: {}", e);
+        }
+    }
+
+    let current_existed = tokio::fs::metadata(path).await.is_ok();
+    let current_text = if current_existed {
+        tokio::fs::read_to_string(path).await.unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    match tokio::fs::write(path, &backup_content).await {
+        Ok(_) => {
+            // Only emit a unified-style diff when both sides are UTF-8 text
+            // (backups of binary files restore correctly but can't be
+            // diff-printed).
+            let backup_text = std::str::from_utf8(&backup_content).ok();
+            match backup_text {
+                Some(new_text) if current_existed => {
+                    let diff = generate_diff(&current_text, new_text, path);
                     format!("Restored {} from backup.\n\n{}", path, diff)
                 }
-                Err(e) => format!("Error restoring: {}", e),
+                Some(_) => format!(
+                    "Restored {} from backup (file had been deleted; recreated with prior contents).",
+                    path
+                ),
+                None => format!(
+                    "Restored {} from backup ({} bytes of binary content).",
+                    path,
+                    backup_content.len()
+                ),
             }
         }
-        Err(e) => format!("Error reading backup: {}", e),
+        Err(e) => format!("Error restoring: {}", e),
     }
 }
 
@@ -1309,6 +1398,96 @@ mod tests {
             .join(".yiyi").join("backups")
             .join(format!("{}.backup", safe_name));
         let _ = std::fs::remove_file(backup);
+    }
+
+    // ── P2.1: every file-mutating tool routes its pre-change snapshot
+    //    through `backup_to_central`, so `undo_edit` should be able to
+    //    roll back ANY of them — not just edit_file (the only one
+    //    covered before P2.1).
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn undo_edit_rolls_back_write_file_overwrite() {
+        if dirs::home_dir().is_none() { return; }
+        let dir = tmpdir();
+        authorize(dir.path()).await;
+        let file = dir.path().join(format!("write_{}.txt", uuid::Uuid::new_v4()));
+        let pre = "VERSION_ONE — the value before write_file overwrites it. Has to be over 500 chars so the shrink-guard doesn't fire when we replace it with a similarly-sized payload. Padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding";
+        std::fs::write(&file, pre).unwrap();
+        // Read-before-write contract.
+        let _ = read_file_tool(&json!({ "path": file.to_string_lossy() })).await;
+        let post: String = pre.replace("VERSION_ONE", "VERSION_TWO");
+        let out = write_file_tool(&json!({
+            "path": file.to_string_lossy(),
+            "content": post,
+        })).await;
+        assert!(out.starts_with("File "), "write_file failed: {out}");
+        assert!(std::fs::read_to_string(&file).unwrap().contains("VERSION_TWO"));
+
+        let undo = undo_edit_tool(&json!({ "path": file.to_string_lossy() })).await;
+        assert!(undo.starts_with("Restored"), "undo_edit failed: {undo}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), pre);
+
+        let _ = std::fs::remove_file(backup_slot_for(&file.to_string_lossy()).unwrap());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn undo_edit_rolls_back_append_file_changes() {
+        if dirs::home_dir().is_none() { return; }
+        let dir = tmpdir();
+        authorize(dir.path()).await;
+        let file = dir.path().join(format!("append_{}.log", uuid::Uuid::new_v4()));
+        std::fs::write(&file, "line1\n").unwrap();
+
+        let out = append_file_tool(&json!({
+            "path": file.to_string_lossy(),
+            "content": "line2\n"
+        })).await;
+        assert!(out.starts_with("Appended"), "append_file failed: {out}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "line1\nline2\n");
+
+        let undo = undo_edit_tool(&json!({ "path": file.to_string_lossy() })).await;
+        assert!(undo.starts_with("Restored"), "undo_edit failed: {undo}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "line1\n");
+
+        let _ = std::fs::remove_file(backup_slot_for(&file.to_string_lossy()).unwrap());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn undo_edit_resurrects_deleted_file() {
+        if dirs::home_dir().is_none() { return; }
+        let dir = tmpdir();
+        authorize(dir.path()).await;
+        let file = dir.path().join(format!("doomed_{}.txt", uuid::Uuid::new_v4()));
+        std::fs::write(&file, "contents worth preserving").unwrap();
+
+        let out = delete_file_tool(&json!({ "path": file.to_string_lossy() })).await;
+        assert!(out.starts_with("Deleted"), "delete_file failed: {out}");
+        assert!(!file.exists());
+
+        let undo = undo_edit_tool(&json!({ "path": file.to_string_lossy() })).await;
+        assert!(undo.contains("Restored"), "undo_edit failed: {undo}");
+        assert!(file.exists(), "undo_edit must recreate the deleted file");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "contents worth preserving");
+
+        let _ = std::fs::remove_file(backup_slot_for(&file.to_string_lossy()).unwrap());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn backup_to_central_skips_when_source_missing() {
+        // No file exists at this path — `backup_to_central` must NOT write
+        // an empty `.backup` for it, since that would let a later
+        // `undo_edit` mistakenly "restore" garbage.
+        let unique = format!(
+            "/tmp/yiyi_backup_source_missing_{}.txt",
+            uuid::Uuid::new_v4()
+        );
+        let result = backup_to_central(&unique).await;
+        assert!(result.is_none(), "expected None for missing source, got {:?}", result);
+        let slot = backup_slot_for(&unique).unwrap();
+        assert!(!slot.exists(), "no backup file should have been created");
     }
 
     // ── grep_search_tool ──────────────────────────────────────────────
