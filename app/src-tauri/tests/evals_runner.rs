@@ -917,6 +917,7 @@ async fn build_real_system_prompt() -> String {
         Some("zh-CN"),
         None,
         None,
+        None,
     )
     .await
 }
