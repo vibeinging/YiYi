@@ -11,7 +11,6 @@ pub(crate) mod skill_tools;
 mod task_tools;
 mod canvas_tools;
 mod spawn_tools;
-mod computer_tools;
 mod lsp_tools;
 mod git_tools;
 mod flash_tools;
@@ -919,7 +918,6 @@ pub fn spawn_task_execution(
 const VISION_DISABLED_TOOLS: &[&str] = &[
     "browser_screenshot",
     "browser_use",
-    "computer_control",
 ];
 
 pub fn core_tools() -> Vec<ToolDefinition> {
@@ -980,9 +978,8 @@ fn deferred_tools_static() -> &'static Vec<ToolDefinition> {
         tools.extend(system_tools::definitions());
         tools.extend(file_tools::definitions());
         tools.extend(web_tools::definitions());
-        // browser_tools (browser_use) and computer_tools (computer_control)
-        // are vision-dependent. Suppressed via VISION_DISABLED_TOOLS until
-        // V4 has multimodal — agents drive the browser through the
+        // browser_tools is vision-dependent — suppressed via VISION_DISABLED_TOOLS
+        // until DeepSeek V4 has multimodal. Browser automation goes through the
         // Playwright MCP server (ARIA snapshots) in the meantime.
         // tools.extend(browser_tools::definitions());
         tools.extend(memory_tools::definitions());
@@ -992,7 +989,11 @@ fn deferred_tools_static() -> &'static Vec<ToolDefinition> {
         tools.extend(task_tools::definitions());
         tools.extend(canvas_tools::definitions());
         tools.extend(spawn_tools::definitions());
-        // tools.extend(computer_tools::definitions());
+        // Desktop control: the prior in-process `computer_control` (CGEvent-based)
+        // was removed because it stole the user's cursor/focus and was unusable
+        // without a vision model. The replacement is the `cua-driver` MCP server
+        // (background SkyLight-based, macOS only) — seeded in
+        // `seed_default_mcp_servers` and enabled by the user from Settings → MCP.
         tools.extend(lsp_tools::definitions());
         tools.extend(git_tools::definitions());
         tools.extend(flash_tools::definitions());
@@ -1484,14 +1485,6 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         }
         "tool_search" => execute_tool_search(&args),
         "revert_turn" => snapshot_tools::revert_turn_tool(&args).await,
-        "computer_control" => {
-            let (content, images) = computer_tools::computer_control_tool(&args).await;
-            return ToolResult {
-                tool_call_id: call.id.clone(),
-                content,
-                images,
-            };
-        }
         _ => {
             // Deferred-MCP stub interception: if the tool name belongs to
             // an MCP server that's waiting on a missing prerequisite, ask

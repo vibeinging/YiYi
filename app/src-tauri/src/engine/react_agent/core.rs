@@ -3,7 +3,12 @@ use super::{AgentStreamEvent, PersistToolFn, ToolPersistEvent, DEFAULT_MAX_ITERA
 use crate::engine::hooks::{HookRunner, HookConfig, merge_hook_feedback};
 use crate::engine::permission_mode::{PermissionMode, PermissionPolicy, PermissionOutcome};
 
-use crate::engine::llm_client::{chat_completion_stream, LLMConfig, LLMMessage, MessageContent, StreamEvent};
+use crate::engine::llm_client::{chat_completion_stream, evict_old_screenshots, LLMConfig, LLMMessage, MessageContent, StreamEvent};
+
+/// Max screenshots to keep in conversation history. Older ones become text
+/// placeholders. Each PNG ≈ 1500 tokens → a 20-step computer-use task
+/// without this would push 600k tokens of stale visual context.
+const MAX_KEEP_SCREENSHOTS: usize = 3;
 use crate::engine::llm_client::retry::parse_context_overflow;
 use crate::engine::tools::{builtin_tools, execute_tool, get_current_session_id, resolve_deferred_tools, ToolDefinition};
 
@@ -326,6 +331,10 @@ where
             return Err("cancelled".to_string());
         }
 
+        // Evict old screenshots before each LLM call — the agent has already
+        // reasoned about them, dragging the raw PNG along is dead weight.
+        evict_old_screenshots(&mut messages, MAX_KEEP_SCREENSHOTS);
+
         let response = match chat_completion_stream(config, &messages, &tools, {
             let cb = on_event.clone();
             move |evt| {
@@ -459,7 +468,7 @@ where
                 if let PermissionOutcome::NeedsConfirmation { reason } = &perm_outcome {
                     // Buddy hosted mode: auto-approve non-destructive tools
                     let high_risk = matches!(tool_name.as_str(),
-                        "execute_shell" | "delete_file" | "computer_control");
+                        "execute_shell" | "delete_file");
                     if crate::engine::buddy_delegate::is_hosted() && !high_risk {
                         let friendly = humanize_tool_action(tool_name, tool_input);
                         log::info!("Buddy auto-approved: {}", friendly);
@@ -860,10 +869,6 @@ fn humanize_tool_action(tool_name: &str, tool_input: &str) -> String {
         "delete_file" => {
             let path = args["path"].as_str().unwrap_or("文件");
             format!("删除文件: {}", truncate(path, 60))
-        }
-        "computer_control" => {
-            let action = args["action"].as_str().unwrap_or("操作");
-            format!("电脑控制: {}", action)
         }
         "spawn_agents" => "启动子智能体".into(),
         "manage_bot" => "管理 Bot 配置".into(),

@@ -15,7 +15,7 @@ import { BuddyStatsCard } from './BuddyStatsCard'
 import { BuddyHatchAnimation } from './BuddyHatchAnimation'
 import { PersonalityOrb } from './PersonalityOrb'
 import { GrowthSuggestionsBubble } from './GrowthSuggestionsBubble'
-import { useGrowthSuggestionsStore } from '../../stores/growthSuggestionsStore'
+import { useInboxStore } from '../../stores/inboxStore'
 
 const IDLE_ANIMATIONS: Record<string, string> = {
   breathe: 'buddy-breathe 3s ease-in-out infinite',
@@ -70,16 +70,17 @@ export const BuddySprite: React.FC = () => {
   const hasError = useChatStreamStore(s => !!s.errorMessage)
   const isMeditating = useMeditationStore(s => s.isRunning)
 
-  // Growth suggestions inbox badge — use stable selectors (see growthSuggestionsStore.ts)
-  const pendingSuggestions = useGrowthSuggestionsStore((s) => s.pending)
-  const snoozedUntil = useGrowthSuggestionsStore((s) => s.snoozedUntil)
+  // Growth suggestions inbox badge — fed by `inbox_items` (SQLite) via
+  // `useGrowthEventBridge`, with client-side snooze still in localStorage.
+  const pendingInbox = useInboxStore((s) => s.pending)
+  const inboxSnoozed = useInboxStore((s) => s.snoozedUntil)
   const growthCount = useMemo(() => {
     const now = Date.now()
-    return pendingSuggestions.filter((s) => {
-      const until = snoozedUntil[s.id]
+    return pendingInbox.filter((i) => {
+      const until = inboxSnoozed[i.id]
       return !until || until <= now
     }).length
-  }, [pendingSuggestions, snoozedUntil])
+  }, [pendingInbox, inboxSnoozed])
   const [showGrowth, setShowGrowth] = useState(false)
 
   const [fidget, setFidget] = useState(false)
@@ -206,8 +207,10 @@ export const BuddySprite: React.FC = () => {
       listen<{ name?: string }>('cronjob://result', (e) => {
         bubble(`${e.payload?.name || '定时任务'} 执行完成！`)
       }),
-      listen('growth://persist_suggestion', () => {
-        bubble('发现了可以改进的技能！')
+      listen<{ kind?: string }>('inbox://updated', (e) => {
+        // Only chirp on new skill_create inserts — withdraw/approve emit the
+        // same event but don't deserve a bubble.
+        if (e.payload?.kind === 'skill_create') bubble('发现了可以改进的技能！')
       }),
       // Buddy monitors scheduled task pre-checks
       listen<{ job_name?: string }>('buddy://cron_precheck', (e) => {

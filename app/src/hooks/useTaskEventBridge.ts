@@ -26,6 +26,7 @@ export function useTaskEventBridge() {
     const unlisteners: Promise<() => void>[] = [];
 
     const getTaskId = (p: any): string => p.task_id || p.taskId || '';
+    const refresh = (taskId: string) => { if (taskId) store().addOrRefreshTask(taskId); };
 
     unlisteners.push(
       listen('task://created', (event) => {
@@ -86,6 +87,8 @@ export function useTaskEventBridge() {
         const totalStages = p.totalStages ?? p.total_stages ?? 0;
         const progress = p.progress ?? 0;
         store().updateTaskProgress(taskId, currentStage, totalStages, progress);
+        // Refetch to pick up plan-stage flips (DB only — not in event payload).
+        refresh(taskId);
       }),
 
       listen('task://completed', (event) => {
@@ -94,6 +97,7 @@ export function useTaskEventBridge() {
         const taskId = getTaskId(p);
         const title = p.title || p.task_title || '';
         store().updateTaskStatus(taskId, 'completed');
+        refresh(taskId);
         streamStore().taskStreamEnd(taskId);
         setTimeout(() => streamStore().taskStreamRemove(taskId), 5000);
         toast.success(title ? `任务完成：${title}` : '任务已完成');
@@ -109,6 +113,7 @@ export function useTaskEventBridge() {
         const title = p.title || p.task_title || '';
         const errorMsg = p.error_message || p.errorMessage || p.error || undefined;
         store().updateTaskStatus(taskId, 'failed', errorMsg);
+        refresh(taskId);
         streamStore().taskStreamEnd(taskId);
         setTimeout(() => streamStore().taskStreamRemove(taskId), 5000);
         toast.error(title ? `任务失败：${title}` : '任务执行失败');
@@ -121,6 +126,7 @@ export function useTaskEventBridge() {
         const p = event.payload as any;
         const taskId = getTaskId(p);
         store().updateTaskStatus(taskId, 'cancelled');
+        refresh(taskId);
         streamStore().taskStreamEnd(taskId);
         setTimeout(() => streamStore().taskStreamRemove(taskId), 5000);
       }),

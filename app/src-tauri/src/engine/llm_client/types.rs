@@ -89,6 +89,102 @@ impl MessageContent {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Screenshot eviction — keep only the N most recent images in history.
+// Each PNG ≈ 1500 tokens; a 20-step computer-use task otherwise pushes
+// 30k → 600k tokens of context just from old screenshots. The agent has
+// already reasoned about prior screenshots so the data is dead weight.
+// ─────────────────────────────────────────────────────────────────────
+
+/// Drop every `ContentPart::ImageUrl` beyond the most recent `keep_recent`
+/// across the message list. Old images become `[screenshot evicted]` text
+/// placeholders so the LLM still sees the tool-call had visual output.
+pub fn evict_old_screenshots(messages: &mut [LLMMessage], keep_recent: usize) {
+    let mut budget = keep_recent;
+    for msg in messages.iter_mut().rev() {
+        let Some(MessageContent::Parts(parts)) = msg.content.as_mut() else { continue };
+        for part in parts.iter_mut().rev() {
+            if matches!(part, ContentPart::ImageUrl { .. }) {
+                if budget > 0 {
+                    budget -= 1;
+                } else {
+                    *part = ContentPart::Text {
+                        text: "[screenshot evicted]".to_string(),
+                    };
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod eviction_tests {
+    use super::*;
+
+    fn img(uri: &str) -> ContentPart {
+        ContentPart::ImageUrl { image_url: ImageUrl { url: uri.into(), detail: None } }
+    }
+    fn txt(s: &str) -> ContentPart { ContentPart::Text { text: s.into() } }
+    fn msg(parts: Vec<ContentPart>) -> LLMMessage {
+        LLMMessage {
+            role: "tool".into(),
+            content: Some(MessageContent::Parts(parts)),
+            tool_calls: None,
+            tool_call_id: None,
+            reasoning_content: None,
+        }
+    }
+
+    #[test]
+    fn keeps_recent_n_drops_older() {
+        let mut msgs = vec![
+            msg(vec![txt("old"), img("data:1")]),
+            msg(vec![txt("mid"), img("data:2")]),
+            msg(vec![txt("new"), img("data:3"), img("data:4")]),
+        ];
+        evict_old_screenshots(&mut msgs, 2);
+
+        // Newest 2 images = data:3, data:4 → kept. data:1 and data:2 → evicted.
+        let collect = |m: &LLMMessage| match m.content.as_ref().unwrap() {
+            MessageContent::Parts(p) => p.iter().map(|x| match x {
+                ContentPart::ImageUrl { image_url } => format!("img:{}", image_url.url),
+                ContentPart::Text { text } => format!("t:{}", text),
+            }).collect::<Vec<_>>(),
+            _ => unreachable!(),
+        };
+        assert_eq!(collect(&msgs[0]), vec!["t:old", "t:[screenshot evicted]"]);
+        assert_eq!(collect(&msgs[1]), vec!["t:mid", "t:[screenshot evicted]"]);
+        assert_eq!(collect(&msgs[2]), vec!["t:new", "img:data:3", "img:data:4"]);
+    }
+
+    #[test]
+    fn no_op_when_under_budget() {
+        let mut msgs = vec![msg(vec![txt("x"), img("a"), img("b")])];
+        evict_old_screenshots(&mut msgs, 3);
+        let parts = match msgs[0].content.as_ref().unwrap() {
+            MessageContent::Parts(p) => p.clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(parts.len(), 3);
+        assert!(matches!(parts[1], ContentPart::ImageUrl { .. }));
+        assert!(matches!(parts[2], ContentPart::ImageUrl { .. }));
+    }
+
+    #[test]
+    fn text_only_messages_untouched() {
+        let mut msgs = vec![LLMMessage {
+            role: "user".into(),
+            content: Some(MessageContent::Text("hello".into())),
+            tool_calls: None, tool_call_id: None, reasoning_content: None,
+        }];
+        evict_old_screenshots(&mut msgs, 0);
+        match msgs[0].content.as_ref().unwrap() {
+            MessageContent::Text(s) => assert_eq!(s, "hello"),
+            _ => panic!("text msg mutated"),
+        }
+    }
+}
+
 // ── LLM Message ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -588,6 +588,14 @@ pub fn run() {
             commands::snapshots::discard_checkpoint_branch,
             // DeepSeek platform integration (balance query)
             commands::deepseek::get_deepseek_balance,
+            // Growth V3 — Inbox (white-box co-construction)
+            commands::inbox::propose_skills_now,
+            commands::inbox::list_inbox_items,
+            commands::inbox::count_pending_inbox,
+            commands::inbox::get_inbox_item,
+            commands::inbox::approve_inbox_item,
+            commands::inbox::reject_inbox_item,
+            commands::inbox::withdraw_inbox_item,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -796,20 +804,30 @@ async fn recover_interrupted_tasks(
             task.title, task.id, round_info
         );
 
-        // Build recovery context
+        const RECOVERY_PREAMBLE_PREFIX: &str = "你正在继续执行一个被中断的任务";
         let recovery_context = format!(
-            "你正在继续执行一个被中断的任务。\n\
+            "{}。\n\
             任务标题：{}\n\
             任务描述：{}\n\
             之前已执行到第 {} 轮。\n\
             请继续执行未完成的部分。",
+            RECOVERY_PREAMBLE_PREFIX,
             task.title,
             task.description.as_deref().unwrap_or(""),
             round_info,
         );
 
-        // Push recovery context as system message
-        db.push_message(&task.session_id, "system", &recovery_context).ok();
+        // Skip if the last session message is already a recovery preamble —
+        // crash/restart cycles otherwise stack identical preambles in chat.
+        let last_is_recovery = db
+            .get_recent_messages(&task.session_id, 1)
+            .ok()
+            .and_then(|v| v.into_iter().next())
+            .map(|m| m.role == "system" && m.content.starts_with(RECOVERY_PREAMBLE_PREFIX))
+            .unwrap_or(false);
+        if !last_is_recovery {
+            db.push_message(&task.session_id, "system", &recovery_context).ok();
+        }
 
         // Re-spawn the task execution
         let plan: Vec<String> = task.plan

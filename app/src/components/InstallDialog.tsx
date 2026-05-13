@@ -12,7 +12,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openExternal } from '@tauri-apps/plugin-shell';
-import { Loader2, Package, ExternalLink, X, Check, AlertTriangle } from 'lucide-react';
+import { Loader2, Package, ExternalLink, X, Check, AlertTriangle, ShieldCheck, Settings } from 'lucide-react';
 
 interface InstallStep {
   kind: string;             // "brew" | "winget" | "apt" | "url" | "manual"
@@ -194,7 +194,7 @@ export function InstallDialog() {
             <RunningPanel progress={active.progress} dep={currentDep} step={active.picked[active.depIdx]} />
           )}
           {active.phase === 'done' && (
-            <DonePanel server={active.serverName} />
+            <DonePanel server={active.serverName} missing={active.missing} />
           )}
           {active.phase === 'failed' && (
             <FailedPanel error={active.error ?? 'unknown'} progress={active.progress} />
@@ -342,6 +342,19 @@ function RunningPanel({ progress, dep, step }: { progress: ProgressLine[]; dep?:
         </code>
       )}
       <div
+        className="rounded-md px-3 py-2 text-[11.5px] leading-relaxed flex items-start gap-2"
+        style={{
+          background: 'var(--color-primary-subtle)',
+          color: 'var(--color-text-secondary)',
+        }}
+      >
+        <ShieldCheck size={13} className="shrink-0 mt-0.5" style={{ color: 'var(--color-primary)' }} />
+        <span>
+          如系统弹出管理员密码框，<b style={{ color: 'var(--color-text)' }}>YiYi 不会读取或保存密码</b>，
+          请直接在系统对话框中输入——它由 macOS 处理，与 YiYi 进程隔离。
+        </span>
+      </div>
+      <div
         className="rounded-lg p-3 text-[11px] font-mono leading-relaxed overflow-y-auto"
         style={{
           background: 'var(--color-bg-subtle)',
@@ -364,15 +377,75 @@ function RunningPanel({ progress, dep, step }: { progress: ProgressLine[]; dep?:
   );
 }
 
-function DonePanel({ server }: { server: string }) {
+function DonePanel({ server, missing }: { server: string; missing: DepSpec[] }) {
+  const needsCuaDriver = missing.some((d) => d.bin === 'cua-driver');
   return (
-    <div className="flex flex-col items-center justify-center py-6 gap-2">
-      <Check size={28} style={{ color: 'var(--color-success)' }} />
-      <div className="text-[14px] font-medium" style={{ color: 'var(--color-text)' }}>
-        全部依赖安装完成
+    <div className="py-2 space-y-4">
+      <div className="flex flex-col items-center justify-center gap-2">
+        <Check size={28} style={{ color: 'var(--color-success)' }} />
+        <div className="text-[14px] font-medium" style={{ color: 'var(--color-text)' }}>
+          全部依赖安装完成
+        </div>
+        <div className="text-[12px]" style={{ color: 'var(--color-text-secondary)' }}>
+          点下方按钮启动 {server}
+        </div>
       </div>
-      <div className="text-[12px]" style={{ color: 'var(--color-text-secondary)' }}>
-        点下方按钮启动 {server}
+      {needsCuaDriver && <CuaPermissionCard />}
+    </div>
+  );
+}
+
+/**
+ * Post-install onboarding for cua-driver: two macOS privacy permissions
+ * the user must grant manually. macOS does not allow apps to flip these.
+ */
+function CuaPermissionCard() {
+  const openA11y = () =>
+    openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility').catch(() => {});
+  const openScreen = () =>
+    openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture').catch(() => {});
+
+  return (
+    <div
+      className="rounded-xl p-3.5 space-y-2.5"
+      style={{
+        background: 'var(--color-bg-subtle)',
+        border: '1px solid var(--color-border)',
+      }}
+    >
+      <div className="flex items-center gap-2 text-[13px] font-semibold" style={{ color: 'var(--color-text)' }}>
+        <ShieldCheck size={14} style={{ color: 'var(--color-primary)' }} />
+        还差两步：授权 macOS 隐私权限
+      </div>
+      <div className="text-[11.5px] leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>
+        cua-driver 需要这两项权限才能在后台操作桌面。macOS 安全策略要求用户手动授权，YiYi 无法代劳。
+      </div>
+      <div className="space-y-1.5">
+        <button
+          onClick={openA11y}
+          className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-[12px] transition-colors hover:bg-[var(--color-bg-elevated)]"
+          style={{ border: '1px solid var(--color-border)', color: 'var(--color-text)' }}
+        >
+          <span className="flex items-center gap-2">
+            <Settings size={12} style={{ color: 'var(--color-text-muted)' }} />
+            打开「辅助功能」设置
+          </span>
+          <ExternalLink size={11} className="opacity-50" />
+        </button>
+        <button
+          onClick={openScreen}
+          className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-[12px] transition-colors hover:bg-[var(--color-bg-elevated)]"
+          style={{ border: '1px solid var(--color-border)', color: 'var(--color-text)' }}
+        >
+          <span className="flex items-center gap-2">
+            <Settings size={12} style={{ color: 'var(--color-text-muted)' }} />
+            打开「屏幕录制」设置
+          </span>
+          <ExternalLink size={11} className="opacity-50" />
+        </button>
+      </div>
+      <div className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+        勾选 YiYi 后回到这里点"完成"。若权限未生效，重启 YiYi 一次即可。
       </div>
     </div>
   );

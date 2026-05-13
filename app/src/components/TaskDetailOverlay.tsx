@@ -46,16 +46,21 @@ function formatDate(ts: number | null | undefined): string | null {
   } catch { return null; }
 }
 
-function PlanTimeline({ plan }: { plan: TaskStage[] }) {
+function PlanTimeline({ plan, runningIdx }: { plan: TaskStage[]; runningIdx: number | null }) {
   return (
     <ol className="space-y-2">
       {plan.map((stage, idx) => {
-        const cfg = TASK_STATUS_CONFIG[stage.status] || TASK_STATUS_CONFIG.pending;
+        // Backend only flips stages to 'completed' — the in-flight one stays
+        // 'pending' in DB, so synthesize 'running' here to animate the timeline.
+        const effectiveStatus = stage.status === 'pending' && idx === runningIdx
+          ? 'running'
+          : stage.status;
+        const cfg = TASK_STATUS_CONFIG[effectiveStatus] || TASK_STATUS_CONFIG.pending;
         const StageIcon = cfg.Icon;
-        const isRunning = stage.status === 'running';
-        const isDone = stage.status === 'completed';
-        const isFailed = stage.status === 'failed';
-        const isPending = stage.status === 'pending';
+        const isRunning = effectiveStatus === 'running';
+        const isDone = effectiveStatus === 'completed';
+        const isFailed = effectiveStatus === 'failed';
+        const isPending = effectiveStatus === 'pending';
         return (
           <li
             key={idx}
@@ -448,7 +453,10 @@ export function TaskDetailOverlay() {
               <h3 className="text-[11px] font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--color-text-muted)' }}>
                 执行计划
               </h3>
-              <PlanTimeline plan={plan} />
+              <PlanTimeline
+                plan={plan}
+                runningIdx={task.status === 'running' ? task.currentStage : null}
+              />
             </div>
           ) : (
             !task.errorMessage && !task.workspacePath && (

@@ -9115,7 +9115,6 @@ dependencies = [
  "calamine",
  "chrono",
  "cocoa",
- "core-graphics 0.24.0",
  "cpal",
  "cron",
  "dirs",

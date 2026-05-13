@@ -25,3 +25,4 @@ pub mod export;
 pub mod extensions;
 pub mod snapshots;
 pub mod deepseek;
+pub mod inbox;

@@ -250,25 +250,91 @@ JSON only:"#
         }
     }
 
-    // Notify frontend immediately when a persist-worthy opportunity is detected
+    // Route a persist-worthy opportunity into the white-box Inbox.
+    //
+    // Gates (deliberately strict — see CLAUDE.md "Design Principles — 白盒共建"):
+    //   • Only explicit signals (ExplicitPraise / ExplicitCorrection) — silent
+    //     completions go through skill_proposer's n-gram path instead.
+    //   • Per-day cap: ≤3 reflection-sourced inbox items per local day.
+    //   • Semantic dedup over the last 7 days (Jaccard ≥ 0.7 on description).
     if let Some(ref opp) = parsed.skill_opportunity {
-        if let Some(handle) = crate::engine::tools::APP_HANDLE.get() {
-            use tauri::Emitter;
-            let payload = serde_json::json!({
-                "type": opp.opp_type,
-                "name": opp.name,
-                "description": opp.description,
-                "reason": opp.reason,
-                "session_id": session_id,
-                "task_id": task_id,
-            });
-            if let Err(e) = handle.emit("growth://persist_suggestion", &payload) {
-                log::warn!("Failed to emit persist_suggestion event: {}", e);
-            }
-            log::info!(
-                "Persist suggestion: [{}] {} — {}",
-                opp.opp_type, opp.name, opp.description
+        let is_explicit = matches!(
+            signal_type,
+            SignalType::ExplicitPraise | SignalType::ExplicitCorrection,
+        );
+        if !is_explicit {
+            log::debug!(
+                "Inbox skip ({}): non-explicit signal {:?}",
+                opp.name, signal_type
             );
+        } else if db.has_similar_skill_proposal(&opp.name, &opp.description, 7) {
+            log::info!("Inbox skip: similar proposal exists for '{}'", opp.name);
+        } else {
+            let today_start = chrono::Local::now()
+                .date_naive()
+                .and_hms_opt(0, 0, 0)
+                .and_then(|dt| dt.and_local_timezone(chrono::Local).single())
+                .map(|dt| dt.timestamp_millis())
+                .unwrap_or(0);
+            let today_count = db.count_inbox_since_with_source_prefix(today_start, "reflection_");
+            if today_count >= 3 {
+                log::info!(
+                    "Inbox skip: daily reflection cap reached ({}/3)",
+                    today_count
+                );
+            } else {
+                let confidence = signal_type.base_confidence();
+                let reason_str = opp
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "agent 在任务后反思中识别为可固化".to_string());
+                let skill_md = build_inbox_skill_md(
+                    &opp.name,
+                    &opp.description,
+                    confidence,
+                    &reason_str,
+                );
+                let draft = serde_json::json!({
+                    "name": opp.name,
+                    "description": opp.description,
+                    "content": skill_md,
+                    "confidence": confidence,
+                    "reason": reason_str,
+                });
+                let evidence = serde_json::json!({
+                    "task_id": task_id,
+                    "session_id": session_id,
+                    "signal": signal_type.as_str(),
+                    "summary": summary,
+                    "opportunity_type": opp.opp_type,
+                });
+                let id = uuid::Uuid::new_v4().to_string();
+                let new_item = crate::engine::db::NewInboxItem {
+                    id: id.clone(),
+                    kind: "skill_create".into(),
+                    draft_json: draft.to_string(),
+                    source: format!("reflection_{}", signal_type.as_str()),
+                    reason: reason_str,
+                    confidence,
+                    evidence_json: Some(evidence.to_string()),
+                };
+                match db.insert_inbox_item(&new_item) {
+                    Ok(()) => {
+                        log::info!(
+                            "Inbox insert: skill_create '{}' ({}, conf={:.2}, type={})",
+                            opp.name, signal_type.as_str(), confidence, opp.opp_type,
+                        );
+                        if let Some(handle) = crate::engine::tools::APP_HANDLE.get() {
+                            use tauri::Emitter;
+                            let _ = handle.emit(
+                                "inbox://updated",
+                                serde_json::json!({ "id": id, "kind": "skill_create" }),
+                            );
+                        }
+                    }
+                    Err(e) => log::warn!("Inbox insert failed for '{}': {}", opp.name, e),
+                }
+            }
         }
     }
 
@@ -299,6 +365,34 @@ JSON only:"#
             });
         }
     }
+}
+
+/// Compose a minimal SKILL.md from a reflection-derived opportunity.
+/// Kept LLM-free (no extra cost) — the user can edit the body during approval.
+fn build_inbox_skill_md(name: &str, description: &str, confidence: f64, reason: &str) -> String {
+    let now_iso = chrono::Utc::now().to_rfc3339();
+    let desc_clean = description.replace('\n', " ");
+    format!(
+        "---\n\
+         name: {name}\n\
+         description: {desc}\n\
+         metadata:\n  \
+           yiyi:\n    \
+             source: inbox_pending\n    \
+             proposed_at: {ts}\n    \
+             agent_confidence: {conf}\n    \
+             origin: reflection\n\
+         ---\n\n\
+         # {name}\n\n\
+         {desc_clean}\n\n\
+         > {reason}\n",
+        name = name,
+        desc = desc_clean,
+        desc_clean = desc_clean,
+        ts = now_iso,
+        conf = confidence,
+        reason = reason,
+    )
 }
 
 // ---------------------------------------------------------------------------

@@ -1,36 +1,22 @@
 /**
  * GrowthSuggestionsBubble — pop-out card above the Buddy sprite listing
- * pending "save as skill / code / workflow" suggestions.
+ * pending growth proposals from the white-box Inbox.
  *
- * Two modes per suggestion:
- *   • collapsed row (name + type chip + glance-value reason)
- *   • expanded card (full description, editable name, save / discard / snooze)
- *
- * Rendered conditionally by <BuddySprite> when the store has visible pending
- * suggestions. Dismissing the bubble doesn't clear the store — only acting
- * on a suggestion does.
+ * Data source: `inbox_items` (SQLite, kind='skill_create'). Approve writes
+ * SKILL.md via `approve_inbox_item`; reject marks the row rejected; snooze
+ * is purely UI-side (stored in `useInboxStore.snoozedUntil`).
  */
 import React, { useMemo, useState } from 'react';
 import { Sparkles, X, Save, Clock, Pencil, Check, Trash2, Loader2 } from 'lucide-react';
+import { useInboxStore } from '../../stores/inboxStore';
 import {
-  useGrowthSuggestionsStore,
-  type GrowthSuggestion,
-  type SuggestionType,
-} from '../../stores/growthSuggestionsStore';
-import { createSkill } from '../../api/skills';
+  approveInboxItem,
+  parseSkillDraft,
+  rejectInboxItem,
+  type InboxItem,
+  type SkillDraft,
+} from '../../api/inbox';
 import { toast } from '../Toast';
-
-const TYPE_LABEL: Record<SuggestionType, string> = {
-  skill: '技能',
-  code: '代码工具',
-  workflow: '工作流',
-};
-
-const TYPE_COLOR: Record<SuggestionType, string> = {
-  skill: '#A78BFA',
-  code: '#38BDF8',
-  workflow: '#FCD34D',
-};
 
 interface Props {
   onClose: () => void;
@@ -38,48 +24,67 @@ interface Props {
 }
 
 export const GrowthSuggestionsBubble: React.FC<Props> = ({ onClose, flipRight }) => {
-  // Select stable fields — calling s.visiblePending() returns a fresh array
-  // every render and trips zustand into an infinite re-render loop (which
-  // unmounts the whole app tree and shows a blank/dark screen).
-  const pending = useGrowthSuggestionsStore((s) => s.pending);
-  const snoozedUntil = useGrowthSuggestionsStore((s) => s.snoozedUntil);
-  const remove = useGrowthSuggestionsStore((s) => s.remove);
-  const snooze = useGrowthSuggestionsStore((s) => s.snooze);
-  const recordSave = useGrowthSuggestionsStore((s) => s.recordSave);
+  const pending = useInboxStore((s) => s.pending);
+  const snoozedUntil = useInboxStore((s) => s.snoozedUntil);
+  const removeLocal = useInboxStore((s) => s.removeLocal);
+  const snooze = useInboxStore((s) => s.snooze);
+  const refresh = useInboxStore((s) => s.refresh);
 
   const visible = useMemo(() => {
     const now = Date.now();
-    return pending.filter((s) => {
-      const until = snoozedUntil[s.id];
-      return !until || until <= now;
-    });
+    return pending
+      .map((item) => ({ item, draft: parseSkillDraft(item) }))
+      .filter(({ item, draft }) => {
+        if (!draft) return false;
+        const until = snoozedUntil[item.id];
+        return !until || until <= now;
+      });
   }, [pending, snoozedUntil]);
 
-  const [expandedId, setExpandedId] = useState<string | null>(
-    visible[0]?.id ?? null,
-  );
+  const [expandedId, setExpandedId] = useState<string | null>(visible[0]?.item.id ?? null);
   const [editingName, setEditingName] = useState<Record<string, string>>({});
-  const [savingId, setSavingId] = useState<string | null>(null);
+  const [actingOn, setActingOn] = useState<string | null>(null);
 
   if (visible.length === 0) return null;
 
-  const handleSave = async (s: GrowthSuggestion) => {
-    const finalName = (editingName[s.id] ?? s.name).trim();
-    if (!finalName) {
-      toast.error('名称不能为空');
-      return;
-    }
-    setSavingId(s.id);
+  const handleApprove = async (item: InboxItem, draft: SkillDraft) => {
+    setActingOn(item.id);
     try {
-      const content = buildSkillMarkdown(s, finalName);
-      await createSkill(finalName, content);
-      recordSave(finalName, content);
-      remove(s.id);
-      toast.success(`已保存「${finalName}」到技能库`);
+      const finalName = (editingName[item.id] ?? draft.name).trim();
+      if (!finalName) {
+        toast.error('名称不能为空');
+        setActingOn(null);
+        return;
+      }
+      // If the user renamed, splice the new name into the draft content's
+      // `name:` frontmatter line before sending it back as edited content.
+      let editedContent: string | undefined;
+      if (finalName !== draft.name) {
+        editedContent = draft.content.replace(
+          /^name:\s*.+$/m,
+          `name: ${finalName}`,
+        );
+      }
+      await approveInboxItem(item.id, editedContent);
+      toast.success(`已学会「${finalName}」`);
+      removeLocal(item.id);
+      refresh();
     } catch (e) {
       toast.error(`保存失败：${e instanceof Error ? e.message : String(e)}`);
     } finally {
-      setSavingId(null);
+      setActingOn(null);
+    }
+  };
+
+  const handleReject = async (item: InboxItem) => {
+    setActingOn(item.id);
+    try {
+      await rejectInboxItem(item.id);
+      removeLocal(item.id);
+    } catch (e) {
+      toast.error(`否决失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setActingOn(null);
     }
   };
 
@@ -102,7 +107,6 @@ export const GrowthSuggestionsBubble: React.FC<Props> = ({ onClose, flipRight })
           animation: 'buddy-bubble-in 0.22s ease-out',
         }}
       >
-        {/* Header */}
         <div
           className="flex items-center gap-2 px-3 py-2"
           style={{ borderBottom: '1px solid var(--color-border)' }}
@@ -129,31 +133,30 @@ export const GrowthSuggestionsBubble: React.FC<Props> = ({ onClose, flipRight })
           </button>
         </div>
 
-        {/* List */}
         <div className="max-h-[420px] overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>
-          {visible.map((s) => {
-            const expanded = expandedId === s.id;
-            const color = TYPE_COLOR[s.type];
-            const displayName = editingName[s.id] ?? s.name;
+          {visible.map(({ item, draft }) => {
+            if (!draft) return null;
+            const expanded = expandedId === item.id;
+            const displayName = editingName[item.id] ?? draft.name;
+            const busy = actingOn === item.id;
             return (
               <div
-                key={s.id}
+                key={item.id}
                 className="px-3 py-2.5"
                 style={{ borderBottom: '1px solid var(--color-border)' }}
               >
-                {/* Row header — always visible */}
                 <button
-                  onClick={() => setExpandedId(expanded ? null : s.id)}
+                  onClick={() => setExpandedId(expanded ? null : item.id)}
                   className="w-full flex items-center gap-2 text-left"
                 >
                   <span
                     className="shrink-0 text-[10px] font-semibold px-1.5 py-[1px] rounded-md"
                     style={{
-                      color,
-                      background: `color-mix(in srgb, ${color} 14%, transparent)`,
+                      color: '#A78BFA',
+                      background: 'color-mix(in srgb, #A78BFA 14%, transparent)',
                     }}
                   >
-                    {TYPE_LABEL[s.type]}
+                    技能
                   </span>
                   <span
                     className="flex-1 truncate text-[12.5px] font-medium"
@@ -163,18 +166,17 @@ export const GrowthSuggestionsBubble: React.FC<Props> = ({ onClose, flipRight })
                   </span>
                 </button>
 
-                {!expanded && s.reason && (
+                {!expanded && draft.reason && (
                   <div
                     className="text-[11px] mt-0.5 pl-1 truncate"
                     style={{ color: 'var(--color-text-muted)' }}
                   >
-                    {s.reason}
+                    {draft.reason}
                   </div>
                 )}
 
                 {expanded && (
                   <div className="mt-2 space-y-2">
-                    {/* Editable name */}
                     <div>
                       <label
                         className="text-[10px]"
@@ -185,7 +187,7 @@ export const GrowthSuggestionsBubble: React.FC<Props> = ({ onClose, flipRight })
                       <input
                         value={displayName}
                         onChange={(e) =>
-                          setEditingName((m) => ({ ...m, [s.id]: e.target.value }))
+                          setEditingName((m) => ({ ...m, [item.id]: e.target.value }))
                         }
                         className="w-full mt-0.5 px-2 py-1 rounded text-[12px] outline-none"
                         style={{
@@ -196,8 +198,7 @@ export const GrowthSuggestionsBubble: React.FC<Props> = ({ onClose, flipRight })
                       />
                     </div>
 
-                    {/* Description (read-only preview) */}
-                    {s.description && (
+                    {draft.description && (
                       <div>
                         <label
                           className="text-[10px]"
@@ -214,41 +215,38 @@ export const GrowthSuggestionsBubble: React.FC<Props> = ({ onClose, flipRight })
                             overflowY: 'auto',
                           }}
                         >
-                          {s.description}
+                          {draft.description}
                         </div>
                       </div>
                     )}
 
-                    {s.reason && (
+                    {draft.reason && (
                       <div
                         className="text-[11px]"
                         style={{ color: 'var(--color-text-muted)' }}
                       >
                         <Pencil size={10} className="inline mr-1 -mt-0.5" />
-                        {s.reason}
+                        {draft.reason}
                       </div>
                     )}
 
-                    {/* Actions */}
                     <div className="flex items-center gap-1.5 pt-1">
                       <button
-                        onClick={() => handleSave(s)}
-                        disabled={savingId === s.id}
+                        onClick={() => handleApprove(item, draft)}
+                        disabled={busy}
                         className="flex-1 inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded text-[11.5px] font-semibold transition-colors disabled:opacity-60"
-                        style={{
-                          background: 'var(--color-primary)',
-                          color: '#fff',
-                        }}
+                        style={{ background: 'var(--color-primary)', color: '#fff' }}
                       >
-                        {savingId === s.id ? (
+                        {busy ? (
                           <Loader2 size={12} className="animate-spin" />
                         ) : (
                           <Save size={12} />
                         )}
-                        {savingId === s.id ? '保存中' : '保存'}
+                        {busy ? '保存中' : '保存'}
                       </button>
                       <button
-                        onClick={() => snooze(s.id, 24)}
+                        onClick={() => snooze(item.id, 24)}
+                        disabled={busy}
                         className="inline-flex items-center gap-1 px-2 py-1.5 rounded text-[11.5px] transition-colors"
                         style={{
                           background: 'var(--color-bg-subtle)',
@@ -259,7 +257,8 @@ export const GrowthSuggestionsBubble: React.FC<Props> = ({ onClose, flipRight })
                         <Clock size={11} />
                       </button>
                       <button
-                        onClick={() => remove(s.id)}
+                        onClick={() => handleReject(item)}
+                        disabled={busy}
                         className="inline-flex items-center gap-1 px-2 py-1.5 rounded text-[11.5px] transition-colors"
                         style={{
                           background: 'var(--color-bg-subtle)',
@@ -267,7 +266,7 @@ export const GrowthSuggestionsBubble: React.FC<Props> = ({ onClose, flipRight })
                         }}
                         title="丢弃"
                       >
-                        <Trash2 size={11} />
+                        {busy ? <Loader2 size={11} className="animate-spin" /> : <Trash2 size={11} />}
                       </button>
                     </div>
                   </div>
@@ -277,7 +276,6 @@ export const GrowthSuggestionsBubble: React.FC<Props> = ({ onClose, flipRight })
           })}
         </div>
 
-        {/* Tail */}
         <div
           className="absolute top-full w-0 h-0"
           style={{
@@ -291,31 +289,3 @@ export const GrowthSuggestionsBubble: React.FC<Props> = ({ onClose, flipRight })
     </div>
   );
 };
-
-/**
- * Compose the minimum valid SKILL.md content from a suggestion.
- * User can rename / refine later via Settings → Skills.
- */
-function buildSkillMarkdown(s: GrowthSuggestion, finalName: string): string {
-  const lines: string[] = ['---'];
-  lines.push(`name: "${finalName}"`);
-  if (s.description) lines.push(`description: "${s.description.replace(/"/g, '\\"')}"`);
-  lines.push('metadata:');
-  lines.push('  yiyi:');
-  lines.push(`    source: growth-suggestion`);
-  if (s.sessionId) lines.push(`    origin_session: "${s.sessionId}"`);
-  if (s.taskId) lines.push(`    origin_task: "${s.taskId}"`);
-  lines.push('---');
-  lines.push('');
-  lines.push(`# ${finalName}`);
-  lines.push('');
-  if (s.description) {
-    lines.push(s.description);
-    lines.push('');
-  }
-  if (s.reason) {
-    lines.push(`> ${s.reason}`);
-    lines.push('');
-  }
-  return lines.join('\n');
-}
