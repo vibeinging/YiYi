@@ -6,10 +6,77 @@
 //! to the correct executor.
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, LazyLock, RwLock};
+use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use super::tools::{ToolDefinition, FunctionDef};
+
+/// Liveness probe for a tool: returns `true` when the tool is usable right
+/// now, `false` when it should be hidden from the LLM. The hooked
+/// implementation must be cheap (≤1 ms target) — results are cached for
+/// `CHECK_TTL` so the LLM's tools list doesn't recompute liveness on every
+/// turn (and break DeepSeek's tools-field prefix-cache for transient blips).
+pub type CheckFn = Arc<dyn Fn() -> bool + Send + Sync>;
+
+/// How long a check result stays valid before the next call recomputes.
+/// 30 s mirrors the cadence at which MCP servers / cua-driver are expected
+/// to come up or go down — short enough that a freshly-installed driver
+/// becomes visible quickly, long enough that we don't probe per turn.
+pub const CHECK_TTL: Duration = Duration::from_secs(30);
+
+/// Tool-name → (last_check_at, last_result). Process-global; mirrors the
+/// registry's own scope. Wrapped in `LazyLock` to keep the initialization
+/// noise low.
+static CHECK_CACHE: LazyLock<RwLock<HashMap<String, (Instant, bool)>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// Read-through TTL cache for check_fn evaluations.
+fn check_cached(name: &str, check: &CheckFn) -> bool {
+    if let Ok(cache) = CHECK_CACHE.read() {
+        if let Some((at, ok)) = cache.get(name) {
+            if at.elapsed() < CHECK_TTL {
+                return *ok;
+            }
+        }
+    }
+    let ok = check();
+    if let Ok(mut cache) = CHECK_CACHE.write() {
+        cache.insert(name.to_string(), (Instant::now(), ok));
+    }
+    ok
+}
+
+/// Drop the cached result for a single tool. The next availability query
+/// will re-evaluate the check_fn. Use this after granting permissions,
+/// finishing an MCP reconnect, or any state change that should immediately
+/// flip a tool from unavailable → available (or vice versa).
+pub fn invalidate_check(name: &str) {
+    if let Ok(mut cache) = CHECK_CACHE.write() {
+        cache.remove(name);
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn _clear_check_cache_for_test() {
+    if let Ok(mut cache) = CHECK_CACHE.write() {
+        cache.clear();
+    }
+}
+
+/// Backdate a cached entry so that its `elapsed()` exceeds `CHECK_TTL` on
+/// the next read, forcing recomputation. Lets tests exercise the TTL
+/// expiry branch without sleeping 30s.
+#[cfg(any(test, feature = "test-support"))]
+pub fn _expire_check_for_test(name: &str) {
+    if let Ok(mut cache) = CHECK_CACHE.write() {
+        if let Some(entry) = cache.get_mut(name) {
+            entry.0 = Instant::now()
+                .checked_sub(CHECK_TTL + Duration::from_secs(1))
+                .unwrap_or_else(Instant::now);
+        }
+    }
+}
 
 /// Where a tool comes from.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -51,6 +118,10 @@ pub struct GlobalToolRegistry {
     tools: RwLock<HashMap<String, ToolEntry>>,
     /// Per-server description overrides applied during MCP sync (e.g. skill aliases).
     mcp_skill_overrides: RwLock<HashMap<String, String>>,
+    /// Optional liveness probe per tool name (side-table — keeps `ToolEntry`
+    /// `Serialize`/`Debug`-friendly). Tools without an entry here are
+    /// always considered available.
+    check_fns: RwLock<HashMap<String, CheckFn>>,
 }
 
 impl GlobalToolRegistry {
@@ -58,6 +129,7 @@ impl GlobalToolRegistry {
         Self {
             tools: RwLock::new(HashMap::new()),
             mcp_skill_overrides: RwLock::new(HashMap::new()),
+            check_fns: RwLock::new(HashMap::new()),
         }
     }
 
@@ -137,6 +209,51 @@ impl GlobalToolRegistry {
             .collect();
         v.sort_by(|a, b| a.function.name.cmp(&b.function.name));
         v
+    }
+
+    /// Like [`all_definitions`], but filters out tools whose attached
+    /// `check_fn` reports unavailable. Tools without a registered check are
+    /// always included. The check result is TTL-cached (see `CHECK_TTL`) so
+    /// this is safe to call once per agent turn.
+    ///
+    /// Failure mode: if a `check_fn` itself panics it would unwind through
+    /// the iterator; callers should keep probes simple (file existence,
+    /// atomic-bool reads). Network/IPC probes belong behind a `try_*`
+    /// wrapper that returns `false` on error.
+    pub fn all_definitions_available(&self) -> Vec<ToolDefinition> {
+        let tools = self.tools.read().unwrap();
+        let checks = self.check_fns.read().unwrap();
+        let mut v: Vec<ToolDefinition> = tools
+            .values()
+            .filter(|e| match checks.get(&e.name) {
+                Some(check) => check_cached(&e.name, check),
+                None => true,
+            })
+            .map(|e| e.definition.clone())
+            .collect();
+        v.sort_by(|a, b| a.function.name.cmp(&b.function.name));
+        v
+    }
+
+    /// Attach (or replace) a liveness probe for a tool. The probe runs at
+    /// most once every `CHECK_TTL`. Pass [`crate::engine::tool_registry_global::invalidate_check`]
+    /// to force a refresh.
+    pub fn set_check_fn(&self, name: &str, check: CheckFn) {
+        self.check_fns.write().unwrap().insert(name.to_string(), check);
+        // Drop any stale cached result so the next `_available` query
+        // immediately reflects the new probe.
+        invalidate_check(name);
+    }
+
+    /// Remove a liveness probe and drop its cached verdict.
+    pub fn remove_check_fn(&self, name: &str) {
+        self.check_fns.write().unwrap().remove(name);
+        invalidate_check(name);
+    }
+
+    /// Whether a liveness probe is registered for this tool.
+    pub fn has_check_fn(&self, name: &str) -> bool {
+        self.check_fns.read().unwrap().contains_key(name)
     }
 
     /// Get tool definitions filtered by source type, sorted by name.

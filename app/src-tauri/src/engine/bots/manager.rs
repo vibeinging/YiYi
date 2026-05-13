@@ -770,7 +770,7 @@ async fn process_message(
     }
     let tools_override: Option<Vec<ToolDefinition>> = route_tool_filter.as_ref().map(|filter| {
         let all_tools = crate::engine::tool_registry_global::global_registry()
-            .map(|r| r.all_definitions())
+            .map(|r| r.all_definitions_available())
             .unwrap_or_else(crate::engine::tools::builtin_tools);
         filter.apply(&all_tools)
     });

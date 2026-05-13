@@ -223,8 +223,12 @@ where
         // Single source of truth: GlobalToolRegistry (built-in + plugin + MCP).
         // Registry enforces unique names across sources — collisions are
         // resolved at registration time (alias) rather than send time.
+        // `_available` walks attached check_fns (TTL-cached 30s) so tools
+        // whose backend is down — cua-driver not installed, MCP server
+        // disconnected, … — disappear from the LLM's tool list instead of
+        // surfacing as confusing runtime errors.
         let all = crate::engine::tool_registry_global::global_registry()
-            .map(|r| r.all_definitions())
+            .map(|r| r.all_definitions_available())
             .unwrap_or_else(builtin_tools); // startup-only fallback
         // Honour any task-local agent tool filter so the LLM only sees
         // tools the runtime would actually let it call.
@@ -958,7 +962,7 @@ where
         crate::engine::tool_registry_global::sync_mcp_tools(registry).await;
     }
     let all_tools = crate::engine::tool_registry_global::global_registry()
-        .map(|r| r.all_definitions())
+        .map(|r| r.all_definitions_available())
         .unwrap_or_else(builtin_tools);
     let filtered = tool_filter.apply(&all_tools);
 
