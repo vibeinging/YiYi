@@ -7,8 +7,107 @@
 //! - Exit-code semantics so the LLM understands grep-1 ≠ error
 //! - Output enhancement for silent commands and warnings
 
+use regex::Regex;
 use std::collections::HashSet;
 use std::sync::LazyLock;
+
+// ---------------------------------------------------------------------------
+// Hardline patterns — UNCONDITIONAL blocklist
+// ---------------------------------------------------------------------------
+//
+// These commands cause unrecoverable damage (wiped filesystem, formatted
+// disk, fork bomb, etc.). Detected even if the user enabled "approve all"
+// for the session. If they truly need to run one of these, they run it in
+// their own terminal — never via the agent.
+//
+// CMD_PREFIX anchors regex matches to actual command-start positions
+// (line start, after `;` `&` `|` `\n` `\``, after `$(`, optionally consuming
+// `sudo` / `env VAR=VAL` / `exec` / `nohup` / `setsid` / `time` wrappers).
+// Without this, `echo "reboot"` or `grep 'shutdown' /var/log/syslog` would
+// false-positive on the shutdown/reboot family.
+//
+// `rm` / `mkfs` / `dd` etc. use simple `\b` word-boundary anchoring instead
+// because they're rarely meaningful as text content, and `\b` is cheaper.
+
+const CMD_PREFIX: &str = concat!(
+    r"(?:^|[;&|\n`]|\$\()",                  // start or separator
+    r"\s*",
+    r"(?:sudo\s+(?:-\S+\s+)*)?",             // optional sudo + flags
+    r"(?:env\s+(?:\w+=\S*\s+)*)?",           // optional env VAR=VAL...
+    r"(?:(?:exec|nohup|setsid|time)\s+)*",   // optional wrappers
+    r"\s*",
+);
+
+static HARDLINE_PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
+    let pat = |s: &str| Regex::new(s).expect("hardline regex");
+    vec![
+        // rm -rf / / /* / ~  (recursive delete of root or home)
+        (
+            pat(r"(?i)\brm\s+(?:-\S*\s+)*(?:--no-preserve-root\s+)?(/|/\*|~)(\s|$)"),
+            "recursive delete of root/home filesystem",
+        ),
+        // rm -rf into protected system directories
+        (
+            pat(r"(?i)\brm\s+(?:-\S*\s+)*(/home|/root|/etc|/usr|/var|/bin|/sbin|/boot|/lib)(/?\*?)(\s|$)"),
+            "recursive delete of system directory",
+        ),
+        // mkfs.<type> (any filesystem format)
+        (pat(r"(?i)\bmkfs(\.[a-z0-9]+)?\b"), "format filesystem (mkfs)"),
+        // dd of=/dev/sd* /dev/nvme* — raw block-device overwrite
+        (
+            pat(r"(?i)\bdd\b[^\n]*\bof=/dev/(sd|nvme|hd|mmcblk|vd|xvd|disk|rdisk)[a-z0-9]*"),
+            "dd to raw block device",
+        ),
+        // > /dev/sd* — shell redirection to raw block device
+        (
+            pat(r"(?i)>\s*/dev/(sd|nvme|hd|mmcblk|vd|xvd|disk|rdisk)[a-z0-9]*\b"),
+            "redirect to raw block device",
+        ),
+        // Fork bomb (classic and tolerant of whitespace variants)
+        (
+            pat(r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:"),
+            "fork bomb",
+        ),
+        // `kill -1` / `kill -9 -1` — kills every process incl PID 1
+        (
+            pat(r"(?i)\bkill\s+(?:-\S+\s+)*-1\b"),
+            "kill all processes (kill -1)",
+        ),
+        // System shutdown / reboot — must anchor at command-start position
+        (
+            pat(&format!(r"(?i){}(shutdown|reboot|halt|poweroff)\b", CMD_PREFIX)),
+            "system shutdown/reboot",
+        ),
+        (
+            pat(&format!(r"(?i){}init\s+[06]\b", CMD_PREFIX)),
+            "init 0/6 (shutdown/reboot)",
+        ),
+        (
+            pat(&format!(r"(?i){}systemctl\s+(poweroff|reboot|halt|kexec)\b", CMD_PREFIX)),
+            "systemctl poweroff/reboot",
+        ),
+        (
+            pat(&format!(r"(?i){}telinit\s+[06]\b", CMD_PREFIX)),
+            "telinit 0/6 (shutdown/reboot)",
+        ),
+    ]
+});
+
+/// Detect if a command matches the unconditional hardline blocklist.
+///
+/// Returns `Some(label)` describing the match, or `None` if safe. The label
+/// is used in error messages and logs.
+///
+/// **Important**: this is NEVER allowed to be bypassed — see
+/// [`SecurityVerdict::Hardline`] and `permission_gate::request_permission`.
+pub fn detect_hardline(command: &str) -> Option<&'static str> {
+    for (re, label) in HARDLINE_PATTERNS.iter() {
+        if re.is_match(command) {
+            return Some(label);
+        }
+    }
+    None
+}
 
 // ---------------------------------------------------------------------------
 // 1. Types
@@ -42,6 +141,13 @@ pub enum CommandClass {
 #[derive(Debug, Clone)]
 pub enum SecurityVerdict {
     Allow,
+    /// **Unconditional block** — patterns that destroy data, system, or
+    /// hardware irrecoverably. Never bypassable: not by session blanket
+    /// "approve all", not by yolo mode. If the user really needs to run
+    /// it, they run it in their own terminal.
+    Hardline { reason: String },
+    /// Dangerous but recoverable — surfaced to the user as a permission
+    /// dialog; can be approved per-command or via session blanket.
     Block { reason: String },
     Warn { message: String },
 }
@@ -589,7 +695,12 @@ pub fn analyze_command(command: &str) -> CommandAnalysis {
         blocked
     };
 
-    let security_verdict = if let Some(reason) = pipe_to_shell_block {
+    // Hardline runs FIRST and on the raw command (regex handles whitespace);
+    // it short-circuits everything else so a hardline pattern can never be
+    // demoted to a bypassable Block by a downstream check.
+    let security_verdict = if let Some(label) = detect_hardline(command) {
+        SecurityVerdict::Hardline { reason: label.to_string() }
+    } else if let Some(reason) = pipe_to_shell_block {
         SecurityVerdict::Block { reason }
     } else if let Some(reason) = check_block_patterns(&normalized) {
         SecurityVerdict::Block { reason }
@@ -740,6 +851,129 @@ pub fn enhance_output(
 // ---------------------------------------------------------------------------
 // 10. Tests
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod hardline_tests {
+    use super::*;
+
+    // ── direct detect_hardline coverage ─────────────────────────────────
+
+    #[test]
+    fn hardline_rm_root_blocks() {
+        assert!(detect_hardline("rm -rf /").is_some());
+        assert!(detect_hardline("rm -rf /*").is_some());
+        assert!(detect_hardline("rm -fr /").is_some());
+        assert!(detect_hardline("sudo rm -rf /").is_some());
+    }
+
+    #[test]
+    fn hardline_rm_home_blocks() {
+        // Hardline = wipe the WHOLE protected directory; subpaths
+        // (e.g. /home/alice/scratch) are dangerous but recoverable, fall
+        // through to the bypassable Block layer.
+        assert!(detect_hardline("rm -rf ~").is_some());
+        assert!(detect_hardline("rm -rf /home").is_some());
+        assert!(detect_hardline("rm -rf /home/*").is_some());
+        assert!(detect_hardline("rm -rf /etc").is_some());
+        // Subpath — NOT hardline (block layer covers it)
+        assert!(detect_hardline("rm -rf /home/user/data").is_none());
+    }
+
+    #[test]
+    fn hardline_mkfs_blocks() {
+        assert!(detect_hardline("mkfs.ext4 /dev/sdb1").is_some());
+        assert!(detect_hardline("mkfs.xfs /dev/nvme0n1").is_some());
+        assert!(detect_hardline("sudo mkfs.btrfs /dev/sda").is_some());
+    }
+
+    #[test]
+    fn hardline_dd_to_disk_blocks() {
+        assert!(detect_hardline("dd if=/dev/zero of=/dev/sdb").is_some());
+        assert!(detect_hardline("dd if=image.iso of=/dev/nvme0n1 bs=4M").is_some());
+    }
+
+    #[test]
+    fn hardline_raw_device_redirect_blocks() {
+        assert!(detect_hardline("cat image > /dev/sdb").is_some());
+        assert!(detect_hardline("echo x > /dev/nvme0n1").is_some());
+    }
+
+    #[test]
+    fn hardline_fork_bomb_blocks() {
+        assert!(detect_hardline(":(){ :|:& };:").is_some());
+        // whitespace variants
+        assert!(detect_hardline(":(){ : | : & } ; :").is_some());
+    }
+
+    #[test]
+    fn hardline_kill_minus_one_blocks() {
+        assert!(detect_hardline("kill -1").is_some());
+        assert!(detect_hardline("kill -9 -1").is_some());
+    }
+
+    #[test]
+    fn hardline_shutdown_family_blocks() {
+        assert!(detect_hardline("shutdown -h now").is_some());
+        assert!(detect_hardline("sudo shutdown -h now").is_some());
+        assert!(detect_hardline("reboot").is_some());
+        assert!(detect_hardline("poweroff").is_some());
+        assert!(detect_hardline("halt").is_some());
+        assert!(detect_hardline("systemctl poweroff").is_some());
+        assert!(detect_hardline("telinit 0").is_some());
+        assert!(detect_hardline("init 6").is_some());
+    }
+
+    // ── CMD_PREFIX anchoring: must not false-positive on text args ──────
+
+    #[test]
+    fn hardline_does_not_match_reboot_as_argument() {
+        // `reboot` after a non-separator (space, alphanum) is an arg/filename,
+        // not a command-start. CMD_PREFIX should reject these.
+        assert!(detect_hardline("echo reboot").is_none());
+        assert!(detect_hardline(r#"echo "reboot""#).is_none());
+        assert!(detect_hardline("grep 'shutdown' /var/log/syslog").is_none());
+        assert!(detect_hardline("git log --grep=poweroff").is_none());
+        assert!(detect_hardline("git reboot").is_none());
+        assert!(detect_hardline("cat reboot.log").is_none());
+    }
+
+    #[test]
+    fn hardline_anchors_correctly_after_separators() {
+        // After `;` `&&` `||` `\n` or `$(`, reboot IS at a command-start
+        assert!(detect_hardline("ls; reboot").is_some());
+        assert!(detect_hardline("ls && reboot").is_some());
+        assert!(detect_hardline("ls\nreboot").is_some());
+        assert!(detect_hardline("$(reboot)").is_some());
+    }
+
+    // ── analyze_command integration ─────────────────────────────────────
+
+    #[test]
+    fn analyze_routes_hardline_to_hardline_verdict() {
+        let a = analyze_command("rm -rf /");
+        assert!(
+            matches!(a.security_verdict, SecurityVerdict::Hardline { .. }),
+            "expected Hardline, got {:?}",
+            a.security_verdict
+        );
+    }
+
+    #[test]
+    fn analyze_promotes_hardline_above_block() {
+        // `rm -rf /` previously matched check_block_patterns (Block). With
+        // hardline first, it must now be Hardline (cannot be bypassed).
+        let a = analyze_command("rm -rf /");
+        assert!(!matches!(a.security_verdict, SecurityVerdict::Block { .. }));
+    }
+
+    #[test]
+    fn analyze_leaves_safe_commands_allowed() {
+        let a = analyze_command("ls -la");
+        assert!(matches!(a.security_verdict, SecurityVerdict::Allow));
+        assert!(detect_hardline("git status").is_none());
+        assert!(detect_hardline("cargo test").is_none());
+    }
+}
 
 #[cfg(test)]
 mod tests {

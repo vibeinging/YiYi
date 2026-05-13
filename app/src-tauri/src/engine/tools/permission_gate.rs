@@ -114,6 +114,18 @@ async fn remember_approval(permission_type: &str, path: &str) {
 /// For non-persistent types (shell_block, shell_warn, sensitive_path), approvals
 /// are remembered for the session so the user is not asked again for the same item.
 pub async fn request_permission(req: PermissionRequest) -> bool {
+    // Hardline: unconditional block — bypasses ALL approval paths
+    // (session blanket, session memory, user dialog). Logged so the user
+    // can see in the UI why a "guaranteed-allowed" command was still
+    // rejected. See `shell_security::SecurityVerdict::Hardline`.
+    if req.permission_type == "shell_hardline" {
+        log::warn!(
+            "Permission gate: HARDLINE block (no bypass) '{}' for '{}': {}",
+            req.permission_type, req.path, req.reason
+        );
+        return false;
+    }
+
     // Blanket approval: user clicked "approve all" earlier in this chat.
     let session_id = super::get_current_session_id();
     if is_session_blanket(&session_id).await {

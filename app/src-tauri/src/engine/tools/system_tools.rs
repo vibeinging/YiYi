@@ -266,6 +266,26 @@ pub(super) async fn execute_shell_tool(args: &serde_json::Value) -> String {
         command.to_string()
     };
 
+    // Hardline: unrecoverable destruction patterns — refuse regardless of
+    // session blanket / yolo. We still go through permission_gate so the
+    // user sees the audit log line; the gate rejects "shell_hardline" at
+    // its top.
+    if let SecurityVerdict::Hardline { reason } = &analysis.security_verdict {
+        let req = permission_gate::PermissionRequest {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            permission_type: "shell_hardline".into(),
+            path: display_cmd.clone(),
+            parent_folder: String::new(),
+            reason: reason.clone(),
+            risk_level: "critical".into(),
+        };
+        let _ = permission_gate::request_permission(req).await;
+        return format!(
+            "Error: 命令命中不可绕过的硬拦截清单（{}）。如果你确实需要执行，请在自己的终端里手动跑——agent 不会帮你执行这类操作。",
+            reason
+        );
+    }
+
     // Block dangerous commands — ask user via permission gate
     if let SecurityVerdict::Block { reason } = &analysis.security_verdict {
         let req = permission_gate::PermissionRequest {
@@ -887,9 +907,14 @@ pub(super) async fn pty_send_input_tool(args: &serde_json::Value) -> String {
     let input = args["input"].as_str().unwrap_or("");
     let wait_ms = args["wait_ms"].as_u64().unwrap_or(3000);
 
-    // Security gate: analyze input before sending to PTY
+    // Security gate: analyze input before sending to PTY. PTY is a side
+    // channel — we cannot pop a permission dialog mid-stream, so Hardline
+    // *and* Block both refuse outright. Hardline message is louder.
     {
         let analysis = shell_security::analyze_command(input);
+        if let SecurityVerdict::Hardline { reason } = analysis.security_verdict {
+            return format!("Error: PTY input refused (hardline) — {reason}");
+        }
         if let SecurityVerdict::Block { reason } = analysis.security_verdict {
             return format!("Error: PTY input blocked — {reason}");
         }
