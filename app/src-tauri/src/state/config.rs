@@ -26,6 +26,36 @@ pub struct Config {
     /// Buddy companion configuration.
     #[serde(default)]
     pub buddy: BuddyConfig,
+    /// Agent trace recording (opt-in fine-tune data path).
+    #[serde(default)]
+    pub tracing: TracingConfig,
+}
+
+/// Turn-level agent trace persistence.
+///
+/// Stores raw ShareGPT-format turns (role, content, reasoning, tool_calls)
+/// to SQLite for future offline fine-tuning of DeepSeek V4 once the API
+/// supports it. **Default: disabled** — must be explicitly enabled by the
+/// user since traces contain full conversation including tool inputs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TracingConfig {
+    /// Master switch. When false, agent loop does not write to `agent_traces`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Rows older than this are dropped by the daily GC.
+    #[serde(default = "default_trace_max_age_days")]
+    pub max_age_days: u32,
+}
+
+fn default_trace_max_age_days() -> u32 { 30 }
+
+impl Default for TracingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_age_days: default_trace_max_age_days(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

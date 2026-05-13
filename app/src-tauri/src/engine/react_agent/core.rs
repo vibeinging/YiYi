@@ -369,6 +369,32 @@ where
             usage_tracker.record(u);
         }
 
+        // Trace recording — opt-in via Settings → tracing.enabled. Captures
+        // the assistant turn (content + reasoning + tool_calls) to SQLite
+        // for future offline fine-tuning. Best-effort: any failure is
+        // swallowed and never affects the agent loop.
+        if crate::engine::tools::is_tracing_enabled() {
+            if let Some(db) = crate::engine::tools::get_database() {
+                let trace_session = crate::engine::tools::get_current_session_id();
+                let trace_session = if trace_session.is_empty() { "__no_session".to_string() } else { trace_session };
+                let tool_calls_json = response.message.tool_calls.as_ref()
+                    .and_then(|tc| serde_json::to_string(tc).ok());
+                let content_text = response.message.content.as_ref()
+                    .map(|c| c.as_text().unwrap_or("").to_string());
+                let _ = db.record_trace(&crate::engine::db::NewAgentTrace {
+                    session_id: &trace_session,
+                    task_id: None,
+                    turn_index: messages.len() as i64,
+                    role: "assistant",
+                    content: content_text.as_deref(),
+                    reasoning_content: response.message.reasoning_content.as_deref(),
+                    tool_calls_json: tool_calls_json.as_deref(),
+                    tool_call_id: None,
+                    model: Some(config.model.as_str()),
+                });
+            }
+        }
+
         let has_tool_calls = response.message.tool_calls.as_ref()
             .map_or(false, |tc| !tc.is_empty());
 

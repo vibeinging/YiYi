@@ -95,6 +95,13 @@ pub fn run() {
             engine::tools::set_pty_manager(state.pty_manager.clone());
             engine::tools::set_memme_store(state.memme_store.clone());
 
+            // Mirror tracing flag from config to a process-level atomic so
+            // the agent hot path can check it without a config lock.
+            {
+                let cfg = tauri::async_runtime::block_on(async { state.config.read().await.clone() });
+                engine::tools::set_tracing_enabled(cfg.tracing.enabled);
+            }
+
             // Mark tools subsystem as ready (all OnceLock statics initialized)
             engine::tools::mark_ready();
 
@@ -301,10 +308,20 @@ pub fn run() {
                     tokio::time::sleep(std::time::Duration::from_secs(300)).await;
                     loop {
                         let state = gc_handle.state::<AppState>();
+                        // 1) Stale 成长建议 → archived
                         match state.db.archive_stale_inbox_items(30) {
                             Ok(n) if n > 0 => log::info!("Inbox GC: archived {} stale 成长建议 (> 30 days)", n),
                             Ok(_) => {}
                             Err(e) => log::warn!("Inbox GC failed: {}", e),
+                        }
+                        // 2) Old agent traces (only relevant if tracing enabled — but
+                        //    GC runs unconditionally so users who toggle tracing off
+                        //    still have their backlog age out).
+                        let max_age = state.config.read().await.tracing.max_age_days as i64;
+                        match state.db.gc_old_traces(max_age) {
+                            Ok(n) if n > 0 => log::info!("Trace GC: dropped {} rows older than {} days", n, max_age),
+                            Ok(_) => {}
+                            Err(e) => log::warn!("Trace GC failed: {}", e),
                         }
                         drop(state);
                         tokio::time::sleep(std::time::Duration::from_secs(86_400)).await;

@@ -48,6 +48,10 @@ pub(crate) static APP_HANDLE: std::sync::OnceLock<tauri::AppHandle> = std::sync:
 
 /// Global database reference for tools that need DB access.
 static DATABASE: std::sync::OnceLock<Arc<super::db::Database>> = std::sync::OnceLock::new();
+// Tracing master switch — config.tracing.enabled mirrored to a process-level
+// atomic so the agent hot path doesn't need to lock config on every turn.
+// Updated by `set_tracing_enabled` from lib.rs config load + Settings toggle.
+static TRACING_ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Global scheduler reference for tools that need to register jobs at runtime.
 static SCHEDULER: std::sync::OnceLock<Arc<tokio::sync::RwLock<Option<crate::engine::scheduler::CronScheduler>>>> = std::sync::OnceLock::new();
@@ -534,6 +538,16 @@ pub fn set_app_handle(handle: tauri::AppHandle) {
 /// Set the database reference for tools that need DB access.
 pub fn set_database(db: Arc<super::db::Database>) {
     DATABASE.set(db).ok();
+}
+
+/// Update the tracing master switch. Called from config load + Settings toggle.
+pub fn set_tracing_enabled(enabled: bool) {
+    TRACING_ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Cheap check used by the agent hot path before formatting a trace row.
+pub fn is_tracing_enabled() -> bool {
+    TRACING_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Set the global scheduler reference for tools.

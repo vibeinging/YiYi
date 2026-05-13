@@ -14,6 +14,7 @@ mod users;
 mod tasks;
 mod growth;
 mod inbox;
+mod traces;
 pub mod usage;
 mod quick_actions;
 
@@ -28,6 +29,7 @@ pub use users::{UnifiedUserRow, UserIdentityRow};
 pub use tasks::TaskInfo;
 pub use growth::{MeditationSession, BuddyDecision, TrustStats, PersonalitySignal, PersonalitySignalRow, SparklingMemory, RecallCandidate, PERSONALITY_BASE_STAT, invalidate_personality_cache};
 pub use inbox::{InboxItem, NewInboxItem};
+pub use traces::{AgentTrace, NewAgentTrace};
 pub use quick_actions::QuickActionRow;
 
 pub struct Database {
@@ -517,6 +519,28 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_inbox_kind ON inbox_items(kind, status);",
         )
         .map_err(|e| format!("Failed to create inbox_items table: {}", e))?;
+
+        // Agent traces: turn-level ShareGPT-format trace for offline fine-tune
+        // data path. OPT-IN — gated by `config.tracing.enabled`.
+        // See engine/db/traces.rs for read/write API.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS agent_traces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                task_id TEXT,
+                turn_index INTEGER NOT NULL,
+                role TEXT NOT NULL,                 -- 'user' | 'assistant' | 'tool' | 'system'
+                content TEXT,
+                reasoning_content TEXT,             -- DeepSeek V4 thinking trace
+                tool_calls_json TEXT,
+                tool_call_id TEXT,
+                model TEXT,
+                created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_traces_session ON agent_traces(session_id, turn_index);
+            CREATE INDEX IF NOT EXISTS idx_traces_age ON agent_traces(created_at);",
+        )
+        .map_err(|e| format!("Failed to create agent_traces table: {}", e))?;
 
         Ok(())
     }
