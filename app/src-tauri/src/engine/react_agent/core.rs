@@ -260,7 +260,13 @@ where
     let effective_user_message = if history.is_empty() {
         if let Some(wd) = working_dir {
             let ws = crate::engine::tools::get_effective_workspace();
-            let persona_prefix = super::prompt::build_persona_prefix(wd, Some(&ws)).await;
+            // Session-scoped cache: same byte string for every sub-agent /
+            // task / auto-continue round within this session, so DeepSeek's
+            // implicit prefix cache hits. See prompt.rs::build_persona_prefix_cached.
+            let sid = crate::engine::tools::get_current_session_id();
+            let persona_prefix = super::prompt::build_persona_prefix_cached(
+                &sid, wd, Some(&ws),
+            ).await;
             if persona_prefix.is_empty() {
                 user_message.to_string()
             } else {

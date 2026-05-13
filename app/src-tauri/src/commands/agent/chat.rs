@@ -1185,6 +1185,9 @@ pub async fn clear_history_impl(
     // get_recent_messages will stop at this boundary, effectively
     // resetting the LLM context while preserving chat history.
     state.db.push_message(&sid, "context_reset", "")?;
+    // Reset of LLM context also retires the frozen persona snapshot, so the
+    // next turn picks up the user's latest AGENTS.md / SOUL.md edits.
+    react_agent::invalidate_persona_snapshot(&sid);
     Ok(())
 }
 

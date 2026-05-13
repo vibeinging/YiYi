@@ -1,10 +1,39 @@
 use super::growth::detect_skill_opportunity;
 use super::BOOTSTRAP_COMPLETED;
+use std::collections::HashMap;
 use std::sync::Mutex;
+use std::sync::OnceLock;
+use std::time::SystemTime;
 
 /// Cache for stale-branch check: (workspace_path, warning_option, timestamp).
 /// Re-checked only if >60s have passed since the last check.
 static STALE_CACHE: std::sync::OnceLock<Mutex<(String, Option<String>, std::time::Instant)>> = std::sync::OnceLock::new();
+
+/// Per-file byte cap for AGENTS.md / SOUL.md / PROFILE.md. Beyond this the
+/// tail is dropped — keeps the persona prefix from drifting into the multi-KB
+/// range and eating the prefix-cache budget. 8 KiB ≈ 2 000 tokens.
+pub const PERSONA_FILE_MAX_BYTES: usize = 8 * 1024;
+
+/// Frozen persona snapshot for a single session. Once captured, AGENTS.md /
+/// SOUL.md / PROFILE.md edits do NOT take effect until the next fresh
+/// session — this is exactly what we need so DeepSeek's implicit prefix
+/// cache hits across sub-agents, auto-continue rounds, and task workers
+/// within the same session.
+#[derive(Debug, Clone)]
+pub struct PersonaSnapshot {
+    pub prefix: String,
+    pub frozen_at: SystemTime,
+}
+
+/// Per-session persona cache. Bounded to PERSONA_CACHE_MAX_SESSIONS entries
+/// (oldest evicted on overflow) so a long-lived process won't grow the map
+/// without bound.
+static PERSONA_SNAPSHOTS: OnceLock<Mutex<HashMap<String, PersonaSnapshot>>> = OnceLock::new();
+const PERSONA_CACHE_MAX_SESSIONS: usize = 16;
+
+fn persona_cache() -> &'static Mutex<HashMap<String, PersonaSnapshot>> {
+    PERSONA_SNAPSHOTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 // ---------------------------------------------------------------------------
 // Template seeding with multi-language support
@@ -82,6 +111,98 @@ pub async fn build_persona_prefix(
     )
 }
 
+/// Session-scoped persona prefix.
+///
+/// On the first call for a given `session_id` this reads AGENTS.md / SOUL.md
+/// / PROFILE.md from disk and renders the same `<persona-prefix>` block as
+/// [`build_persona_prefix`]. Every later call within the same session
+/// returns the **byte-identical** cached string — even if the user edits the
+/// underlying files between calls. That frozen-per-session semantic is the
+/// whole point: it keeps the user-message prefix stable so DeepSeek's
+/// implicit prefix cache hits across sub-agent calls, auto-continue rounds,
+/// and task workers that all run inside the same parent session.
+///
+/// Passing an empty `session_id` falls through to the uncached
+/// [`build_persona_prefix`] (used by unit tests and the rare path where the
+/// runtime didn't establish a session scope).
+pub async fn build_persona_prefix_cached(
+    session_id: &str,
+    working_dir: &std::path::Path,
+    user_workspace: Option<&std::path::Path>,
+) -> String {
+    if session_id.is_empty() {
+        return build_persona_prefix(working_dir, user_workspace).await;
+    }
+
+    if let Ok(map) = persona_cache().lock() {
+        if let Some(snap) = map.get(session_id) {
+            return snap.prefix.clone();
+        }
+    }
+
+    let prefix = build_persona_prefix(working_dir, user_workspace).await;
+    if let Ok(mut map) = persona_cache().lock() {
+        // Defensive: another caller may have populated the slot while we
+        // were reading disk. Re-check before insert.
+        if let Some(snap) = map.get(session_id) {
+            return snap.prefix.clone();
+        }
+        if map.len() >= PERSONA_CACHE_MAX_SESSIONS {
+            // Evict the oldest by frozen_at. HashMap iteration order is
+            // randomized, so fall back to a key clone of the min entry.
+            if let Some(victim) = map
+                .iter()
+                .min_by_key(|(_, s)| s.frozen_at)
+                .map(|(k, _)| k.clone())
+            {
+                map.remove(&victim);
+            }
+        }
+        map.insert(
+            session_id.to_string(),
+            PersonaSnapshot {
+                prefix: prefix.clone(),
+                frozen_at: SystemTime::now(),
+            },
+        );
+    }
+    prefix
+}
+
+/// Drop a session's frozen persona — used when `clear_history` resets the
+/// conversation so the next turn picks up the user's latest AGENTS.md edits.
+pub fn invalidate_persona_snapshot(session_id: &str) {
+    if session_id.is_empty() {
+        return;
+    }
+    if let Ok(mut map) = persona_cache().lock() {
+        map.remove(session_id);
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn clear_persona_cache() {
+    if let Ok(mut map) = persona_cache().lock() {
+        map.clear();
+    }
+}
+
+/// Tail-truncate any persona file that breaches `PERSONA_FILE_MAX_BYTES`.
+/// Uses a UTF-8-safe boundary so we never split a multi-byte codepoint.
+fn truncate_persona_file(content: &str) -> String {
+    if content.len() <= PERSONA_FILE_MAX_BYTES {
+        return content.to_string();
+    }
+    let mut end = PERSONA_FILE_MAX_BYTES;
+    while end > 0 && !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut out = String::with_capacity(end + 32);
+    out.push_str(&content[..end]);
+    out.push_str("\n\n…[truncated]");
+    out
+}
+
 /// Load persona files asynchronously.
 /// Checks both working_dir (~/.yiyi/) and user_workspace (~/Documents/YiYi/),
 /// with user_workspace taking priority (user may customize SOUL.md there via SetupWizard).
@@ -104,7 +225,8 @@ pub async fn load_persona(working_dir: &std::path::Path, user_workspace: Option<
         if let Some(content) = content {
             let stripped = strip_yaml_frontmatter(&content);
             if !stripped.trim().is_empty() {
-                parts.push(format!("# {}\n\n{}", name, stripped));
+                let bounded = truncate_persona_file(&stripped);
+                parts.push(format!("# {}\n\n{}", name, bounded));
             }
         }
     }
@@ -782,7 +904,9 @@ mod tests {
             None,
         )
         .await;
-        assert!(prompt.contains("Please respond in Chinese."));
+        // The zh-CN language instruction is itself authored in Chinese.
+        assert!(prompt.contains("请使用中文回复用户"));
+        assert!(prompt.contains("思考过程"));
     }
 
     #[tokio::test(flavor = "multi_thread")]

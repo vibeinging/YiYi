@@ -13,7 +13,13 @@ pub use growth::{
     generate_morning_reflection, improve_skill_from_experience, learn_from_feedback,
     reflect_on_task, should_reflect_silent, update_user_model, SILENT_REFLECT_SAMPLE_EVERY,
 };
-pub use prompt::{build_system_prompt, seed_default_templates};
+pub use prompt::{
+    build_persona_prefix, build_persona_prefix_cached, build_system_prompt,
+    invalidate_persona_snapshot, seed_default_templates, PersonaSnapshot,
+    PERSONA_FILE_MAX_BYTES,
+};
+#[cfg(any(test, feature = "test-support"))]
+pub use prompt::clear_persona_cache;
 
 // ---------------------------------------------------------------------------
 // Shared types used across sub-modules
