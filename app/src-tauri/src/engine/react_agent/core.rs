@@ -735,17 +735,22 @@ where
                     });
                 }
 
-                // Push to messages. Only feed images into the model context
-                // when the model can actually see them — for text-only models
-                // (DeepSeek V4) the artifact pipeline already showed the image
-                // to the user; injecting an `image_url` placeholder here just
-                // tempts the model to invent a description it can't have.
-                let content = if images.is_empty()
-                    || !crate::engine::llm_client::model_has_vision(config)
-                {
-                    MessageContent::text(output)
+                // Push to messages. Tool results are funnelled through
+                // MultimodalEnvelope::dispatch_for — the envelope owns
+                // the "vision provider gets images, text-only provider
+                // gets only the summary" policy, so this site no longer
+                // makes that decision itself. Vision-less providers
+                // (DeepSeek V4) still see the textual summary; the
+                // artifact pipeline meanwhile shows the visual to the
+                // user regardless.
+                let envelope = crate::engine::tools::output_envelope::MultimodalEnvelope
+                    ::with_images(output, images);
+                let vision_capable = crate::engine::llm_client::model_has_vision(config);
+                let (text, dispatched_images) = envelope.dispatch_for(vision_capable);
+                let content = if dispatched_images.is_empty() {
+                    MessageContent::text(text)
                 } else {
-                    MessageContent::with_images(&output, &images)
+                    MessageContent::with_images(&text, &dispatched_images)
                 };
                 messages.push(LLMMessage {
                     role: "tool".into(),
