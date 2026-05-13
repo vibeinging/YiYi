@@ -206,6 +206,31 @@ impl super::Database {
         .map_err(|e| format!("reject_inbox_item: {}", e))
     }
 
+    /// Auto-archive `pending` items older than `max_age_days`. Returns the
+    /// number archived. Uses status `'archived'` with `user_action='gc'` so
+    /// it's distinguishable from user-initiated withdrawals.
+    ///
+    /// Idempotent — safe to call repeatedly; items already not-pending are
+    /// untouched. Designed for a daily idle-tick maintenance loop, per the
+    /// CLAUDE.md "维护型任务：规则先行 + 空闲触发" principle.
+    pub fn archive_stale_inbox_items(&self, max_age_days: i64) -> Result<usize, String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let now = super::now_ts();
+        let cutoff = now - max_age_days * 86_400_000;
+        let affected = conn
+            .execute(
+                "UPDATE inbox_items
+                    SET status = 'archived',
+                        user_action = 'gc',
+                        user_note = 'auto-archived: stale after ' || ?1 || ' days',
+                        reviewed_at = ?2
+                  WHERE status = 'pending' AND created_at < ?3",
+                params![max_age_days, now, cutoff],
+            )
+            .map_err(|e| format!("archive_stale_inbox_items: {}", e))?;
+        Ok(affected)
+    }
+
     pub fn withdraw_inbox_item(&self, id: &str) -> Result<(), String> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = super::now_ts();

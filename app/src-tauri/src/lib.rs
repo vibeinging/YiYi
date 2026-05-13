@@ -291,6 +291,27 @@ pub fn run() {
                 });
             }
 
+            // Daily inbox GC: pending 成长建议 > 30 天自动 archived。
+            // 纯规则型维护任务（参 CLAUDE.md §4 "规则先行 + 空闲触发"），
+            // 不烧 LLM、不动用户主动行为。延迟 5 分钟启动以避开启动 IO
+            // 高峰，之后每 24 小时跑一次。
+            {
+                let gc_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                    loop {
+                        let state = gc_handle.state::<AppState>();
+                        match state.db.archive_stale_inbox_items(30) {
+                            Ok(n) if n > 0 => log::info!("Inbox GC: archived {} stale 成长建议 (> 30 days)", n),
+                            Ok(_) => {}
+                            Err(e) => log::warn!("Inbox GC failed: {}", e),
+                        }
+                        drop(state);
+                        tokio::time::sleep(std::time::Duration::from_secs(86_400)).await;
+                    }
+                });
+            }
+
             // One-time migration: seed MemMe from legacy MEMORY.md/PRINCIPLES.md
             {
                 let migration_flag = state.working_dir.join(".memme_seeded");

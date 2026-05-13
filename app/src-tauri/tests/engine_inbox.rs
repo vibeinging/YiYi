@@ -169,15 +169,75 @@ fn inbox_list_filters_by_status() {
 
 #[test]
 #[serial]
-fn inbox_has_open_skill_proposal_detects_dup() {
+fn inbox_has_similar_skill_proposal_by_exact_name() {
     let t = TempDb::new();
     let db = t.db();
     db.insert_inbox_item(&new_item("id-x", "shared-name"))
         .expect("insert");
-    assert!(db.has_open_skill_proposal("shared-name"));
-    assert!(!db.has_open_skill_proposal("other-name"));
+    assert!(db.has_similar_skill_proposal("shared-name", "different desc", 7));
+    assert!(!db.has_similar_skill_proposal("other-name", "different desc", 7));
 
-    // After rejection, no longer "open"
+    // Rejected items within the window still count (anti-pester rule)
     db.reject_inbox_item("id-x", None).expect("reject");
-    assert!(!db.has_open_skill_proposal("shared-name"));
+    assert!(db.has_similar_skill_proposal("shared-name", "any", 7));
+}
+
+#[test]
+#[serial]
+fn inbox_archive_stale_items_moves_only_old_pending() {
+    let t = TempDb::new();
+    let db = t.db();
+
+    // Fresh pending item — should NOT be archived
+    db.insert_inbox_item(&new_item("fresh", "fresh-skill"))
+        .expect("insert fresh");
+
+    // Old pending item — backdate its created_at past the cutoff
+    db.insert_inbox_item(&new_item("stale", "stale-skill"))
+        .expect("insert stale");
+    {
+        let conn = db.get_conn().expect("conn");
+        let forty_days_ago = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64) - 40 * 86_400_000;
+        conn.execute(
+            "UPDATE inbox_items SET created_at = ?1 WHERE id = 'stale'",
+            rusqlite::params![forty_days_ago],
+        )
+        .expect("backdate");
+    }
+
+    // Approved old item — must NOT be touched (status != pending)
+    db.insert_inbox_item(&new_item("approved-old", "approved-skill"))
+        .expect("insert approved");
+    db.mark_inbox_approved("approved-old", None, None).expect("approve");
+
+    let archived = db.archive_stale_inbox_items(30).expect("gc");
+    assert_eq!(archived, 1, "exactly one stale pending should be archived");
+
+    let stale = db.get_inbox_item("stale").expect("stale exists");
+    assert_eq!(stale.status, "archived");
+    assert_eq!(stale.user_action.as_deref(), Some("gc"));
+    assert!(stale.user_note.as_ref().map_or(false, |s| s.contains("auto-archived")));
+
+    let fresh = db.get_inbox_item("fresh").expect("fresh exists");
+    assert_eq!(fresh.status, "pending", "fresh pending must stay pending");
+
+    let approved = db.get_inbox_item("approved-old").expect("approved exists");
+    assert_eq!(approved.status, "approved", "approved items not re-touched");
+}
+
+#[test]
+#[serial]
+fn inbox_archive_is_idempotent() {
+    let t = TempDb::new();
+    let db = t.db();
+    db.insert_inbox_item(&new_item("x", "x")).expect("insert");
+    {
+        let conn = db.get_conn().expect("conn");
+        let old = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64) - 50 * 86_400_000;
+        conn.execute("UPDATE inbox_items SET created_at = ?1", rusqlite::params![old])
+            .expect("backdate");
+    }
+    assert_eq!(db.archive_stale_inbox_items(30).unwrap(), 1);
+    // Second run: nothing left to archive
+    assert_eq!(db.archive_stale_inbox_items(30).unwrap(), 0);
 }
