@@ -4,179 +4,177 @@
 
 # YiYi
 
-A desktop AI assistant. Wired to DeepSeek V4 only — but wired deep. Keeps notes, reflects nightly, gets sharper the longer you use it.
+**A desktop AI companion that grows alongside you**
+DeepSeek V4–only, engineered deep · meditates nightly, learns from corrections, knows you better over time
 
 [![GitHub release](https://img.shields.io/github/v/release/vibeinging/YiYi?style=flat-square&color=orange&include_prereleases)](https://github.com/vibeinging/YiYi/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue?style=flat-square)](https://github.com/vibeinging/YiYi/releases)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg?style=flat-square)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/vibeinging/YiYi?style=flat-square&color=yellow)](https://github.com/vibeinging/YiYi/stargazers)
+[![Issues](https://img.shields.io/github/issues/vibeinging/YiYi?style=flat-square&color=red)](https://github.com/vibeinging/YiYi/issues)
 
 [中文](./README.md) · English
 
-[Download](https://github.com/vibeinging/YiYi/releases) · [Issues](https://github.com/vibeinging/YiYi/issues)
+[![macOS](https://img.shields.io/badge/macOS-Download-000000?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/vibeinging/YiYi/releases/latest)
+[![Windows](https://img.shields.io/badge/Windows-Download-0078D6?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/vibeinging/YiYi/releases/latest)
+[![Linux](https://img.shields.io/badge/Linux-Download-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/vibeinging/YiYi/releases/latest)
+
+<br/>
+
+<img src="docs/screenshots/01-main.png" alt="YiYi main UI" width="860" />
 
 </div>
 
 ---
 
-## What YiYi is
-
-A desktop AI assistant — one that gets work done (read PDFs, write scripts, generate spreadsheets, handle email, run scheduled jobs, deploy as a chat-platform bot) and also lives with you across sessions: it keeps track of your preferences, remembers the corrections you've made, and quietly reviews its own interactions overnight to get better at how you actually want things done.
-
-YiYi doesn't try to be model-agnostic. It commits to whichever DeepSeek model has the best price-to-capability ratio at the time. That's a deliberate trade — once the choice is narrowed, the adaptation can go deep: prefix caching, parallel tool calls, error-code backoff strategy, thinking-chain UI, vision-aware routing. These don't survive intact under a generic multi-model abstraction.
-
-The other axis — "leave it running, let it grow" — needs the model to be good enough to drive the main loop and cheap enough to leave thinking about itself in the background. Both are true at this generation of V4.
-
-## See it
-
-<p align="center">
-  <img src="docs/screenshots/01-main.png" alt="YiYi main view" width="860" />
-</p>
+## ✨ Why YiYi
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/02-buddy.png" alt="Buddy" /></td>
-    <td width="50%"><img src="docs/screenshots/03-skills.png" alt="Skills library" /></td>
-  </tr>
-  <tr>
-    <td align="center">Buddy<br/>Desktop sprite, persona, evolves</td>
-    <td align="center">Skills<br/>25+ built-in + custom + MCP</td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="docs/screenshots/04-tasks.png" alt="Long tasks" /></td>
-    <td width="50%"><img src="docs/screenshots/05-authorize.png" alt="Authorization prompt" /></td>
-  </tr>
-  <tr>
-    <td align="center">Long tasks<br/>Auto-decomposed · pausable · resumable</td>
-    <td align="center">Authorization<br/>Sensitive ops need explicit approval</td>
+    <td align="center" width="33%" valign="top">
+      <h3>🎯 Engineered Deep</h3>
+      <p>DeepSeek V4 only. Pro/Flash routing, prefix-cache hit tracking, streaming reasoning, parallel tool calls — the kind of detail that gets lost behind a multi-model abstraction.</p>
+    </td>
+    <td align="center" width="33%" valign="top">
+      <h3>🌱 Long-term Growth</h3>
+      <p>Lives on your desktop. Remembers your corrections, meditates nightly in the background. White-box "growth suggestions" — what the agent thinks should be saved waits for your review.</p>
+    </td>
+    <td align="center" width="33%" valign="top">
+      <h3>💸 Low on both ends</h3>
+      <p>Learning curve: no jargon required. Money: no subscription, no markup — your API key talks to DeepSeek directly, you see exactly what each turn cost.</p>
+    </td>
   </tr>
 </table>
 
 ---
 
-## What "deep DeepSeek V4 adaptation" actually means
+## 📸 Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/02-buddy.png" alt="Desktop sprite" /></td>
+    <td width="50%"><img src="docs/screenshots/03-skills.png" alt="Skills library" /></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Desktop Sprite</b><br/>Always there · with personality · talks to you</td>
+    <td align="center"><b>Skills Library</b><br/>25+ built-in · custom · MCP-connected</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/04-tasks.png" alt="Long tasks" /></td>
+    <td width="50%"><img src="docs/screenshots/05-authorize.png" alt="Authorization" /></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Long Tasks</b><br/>Auto-decompose · pausable · resumable</td>
+    <td align="center"><b>Authorization</b><br/>Destructive ops need explicit consent</td>
+  </tr>
+</table>
+
+---
+
+## 🚀 Quick Start
+
+1. Grab the installer for your platform from [Releases](https://github.com/vibeinging/YiYi/releases/latest)
+2. Walk through the setup wizard
+3. Get an API key from [DeepSeek](https://platform.deepseek.com/api_keys), paste it in
+4. Start chatting — Pro/Flash routing is automatic
+
+> This release is DeepSeek V4 only. If you're still on OpenAI / Claude / Gemini, keep the previous build or export sessions before upgrading.
+
+---
+
+## 🎯 Features
+
+| Module | What it does |
+|---|---|
+| 🧠 **ReAct Agent** | think → act → observe loop · 60+ built-in tools · parallel sub-agents |
+| 🎯 **25+ Built-in Skills** | Office · browser · comms · creative · automation · dev |
+| 🤖 **Multi-platform Bot** | QQ · DingTalk · Feishu · WeCom · Discord · Telegram · Webhook |
+| 🔌 **MCP Protocol** | Plug in external MCP servers, expose your own skills |
+| 🖱️ **Desktop Control** | Background macOS control via cua-driver MCP — doesn't steal cursor or Space |
+| 🌱 **Long-term Growth** | Nightly meditation · failure reflection · learn from corrections · capability profile |
+| 🛡️ **Safe by Default** | Folder allowlist · shell static analysis · SSRF guard · prompt-injection guard |
+
+---
+
+<details>
+<summary><b>🔬 DeepSeek V4 deep integration</b> — performance / cost / UX / robustness</summary>
 
 **Performance & cost**
 
-| Item | What we did |
+| Item | How |
 |---|---|
-| Pro / Flash routing | Main loop runs V4 Pro. Compaction, meditation, heartbeat, connection tests run V4 Flash. Pipeline-level routing — saves ~10× |
-| Prefix cache hits | Tools array sorted by name for byte-stable prefix; system prompt split into static + dynamic blocks. Hit rate displayed live |
-| Long-context compaction | Triggers at 80% window (800K). Disabled below 500K so we don't trash the prefix cache |
-| Error-code specialization | `503 Server busy` → 5s base backoff; `402` → "balance exhausted, top up at platform.deepseek.com"; `429` + balance keywords → no retry |
-| Flash-driven helper tools | `compact_context` (squash long text) and `parallel_analyze` (N concurrent Flash calls) offload work from Pro |
+| Pro / Flash routing | Main loop on V4 Pro; compaction, meditation, heartbeat, connection tests on V4 Flash. Flow-level routing, ~10× cheaper |
+| Prefix-cache hits | Tools array sorted by name for byte stability; system prompt split into static/dynamic blocks. Hit rate shown live |
+| Long-context compaction | Triggers at 80% (800K); under 500K compaction is disabled to preserve prefix cache |
+| Error-code specialization | 503 + Server busy → 5s exponential backoff; 402 → top-up page; 429 + balance keyword → no retry |
+| Flash-accelerated tools | `compact_context` for long docs, `parallel_analyze` for N Flash calls — offload heavy subtasks from Pro |
 
-**Experience**
+**UX**
 
-| Item | What we did |
+| Item | How |
 |---|---|
-| Reasoning chain | `reasoning_content` streamed live, collapsible, persisted in history. Effort toggles OFF / HIGH / MAX in the input box |
-| Chinese reasoning | System prompt explicitly tells the model to think in the same language as the reply |
-| Parallel tool calls | OpenAI-compatible request sets `parallel_tool_calls: true` explicitly + prompt nudges the model to batch independent reads. Engine `join_all`s read-only tools |
-| Cache-hit badge | One line under each reply: `↑12,453  ↓1,028  cache 73%`. You can see what the cache is saving |
+| Reasoning chain | `reasoning_content` streams in, collapsible, persisted; effort toggle: OFF / HIGH / MAX |
+| Chinese thinking | System prompt forces thinking in Chinese — no English-then-translate |
+| Parallel tool calls | `parallel_tool_calls: true` + prompt-level guidance; engine uses `join_all` |
+| Cache-hit badge | Each reply footer: `↑12,453  ↓1,028  cache 73%` — you see the savings |
 
 **Robustness**
 
-| Item | What we did |
+| Item | How |
 |---|---|
-| Anti-loop guard | Same `(tool, args)` 3 times → blocked with corrective feedback. Same tool failing 8 times → halt with a friendly summary, never a raw `Error:` paste |
-| Browser fetch | Real Chrome 131 UA, `disable-blink-features=AutomationControlled`. Detects Cloudflare / Akamai challenge pages and returns a structured Error pointing the agent at `web_search` |
-| Workspace time machine | Shadow-git snapshots before and after every turn. Roll back any step; your real `.git` is untouched |
+| Loop guard | Same (tool, args) called 3× → auto-block; same tool fails 8× → friendly halt |
+| Browser Fetch | Real Chrome 131 UA, webdriver disabled; Cloudflare/Akamai challenge pages detected and redirected to web_search |
+| Workspace time machine | Shadow-git snapshot before/after every turn (your `.git` untouched), one-click rollback |
 
----
+</details>
 
-## Long-term growth
+<details>
+<summary><b>🌱 Long-term growth</b> — nightly meditation, learn from corrections, white-box co-construction</summary>
 
-Wrapper agents solve "one task." Every new chat starts from scratch. YiYi's other axis is keeping the model in your workflow long enough to actually get better at working with you.
+A desktop-agent wrapper solves "one task at a time" but starts from zero every session. YiYi's other main thread: keep the model in your workflow and make it stronger over time.
 
-- **Nightly meditation** — a Flash-tier background pass reviews the day's interactions and distills scattered experience into behavior principles
-- **Tiered memory** — HOT (active context) / COLD (SQLite) / MEMME (vector recall). Important facts age into long-term storage instead of getting lost
-- **Corrections become rules** — say "don't do that again" once; it goes into feedback memory and applies next time
-- **Capability profile** — visible deltas of where she's getting stronger or weaker
-- **Failure reflection** — repeated tool failures and loop_guard halts get written into reflections; next similar task starts by checking those notes
+- **Nightly meditation**: a background Flash run distills the day's interactions into behavioral principles
+- **Tiered memory**: HOT (active context) / COLD (SQLite) / MEMME (vector recall) — routed by recency and importance
+- **Learn from corrections**: tell it "don't do that again" once → written to feedback memory → avoided next time
+- **Failure reflection**: tool fails repeatedly or loop_guard fires → writes a reflection → consulted on similar tasks later
+- **Capability profile**: see what's improving and what's regressing
+- **White-box growth suggestions**: agent-proposed skills don't auto-apply — they queue for your review. Even a full inbox doesn't affect runtime — zero-risk accumulation
 
-This loop needs to keep running quietly in the background — correcting, reflecting, consolidating — so it has to be cheap enough to forget about. That's the second reason YiYi picks V4.
+This thread needs a model running in the background — correcting, reflecting, consolidating — so it has to be cheap enough to leave on. Another reason for V4.
 
----
+</details>
 
-## About money
+<details>
+<summary><b>💸 About money</b> — no subscription, you pay DeepSeek directly</summary>
 
-YiYi has no subscription. What you pay for is the inference YiYi uses on your behalf — paid directly to DeepSeek, by usage.
+YiYi doesn't charge a subscription. You pay for the compute it uses on your behalf — directly to DeepSeek, by usage.
 
-In practice:
+- **In-app top-up in one step**: when balance is low, tap the prompt; the DeepSeek official top-up page opens in a sandbox webview (their session, not YiYi's backend)
+- **Balance and usage always visible**: every reply shows what that turn cost; account page shows total balance and recent spend
+- **¥1 goes a long way for casual chat**: cheap models, prefix-cache reuse, background work runs on Flash
+- **No need to know "model" / "token"**: YiYi picks the heavy or light model itself — you just talk
 
-- **Top-ups happen inside the app**: when balance is low, click the prompt — a sandboxed webview opens DeepSeek's official top-up page (your DeepSeek session lives there, not in YiYi's backend)
-- **Balance and usage are always visible**: each reply shows a small footer with what the turn cost; the account page tracks running balance and recent spend
-- **Casual chatting goes a long way on a few dollars**: the model is priced cheap to begin with, the engine reuses cached prefixes, and lightweight background jobs run on the smaller variant — actual mileage depends on how you use it
-- **No need to learn "model" or "token"**: YiYi picks the heavy or light variant on its own; you just talk to it
+</details>
 
----
-
-## What's in the box
-
-**ReAct agent**
-
-`think → act → observe` loop. 60+ built-in tools — shell, file I/O, browser automation, screenshot analysis, calendar, memory recall. Spawns sub-agents in parallel for harder workflows.
-
-**25+ built-in skills**
-
-| | |
-|:---|:---|
-| Office — Word / Excel / PDF / PPT | Browser — automation / testing / SEO |
-| Comms — email, news aggregation | Creative — Canvas, algorithmic art, frontend |
-| Automation — cron, auto-continue | Dev — coding assistant, MCP, Claude Code |
-
-Install more from the skill market, or have YiYi generate one.
-
-**Bot deployment**
-
-Run YiYi as a bot on QQ · DingTalk · Lark · WeCom · Discord · Telegram · Webhook. Same agent, same memory, anywhere you live.
-
-**MCP**
-
-Speaks Model Context Protocol natively. Connect any MCP server for new capabilities; expose YiYi's skills back out so other AI apps can call them.
-
-**Safe by default**
-
-- Folder allowlist; sensitive paths (`.env`, `.ssh`, credentials) always blocked
-- Shell commands go through static safety analysis; destructive ops require explicit confirmation
-- Model-supplied URLs go through SSRF filtering
-- External content is wrapped in `<external-content>` to defend against prompt injection
-
----
-
-## Install
-
-Grab a build from [Releases](https://github.com/vibeinging/YiYi/releases):
-
-| Platform | File |
-|---|---|
-| macOS (Apple Silicon) | `YiYi_x.x.x_aarch64.dmg` |
-| macOS (Intel) | `YiYi_x.x.x_x64.dmg` |
-| Windows | `YiYi_x.x.x_x64-setup.exe` |
-| Linux (Debian / Ubuntu) | `YiYi_x.x.x_amd64.deb` |
-| Linux (generic) | `YiYi_x.x.x_amd64.AppImage` |
-
-Open it, pick a language in the wizard, paste in a key from the [DeepSeek platform](https://platform.deepseek.com/api_keys), and start chatting. Pro / Flash routing is automatic — there's no model picker.
-
-> This release supports DeepSeek V4 only. If you're still on OpenAI / Claude / Gemini, stay on the prior release or export sessions before upgrading.
-
----
-
-## Architecture
+<details>
+<summary><b>🏗️ Tech stack</b> — Rust / Tauri 2 · React 18 · DeepSeek V4 · SQLite · MCP</summary>
 
 - Frontend: React 18, TypeScript, Tailwind, Vite, xterm.js
 - Backend: Rust, Tauri 2.x
-- Agent: ReAct + `spawn_agents` parallel sub-agents + `loop_guard` anti-loop
-- LLM: DeepSeek V4 Pro / Flash dual-model, `UsageSource`-driven routing, prefix-cache hit tracking, streaming reasoning
-- Cost: `engine/pricing.rs` V4 pricing table (V4 Pro 75% promo through 2026-05-31). Process-wide cost side-channel covers background calls
-- Context: 800K auto-compaction trigger; disabled below 500K to preserve the prefix cache
-- Workspace: shadow-git snapshots before/after every turn; your `.git` is never touched
-- DB: SQLite (WAL)
-- Vector memory: [MemMe](https://github.com/vibeinging/MemMe) tiered memory + nightly meditation consolidation
-- Python: PyO3 embedded, bundled pypdf / python-docx / openpyxl / python-pptx
-- Browser: Playwright bridge for interactive flows; system Chrome headless for cheap screenshot / HTML fetch (with anti-bot hardening)
+- Agent: ReAct + `spawn_agents` parallel sub-agents + `loop_guard`
+- LLM: DeepSeek V4 Pro/Flash dual-model, `UsageSource`-driven routing, prefix-cache hit tracking, streaming reasoning
+- Cost: `engine/pricing.rs` V4 price table; process-level cost side-channel aggregating background calls
+- Context: 800K triggers auto-compaction, below 500K compaction disabled to preserve prefix cache
+- Workspace: shadow-git snapshot (per-turn), user's `.git` untouched
+- Database: SQLite (WAL)
+- Vector memory: [MemMe](https://github.com/vibeinging/MemMe) tiered memory + meditation consolidation
+- Python: PyO3 embedded, ships with pypdf / python-docx / openpyxl / python-pptx
+- Browser: Playwright bridge for interactive flows; system Chrome headless for screenshots / HTML fetch
 
-## Development
+</details>
+
+<details>
+<summary><b>🛠️ Local development</b></summary>
 
 ```bash
 git clone https://github.com/vibeinging/YiYi.git
@@ -186,20 +184,50 @@ npm run tauri dev          # dev mode
 npm run tauri build        # production build
 ```
 
-Requirements: Node.js 20+, Rust 1.77+, Python 3.13. See [CLAUDE.md](./CLAUDE.md) for engineering details.
+Requirements: Node.js 20+, Rust 1.77+, Python 3.13. See [CLAUDE.md](./CLAUDE.md).
+
+</details>
 
 ---
 
-## License
+## 🧭 What we're aiming for
+
+- **Lower both kinds of cost** — no AI jargon to learn (no "model" / "token" / "prompt"), and you pay DeepSeek by usage: no subscription, no markup
+- Be **the DeepSeek-native desktop AI**, period — no other model, this one mastered
+- Engineer for both **peak capability** and **minimal cost** — no compromise
+- Build an AI that doesn't just help you once, but **grows with you** the longer you keep it around
+
+## 🤝 Contributing
+
+PRs and issues welcome. Before submitting, please run `cd app && npx tsc --noEmit` and `cd app/src-tauri && cargo test --features test-support`. Conventions in [CLAUDE.md](./CLAUDE.md).
+
+[![Contributors](https://contrib.rocks/image?repo=vibeinging/YiYi)](https://github.com/vibeinging/YiYi/graphs/contributors)
+
+## 💬 Community
+
+- [Issues](https://github.com/vibeinging/YiYi/issues) — bug reports / feature requests
+- [Discussions](https://github.com/vibeinging/YiYi/discussions) — usage tips / skill sharing / Q&A
+
+<div align="center">
+
+> *If you enjoy using it, that's all the motivation I need.*
+>
+> *Built for love — don't worry about my costs.*
+
+</div>
+
+## ⭐ Star History
+
+<a href="https://star-history.com/#vibeinging/YiYi&Date">
+  <img src="https://api.star-history.com/svg?repos=vibeinging/YiYi&type=Date" alt="Star History Chart" width="600" />
+</a>
+
+## 📜 License
 
 [Apache 2.0](./LICENSE)
 
 ---
 
 <div align="center">
-
-Tauri 2 · Rust · React · TypeScript · SQLite · MCP · DeepSeek V4
-
-[Download](https://github.com/vibeinging/YiYi/releases) · [File an issue](https://github.com/vibeinging/YiYi/issues)
-
+<sub>Tauri 2 · Rust · React · TypeScript · SQLite · MCP · DeepSeek V4</sub>
 </div>
