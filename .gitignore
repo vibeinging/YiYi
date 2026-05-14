@@ -97,9 +97,11 @@ docs/*
 *.pfx
 
 # vibe coding
+# .claude/ and CLAUDE.md are local-only — per-machine tool state and notes.
+# /AGENTS.md is NOT ignored: it's the project-level onboarding doc for
+# Claude Code / Cursor / other coding AIs (Hermes / OpenAI convention).
 .claude
 openspec
-/AGENTS.md
 CLAUDE.md
 *.tmp
 app/src-tauri/libs/
