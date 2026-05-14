@@ -616,6 +616,7 @@ pub fn run() {
             commands::usage::get_usage_by_session,
             commands::usage::get_usage_daily,
             commands::usage::drain_pending_cost,
+            commands::usage::get_prompt_cache_stats,
             // Export
             commands::export::export_conversations,
             commands::export::export_memories,

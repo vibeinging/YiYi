@@ -206,6 +206,63 @@ fn now_epoch_ms() -> i64 {
         .map_or(0, |d| d.as_millis() as i64)
 }
 
+// ── Global process-scoped instance ────────────────────────────────────
+//
+// The `PromptCache` instance itself is just a fingerprint + stats
+// accumulator — there's no reason to thread it through the agent loop's
+// 9-argument call sites. A process-global lets the ReAct loop dump
+// usage with one call and lets a Tauri command read stats without
+// touching `AppState`.
+
+use std::sync::OnceLock;
+
+static GLOBAL_PROMPT_CACHE: OnceLock<std::sync::Mutex<PromptCache>> = OnceLock::new();
+
+fn global() -> &'static std::sync::Mutex<PromptCache> {
+    GLOBAL_PROMPT_CACHE.get_or_init(|| std::sync::Mutex::new(PromptCache::new()))
+}
+
+/// Convenience wrapper for the agent loop: builds a fingerprint from the
+/// system prompt + a cheap message-count summary, then feeds it to the
+/// global cache. The summary intentionally collapses the whole message
+/// list to a single integer — we want the fingerprint to flip when
+/// `system_prompt` changes (the cache-break signal we actually care
+/// about), not on every new user message.
+///
+/// No-op when both token counts are zero, so providers without cache
+/// reporting don't pollute the stats.
+pub fn record_call(
+    system_prompt: &str,
+    messages_count: usize,
+    cache_creation_tokens: u32,
+    cache_read_tokens: u32,
+) {
+    if cache_creation_tokens == 0 && cache_read_tokens == 0 {
+        return;
+    }
+    let summary = format!("n={}", messages_count);
+    let fp = PromptCache::fingerprint(system_prompt, &summary);
+    if let Ok(mut cache) = global().lock() {
+        cache.record_api_usage(fp, cache_creation_tokens, cache_read_tokens);
+    }
+}
+
+/// Snapshot the global cache stats (read-only). Used by Tauri commands /
+/// future Cost UI to surface prefix-cache hit rate.
+pub fn snapshot_stats() -> CacheStats {
+    global()
+        .lock()
+        .map(|c| c.stats())
+        .unwrap_or_default()
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn _reset_global_for_test() {
+    if let Ok(mut cache) = global().lock() {
+        *cache = PromptCache::new();
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -300,5 +357,46 @@ mod tests {
             .load_stats(Path::new("/tmp/does-not-exist-yiyi-test.json"))
             .expect("should not error");
         assert!(!ok);
+    }
+
+    // ── Global accumulator tests ──────────────────────────────────────
+    // All `record_call` tests share one process-global Mutex<PromptCache>
+    // — `#[serial]` keeps them from interleaving and corrupting each
+    // other's reset-then-record sequence.
+    use serial_test::serial;
+
+    #[test]
+    #[serial]
+    fn record_call_accumulates_into_global_stats() {
+        _reset_global_for_test();
+        record_call("system", 3, 100, 200);
+        record_call("system", 4, 50, 300);
+        let s = snapshot_stats();
+        assert_eq!(s.total_cache_creation_tokens, 150);
+        assert_eq!(s.total_cache_read_tokens, 500);
+    }
+
+    #[test]
+    #[serial]
+    fn record_call_is_noop_when_both_token_counts_are_zero() {
+        // Providers that don't report cache stats would otherwise pollute
+        // the totals with zero-valued events, masking the cache-break
+        // detector's signal.
+        _reset_global_for_test();
+        record_call("system", 1, 0, 0);
+        let s = snapshot_stats();
+        assert_eq!(s.total_cache_creation_tokens, 0);
+        assert_eq!(s.total_cache_read_tokens, 0);
+    }
+
+    #[test]
+    #[serial]
+    fn snapshot_stats_does_not_consume_state() {
+        _reset_global_for_test();
+        record_call("system", 1, 100, 200);
+        let a = snapshot_stats();
+        let b = snapshot_stats();
+        assert_eq!(a.total_cache_read_tokens, b.total_cache_read_tokens);
+        assert_eq!(a.total_cache_creation_tokens, 100);
     }
 }

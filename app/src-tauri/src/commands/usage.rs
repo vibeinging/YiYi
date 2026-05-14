@@ -103,3 +103,18 @@ pub fn get_usage_daily(
 pub fn drain_pending_cost() -> f64 {
     crate::engine::cost_status::drain()
 }
+
+/// Snapshot of process-wide prefix-cache health.
+///
+/// Returns DeepSeek's `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`
+/// accumulated since process start, plus cache-break event counters. The
+/// Cost / Settings UI can divide hit / (hit + miss) to show the user how
+/// well YiYi is exploiting the 120× hit-vs-miss price gap, and an
+/// unusually high `unexpected_breaks` count is a smoke alarm for a
+/// regression in the static-prefix layout.
+///
+/// Read-only; safe to poll.
+#[tauri::command]
+pub fn get_prompt_cache_stats() -> crate::engine::prompt_cache::CacheStats {
+    crate::engine::prompt_cache::snapshot_stats()
+}

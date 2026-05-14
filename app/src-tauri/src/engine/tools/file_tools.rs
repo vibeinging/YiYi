@@ -151,11 +151,27 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
 // recovery surface: regardless of which tool clobbered a file, one
 // rollback path covers it.
 //
-// Backup layout: `~/.yiyi/backups/<path_with_/_encoded_as___>.backup`.
-// Single revision per path — a second mutation overwrites the prior
-// backup. The shadow-git checkpoint module (engine::checkpoint) still
-// owns turn-level multi-file rollback; this exists for the in-turn,
-// "oops, undo that one tool call" surface.
+// Backup layout: `~/.yiyi/backups/<fnv16hex>__<short_tail>.backup`
+// (single revision per path — a second mutation overwrites the prior
+// backup). The hash is the collision-safe identity; the tail is just
+// human-readable scaffolding.
+//
+// ## Why this lives alongside `engine::checkpoint`
+//
+// The two are NOT redundant — they cover different time granularities:
+//
+//   * `backup_to_central` is **per tool call**: undo the single most
+//     recent write/edit/append/delete to one file. Operates on demand
+//     via `undo_edit` regardless of session/turn state.
+//   * `engine::checkpoint` is **per turn**: snapshot the whole
+//     workspace at turn boundaries (pre + post), restore any file or
+//     all files back to that point. Drives the UI timeline.
+//
+// They DO compose cleanly: when `undo_edit` restores a file to its
+// pre-mutation state, that state is what the next `snapshot_post_turn`
+// will record. A subsequent turn-level restore to that turn's `pre`
+// snapshot also lands on the same content — the two recovery paths
+// are idempotent on the same intermediate result, not in conflict.
 // ────────────────────────────────────────────────────────────────────
 
 /// Stable on-disk slot for a path's backup. Public so undo_edit and

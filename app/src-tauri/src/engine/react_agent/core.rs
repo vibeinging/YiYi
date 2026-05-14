@@ -377,6 +377,16 @@ where
         // Track token usage
         if let Some(u) = response.usage {
             usage_tracker.record(u);
+            // Feed prefix-cache stats so the Cost UI can surface hit
+            // rate and we can verify that PersonaSnapshot is actually
+            // earning its keep. No-op for providers without cache
+            // reporting; safe to call every turn.
+            crate::engine::prompt_cache::record_call(
+                system_prompt,
+                messages.len(),
+                u.prompt_cache_miss_tokens,
+                u.prompt_cache_hit_tokens,
+            );
         }
 
         // Trace recording — opt-in via Settings → tracing.enabled. Captures
