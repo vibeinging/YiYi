@@ -772,7 +772,7 @@ where
                 // (DeepSeek V4) still see the textual summary; the
                 // artifact pipeline meanwhile shows the visual to the
                 // user regardless.
-                let envelope = crate::engine::tools::output_envelope::MultimodalEnvelope
+                let envelope = crate::engine::llm_client::MultimodalEnvelope
                     ::with_images(output, images);
                 let vision_capable = crate::engine::llm_client::model_has_vision(config);
                 let (text, dispatched_images) = envelope.dispatch_for(vision_capable);

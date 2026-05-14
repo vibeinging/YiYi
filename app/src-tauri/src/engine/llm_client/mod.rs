@@ -12,6 +12,7 @@
 //!   openai.rs  — OpenAI-compatible adapter (DeepSeek Pro / Flash + any
 //!                OpenAI-format third-party endpoint a user points us at)
 
+mod multimodal;
 mod openai;
 pub mod retry;
 pub mod route;
@@ -19,6 +20,7 @@ mod stream;
 mod types;
 
 // Re-export all public types (maintains backward compatibility)
+pub use multimodal::MultimodalEnvelope;
 pub use route::{apply_hint, apply_source, model_for_source, RouteHint, FLASH_MODEL, PRO_MODEL};
 pub use types::*;
 
@@ -104,8 +106,8 @@ pub fn resolve_config_from_providers(
 /// Pro / Flash are both text-only, so this returns `false` unconditionally.
 /// Engine code consults it to decide whether to feed tool-produced images
 /// (screenshots, generated charts) into the model's context — see
-/// `engine/tools/output_envelope.rs::MultimodalEnvelope`. The artifact
-/// pipeline is independent: images always reach the user regardless.
+/// [`MultimodalEnvelope`]. The artifact pipeline is independent: images
+/// always reach the user regardless.
 ///
 /// When a vision-capable DeepSeek model ships, branch here on
 /// `config.model` rather than re-introducing the multi-provider lookup
