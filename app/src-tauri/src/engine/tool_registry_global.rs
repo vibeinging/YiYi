@@ -32,6 +32,12 @@ static CHECK_CACHE: LazyLock<RwLock<HashMap<String, (Instant, bool)>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
 /// Read-through TTL cache for check_fn evaluations.
+///
+/// A panicking probe is treated as `false` (tool unavailable) — without this
+/// guard one bad `check_fn` would unwind through `all_definitions_available`
+/// and take the whole tool list down. The verdict is still cached so the
+/// next request doesn't re-trigger the panic immediately; callers can
+/// `invalidate_check` once the underlying issue is fixed.
 fn check_cached(name: &str, check: &CheckFn) -> bool {
     if let Ok(cache) = CHECK_CACHE.read() {
         if let Some((at, ok)) = cache.get(name) {
@@ -40,7 +46,19 @@ fn check_cached(name: &str, check: &CheckFn) -> bool {
             }
         }
     }
-    let ok = check();
+    // `Arc<dyn Fn() -> bool + Send + Sync>` is generally not statically
+    // UnwindSafe (closures may capture interior-mutable state), so use
+    // `AssertUnwindSafe`. We only need the boolean return; if the closure
+    // poisoned anything internal, that's the caller's problem to clean up
+    // — our job is to keep the registry iterating.
+    let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| check()))
+        .unwrap_or_else(|_| {
+            log::warn!(
+                "check_fn for tool '{}' panicked — treating tool as unavailable",
+                name
+            );
+            false
+        });
     if let Ok(mut cache) = CHECK_CACHE.write() {
         cache.insert(name.to_string(), (Instant::now(), ok));
     }

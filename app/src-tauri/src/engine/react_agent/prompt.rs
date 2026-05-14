@@ -3,7 +3,7 @@ use super::BOOTSTRAP_COMPLETED;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use std::time::SystemTime;
+use std::time::Instant;
 
 /// Cache for stale-branch check: (workspace_path, warning_option, timestamp).
 /// Re-checked only if >60s have passed since the last check.
@@ -19,19 +19,62 @@ pub const PERSONA_FILE_MAX_BYTES: usize = 8 * 1024;
 /// session — this is exactly what we need so DeepSeek's implicit prefix
 /// cache hits across sub-agents, auto-continue rounds, and task workers
 /// within the same session.
+///
+/// `frozen_at` uses `Instant` (monotonic) instead of `SystemTime` because
+/// LRU eviction needs total ordering across cache entries. `SystemTime` can
+/// jump backwards on NTP sync or laptop wake, which would invert "oldest"
+/// classification and evict freshly populated entries.
 #[derive(Debug, Clone)]
 pub struct PersonaSnapshot {
     pub prefix: String,
-    pub frozen_at: SystemTime,
+    pub frozen_at: Instant,
+}
+
+/// Cache key for the persona snapshot. `session_id` alone isn't enough:
+/// the same session can switch `user_workspace` mid-flight (test harness,
+/// `set_user_workspace` command), and the persona must reflect the active
+/// workspace — not whichever one we sampled first. Hashing the workspace
+/// path (canonicalised when possible) keeps the key short while making the
+/// (session, workspace) pair distinguishable.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+struct PersonaKey {
+    session_id: String,
+    workspace_fingerprint: u64,
+}
+
+impl PersonaKey {
+    fn new(session_id: &str, workspace: Option<&std::path::Path>) -> Self {
+        Self {
+            session_id: session_id.to_string(),
+            workspace_fingerprint: workspace_fingerprint(workspace),
+        }
+    }
+}
+
+/// FNV-1a over the canonical workspace path. `None` and unresolvable paths
+/// collapse to a fixed sentinel so callers without a workspace still get a
+/// stable key.
+fn workspace_fingerprint(workspace: Option<&std::path::Path>) -> u64 {
+    let canon = match workspace {
+        Some(p) => p.canonicalize().unwrap_or_else(|_| p.to_path_buf()),
+        None => return 0,
+    };
+    let s = canon.to_string_lossy();
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in s.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
 }
 
 /// Per-session persona cache. Bounded to PERSONA_CACHE_MAX_SESSIONS entries
 /// (oldest evicted on overflow) so a long-lived process won't grow the map
 /// without bound.
-static PERSONA_SNAPSHOTS: OnceLock<Mutex<HashMap<String, PersonaSnapshot>>> = OnceLock::new();
+static PERSONA_SNAPSHOTS: OnceLock<Mutex<HashMap<PersonaKey, PersonaSnapshot>>> = OnceLock::new();
 const PERSONA_CACHE_MAX_SESSIONS: usize = 16;
 
-fn persona_cache() -> &'static Mutex<HashMap<String, PersonaSnapshot>> {
+fn persona_cache() -> &'static Mutex<HashMap<PersonaKey, PersonaSnapshot>> {
     PERSONA_SNAPSHOTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -133,9 +176,10 @@ pub async fn build_persona_prefix_cached(
     if session_id.is_empty() {
         return build_persona_prefix(working_dir, user_workspace).await;
     }
+    let key = PersonaKey::new(session_id, user_workspace);
 
     if let Ok(map) = persona_cache().lock() {
-        if let Some(snap) = map.get(session_id) {
+        if let Some(snap) = map.get(&key) {
             return snap.prefix.clone();
         }
     }
@@ -144,7 +188,7 @@ pub async fn build_persona_prefix_cached(
     if let Ok(mut map) = persona_cache().lock() {
         // Defensive: another caller may have populated the slot while we
         // were reading disk. Re-check before insert.
-        if let Some(snap) = map.get(session_id) {
+        if let Some(snap) = map.get(&key) {
             return snap.prefix.clone();
         }
         if map.len() >= PERSONA_CACHE_MAX_SESSIONS {
@@ -159,10 +203,10 @@ pub async fn build_persona_prefix_cached(
             }
         }
         map.insert(
-            session_id.to_string(),
+            key,
             PersonaSnapshot {
                 prefix: prefix.clone(),
-                frozen_at: SystemTime::now(),
+                frozen_at: Instant::now(),
             },
         );
     }
@@ -176,7 +220,12 @@ pub fn invalidate_persona_snapshot(session_id: &str) {
         return;
     }
     if let Ok(mut map) = persona_cache().lock() {
-        map.remove(session_id);
+        // Drop every entry for this session_id regardless of which workspace
+        // it was keyed under. `/clear` should invalidate the user's frozen
+        // persona, full stop — we don't want a stale entry keyed under an
+        // older workspace lingering after the user switches workspaces and
+        // clears history.
+        map.retain(|k, _| k.session_id != session_id);
     }
 }
 

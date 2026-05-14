@@ -381,8 +381,11 @@ where
 
         // Trace recording — opt-in via Settings → tracing.enabled. Captures
         // the assistant turn (content + reasoning + tool_calls) to SQLite
-        // for future offline fine-tuning. Best-effort: any failure is
-        // swallowed and never affects the agent loop.
+        // for future offline fine-tuning. Errors are logged but never
+        // propagate: a missing/corrupt traces table shouldn't take down the
+        // agent loop. The previous `let _ = ...` swallow was silent — if
+        // tracing later becomes a load-bearing data path, the warn lets us
+        // notice it dropped data instead of finding gaps months later.
         if crate::engine::tools::is_tracing_enabled() {
             if let Some(db) = crate::engine::tools::get_database() {
                 let trace_session = crate::engine::tools::get_current_session_id();
@@ -391,17 +394,33 @@ where
                     .and_then(|tc| serde_json::to_string(tc).ok());
                 let content_text = response.message.content.as_ref()
                     .map(|c| c.as_text().unwrap_or("").to_string());
-                let _ = db.record_trace(&crate::engine::db::NewAgentTrace {
+                // Use the count of prior assistant messages as the turn
+                // index — that's what "turn" means in the public API
+                // (one user→assistant exchange). `messages.len()` would
+                // bake in system / tool / continuation messages and make
+                // adjacent turns appear non-contiguous.
+                let assistant_turn = messages
+                    .iter()
+                    .filter(|m| m.role == "assistant")
+                    .count() as i64
+                    + 1;
+                let trace = crate::engine::db::NewAgentTrace {
                     session_id: &trace_session,
                     task_id: None,
-                    turn_index: messages.len() as i64,
+                    turn_index: assistant_turn,
                     role: "assistant",
                     content: content_text.as_deref(),
                     reasoning_content: response.message.reasoning_content.as_deref(),
                     tool_calls_json: tool_calls_json.as_deref(),
                     tool_call_id: None,
                     model: Some(config.model.as_str()),
-                });
+                };
+                if let Err(e) = db.record_trace(&trace) {
+                    log::warn!(
+                        "agent trace insert failed (session={}, turn={}): {}",
+                        trace_session, assistant_turn, e
+                    );
+                }
             }
         }
 

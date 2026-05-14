@@ -184,3 +184,22 @@ fn remove_check_fn_restores_unconditional_visibility() {
     assert_eq!(reg.all_definitions_available().len(), 1,
         "removing the probe must return the tool to the always-visible default");
 }
+
+#[test]
+#[serial]
+fn check_fn_panic_is_caught_and_treated_as_unavailable() {
+    _clear_check_cache_for_test();
+    let reg = GlobalToolRegistry::new();
+    reg.try_register(entry("flaky_probe_tool")).expect("register");
+    reg.try_register(entry("healthy_tool")).expect("register");
+
+    let panicking: CheckFn = Arc::new(|| panic!("probe blew up"));
+    reg.set_check_fn("flaky_probe_tool", panicking);
+
+    // Without catch_unwind, this would unwind the entire iterator and
+    // hide *all* tools — including `healthy_tool`. With it, the bad probe
+    // is just dropped from the list.
+    let visible = reg.all_definitions_available();
+    let names: Vec<&str> = visible.iter().map(|t| t.function.name.as_str()).collect();
+    assert_eq!(names, vec!["healthy_tool"]);
+}

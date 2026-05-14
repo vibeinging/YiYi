@@ -160,10 +160,33 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
 
 /// Stable on-disk slot for a path's backup. Public so undo_edit and
 /// tests can locate the same file the writers used.
+///
+/// File-name layout: `<fnv16hex>__<short_basename>.backup`. The FNV-1a
+/// fingerprint is the collision-safe identity (`/tmp/foo__bar` and
+/// `/tmp/foo/bar` no longer collapse to the same slot — a real bug under
+/// the old `path.replace('/', '__')` scheme). The trailing basename is
+/// human-readable scaffolding so listing `~/.yiyi/backups/` still gives a
+/// hint about which path each backup came from.
 pub(super) fn backup_slot_for(path: &str) -> Option<std::path::PathBuf> {
     let home = dirs::home_dir()?;
-    let safe_name = path.replace(['/', '\\'], "__");
-    Some(home.join(".yiyi").join("backups").join(format!("{}.backup", safe_name)))
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in path.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    // Last ~40 chars of the path, with separator characters flattened so
+    // the result is a valid single-segment filename across platforms.
+    let tail_chars: Vec<char> = path.chars().rev().take(40).collect();
+    let tail: String = tail_chars.into_iter().rev().collect();
+    let safe_tail: String = tail
+        .chars()
+        .map(|c| if c == '/' || c == '\\' || c == ':' { '_' } else { c })
+        .collect();
+    Some(
+        home.join(".yiyi")
+            .join("backups")
+            .join(format!("{:016x}__{}.backup", h, safe_tail)),
+    )
 }
 
 /// Take a single-revision snapshot of `path` so undo_edit can roll

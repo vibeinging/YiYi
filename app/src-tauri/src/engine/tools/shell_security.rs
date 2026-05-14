@@ -41,14 +41,20 @@ const CMD_PREFIX: &str = concat!(
 static HARDLINE_PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
     let pat = |s: &str| Regex::new(s).expect("hardline regex");
     vec![
-        // rm -rf / / /* / ~  (recursive delete of root or home)
+        // rm -rf / / /* / ~  (recursive delete of root or home).
+        // Flag token allows: bare `-rf` / long `--recursive` / quoted
+        // `"-rf"` / quoted `'--no-preserve-root'`. Quoted variants are
+        // a known bypass — the shell strips quotes before `rm` sees
+        // them, but our string-level regex doesn't, so without the
+        // explicit quoted alternative the pattern misses.
         (
-            pat(r"(?i)\brm\s+(?:-\S*\s+)*(?:--no-preserve-root\s+)?(/|/\*|~)(\s|$)"),
+            pat(r#"(?i)\brm\s+(?:(?:-\S*|"-[^"]*"|'-[^']*')\s+)*(?:--no-preserve-root\s+)?(/|/\*|~)(\s|$)"#),
             "recursive delete of root/home filesystem",
         ),
-        // rm -rf into protected system directories
+        // rm -rf into protected system directories. Same quoted-flag
+        // bypass coverage.
         (
-            pat(r"(?i)\brm\s+(?:-\S*\s+)*(/home|/root|/etc|/usr|/var|/bin|/sbin|/boot|/lib)(/?\*?)(\s|$)"),
+            pat(r#"(?i)\brm\s+(?:(?:-\S*|"-[^"]*"|'-[^']*')\s+)*(/home|/root|/etc|/usr|/var|/bin|/sbin|/boot|/lib)(/?\*?)(\s|$)"#),
             "recursive delete of system directory",
         ),
         // mkfs.<type> (any filesystem format)
@@ -864,6 +870,24 @@ mod hardline_tests {
         assert!(detect_hardline("rm -rf /*").is_some());
         assert!(detect_hardline("rm -fr /").is_some());
         assert!(detect_hardline("sudo rm -rf /").is_some());
+    }
+
+    #[test]
+    fn hardline_rm_root_with_long_flags_blocks() {
+        // GNU long-form flags must NOT bypass the hardline.
+        assert!(detect_hardline("rm --recursive --force /").is_some());
+        assert!(detect_hardline("rm --no-preserve-root --recursive /").is_some());
+        assert!(detect_hardline("sudo rm --recursive --force --no-preserve-root /").is_some());
+    }
+
+    #[test]
+    fn hardline_rm_root_with_quoted_flags_blocks() {
+        // String-level regex sees the quote characters too (unlike the
+        // shell, which strips them). The hardline must cover quoted flag
+        // variants explicitly — otherwise the LLM could quote its way out.
+        assert!(detect_hardline(r#"rm "-rf" /"#).is_some());
+        assert!(detect_hardline(r#"rm '-rf' /"#).is_some());
+        assert!(detect_hardline(r#"rm "--recursive" "--force" /"#).is_some());
     }
 
     #[test]
