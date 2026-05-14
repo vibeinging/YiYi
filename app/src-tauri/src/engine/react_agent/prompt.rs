@@ -469,7 +469,8 @@ For simple lookups prefer `web_search` (DuckDuckGo, no browser needed). For read
 ///     3. Task routing policy
 ///     4. Capability Growth guidance
 ///     5. critical_system_reminder
-///   [CACHE BOUNDARY — visible comment so anthropic.rs can split here]
+///   [CACHE BOUNDARY — visible marker; clients that need an explicit
+///    split point can find it via the literal string and slice accordingly]
 ///   [DYNAMIC BLOCK] ← per-user / per-session / per-turn
 ///     6. Workspace & authorized paths
 ///     7. MCP status
@@ -507,10 +508,12 @@ pub async fn build_system_prompt(
     let mut prompt = static_system_block(lang).to_string();
 
     // ── CACHE BOUNDARY MARKER ────────────────────────────────────────────
-    // Anthropic-aware clients (see llm_client/anthropic.rs) split the system
-    // prompt on this marker and put `cache_control: {"type": "ephemeral"}`
-    // on the block BEFORE it. For OpenAI / qwen this is just whitespace —
-    // harmless, and they do implicit prefix-match caching anyway.
+    // The literal `<!-- yiyi:cache_boundary -->` marks where the static
+    // prefix ends and the per-session dynamic block begins. DeepSeek's
+    // implicit prefix cache hits on the bytes before this point as long
+    // as `static_system_block(lang)` stays byte-stable. Any explicit
+    // cache_control–style splitter (Anthropic-style API, future
+    // multi-provider build, …) can find this marker and slice on it.
     prompt.push_str("\n\n<!-- yiyi:cache_boundary -->\n\n");
 
     // ── DYNAMIC BLOCK ────────────────────────────────────────────────────

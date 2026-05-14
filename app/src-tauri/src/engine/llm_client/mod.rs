@@ -1,15 +1,17 @@
-//! LLM Client module — Strategy pattern with provider-specific adapters.
+//! LLM Client module.
+//!
+//! YiYi is V4-only — README §"只接 DeepSeek V4". DeepSeek's API is
+//! OpenAI-compatible, so the adapter set collapses to one. Anthropic
+//! and Google adapters used to live next to `openai.rs`; they were
+//! retired together with the multi-provider build.
 //!
 //! Architecture:
-//!   mod.rs     — Public API (auto-dispatches to correct provider)
+//!   mod.rs     — Public API (single-path dispatch into openai)
 //!   types.rs   — Shared types (LLMMessage, LLMConfig, LLMResponse, etc.)
 //!   stream.rs  — SSE stream parsing utilities
-//!   openai.rs  — OpenAI-compatible adapter (also: DeepSeek, DashScope, Zhipu, Moonshot, MiniMax)
-//!   anthropic.rs — Anthropic Messages API adapter
-//!   google.rs  — Google Gemini API adapter
+//!   openai.rs  — OpenAI-compatible adapter (DeepSeek Pro / Flash + any
+//!                OpenAI-format third-party endpoint a user points us at)
 
-mod anthropic;
-mod google;
 mod openai;
 pub mod retry;
 pub mod route;
@@ -98,44 +100,23 @@ pub fn resolve_config_from_providers(
 
 // ── Provider format detection (Strategy selection) ──────────────────
 
-/// Whether this model can ingest image inputs. Currently DeepSeek V4 Pro/Flash
-/// are text-only; everything else (Anthropic, OpenAI 4o/4.1, Gemini, Qwen-VL)
-/// supports vision via OpenAI-compatible `image_url` content parts.
+/// Whether this model can ingest image inputs. V4-only build: DeepSeek
+/// Pro / Flash are both text-only, so this returns `false` unconditionally.
+/// Engine code consults it to decide whether to feed tool-produced images
+/// (screenshots, generated charts) into the model's context — see
+/// `engine/tools/output_envelope.rs::MultimodalEnvelope`. The artifact
+/// pipeline is independent: images always reach the user regardless.
 ///
-/// Engine code consults this to decide whether to feed tool-produced images
-/// (screenshots, generated charts) into the model's context. The artifact
-/// pipeline is independent — images always reach the user regardless.
-pub fn model_has_vision(config: &LLMConfig) -> bool {
-    let id = config.provider_id.to_lowercase();
-    let url = config.base_url.to_lowercase();
-    let model = config.model.to_lowercase();
-    if id.contains("deepseek") || url.contains("deepseek") || model.contains("deepseek") {
-        return false;
-    }
-    true
-}
-
-/// Determine API format from provider_id or base_url
-fn api_format(config: &LLMConfig) -> &'static str {
-    match config.provider_id.as_str() {
-        "anthropic" => "anthropic",
-        "google" => "google",
-        _ => {
-            let url = config.base_url.to_lowercase();
-            if url.contains("anthropic.com") {
-                "anthropic"
-            } else if url.contains("generativelanguage.googleapis.com") {
-                "google"
-            } else {
-                "openai"
-            }
-        }
-    }
+/// When a vision-capable DeepSeek model ships, branch here on
+/// `config.model` rather than re-introducing the multi-provider lookup
+/// that lived here pre-V4-only.
+pub fn model_has_vision(_config: &LLMConfig) -> bool {
+    false
 }
 
 // ── Public dispatch API ─────────────────────────────────────────────
 
-/// Call LLM with tool definitions (auto-detects provider and dispatches).
+/// Call LLM with tool definitions.
 ///
 /// NOTE: this low-level fn does NOT record usage to the persistent log.
 /// For background callsites (meditation / compaction / growth / subagent /
@@ -150,11 +131,7 @@ pub async fn chat_completion(
     messages: &[LLMMessage],
     tools: &[ToolDefinition],
 ) -> Result<LLMResponse, String> {
-    match api_format(config) {
-        "anthropic" => anthropic::chat_completion(config, messages, tools).await,
-        "google" => google::chat_completion(config, messages, tools).await,
-        _ => openai::chat_completion(config, messages, tools, &config.native_tools).await,
-    }
+    openai::chat_completion(config, messages, tools, &config.native_tools).await
 }
 
 /// Same as `chat_completion` but auto-records the response's usage to the
@@ -197,7 +174,7 @@ pub async fn chat_completion_with_hint(
     chat_completion(&routed, messages, tools).await
 }
 
-/// Streaming chat completion via SSE (auto-detects provider and dispatches)
+/// Streaming chat completion via SSE.
 pub async fn chat_completion_stream<F>(
     config: &LLMConfig,
     messages: &[LLMMessage],
@@ -208,15 +185,5 @@ pub async fn chat_completion_stream<F>(
 where
     F: Fn(StreamEvent) + Send + 'static,
 {
-    match api_format(config) {
-        "anthropic" => {
-            anthropic::chat_completion_stream(config, messages, tools, on_event, cancelled).await
-        }
-        "google" => {
-            google::chat_completion_stream(config, messages, tools, on_event, cancelled).await
-        }
-        _ => {
-            openai::chat_completion_stream(config, messages, tools, &config.native_tools, on_event, cancelled).await
-        }
-    }
+    openai::chat_completion_stream(config, messages, tools, &config.native_tools, on_event, cancelled).await
 }
