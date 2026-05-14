@@ -3,6 +3,9 @@ mod file_tools;
 mod web_tools;
 mod browser_tools;
 mod cheap_browser;
+// Re-export the liveness probe so tool_registry_global can attach it as a
+// check_fn without making the whole module public.
+pub(super) use cheap_browser::chrome_available;
 mod system_tools;
 pub(crate) mod memory_tools;
 mod cron_tools;

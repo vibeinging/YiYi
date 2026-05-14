@@ -187,6 +187,26 @@ fn remove_check_fn_restores_unconditional_visibility() {
 
 #[test]
 #[serial]
+fn register_builtin_tools_attaches_chrome_probe_to_cheap_browser() {
+    _clear_check_cache_for_test();
+    // Use a fresh registry (not the singleton) so this test doesn't
+    // collide with other tests' state.
+    let reg = GlobalToolRegistry::new();
+    app_lib::engine::tool_registry_global::register_builtin_tools(&reg);
+
+    // P1.2 closure: both cheap_browser tools must end up with a probe
+    // attached. `browser_use` (browser_tools.rs) bundles its own chromium,
+    // so it intentionally has no probe — keep that invariant.
+    assert!(reg.has_check_fn("browser_fetch"),
+        "browser_fetch should have a chrome liveness probe");
+    assert!(reg.has_check_fn("browser_screenshot"),
+        "browser_screenshot should have a chrome liveness probe");
+    assert!(!reg.has_check_fn("browser_use"),
+        "browser_use bundles its own chromium — must NOT be gated");
+}
+
+#[test]
+#[serial]
 fn check_fn_panic_is_caught_and_treated_as_unavailable() {
     _clear_check_cache_for_test();
     let reg = GlobalToolRegistry::new();

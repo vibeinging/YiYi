@@ -364,6 +364,20 @@ pub fn register_builtin_tools(registry: &GlobalToolRegistry) {
     if !collisions.is_empty() {
         panic!("Built-in deferred tool name collisions: {:?}", collisions);
     }
+
+    // ── Liveness probes ────────────────────────────────────────────────
+    // Tools whose backend depends on an external binary attach a check_fn
+    // here so they vanish from the LLM-facing list when the binary isn't
+    // installed. Result is 30s TTL-cached at the registry layer, so this
+    // doesn't probe the filesystem on every agent turn.
+    //
+    // `browser_fetch` / `browser_screenshot` need a system Chrome /
+    // Chromium / Edge. (Note: `browser_use` from `browser_tools.rs` is
+    // intentionally NOT gated — it spawns a bundled chromium-shell as
+    // fallback, so it works without a system browser.)
+    let chrome_probe: CheckFn = Arc::new(super::tools::chrome_available);
+    registry.set_check_fn("browser_fetch", chrome_probe.clone());
+    registry.set_check_fn("browser_screenshot", chrome_probe);
 }
 
 /// Apply collisions for plugin/MCP runtime registrations: aliases the

@@ -94,6 +94,15 @@ fn find_chrome_binary() -> Option<PathBuf> {
     None
 }
 
+/// Cheap probe for "is a system Chrome / Chromium / Edge reachable?".
+/// Used by the tool registry's `check_fn` to hide cheap_browser tools
+/// when no browser binary is installed — so the LLM doesn't waste a
+/// turn calling `browser_fetch` only to get `browser_binary_not_found`.
+/// Result is TTL-cached at the registry layer (30s).
+pub(in crate::engine) fn chrome_available() -> bool {
+    find_chrome_binary().is_some()
+}
+
 fn missing_chrome_error() -> String {
     "Error: browser_binary_not_found. YiYi couldn't find Google Chrome / Chromium / Edge on this machine. Either install Chrome (https://www.google.com/chrome/) or point the YIYI_CHROME_PATH env var at your browser binary. If the user specifically needs automation that works without a system browser, fall back to `browser_use` (which bundles its own chromium).".to_string()
 }
