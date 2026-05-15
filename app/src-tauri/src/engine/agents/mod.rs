@@ -15,13 +15,18 @@ pub mod persona_loader;
 /// `Private` (default) — companion writes / reads its own MemMe user_id, fully
 /// isolated from other companions and the main session.
 /// `Shared` — companion uses the main user's memory bucket; suitable for
-/// agents that need to inherit the user's profile (e.g. desktop_operator).
+/// agents that need to inherit the user's profile (e.g. desktop_operator,
+/// or the host companion in a jury).
+/// `Family` — companion uses the `family_shared` bucket, visible to all
+/// companions. For cross-companion context like "user is working on
+/// project X" that every family member should see.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryScope {
     #[default]
     Private,
     Shared,
+    Family,
 }
 
 /// Parsed agent definition from AGENT.md.
@@ -345,6 +350,18 @@ memory_scope: shared
 "#;
         let def = parse_agent_md(shared, Path::new("memory:test")).expect("shared parses");
         assert_eq!(def.memory_scope, MemoryScope::Shared);
+    }
+
+    #[test]
+    fn memory_scope_parses_family_variant() {
+        let family = r#"---
+name: with_family
+description: "x"
+memory_scope: family
+---
+"#;
+        let def = parse_agent_md(family, Path::new("memory:test")).expect("family parses");
+        assert_eq!(def.memory_scope, MemoryScope::Family);
     }
 
     #[test]

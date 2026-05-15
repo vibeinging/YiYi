@@ -571,6 +571,70 @@ impl Database {
         )
         .map_err(|e| format!("Failed to create agent_traces table: {}", e))?;
 
+        // Collaboration system (Phase 2+) — concept-driven协作: jury / single
+        // companion call / dispatch / plan DAG 都是 collaboration_steps 的实
+        // 例化。详见 docs/design/2026-05-15_jury-collaboration-design.md。
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS collaborations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_session_id TEXT NOT NULL,
+                intent TEXT NOT NULL,              -- 用户原始 prompt
+                mode_json TEXT NOT NULL,           -- CollaborationMode: Manual / Dispatched{by}
+                status TEXT NOT NULL,              -- planning / awaiting_confirm / running / done / aborted / failed
+                status_reason TEXT,                -- Failed 时的 reason 描述
+                plan_json TEXT NOT NULL,           -- CollaborationPlan (DAG)
+                parent_id INTEGER,                 -- 再开一轮 / expand_verdict 链表
+                created_at INTEGER NOT NULL,
+                completed_at INTEGER,
+                FOREIGN KEY (chat_session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+                FOREIGN KEY (parent_id) REFERENCES collaborations(id) ON DELETE SET NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_collab_session ON collaborations(chat_session_id);
+            CREATE INDEX IF NOT EXISTS idx_collab_status ON collaborations(status);
+            CREATE INDEX IF NOT EXISTS idx_collab_parent ON collaborations(parent_id);
+
+            CREATE TABLE IF NOT EXISTS collaboration_steps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                collaboration_id INTEGER NOT NULL,
+                kind TEXT NOT NULL,                -- single_agent / parallel_agents / host_summarize / user_confirmation
+                participants_json TEXT NOT NULL,   -- Vec<Participant>
+                depends_on_json TEXT NOT NULL DEFAULT '[]', -- Vec<step_id>
+                input_json TEXT NOT NULL,
+                output_json TEXT,
+                status TEXT NOT NULL,              -- pending / running / completed / failed / skipped
+                error_reason TEXT,
+                started_at INTEGER,
+                finished_at INTEGER,
+                position INTEGER NOT NULL,         -- DAG 拓扑序，前端渲染顺序
+                FOREIGN KEY (collaboration_id) REFERENCES collaborations(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_collab_steps_collab ON collaboration_steps(collaboration_id, position);
+            CREATE INDEX IF NOT EXISTS idx_collab_steps_status ON collaboration_steps(status);
+
+            CREATE TABLE IF NOT EXISTS collaboration_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                collaboration_id INTEGER NOT NULL,
+                timestamp INTEGER NOT NULL,
+                actor_json TEXT NOT NULL,          -- Actor: System / User / Companion(id)
+                kind TEXT NOT NULL,                -- AuditKind variants
+                payload_json TEXT NOT NULL,
+                FOREIGN KEY (collaboration_id) REFERENCES collaborations(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_collab_audit_collab ON collaboration_audit(collaboration_id, timestamp);
+
+            -- Learning signals from user 干预 — feeds DispatchStrategy
+            CREATE TABLE IF NOT EXISTS learning_signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL,                -- dispatch_recalled / dispatch_changed / verdict_accepted / verdict_rejected / step_retried / plan_aborted
+                collaboration_id INTEGER,          -- 关联的协作（nullable 因为有些信号跨协作累积）
+                payload_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (collaboration_id) REFERENCES collaborations(id) ON DELETE SET NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_learning_kind_time ON learning_signals(kind, created_at);",
+        )
+        .map_err(|e| format!("Failed to create collaboration tables: {}", e))?;
+
         Ok(())
     }
 
@@ -586,6 +650,22 @@ impl Database {
                  ALTER TABLE messages ADD COLUMN exported INTEGER NOT NULL DEFAULT 0;"
             ).map_err(|e| format!("Migration error: {}", e))?;
             log::info!("Migrated messages table: added metadata, exported columns");
+        }
+
+        // Collaboration cross-reference columns on messages — added Phase 2A.
+        // Lets any chat row backtrack to the协作 / step / speaker companion.
+        let has_collab_link: bool = conn
+            .prepare("SELECT collaboration_id FROM messages LIMIT 0")
+            .is_ok();
+        if !has_collab_link {
+            conn.execute_batch(
+                "ALTER TABLE messages ADD COLUMN collaboration_id INTEGER DEFAULT NULL;
+                 ALTER TABLE messages ADD COLUMN step_id INTEGER DEFAULT NULL;
+                 ALTER TABLE messages ADD COLUMN companion_id INTEGER DEFAULT NULL;
+                 CREATE INDEX IF NOT EXISTS idx_messages_collab ON messages(collaboration_id, step_id);
+                 CREATE INDEX IF NOT EXISTS idx_messages_companion ON messages(companion_id);"
+            ).map_err(|e| format!("Migration error (messages collab cols): {}", e))?;
+            log::info!("Migrated messages table: added collaboration_id, step_id, companion_id columns");
         }
 
         // Add source/source_meta to sessions table

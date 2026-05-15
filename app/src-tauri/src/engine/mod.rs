@@ -31,6 +31,7 @@ pub mod scheduler;
 
 // ── Extensions: agents, plugins, skills ──
 pub mod agents;
+pub mod collaboration;
 pub mod plugins;
 pub mod skills_hub;
 pub mod skill_proposer;

@@ -38,6 +38,12 @@ pub fn model_for_source(source: UsageSource) -> &'static str {
         UsageSource::Growth => FLASH_MODEL,
         UsageSource::Heartbeat => FLASH_MODEL,
         UsageSource::TestConnection => FLASH_MODEL,
+        // Collaboration: jurors and dispatch judgment run cheap (persona work
+        // doesn't need long-range planning, dispatch is a quick classifier);
+        // host summarize needs strong reasoning over N verdict outputs.
+        UsageSource::CollabWorker => FLASH_MODEL,
+        UsageSource::CollabDispatch => FLASH_MODEL,
+        UsageSource::CollabHost => PRO_MODEL,
     }
 }
 

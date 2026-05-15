@@ -40,6 +40,15 @@ pub enum UsageSource {
     TestConnection,
     /// Evals harness (`tests/evals_runner.rs`).
     Eval,
+    /// Collaboration participant (jury juror / single companion dispatchee).
+    /// Routes to Flash by default — persona-driven analysis doesn't need long-range planning.
+    CollabWorker,
+    /// Collaboration host summarizer (主小精灵 aggregating verdicts).
+    /// Routes to Pro — needs long context + strong reasoning to合并 N juror outputs.
+    CollabHost,
+    /// Collaboration dispatch judgment (家族模式: who handles this task).
+    /// Routes to Flash — cheap classification, runs每个 turn in family mode.
+    CollabDispatch,
     /// Anything else — caller didn't specify.
     Other,
 }
@@ -56,6 +65,9 @@ impl UsageSource {
             UsageSource::BuddyDelegate => "buddy_delegate",
             UsageSource::TestConnection => "test_connection",
             UsageSource::Eval => "eval",
+            UsageSource::CollabWorker => "collab_worker",
+            UsageSource::CollabHost => "collab_host",
+            UsageSource::CollabDispatch => "collab_dispatch",
             UsageSource::Other => "other",
         }
     }
