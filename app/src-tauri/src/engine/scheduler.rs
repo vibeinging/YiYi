@@ -656,7 +656,7 @@ impl CronScheduler {
             let wd = working_dir.clone();
             let one_time_handles = self.one_time_handles.clone();
 
-            let llm_config = crate::engine::tools::resolve_llm_config_from_globals_pub().await;
+            let llm_config = crate::engine::tools::resolve_llm_config_from_globals().await;
 
             let duration_display = format_duration(&duration);
             let job_type = spec.schedule.r#type.clone();
@@ -704,7 +704,7 @@ impl CronScheduler {
         // Cron type
         let cron_expr = &spec.schedule.cron;
         let spec_clone = spec.clone();
-        let llm_config = crate::engine::tools::resolve_llm_config_from_globals_pub().await;
+        let llm_config = crate::engine::tools::resolve_llm_config_from_globals().await;
         let wd = working_dir.clone();
         let db_clone = db.clone();
 
