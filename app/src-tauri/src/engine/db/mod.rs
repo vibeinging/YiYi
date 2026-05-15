@@ -17,6 +17,7 @@ mod inbox;
 mod traces;
 pub mod usage;
 mod quick_actions;
+mod companions;
 
 // Re-export all public types
 pub use sessions::ChatSession;
@@ -31,6 +32,7 @@ pub use growth::{MeditationSession, BuddyDecision, TrustStats, PersonalitySignal
 pub use inbox::{InboxItem, NewInboxItem};
 pub use traces::{AgentTrace, NewAgentTrace};
 pub use quick_actions::QuickActionRow;
+pub use companions::{Companion, CompanionUpdate, NewCompanion};
 
 pub struct Database {
     pub(super) conn: Mutex<Connection>,
@@ -519,6 +521,33 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_inbox_kind ON inbox_items(kind, status);",
         )
         .map_err(|e| format!("Failed to create inbox_items table: {}", e))?;
+
+        // Companions: user-adopted agent instances. Each row represents the
+        // *relationship* between the user and an agent role — distinct from
+        // the AgentDefinition file (the role template). One agent_definition_name
+        // can spawn multiple companions with different names / personas / stats.
+        // See engine/db/companions.rs for CRUD; docs/design/2026-05-15_companions-system.md
+        // for the broader design.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS companions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,                  -- 用户起的名字，例如 \"阿狸\"
+                agent_definition_name TEXT NOT NULL,        -- 对应 AgentDefinition.name (slug)
+                avatar_emoji TEXT NOT NULL,                 -- 🦉 / 🐧 / 🦊 ...
+                color_hex TEXT NOT NULL,                    -- 主色 \"#F97316\" 等
+                persona_md_path TEXT,                       -- 用户编辑的人格 prompt 文件（绝对路径）
+                memory_user_id TEXT NOT NULL UNIQUE,        -- MemMe 用户隔离 key
+                adopted_at INTEGER NOT NULL,                -- 收养时间（millis）
+                retired_at INTEGER,                         -- NULL = 在职；非 NULL = 归隐时间（millis）
+                personality_stats_json TEXT,                -- Phase 2 用，本期 NULL
+                invocation_count INTEGER NOT NULL DEFAULT 0,-- 一起做过 X 件事
+                last_used_at INTEGER,
+                metadata_json TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_companions_retired ON companions(retired_at);
+            CREATE INDEX IF NOT EXISTS idx_companions_adopted ON companions(adopted_at);",
+        )
+        .map_err(|e| format!("Failed to create companions table: {}", e))?;
 
         // Agent traces: turn-level ShareGPT-format trace for offline fine-tune
         // data path. OPT-IN — gated by `config.tracing.enabled`.

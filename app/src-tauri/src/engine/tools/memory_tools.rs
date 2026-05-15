@@ -3,7 +3,7 @@
 /// All structured memory operations go through MemMe's DuckDB-backed store.
 /// File-based operations (diary, MEMORY.md) remain as complementary markdown layers.
 
-use super::MEMME_USER_ID;
+use super::current_memme_user_id;
 
 pub(super) fn definitions() -> Vec<super::ToolDefinition> {
     // Priya P1-4 + P1-5 consolidation: the LLM surface is deliberately just
@@ -55,7 +55,7 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
 
 /// Build MemMe AddOptions with common defaults.
 pub(crate) fn memme_add_opts(category: &str, importance: f32) -> memme_core::AddOptions {
-    memme_core::AddOptions::new(MEMME_USER_ID)
+    memme_core::AddOptions::new(current_memme_user_id())
         .categories(vec![category.to_string()])
         .importance(importance)
 }
@@ -110,7 +110,7 @@ pub(super) async fn memory_search_tool(args: &serde_json::Value) -> String {
         Err(e) => return e,
     };
 
-    let mut options = memme_core::SearchOptions::new(MEMME_USER_ID)
+    let mut options = memme_core::SearchOptions::new(current_memme_user_id())
         .limit(max_results)
         .keyword_search(true);
     if let Some(cat) = category {
@@ -166,7 +166,7 @@ pub(super) async fn memory_list_tool(args: &serde_json::Value) -> String {
         Err(e) => return e,
     };
 
-    let mut options = memme_core::ListOptions::new(MEMME_USER_ID).limit(limit);
+    let mut options = memme_core::ListOptions::new(current_memme_user_id()).limit(limit);
     if let Some(cat) = category {
         options = options.filter(memme_core::FilterExpression::contains("categories", cat));
     }

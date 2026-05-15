@@ -57,8 +57,18 @@ pub(crate) static STREAMING_STATE: std::sync::OnceLock<
 pub(crate) static MEMME_STORE: std::sync::OnceLock<Arc<memme_core::MemoryStore>> =
     std::sync::OnceLock::new();
 
-/// Shared MemMe user ID constant. All memory operations use this as the user scope.
-pub(crate) const MEMME_USER_ID: &str = "yiyi_default_user";
+/// Default MemMe user_id when no companion override is in scope.
+pub(crate) const DEFAULT_MEMME_USER_ID: &str = "yiyi_default_user";
+
+/// Main-user MemMe bucket — used by call sites that **must not** be redirected
+/// to a companion's bucket. Buddy (the user's digital twin), meditation,
+/// growth signals, and other "this belongs to the human user, not to whichever
+/// agent personality is currently running" paths read/write here directly.
+///
+/// In contrast, [`current_memme_user_id`] respects a task-local companion
+/// override and is what the LLM-facing `memory_add` / `memory_search` tools
+/// use, so companion sub-agents get their own isolated bucket.
+pub(crate) const MEMME_USER_ID: &str = DEFAULT_MEMME_USER_ID;
 
 /// User-Agent string used by all built-in web fetchers (web_search, browser_fetch).
 /// Matches a real Chrome 131 build — anything containing `HeadlessChrome` triggers
@@ -144,6 +154,31 @@ tokio::task_local! {
     /// `edit_file` and `write_file` (for existing files) require a prior
     /// `read_file` call.
     pub(crate) static FILE_STATE_CACHE: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>;
+}
+
+tokio::task_local! {
+    /// Per-task MemMe user_id override. Set by spawn_tools when a sub-agent
+    /// is bound to a companion — the companion's memories live in its own
+    /// bucket so two companions can't read each other's memories.
+    pub(crate) static MEMME_USER_ID_OVERRIDE: String;
+}
+
+/// Effective MemMe user_id for the current task. Returns the per-task
+/// override when set, else falls back to [`DEFAULT_MEMME_USER_ID`].
+pub fn current_memme_user_id() -> String {
+    MEMME_USER_ID_OVERRIDE
+        .try_with(|v| v.clone())
+        .unwrap_or_else(|_| DEFAULT_MEMME_USER_ID.to_string())
+}
+
+/// Scope a future under a specific MemMe user_id. Used by spawn_tools to
+/// route a companion sub-agent's memory operations into the companion's
+/// isolated bucket.
+pub async fn with_memme_user_id<F, R>(user_id: String, fut: F) -> R
+where
+    F: std::future::Future<Output = R>,
+{
+    MEMME_USER_ID_OVERRIDE.scope(user_id, fut).await
 }
 
 /// Record that a file has been read by the current agent.
@@ -430,4 +465,54 @@ pub(crate) async fn resolve_llm_config_from_globals()
         provider_id: active.provider_id.clone(),
         native_tools,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn current_memme_user_id_defaults_when_no_override() {
+        assert_eq!(current_memme_user_id(), DEFAULT_MEMME_USER_ID);
+    }
+
+    #[tokio::test]
+    async fn with_memme_user_id_overrides_for_inner_scope() {
+        let observed = with_memme_user_id("companion_alpha".into(), async {
+            current_memme_user_id()
+        })
+        .await;
+        assert_eq!(observed, "companion_alpha");
+        // Override is scoped — outside the wrapper we revert to the default.
+        assert_eq!(current_memme_user_id(), DEFAULT_MEMME_USER_ID);
+    }
+
+    #[tokio::test]
+    async fn nested_with_memme_user_id_inner_wins() {
+        let inner = with_memme_user_id("outer".into(), async {
+            // From within the outer scope, nesting another override should
+            // route reads to the inner companion (e.g. one companion dispatching
+            // to another companion's bucket via a tool call).
+            with_memme_user_id("inner".into(), async { current_memme_user_id() }).await
+        })
+        .await;
+        assert_eq!(inner, "inner");
+    }
+
+    #[tokio::test]
+    async fn parallel_overrides_dont_leak_across_tasks() {
+        // Two concurrent tokio tasks each scoped to a different user_id —
+        // verifies task_local isolation is per-tokio-task.
+        let h_a = tokio::spawn(with_memme_user_id("a".into(), async {
+            tokio::task::yield_now().await;
+            current_memme_user_id()
+        }));
+        let h_b = tokio::spawn(with_memme_user_id("b".into(), async {
+            tokio::task::yield_now().await;
+            current_memme_user_id()
+        }));
+        let (ra, rb) = tokio::join!(h_a, h_b);
+        assert_eq!(ra.unwrap(), "a");
+        assert_eq!(rb.unwrap(), "b");
+    }
 }

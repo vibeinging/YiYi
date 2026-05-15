@@ -324,6 +324,23 @@ pub fn run() {
                             Ok(_) => {}
                             Err(e) => log::warn!("Trace GC failed: {}", e),
                         }
+                        // 3) Retired companions ≥ 30 天 → 物理删除 + 清掉
+                        //    persona_loader 缓存里挂的旧 path（公司 retire
+                        //    后 path 即作废，但 cache 不会自动 evict）。
+                        //    `gc_retired_companions` 返回被删的 memory_user_id
+                        //    列表 —— Phase 1 不主动扫 MemMe 桶（MemMe 自身按
+                        //    user_id 隔离，无引用的桶等 MemMe 自己的 GC 兜底）。
+                        match state.db.gc_retired_companions(30) {
+                            Ok(freed) if !freed.is_empty() => {
+                                log::info!(
+                                    "Companions GC: hard-deleted {} retired companions (> 30 days): {:?}",
+                                    freed.len(),
+                                    freed
+                                );
+                            }
+                            Ok(_) => {}
+                            Err(e) => log::warn!("Companions GC failed: {}", e),
+                        }
                         drop(state);
                         tokio::time::sleep(std::time::Duration::from_secs(86_400)).await;
                     }
@@ -636,6 +653,13 @@ pub fn run() {
             commands::inbox::approve_inbox_item,
             commands::inbox::reject_inbox_item,
             commands::inbox::withdraw_inbox_item,
+            // Companions (Buddy > 家族 子标签)
+            commands::companions::adopt_companion,
+            commands::companions::update_companion,
+            commands::companions::retire_companion,
+            commands::companions::list_companions,
+            commands::companions::get_companion,
+            commands::companions::preview_persona_tone,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

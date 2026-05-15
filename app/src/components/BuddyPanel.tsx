@@ -26,6 +26,10 @@ import { getSpeciesLabel, STAT_LABELS, STAT_NAMES, type StatName } from '../util
 import { PersonalityOrb } from './buddy/PersonalityOrb'
 import { InboxPanel } from './buddy/InboxPanel'
 import { BuddySettingsDrawer } from './buddy/BuddySettingsDrawer'
+import { CompanionsSection } from './companions/CompanionsSection'
+import { AdoptModal } from './companions/AdoptModal'
+import { CompanionEditDrawer } from './companions/CompanionEditDrawer'
+import type { Companion } from '../api/companions'
 import { toast } from './Toast'
 
 // Personality stat → emoji (used in the Hero stats bar).
@@ -64,6 +68,9 @@ export function BuddyPanel() {
   const { companion, bones, config, aiName } = useBuddyStore()
 
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [adoptOpen, setAdoptOpen] = useState(false)
+  const [editingCompanion, setEditingCompanion] = useState<Companion | null>(null)
+  const [companionsReload, setCompanionsReload] = useState(0)
   const [decisionsExpanded, setDecisionsExpanded] = useState(false)
   const [personalityExpanded, setPersonalityExpanded] = useState(false)
   const [episodesExpanded, setEpisodesExpanded] = useState(false)
@@ -414,6 +421,28 @@ export function BuddyPanel() {
           </div>
         )}
       </Card>
+
+      {/* ═══ 家族 — 用户养的小精灵伙伴 ═══ */}
+      <CompanionsSection
+        accent={from}
+        reloadToken={companionsReload}
+        onAdopt={() => setAdoptOpen(true)}
+        onChatWith={c => toast.info(`@${c.name} 即将打通到 Chat`)}
+        onEdit={c => setEditingCompanion(c)}
+      />
+      {adoptOpen && (
+        <AdoptModal
+          onClose={() => setAdoptOpen(false)}
+          onAdopted={() => setCompanionsReload(n => n + 1)}
+        />
+      )}
+      {editingCompanion && (
+        <CompanionEditDrawer
+          companion={editingCompanion}
+          onClose={() => setEditingCompanion(null)}
+          onChanged={() => setCompanionsReload(n => n + 1)}
+        />
+      )}
 
       {/* ═══ 成长建议 — 她想跟你商量的事（仅在有候选时显示） ═══ */}
       <InboxPanel accent={from} buddyName={companion.name} />

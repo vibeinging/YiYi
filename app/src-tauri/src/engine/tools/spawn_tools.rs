@@ -30,6 +30,13 @@ struct AgentSpec {
     /// might spin on a slow LLM or misbehaving tool.
     #[serde(default)]
     timeout_secs: Option<u64>,
+    /// Companion binding (internal field — NOT advertised in the LLM tool
+    /// schema). When set, the sub-agent runs under the companion's MemMe
+    /// user_id and any persona overrides defined on the companion's
+    /// AgentDefinition. Populated by the `chat_with_companion` Tauri
+    /// command path; LLM-originated spawn calls leave this `None`.
+    #[serde(default)]
+    companion_id: Option<i64>,
 }
 
 /// Spawn agents tool definitions.
@@ -201,6 +208,16 @@ fn spawn_agents_background(
             let sid_for_agent = session_id.clone();
             let branch_name = current_branch.clone();
 
+            // Resolve companion → memory_user_id once per spec, before the
+            // sub-agent future starts. Avoids paying for a DB lookup inside
+            // every parallel ReAct loop; jury scenarios that bind multiple
+            // sibling agents to the same companion still pay per spec but
+            // outside the hot path.
+            let companion_memory_user_id: Option<String> = spec
+                .companion_id
+                .and_then(|cid| super::DATABASE.get().and_then(|db| db.get_companion(cid)))
+                .map(|c| c.memory_user_id);
+
             async move {
                 let agent_name = spec.name.clone();
                 let started_at = std::time::Instant::now();
@@ -291,11 +308,27 @@ fn spawn_agents_background(
                     &wd, None, &filtered_index, &always_active, None, mcp_ref, unavail_ref, None,
                 ).await;
 
-                // Build system prompt: agent definition instructions take priority
+                // Build system prompt: agent definition instructions take priority.
+                // When the agent has a companion persona file attached, render
+                // it as a <companion-persona> block right before the agent's
+                // own AGENT.md instructions so the user-authored voice
+                // overrides / extends the template's persona without leaking
+                // into base_prompt's runtime rules.
                 let agent_identity = if let Some(ref def) = agent_def {
+                    let persona_prefix = def
+                        .persona_md_path
+                        .as_deref()
+                        .and_then(crate::engine::agents::persona_loader::load_companion_persona)
+                        .map(|p| p.render_prefix())
+                        .unwrap_or_default();
                     format!(
-                        "{} {}\n\nYour assigned task: {}\n\n{}\n\n{}",
-                        def.emoji(), def.name, spec.task, def.instructions, base_prompt
+                        "{} {}\n\nYour assigned task: {}\n\n{}{}\n\n{}",
+                        def.emoji(),
+                        def.name,
+                        spec.task,
+                        persona_prefix,
+                        def.instructions,
+                        base_prompt
                     )
                 } else {
                     format!(
@@ -394,6 +427,17 @@ fn spawn_agents_background(
                 }
                 };
 
+                // Wrap the sub-agent run in the companion's MemMe scope so any
+                // memory_add / memory_search inside the sub-agent hits the
+                // companion's isolated bucket. When the spec has no companion
+                // binding, the run_future is awaited directly.
+                let scoped_future = async move {
+                    match companion_memory_user_id {
+                        Some(uid) => super::with_memme_user_id(uid, run_future).await,
+                        None => run_future.await,
+                    }
+                };
+
                 // Apply optional wall-clock timeout. When the future elapses,
                 // flatten Elapsed into a synthetic Err so the downstream error
                 // handling path (worker/task registry, snapshot, event emit)
@@ -401,7 +445,7 @@ fn spawn_agents_background(
                 let (result, timed_out) = match timeout_secs {
                     Some(secs) => match tokio::time::timeout(
                         std::time::Duration::from_secs(secs),
-                        run_future,
+                        scoped_future,
                     ).await {
                         Ok(r) => (r, false),
                         Err(_) => (
@@ -409,7 +453,7 @@ fn spawn_agents_background(
                             true,
                         ),
                     },
-                    None => (run_future.await, false),
+                    None => (scoped_future.await, false),
                 };
 
                 // `full_text` is the complete, uncapped output/error. It is

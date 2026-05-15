@@ -75,10 +75,11 @@ pub use state::{
 };
 // pub(crate) globals + atomic statics + consts that siblings reach for directly.
 pub(crate) use state::{
-    file_state_mark_read, file_state_was_read, get_current_bot_context, get_pty_manager,
-    require_db, require_memme, resolve_llm_config_from_globals, task_workspace_map, APP_HANDLE,
-    BROWSER_UA, DATABASE, MCP_RUNTIME, MEMME_USER_ID, SCHEDULER, STREAMING_STATE, TASK_CANCELLED,
-    TASK_SESSION_ID, USER_WORKSPACE, WORKING_DIR,
+    current_memme_user_id, file_state_mark_read, file_state_was_read, get_current_bot_context,
+    get_pty_manager, require_db, require_memme, resolve_llm_config_from_globals,
+    task_workspace_map, with_memme_user_id, APP_HANDLE, BROWSER_UA, DATABASE, MCP_RUNTIME,
+    MEMME_USER_ID, SCHEDULER, STREAMING_STATE, TASK_CANCELLED, TASK_SESSION_ID, USER_WORKSPACE,
+    WORKING_DIR,
 };
 
 // ── Re-exports: authorization ──────────────────────────────────────

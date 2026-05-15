@@ -2,7 +2,7 @@
  * ChatInput — Message input area with slash commands, @mentions, task picker, attachments.
  */
 
-import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Send, X, Paperclip, FileText, Square, Loader2, Sparkles, FolderOpen, Brain,
@@ -15,6 +15,8 @@ import { SlashCommandPicker, filterCommands, SLASH_COMMANDS, type SlashCommand }
 import { VoiceButton } from '../voice/VoiceButton';
 import { listAllTasksBrief } from '../../api/tasks';
 import { listAgents, type AgentSummary } from '../../api/agents';
+import { listCompanions, type Companion } from '../../api/companions';
+import { companionRoleLabel } from '../../utils/companion';
 import type { Attachment } from '../../api/agent';
 import type { WorkspaceFile } from '../../api/workspace';
 
@@ -123,11 +125,44 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const [taskSuggestions, setTaskSuggestions] = useState<TaskSuggestion[]>([]);
   const skipTaskPickerCloseRef = useRef(false);
 
-  // Agents for @mention
+  // Agents for @mention (builtin role templates).
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   useEffect(() => {
     listAgents().then(setAgents).catch(() => setAgents([]));
   }, []);
+
+  // Companions for @mention. Mapped into AgentSummary-shaped entries so
+  // MentionPicker can render them without an API change. We keep a side
+  // map so the onSelect handler can demux companion vs agent by name.
+  const [companions, setCompanions] = useState<Companion[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    listCompanions(false)
+      .then(list => { if (!cancelled) setCompanions(list); })
+      .catch(() => { if (!cancelled) setCompanions([]); });
+    return () => { cancelled = true; };
+  }, []);
+  const companionAgents = useMemo<AgentSummary[]>(
+    () => companions.map(c => ({
+      name: c.name,
+      description: companionRoleLabel(c.agent_definition_name),
+      emoji: c.avatar_emoji,
+      color: c.color_hex,
+      is_builtin: false,
+      model: null,
+      tool_count: null,
+    })),
+    [companions],
+  );
+  const companionByName = useMemo(() => {
+    const m = new Map<string, Companion>();
+    for (const c of companions) m.set(c.name, c);
+    return m;
+  }, [companions]);
+  const allMentionAgents = useMemo(
+    () => [...companionAgents, ...agents],
+    [companionAgents, agents],
+  );
 
   useImperativeHandle(ref, () => ({
     focus: () => inputRef.current?.focus(),
@@ -409,9 +444,17 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               selectedIndex={filePickerIndex}
               onSelectBot={() => {}}
               onSelectFile={onFileSelect}
-              agents={agents}
-              onSelectAgent={(agent) => {
-                const tag: MentionTag = { type: 'agent', id: agent.name, name: agent.name };
+              agents={allMentionAgents}
+              onSelectAgent={(picked) => {
+                // Companions are tagged with id=`companion:<id>` so the
+                // backend send path can later demux them and route through
+                // spawn_agents with companion_id binding (Phase 2 work —
+                // for now the mention falls through to a normal chat turn
+                // and the main agent decides whether to delegate).
+                const companion = companionByName.get(picked.name);
+                const tag: MentionTag = companion
+                  ? { type: 'agent', id: `companion:${companion.id}`, name: companion.name }
+                  : { type: 'agent', id: picked.name, name: picked.name };
                 inputRef.current?.insertMention(tag);
                 setShowFilePicker(false);
               }}
