@@ -16,6 +16,7 @@ test-support = [
     "dep:serial_test",
     "dep:tokio-test",
     "dep:wiremock",
+    "dep:proptest",
     "tokio/test-util",
     "tauri/test",
 ]
@@ -128,4 +129,8 @@ optional = true
 
 [dependencies.wiremock]
 version = "0.6"
+optional = true
+
+[dependencies.proptest]
+version = "1"
 optional = true

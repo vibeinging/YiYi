@@ -38,11 +38,42 @@ pub struct Database {
     pub(super) conn: Mutex<Connection>,
 }
 
-pub(super) fn now_ts() -> i64 {
+pub(crate) fn now_ts() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+/// Idempotent FK-removal migration for tables where the FK turned out to
+/// be unhelpful (weakly-associated derived data that should outlive its
+/// parent). Checks `sqlite_master.sql` for the keyword; if present, drops
+/// and recreates the table from `create_sql`. No-op when the FK is gone.
+///
+/// `create_sql` must include both the `CREATE TABLE` and any indices the
+/// table needs — it's executed inside the same `execute_batch` as the
+/// DROP so the schema lands atomically.
+fn drop_fk_if_present(
+    conn: &Connection,
+    table: &str,
+    create_sql: &str,
+) -> Result<(), String> {
+    let has_fk: bool = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master
+             WHERE type = 'table' AND name = ?1 AND sql LIKE '%FOREIGN KEY%'",
+            [table],
+            |_| Ok(true),
+        )
+        .unwrap_or(false);
+    if !has_fk {
+        return Ok(());
+    }
+    let batch = format!("DROP TABLE {table};\n{create_sql}");
+    conn.execute_batch(&batch)
+        .map_err(|e| format!("Migration error ({table} FK removal): {e}"))?;
+    log::info!("Migrated {table} table: removed FK to collaborations");
+    Ok(())
 }
 
 impl Database {
@@ -611,25 +642,31 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_collab_steps_collab ON collaboration_steps(collaboration_id, position);
             CREATE INDEX IF NOT EXISTS idx_collab_steps_status ON collaboration_steps(status);
 
+            -- Audit log. Intentionally no FK to collaborations: audit is an
+            -- append-only derived stream that can outlive its collaboration
+            -- (archive / replay / sync scenarios) and shouldn't block tests
+            -- from inserting standalone records.
             CREATE TABLE IF NOT EXISTS collaboration_audit (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 collaboration_id INTEGER NOT NULL,
                 timestamp INTEGER NOT NULL,
-                actor_json TEXT NOT NULL,          -- Actor: System / User / Companion(id)
-                kind TEXT NOT NULL,                -- AuditKind variants
-                payload_json TEXT NOT NULL,
-                FOREIGN KEY (collaboration_id) REFERENCES collaborations(id) ON DELETE CASCADE
+                actor_json TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                payload_json TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_collab_audit_collab ON collaboration_audit(collaboration_id, timestamp);
 
-            -- Learning signals from user 干预 — feeds DispatchStrategy
+            -- Learning signals from user 干预 — feeds DispatchStrategy.
+            -- Intentionally no FK to collaborations: signals are historical
+            -- training data, weakly associated; deleting a collaboration
+            -- should not cascade or block. Allows offline / synced signals
+            -- to land before their collaboration row is materialised too.
             CREATE TABLE IF NOT EXISTS learning_signals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                kind TEXT NOT NULL,                -- dispatch_recalled / dispatch_changed / verdict_accepted / verdict_rejected / step_retried / plan_aborted
-                collaboration_id INTEGER,          -- 关联的协作（nullable 因为有些信号跨协作累积）
+                kind TEXT NOT NULL,
+                collaboration_id INTEGER,
                 payload_json TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                FOREIGN KEY (collaboration_id) REFERENCES collaborations(id) ON DELETE SET NULL
+                created_at INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_learning_kind_time ON learning_signals(kind, created_at);",
         )
@@ -651,6 +688,39 @@ impl Database {
             ).map_err(|e| format!("Migration error: {}", e))?;
             log::info!("Migrated messages table: added metadata, exported columns");
         }
+
+        // learning_signals + collaboration_audit: earlier Phase 2A revision
+        // had FOREIGN KEY to collaborations(id) which blocked test inserts
+        // (these are weakly-associated derived data — must outlive their
+        // parent协作 for tests + future sync). Idempotent: no-op if FK
+        // already absent.
+        drop_fk_if_present(
+            &conn,
+            "learning_signals",
+            "CREATE TABLE learning_signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL,
+                collaboration_id INTEGER,
+                payload_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_learning_kind_time
+                ON learning_signals(kind, created_at);",
+        )?;
+        drop_fk_if_present(
+            &conn,
+            "collaboration_audit",
+            "CREATE TABLE collaboration_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                collaboration_id INTEGER NOT NULL,
+                timestamp INTEGER NOT NULL,
+                actor_json TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                payload_json TEXT NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_collab_audit_collab
+                ON collaboration_audit(collaboration_id, timestamp);",
+        )?;
 
         // Collaboration cross-reference columns on messages — added Phase 2A.
         // Lets any chat row backtrack to the协作 / step / speaker companion.

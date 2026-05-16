@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{CollaborationId, CollaborationPlan, StepId};
 
+pub mod sqlite_sink;
+
 /// A single user intervention worth remembering. The discriminator stays
 /// open-ended (additional variants don't require schema migrations
 /// thanks to JSON payload storage) but every variant must carry enough

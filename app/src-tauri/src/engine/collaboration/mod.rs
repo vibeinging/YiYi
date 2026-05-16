@@ -11,8 +11,11 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod audit;
 pub mod dispatch;
+pub mod events;
 pub mod learning;
+pub mod orchestrator;
 
 use std::sync::{Arc, OnceLock};
 use tokio::sync::{broadcast, Semaphore};
@@ -188,7 +191,7 @@ pub struct StepOutput {
     pub duration_ms: u64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct TokenUsage {
     pub input: u32,
     pub output: u32,
@@ -221,6 +224,8 @@ pub enum AuditKind {
     /// User confirmed (possibly with an edited plan). Payload includes the
     /// final plan as confirmed.
     Confirmed,
+    /// Collaboration reached Done. Emitted by `finalize`.
+    CollaborationCompleted,
     Aborted,
     Failed,
     StepStarted,
@@ -363,10 +368,12 @@ pub trait CollaborationOrchestrator: Send + Sync {
     /// participant. Used for "再叫一个人加入" / "让 X 重做" UX.
     async fn mutate(&self, id: CollaborationId, mutation: Mutation) -> Result<(), String>;
 
-    /// Subscribe to live events for one collaboration. Returns a broadcast
-    /// receiver scoped to that id (the implementation filters out other
-    /// collaborations).
-    fn watch(&self, id: CollaborationId) -> broadcast::Receiver<CollaborationEvent>;
+    /// Subscribe to the live event stream. The returned receiver sees
+    /// **every** collaboration's events — callers filter by
+    /// `collaboration_id` themselves. The broadcast model keeps the API
+    /// trivially cloneable and avoids per-collaboration registry
+    /// bookkeeping; UI subscribers are usually short-lived anyway.
+    fn subscribe_all(&self) -> broadcast::Receiver<CollaborationEvent>;
 
     /// Read the current persisted state (for UI hydration, replay).
     async fn get(&self, id: CollaborationId) -> Result<Option<Collaboration>, String>;
@@ -374,6 +381,26 @@ pub trait CollaborationOrchestrator: Send + Sync {
 
 /// Type alias for the trait object commonly stored in AppState.
 pub type OrchestratorHandle = Arc<dyn CollaborationOrchestrator>;
+
+// ── Executor ──────────────────────────────────────────────────────────
+
+/// Runs one Step. Implementations stream tokens via the events channel
+/// and return the final StepOutput. The Orchestrator owns the DAG
+/// traversal; the Executor only knows how to run one step at a time.
+///
+/// Splitting Orchestrator vs Executor lets us mock the LLM-heavy bits
+/// independently of the state-machine plumbing.
+#[async_trait::async_trait]
+pub trait Executor: Send + Sync {
+    async fn run_step(
+        &self,
+        collab_id: CollaborationId,
+        step: &Step,
+        upstream_outputs: &[(StepId, StepOutput)],
+    ) -> Result<StepOutput, String>;
+}
+
+pub type ExecutorHandle = Arc<dyn Executor>;
 
 // ── Memory bucket resolution ──────────────────────────────────────────
 
