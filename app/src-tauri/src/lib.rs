@@ -660,6 +660,12 @@ pub fn run() {
             commands::companions::list_companions,
             commands::companions::get_companion,
             commands::companions::preview_persona_tone,
+            // Collaboration (Phase 2A): orchestrator-backed协作 lifecycle
+            commands::collaboration::collaboration_submit,
+            commands::collaboration::collaboration_confirm,
+            commands::collaboration::collaboration_abort,
+            commands::collaboration::collaboration_mutate,
+            commands::collaboration::collaboration_get,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -27,3 +27,4 @@ pub mod snapshots;
 pub mod deepseek;
 pub mod inbox;
 pub mod companions;
+pub mod collaboration;

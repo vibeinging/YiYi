@@ -20,7 +20,7 @@ pub mod persona_loader;
 /// `Family` — companion uses the `family_shared` bucket, visible to all
 /// companions. For cross-companion context like "user is working on
 /// project X" that every family member should see.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryScope {
     #[default]

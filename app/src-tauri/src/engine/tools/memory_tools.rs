@@ -3,7 +3,72 @@
 /// All structured memory operations go through MemMe's DuckDB-backed store.
 /// File-based operations (diary, MEMORY.md) remain as complementary markdown layers.
 
-use super::current_memme_user_id;
+use std::collections::HashSet;
+
+use super::{current_memme_user_id, DEFAULT_MEMME_USER_ID};
+use crate::engine::collaboration::FAMILY_SHARED_USER_ID;
+
+/// Where a memory operation reads / writes.
+///
+/// - `Mine` (default) — the current speaker's own bucket. For a companion
+///   sub-agent that's their isolated `companion_<id>` MemMe user_id; for
+///   the main session it's the default user.
+/// - `Shared` — the main user bucket. Companions can opt-in to write here
+///   when they're recording an objective fact about the user (rather than
+///   their own opinion of the user).
+/// - `Family` — the cross-companion bucket. Use for context that every
+///   family member should see ("user is working on YiYi project").
+/// - `All` — search-only fan-out: query Mine ∪ Family. Doesn't include
+///   Shared by default (主用户 bucket is privileged; explicit opt-in).
+#[derive(Debug, Clone, Copy)]
+enum MemoryScopeArg {
+    Mine,
+    Shared,
+    Family,
+    All,
+}
+
+fn parse_scope(args: &serde_json::Value) -> MemoryScopeArg {
+    match args.get("scope").and_then(|v| v.as_str()) {
+        Some("shared") => MemoryScopeArg::Shared,
+        Some("family") => MemoryScopeArg::Family,
+        Some("all") => MemoryScopeArg::All,
+        _ => MemoryScopeArg::Mine,
+    }
+}
+
+/// Returns the bucket user_ids a read should fan out across.
+fn read_buckets(scope: MemoryScopeArg) -> Vec<String> {
+    match scope {
+        MemoryScopeArg::Mine => vec![current_memme_user_id()],
+        MemoryScopeArg::Shared => vec![DEFAULT_MEMME_USER_ID.to_string()],
+        MemoryScopeArg::Family => vec![FAMILY_SHARED_USER_ID.to_string()],
+        MemoryScopeArg::All => {
+            let mine = current_memme_user_id();
+            let family = FAMILY_SHARED_USER_ID.to_string();
+            if mine == family {
+                vec![mine]
+            } else {
+                vec![mine, family]
+            }
+        }
+    }
+}
+
+/// Returns the single bucket user_id a write targets. `All` is rejected —
+/// writes must land in one specific bucket.
+fn write_bucket(scope: MemoryScopeArg) -> Result<String, &'static str> {
+    Ok(match scope {
+        MemoryScopeArg::Mine => current_memme_user_id(),
+        MemoryScopeArg::Shared => DEFAULT_MEMME_USER_ID.to_string(),
+        MemoryScopeArg::Family => FAMILY_SHARED_USER_ID.to_string(),
+        MemoryScopeArg::All => {
+            return Err("scope='all' is read-only; pick mine / shared / family for writes")
+        }
+    })
+}
+
+const SCOPE_PROPERTY: &str = "Memory bucket: 'mine' (own/companion bucket, default) / 'shared' (main user bucket, for objective user facts) / 'family' (cross-companion context) / 'all' (search-only: mine ∪ family)";
 
 pub(super) fn definitions() -> Vec<super::ToolDefinition> {
     // Priya P1-4 + P1-5 consolidation: the LLM surface is deliberately just
@@ -17,10 +82,6 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
     //   - memory_write   → ditto; use write_file
     //   - diary_write    → diary is session journal, owned by meditation engine
     //   - diary_read     → ditto
-    //
-    // Rationale: the LLM was misusing list/read as a cheap way to "dump
-    // everything", which polluted context. Forcing on-demand search with a
-    // query tells the agent to think about WHAT it's looking for.
     vec![
         super::tool_def(
             "memory_add",
@@ -30,7 +91,8 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
                 "properties": {
                     "content": { "type": "string", "description": "The memory content to store" },
                     "category": { "type": "string", "enum": ["fact", "preference", "experience", "decision", "note", "principle"], "description": "Category (default: fact)" },
-                    "importance": { "type": "number", "description": "0.0-1.0 (default: 0.5)" }
+                    "importance": { "type": "number", "description": "0.0-1.0 (default: 0.5)" },
+                    "scope": { "type": "string", "enum": ["mine", "shared", "family"], "description": SCOPE_PROPERTY }
                 },
                 "required": ["content"]
             }),
@@ -43,7 +105,8 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
                 "properties": {
                     "query": { "type": "string", "description": "Natural-language query (zh/en)" },
                     "category": { "type": "string", "enum": ["fact", "preference", "experience", "decision", "note", "principle"], "description": "Optional filter" },
-                    "max_results": { "type": "integer", "description": "Default: 10" }
+                    "max_results": { "type": "integer", "description": "Default: 10" },
+                    "scope": { "type": "string", "enum": ["mine", "shared", "family", "all"], "description": SCOPE_PROPERTY }
                 },
                 "required": ["query"]
             }),
@@ -53,16 +116,23 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-/// Build MemMe AddOptions with common defaults.
+/// Build MemMe AddOptions with common defaults. Bucket comes from the
+/// task-local override (companion sub-agent) unless caller overrides.
 pub(crate) fn memme_add_opts(category: &str, importance: f32) -> memme_core::AddOptions {
     memme_core::AddOptions::new(current_memme_user_id())
         .categories(vec![category.to_string()])
         .importance(importance)
 }
 
-/// Build MemMe AddOptions with session from task-local context.
-fn memme_add_opts_with_session(category: &str, importance: f32) -> memme_core::AddOptions {
-    let mut opts = memme_add_opts(category, importance);
+/// Build AddOptions with session_id from task-local context + explicit bucket.
+fn memme_add_opts_for(
+    user_id: String,
+    category: &str,
+    importance: f32,
+) -> memme_core::AddOptions {
+    let mut opts = memme_core::AddOptions::new(user_id)
+        .categories(vec![category.to_string()])
+        .importance(importance);
     let sid = super::get_current_session_id();
     if !sid.is_empty() {
         opts = opts.session_id(sid);
@@ -76,21 +146,27 @@ pub(super) async fn memory_add_tool(args: &serde_json::Value) -> String {
     let content = args["content"].as_str().unwrap_or("");
     let category = args["category"].as_str().unwrap_or("fact");
     let importance = args["importance"].as_f64().unwrap_or(0.5) as f32;
+    let scope = parse_scope(args);
 
     if content.is_empty() {
         return "Error: content is required".into();
     }
+
+    let bucket = match write_bucket(scope) {
+        Ok(b) => b,
+        Err(msg) => return format!("Error: {msg}"),
+    };
 
     let store = match super::require_memme() {
         Ok(s) => s,
         Err(e) => return e,
     };
 
-    let opts = memme_add_opts_with_session(category, importance);
+    let opts = memme_add_opts_for(bucket, category, importance);
     match store.add(content, opts) {
         Ok(result) => format!(
-            "Memory added (id: {}, category: {}, importance: {:.1})",
-            result.id, category, importance
+            "Memory added (id: {}, category: {}, importance: {:.1}, scope: {:?})",
+            result.id, category, importance, scope
         ),
         Err(e) => format!("Error adding memory: {}", e),
     }
@@ -100,6 +176,7 @@ pub(super) async fn memory_search_tool(args: &serde_json::Value) -> String {
     let query = args["query"].as_str().unwrap_or("");
     let category = args["category"].as_str();
     let max_results = args["max_results"].as_u64().unwrap_or(10) as usize;
+    let scope = parse_scope(args);
 
     if query.is_empty() {
         return "Error: query is required".into();
@@ -110,34 +187,54 @@ pub(super) async fn memory_search_tool(args: &serde_json::Value) -> String {
         Err(e) => return e,
     };
 
-    let mut options = memme_core::SearchOptions::new(current_memme_user_id())
-        .limit(max_results)
-        .keyword_search(true);
-    if let Some(cat) = category {
-        options = options.filter(memme_core::FilterExpression::contains("categories", cat));
-    }
-
-    match store.search(query, options) {
-        Ok(results) if !results.is_empty() => {
-            let entries: Vec<String> = results
-                .iter()
-                .map(|m| {
-                    let cats = m.categories.as_ref()
-                        .map(|c| c.join(", "))
-                        .unwrap_or_else(|| "未归类".into());
-                    let score = m.score.map(|s| format!("{:.3}", s)).unwrap_or_default();
-                    let imp = m.importance.map(|i| format!("{:.1}", i)).unwrap_or_else(|| "-".into());
-                    format!(
-                        "[{}] (score: {}, importance: {})\n{}\n  -- id: {} | created: {}",
-                        cats, score, imp, m.content, m.id, m.created_at,
-                    )
-                })
-                .collect();
-            format!("Found {} memories matching '{}':\n\n{}", entries.len(), query, entries.join("\n---\n"))
+    // Fan out across buckets ("all" reads both companion + family). Dedup
+    // by id (a single memory only lives in one bucket so collisions only
+    // happen if Mine and Family resolve to the same id, e.g. the main
+    // session is also viewing family_shared — kept defensive).
+    let buckets = read_buckets(scope);
+    let mut merged: Vec<memme_core::MemoryResult> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for bucket in buckets {
+        let mut options = memme_core::SearchOptions::new(bucket)
+            .limit(max_results)
+            .keyword_search(true);
+        if let Some(cat) = category {
+            options = options.filter(memme_core::FilterExpression::contains("categories", cat));
         }
-        Ok(_) => format!("No memories found matching '{}'", query),
-        Err(e) => format!("Error searching memories: {}", e),
+        if let Ok(results) = store.search(query, options) {
+            for m in results {
+                if seen.insert(m.id.clone()) {
+                    merged.push(m);
+                }
+            }
+        }
     }
+    merged.sort_by(|a, b| {
+        b.score
+            .unwrap_or(0.0)
+            .partial_cmp(&a.score.unwrap_or(0.0))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    merged.truncate(max_results);
+
+    if merged.is_empty() {
+        return format!("No memories found matching '{}'", query);
+    }
+    let entries: Vec<String> = merged
+        .iter()
+        .map(|m| {
+            let cats = m.categories.as_ref()
+                .map(|c| c.join(", "))
+                .unwrap_or_else(|| "未归类".into());
+            let score = m.score.map(|s| format!("{:.3}", s)).unwrap_or_default();
+            let imp = m.importance.map(|i| format!("{:.1}", i)).unwrap_or_else(|| "-".into());
+            format!(
+                "[{}] (score: {}, importance: {})\n{}\n  -- id: {} | created: {}",
+                cats, score, imp, m.content, m.id, m.created_at,
+            )
+        })
+        .collect();
+    format!("Found {} memories matching '{}':\n\n{}", entries.len(), query, entries.join("\n---\n"))
 }
 
 pub(super) async fn memory_delete_tool(args: &serde_json::Value) -> String {
@@ -207,7 +304,7 @@ pub(super) async fn diary_write_tool(args: &serde_json::Value) -> Result<String,
 
     // Also store in MemMe for vector search
     if let Ok(store) = super::require_memme() {
-        let opts = memme_add_opts_with_session("diary", 0.4);
+        let opts = memme_add_opts_for(current_memme_user_id(), "diary", 0.4);
         let _ = store.add(content, opts);
     }
     Ok("Diary entry written.".into())
