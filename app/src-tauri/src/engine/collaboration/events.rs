@@ -50,13 +50,15 @@ mod tests {
     use crate::engine::collaboration::{AuditEvent, AuditKind, Actor};
 
     fn sample_audit(collab_id: i64) -> CollaborationEvent {
-        CollaborationEvent::Audit(AuditEvent {
-            collaboration_id: collab_id,
-            timestamp: 1,
-            actor: Actor::System,
-            kind: AuditKind::Submitted,
-            payload: serde_json::Value::Null,
-        })
+        CollaborationEvent::Audit {
+            event: AuditEvent {
+                collaboration_id: collab_id,
+                timestamp: 1,
+                actor: Actor::System,
+                kind: AuditKind::Submitted,
+                payload: serde_json::Value::Null,
+            },
+        }
     }
 
     #[tokio::test]
@@ -65,7 +67,7 @@ mod tests {
         emit(sample_audit(1));
         let got = rx.recv().await.expect("event received");
         match got {
-            CollaborationEvent::Audit(a) => assert_eq!(a.collaboration_id, 1),
+            CollaborationEvent::Audit { event } => assert_eq!(event.collaboration_id, 1),
             _ => panic!("expected audit event"),
         }
     }

@@ -52,7 +52,7 @@ async fn emit_broadcasts_live_event_to_subscribers() {
         .expect("recv timeout")
         .expect("recv");
     match event {
-        CollaborationEvent::Audit(a) => {
+        CollaborationEvent::Audit { event: a } => {
             assert_eq!(a.collaboration_id, 42);
             assert_eq!(a.actor, Actor::Companion(7));
             assert_eq!(a.kind, AuditKind::StepStarted);

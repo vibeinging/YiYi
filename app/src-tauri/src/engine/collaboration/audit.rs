@@ -62,13 +62,15 @@ impl AuditTrail {
             conn.last_insert_rowid()
         };
 
-        let event = CollaborationEvent::Audit(AuditEvent {
-            collaboration_id,
-            timestamp,
-            actor,
-            kind,
-            payload,
-        });
+        let event = CollaborationEvent::Audit {
+            event: AuditEvent {
+                collaboration_id,
+                timestamp,
+                actor,
+                kind,
+                payload,
+            },
+        };
         events::emit(event);
         Ok(row_id)
     }

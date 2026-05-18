@@ -39,6 +39,14 @@ import { ChatInput, type ChatInputHandle } from '../components/chat/ChatInput';
 import { PermissionCard } from '../components/chat/PermissionCard';
 import { VoiceOverlay } from '../components/voice/VoiceOverlay';
 import { useBuddyStore } from '../stores/buddyStore';
+import { CollaborationPanel } from '../components/collaboration/CollaborationPanel';
+import { CollaborationHistoryStrip } from '../components/collaboration/CollaborationHistoryStrip';
+import {
+  planSingleCompanion,
+  submitCollaboration,
+  type Participant,
+} from '../api/collaboration';
+import { getCompanion } from '../api/companions';
 
 import logoImg from '../assets/yiyi-logo.png';
 
@@ -66,6 +74,12 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
 
   // --- Core state ---
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+
+  // Phase 2B: when handleSend detects a @companion mention, we submit a
+  // collaboration and pin the resulting id so CollaborationPanel renders
+  // above the input until the user closes it.
+  const [activeCollaborationId, setActiveCollaborationId] = useState<number | null>(null);
+  const [collaborationReloadToken, setCollaborationReloadToken] = useState(0);
 
   // --- Refs ---
   const activeSessionIdRef = useRef(activeSessionId);
@@ -287,6 +301,54 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
 
     // Bind @mentioned agents — prepend agent context for backend routing
     const agentMentions = mentions.filter(m => m.type === 'agent');
+
+    // Phase 2B: if there's exactly one @companion mention, route through
+    // the collaboration orchestrator instead of the main chat stream.
+    // (≥ 2 companions = jury — Phase 2C; mixed agent + companion falls
+    // through to the legacy path for now.)
+    const companionMentions = agentMentions.filter(m => m.id.startsWith('companion:'));
+    if (companionMentions.length === 1 && agentMentions.length === 1) {
+      const companionIdStr = companionMentions[0].id.slice('companion:'.length);
+      const companionId = parseInt(companionIdStr, 10);
+      if (Number.isFinite(companionId)) {
+        try {
+          const companion = await getCompanion(companionId);
+          if (!companion) {
+            toast.error(`${companionMentions[0].name} 已不在家族里`);
+            return;
+          }
+          const participant: Participant = {
+            companion_id: companion.id,
+            name: companion.name,
+            avatar_emoji: companion.avatar_emoji,
+            color_hex: companion.color_hex,
+            memory_scope: 'private',
+          };
+          const plan = planSingleCompanion(participant, plainText);
+          setMessages(prev => [...prev, {
+            role: 'user' as const,
+            content: plainText,
+            timestamp: Date.now(),
+            attachments: undefined,
+          }]);
+          const id = await submitCollaboration(
+            activeSessionId,
+            plainText,
+            plan,
+            { kind: 'manual' },
+          );
+          setActiveCollaborationId(id);
+          return;
+        } catch (e) {
+          toast.error(`派遣 ${companionMentions[0].name} 失败: ${e}`);
+          return;
+        }
+      }
+    } else if (companionMentions.length >= 2) {
+      toast.info('陪审团（多位伙伴同聊）在 Phase 2C 开放，目前先单独 @ 一位');
+      return;
+    }
+
     if (agentMentions.length > 0) {
       const agentNames = agentMentions.map(m => m.name).join(', ');
       userMessage = `[agent: ${agentNames}]\n${userMessage}`;
@@ -528,6 +590,29 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
         />
       )}
 
+
+      {/* History strip — past协作 for this session, click to replay. */}
+      {!showWelcome && (
+        <CollaborationHistoryStrip
+          chatSessionId={activeSessionId}
+          reloadToken={collaborationReloadToken}
+          onOpen={(id) => setActiveCollaborationId(id)}
+        />
+      )}
+
+      {/* Active collaboration panel — pinned above the input dock while
+          a @companion request is in flight or recently terminal. */}
+      {activeCollaborationId !== null && (
+        <div className="shrink-0 px-4 pt-2 pb-1" style={{ background: 'var(--color-bg)' }}>
+          <CollaborationPanel
+            collaborationId={activeCollaborationId}
+            onClose={() => {
+              setActiveCollaborationId(null);
+              setCollaborationReloadToken(n => n + 1);
+            }}
+          />
+        </div>
+      )}
 
       {/* Bottom dock: permission request takes over when pending */}
       {isPermissionPending ? (

@@ -317,9 +317,10 @@ pub enum Mutation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum CollaborationEvent {
-    /// Mirror of an `AuditEvent` write. Carries the full record so the
-    /// front-end can render or replay without a second DB hit.
-    Audit(AuditEvent),
+    /// Mirror of an `AuditEvent` write. Wrapped in a named field rather
+    /// than a newtype variant so the outer `tag = "kind"` doesn't collide
+    /// with `AuditEvent.kind` in the serialized form.
+    Audit { event: AuditEvent },
     /// Streaming token for a step's participant. High-frequency, must not
     /// pass through the audit table.
     Token {

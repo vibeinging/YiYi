@@ -624,9 +624,12 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_collab_status ON collaborations(status);
             CREATE INDEX IF NOT EXISTS idx_collab_parent ON collaborations(parent_id);
 
+            -- step.id is scoped within one collaboration (clients author
+            -- plans with ids 1..N); composite PK lets each协作 reuse the
+            -- same step ids without a global counter.
             CREATE TABLE IF NOT EXISTS collaboration_steps (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 collaboration_id INTEGER NOT NULL,
+                id INTEGER NOT NULL,
                 kind TEXT NOT NULL,                -- single_agent / parallel_agents / host_summarize / user_confirmation
                 participants_json TEXT NOT NULL,   -- Vec<Participant>
                 depends_on_json TEXT NOT NULL DEFAULT '[]', -- Vec<step_id>
@@ -637,9 +640,10 @@ impl Database {
                 started_at INTEGER,
                 finished_at INTEGER,
                 position INTEGER NOT NULL,         -- DAG 拓扑序，前端渲染顺序
+                PRIMARY KEY (collaboration_id, id),
                 FOREIGN KEY (collaboration_id) REFERENCES collaborations(id) ON DELETE CASCADE
             );
-            CREATE INDEX IF NOT EXISTS idx_collab_steps_collab ON collaboration_steps(collaboration_id, position);
+            CREATE INDEX IF NOT EXISTS idx_collab_steps_position ON collaboration_steps(collaboration_id, position);
             CREATE INDEX IF NOT EXISTS idx_collab_steps_status ON collaboration_steps(status);
 
             -- Audit log. Intentionally no FK to collaborations: audit is an
@@ -687,6 +691,48 @@ impl Database {
                  ALTER TABLE messages ADD COLUMN exported INTEGER NOT NULL DEFAULT 0;"
             ).map_err(|e| format!("Migration error: {}", e))?;
             log::info!("Migrated messages table: added metadata, exported columns");
+        }
+
+        // collaboration_steps: an earlier Phase 2A revision had a global
+        // AUTOINCREMENT PRIMARY KEY which collided when multiple
+        // collaborations reused the same scoped step id (1, 2, 3...).
+        // Switch to composite (collaboration_id, id). Idempotent: the
+        // helper detects the old AUTOINCREMENT signature.
+        let steps_has_autoincrement: bool = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'collaboration_steps'
+                   AND sql LIKE '%AUTOINCREMENT%'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+        if steps_has_autoincrement {
+            conn.execute_batch(
+                "DROP TABLE collaboration_steps;
+                 CREATE TABLE collaboration_steps (
+                    collaboration_id INTEGER NOT NULL,
+                    id INTEGER NOT NULL,
+                    kind TEXT NOT NULL,
+                    participants_json TEXT NOT NULL,
+                    depends_on_json TEXT NOT NULL DEFAULT '[]',
+                    input_json TEXT NOT NULL,
+                    output_json TEXT,
+                    status TEXT NOT NULL,
+                    error_reason TEXT,
+                    started_at INTEGER,
+                    finished_at INTEGER,
+                    position INTEGER NOT NULL,
+                    PRIMARY KEY (collaboration_id, id),
+                    FOREIGN KEY (collaboration_id) REFERENCES collaborations(id) ON DELETE CASCADE
+                 );
+                 CREATE INDEX IF NOT EXISTS idx_collab_steps_position
+                    ON collaboration_steps(collaboration_id, position);
+                 CREATE INDEX IF NOT EXISTS idx_collab_steps_status
+                    ON collaboration_steps(status);",
+            )
+            .map_err(|e| format!("Migration error (collaboration_steps composite PK): {e}"))?;
+            log::info!("Migrated collaboration_steps: switched to (collaboration_id, id) composite PK");
         }
 
         // learning_signals + collaboration_audit: earlier Phase 2A revision

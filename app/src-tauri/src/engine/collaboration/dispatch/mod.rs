@@ -5,6 +5,8 @@
 
 use super::{DispatchContext, DispatchDecision};
 
+pub mod llm_strategy;
+
 /// Decision policy for converting a user intent into a协作 plan.
 ///
 /// Implementations should be deterministic given the same `ctx` so audit

@@ -849,6 +849,46 @@ impl SqliteOrchestrator {
 }
 
 impl SqliteOrchestrator {
+    /// List the most recent N collaborations for one chat session,
+    /// newest first. Powers the history-replay double-line bubbles in
+    /// Chat. Reuses `load` per collab — small N (UI shows ≤ 20) so the
+    /// per-row JSON cost is dominated by network/IPC.
+    pub fn list_recent_by_session(
+        &self,
+        chat_session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<Collaboration>, String> {
+        let mut ids: Vec<CollaborationId> = Vec::new();
+        {
+            let conn = self.db.get_conn().ok_or_else(|| "db lock".to_string())?;
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id FROM collaborations
+                     WHERE chat_session_id = ?1
+                     ORDER BY created_at DESC
+                     LIMIT ?2",
+                )
+                .map_err(|e| format!("prepare list_recent: {e}"))?;
+            let rows = stmt
+                .query_map(params![chat_session_id, limit as i64], |row| {
+                    row.get::<_, CollaborationId>(0)
+                })
+                .map_err(|e| format!("query list_recent: {e}"))?;
+            for row in rows {
+                if let Ok(id) = row {
+                    ids.push(id);
+                }
+            }
+        }
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(c) = self.load(id)? {
+                out.push(c);
+            }
+        }
+        Ok(out)
+    }
+
     /// Replace the persisted plan with a user-edited version (called from
     /// `confirm` when `edited_plan` is supplied). Drops all existing step
     /// rows for the collab and re-inserts.

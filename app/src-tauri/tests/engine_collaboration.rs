@@ -636,6 +636,78 @@ async fn get_reflects_step_status_after_completion() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
+async fn list_recent_by_session_returns_newest_first() {
+    let t = TempDb::new();
+    let (orch, _executor) = build_orchestrator(&t);
+
+    let mut ids = Vec::new();
+    for i in 0..3 {
+        let plan = CollaborationPlan {
+            steps: vec![step_single(1, &format!("turn {i}"), 10)],
+        };
+        let id = orch
+            .submit(
+                "sess-1".into(),
+                format!("intent {i}"),
+                plan,
+                CollaborationMode::Manual,
+                None,
+            )
+            .await
+            .unwrap();
+        ids.push(id);
+        wait_for_terminal(&orch, id).await;
+        // Stagger so created_at differs.
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+
+    let recent = orch.list_recent_by_session("sess-1", 10).expect("list");
+    assert_eq!(recent.len(), 3);
+    // newest first → reverse insertion order
+    let recent_ids: Vec<i64> = recent.iter().map(|c| c.id).collect();
+    let mut expected = ids.clone();
+    expected.reverse();
+    assert_eq!(recent_ids, expected);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn list_recent_by_session_isolates_by_session_id() {
+    let t = TempDb::new();
+    let (orch, _executor) = build_orchestrator(&t);
+
+    let plan_a = CollaborationPlan {
+        steps: vec![step_single(1, "x", 10)],
+    };
+    let id_a = orch
+        .submit("sess-1".into(), "a".into(), plan_a, CollaborationMode::Manual, None)
+        .await
+        .unwrap();
+    let plan_b = CollaborationPlan {
+        steps: vec![step_single(1, "y", 11)],
+    };
+    let _id_b = orch
+        .submit("s".into(), "b".into(), plan_b, CollaborationMode::Manual, None)
+        .await
+        .unwrap();
+    wait_for_terminal(&orch, id_a).await;
+
+    let only_sess1 = orch.list_recent_by_session("sess-1", 10).unwrap();
+    assert_eq!(only_sess1.len(), 1);
+    assert_eq!(only_sess1[0].chat_session_id, "sess-1");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn list_recent_empty_for_unknown_session() {
+    let t = TempDb::new();
+    let (orch, _executor) = build_orchestrator(&t);
+    let recent = orch.list_recent_by_session("nonexistent", 10).unwrap();
+    assert!(recent.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
 async fn watch_receives_audit_events() {
     let t = TempDb::new();
     let (orch, _executor) = build_orchestrator(&t);
@@ -654,7 +726,7 @@ async fn watch_receives_audit_events() {
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline && (!got_submitted || !got_step_started) {
         match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
-            Ok(Ok(app_lib::engine::collaboration::CollaborationEvent::Audit(a))) => {
+            Ok(Ok(app_lib::engine::collaboration::CollaborationEvent::Audit { event: a })) => {
                 if a.collaboration_id != id {
                     continue;
                 }

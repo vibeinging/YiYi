@@ -284,6 +284,39 @@ pub fn run() {
                 start_meditation_timer(app_handle);
             }
 
+            // Bridge collaboration events to the front-end via Tauri.
+            // The broadcast::Sender lives for the process lifetime (OnceLock)
+            // so reconnect logic isn't needed; if we ever shut down the
+            // collaboration subsystem this loop ends gracefully.
+            {
+                let bridge_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    use tauri::Emitter;
+                    let mut rx = engine::collaboration::events::subscribe();
+                    loop {
+                        match rx.recv().await {
+                            Ok(event) => {
+                                if let Err(e) =
+                                    bridge_handle.emit("collaboration://event", &event)
+                                {
+                                    log::warn!("Failed to emit collaboration event: {e}");
+                                }
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                                log::warn!(
+                                    "Collaboration event bridge lagged: {skipped} events dropped"
+                                );
+                                // continue — receiver auto-resyncs to the latest.
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                log::info!("Collaboration event channel closed, exiting bridge");
+                                break;
+                            }
+                        }
+                    }
+                });
+            }
+
             // Periodic worker cleanup (every 5 min, remove finished workers older than 30 min)
             {
                 let cleanup_handle = app.handle().clone();
@@ -666,6 +699,7 @@ pub fn run() {
             commands::collaboration::collaboration_abort,
             commands::collaboration::collaboration_mutate,
             commands::collaboration::collaboration_get,
+            commands::collaboration::collaboration_list_recent,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

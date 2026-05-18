@@ -78,3 +78,14 @@ pub async fn collaboration_get(
     let orch = orchestrator(&state).await?;
     orch.get(id).await
 }
+
+#[tauri::command]
+pub async fn collaboration_list_recent(
+    state: State<'_, AppState>,
+    chat_session_id: String,
+    limit: Option<usize>,
+) -> Result<Vec<Collaboration>, String> {
+    let orch = orchestrator(&state).await?;
+    let limit = limit.unwrap_or(20).min(100);
+    orch.list_recent_by_session(&chat_session_id, limit)
+}
