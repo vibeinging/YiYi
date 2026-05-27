@@ -39,7 +39,7 @@ export function CompanionCard({ companion, onChat, onEdit }: Props) {
             {companion.name}
           </div>
           <div className="text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
-            {companionRoleLabel(companion.agent_definition_name)}
+            {companionRoleLabel(companion)}
           </div>
         </div>
       </div>

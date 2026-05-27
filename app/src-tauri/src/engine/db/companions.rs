@@ -35,6 +35,11 @@ pub struct Companion {
     pub invocation_count: i64,
     pub last_used_at: Option<i64>,
     pub metadata_json: Option<String>,
+    /// Human-readable role label shown in the UI (e.g. "小红书爆款写手").
+    /// Decoupled from `agent_definition_name` which is just the underlying
+    /// tool-permission template. Old rows may have `None`; the frontend
+    /// falls back to a template-derived label in that case.
+    pub role_label: Option<String>,
 }
 
 /// New companion payload for `adopt_companion`. Fields not listed default
@@ -48,6 +53,7 @@ pub struct NewCompanion {
     pub persona_md_path: Option<String>,
     pub memory_user_id: String,
     pub metadata_json: Option<String>,
+    pub role_label: Option<String>,
 }
 
 /// Partial update payload for `update_companion`. Each `Some` is applied;
@@ -60,6 +66,7 @@ pub struct CompanionUpdate {
     pub persona_md_path: Option<Option<String>>,
     pub personality_stats_json: Option<Option<String>>,
     pub metadata_json: Option<Option<String>>,
+    pub role_label: Option<Option<String>>,
 }
 
 fn map_row(row: &rusqlite::Row) -> rusqlite::Result<Companion> {
@@ -77,13 +84,14 @@ fn map_row(row: &rusqlite::Row) -> rusqlite::Result<Companion> {
         invocation_count: row.get(10)?,
         last_used_at: row.get(11)?,
         metadata_json: row.get(12)?,
+        role_label: row.get(13)?,
     })
 }
 
 const SELECT_COLS: &str =
     "id, name, agent_definition_name, avatar_emoji, color_hex, persona_md_path, \
      memory_user_id, adopted_at, retired_at, personality_stats_json, \
-     invocation_count, last_used_at, metadata_json";
+     invocation_count, last_used_at, metadata_json, role_label";
 
 impl super::Database {
     /// Adopt a new companion. Returns the newly assigned id.
@@ -94,8 +102,8 @@ impl super::Database {
         conn.execute(
             "INSERT INTO companions
                 (name, agent_definition_name, avatar_emoji, color_hex, persona_md_path,
-                 memory_user_id, adopted_at, invocation_count, metadata_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8)",
+                 memory_user_id, adopted_at, invocation_count, metadata_json, role_label)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9)",
             params![
                 new.name,
                 new.agent_definition_name,
@@ -105,6 +113,7 @@ impl super::Database {
                 new.memory_user_id,
                 now,
                 new.metadata_json,
+                new.role_label,
             ],
         )
         .map_err(|e| format!("adopt_companion: {}", e))?;
@@ -196,6 +205,10 @@ impl super::Database {
         }
         if let Some(v) = &upd.metadata_json {
             sets.push("metadata_json = ?");
+            vals.push(Box::new(v.clone()));
+        }
+        if let Some(v) = &upd.role_label {
+            sets.push("role_label = ?");
             vals.push(Box::new(v.clone()));
         }
         if sets.is_empty() {

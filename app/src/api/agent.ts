@@ -50,9 +50,30 @@ export interface ToolArtifact {
   name: string;
 }
 
+export interface CompanionDraftPayload {
+  name: string;
+  avatar_emoji: string;
+  color_hex: string;
+  /** Tool-permission template slug; not shown in the UI. */
+  agent_definition_name: string;
+  /** Free-text "擅长" label shown in the card. */
+  role_label: string;
+  persona_md: string;
+  tone_preview: string;
+  rationale: string;
+}
+
+export interface CompanionDraftEnvelope {
+  companion_draft: CompanionDraftPayload;
+  /** 'pending' | 'adopted' | 'dismissed' — UI state echoed back from DB metadata. */
+  draft_state?: string;
+  /** Companion id once the user adopts. */
+  adopted_companion_id?: number;
+}
+
 export interface ChatMessage {
   id?: number;
-  role: 'user' | 'assistant' | 'system' | 'tool' | 'context_reset';
+  role: 'user' | 'assistant' | 'system' | 'tool' | 'context_reset' | 'collaboration' | 'companion_draft';
   content: string;
   timestamp?: number;
   toolName?: string;
@@ -65,6 +86,10 @@ export interface ChatMessage {
   spawn_agents?: SpawnAgentResult[];
   thinking?: string;
   tool_artifacts?: ToolArtifact[];
+  /** When role === 'collaboration', the orchestrator id this message renders. */
+  collaboration_id?: number;
+  /** When role === 'companion_draft', the draft payload (incl. draft_state). */
+  companion_draft?: CompanionDraftEnvelope;
 }
 
 export async function readArtifactDataUri(path: string, mimeType: string): Promise<string> {

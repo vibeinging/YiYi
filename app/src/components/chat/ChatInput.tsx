@@ -5,7 +5,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  Send, X, Paperclip, FileText, Square, Loader2, Sparkles, FolderOpen, Brain,
+  Send, X, Paperclip, FileText, Square, Loader2, Sparkles, FolderOpen, Brain, Users,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { QuickActionsOverlay } from './QuickActionsOverlay';
@@ -97,6 +97,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
   // Pickers
   const [showQuickActions, setShowQuickActions] = useState(false);
+  const [showFamily, setShowFamily] = useState(false);
 
   // DeepSeek V4 thinking-mode effort: "off" | "high" | "max"
   const [thinkingEffort, setThinkingEffortState] = useState<'off' | 'high' | 'max'>('high');
@@ -145,7 +146,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const companionAgents = useMemo<AgentSummary[]>(
     () => companions.map(c => ({
       name: c.name,
-      description: companionRoleLabel(c.agent_definition_name),
+      description: companionRoleLabel(c),
       emoji: c.avatar_emoji,
       color: c.color_hex,
       is_builtin: false,
@@ -550,6 +551,36 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               </span>
             </button>
 
+            <div className="relative" data-family-anchor>
+              <button type="button" aria-label="家族成员"
+                onClick={() => setShowFamily(v => !v)}
+                onMouseDown={preventFocusSteal}
+                disabled={loading || companions.length === 0}
+                className="w-9 h-9 flex items-center justify-center rounded-xl shrink-0 transition-all disabled:opacity-30"
+                style={{ color: showFamily ? 'var(--color-primary)' : 'var(--color-text-muted)' }}
+                onMouseEnter={(e) => { if (!showFamily) e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
+                onMouseLeave={(e) => { if (!showFamily) e.currentTarget.style.background = 'transparent'; }}
+                title={companions.length === 0 ? '还没有家族成员 — 让 YiYi 帮你生成一个' : '家族成员（点击 @ 一位）'}>
+                <Users size={16} />
+              </button>
+              {showFamily && companions.length > 0 && (
+                <FamilyPopover
+                  companions={companions}
+                  onPick={(c) => {
+                    inputRef.current?.insertMention({
+                      type: 'agent',
+                      id: `companion:${c.id}`,
+                      name: c.name,
+                    });
+                    inputRef.current?.focus();
+                    setShowFamily(false);
+                  }}
+                  onClose={() => setShowFamily(false)}
+                />
+              )}
+            </div>
+            {/* Anchored to the wrapping div above; toggle button + popover share `data-family-anchor`. */}
+
             <button type="button" aria-label={t('chat.quick.title', 'Quick actions')} onClick={() => setShowQuickActions((v) => !v)}
               onMouseDown={preventFocusSteal}
               disabled={loading}
@@ -598,3 +629,70 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     </div>
   );
 });
+
+function FamilyPopover({
+  companions,
+  onPick,
+  onClose,
+}: {
+  companions: Companion[];
+  onPick: (c: Companion) => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      // Treat the toggle button + popover (any node inside the shared
+      // data-family-anchor wrapper) as "inside". Without this the very
+      // click that opens the popover also closes it on the way out.
+      if (t && t.closest('[data-family-anchor]')) return;
+      onClose();
+    };
+    // Defer attachment by one macrotask so the click that opens the
+    // popover doesn't immediately trigger this listener.
+    const timer = window.setTimeout(() => {
+      document.addEventListener('mousedown', handler);
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener('mousedown', handler);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      className="absolute bottom-12 left-0 z-30 rounded-2xl shadow-xl p-2 flex flex-col gap-1 min-w-[260px] max-w-[340px] max-h-[360px] overflow-y-auto"
+      style={{
+        background: 'var(--color-bg-elevated)',
+        border: '1px solid var(--color-border)',
+      }}
+    >
+      <div className="px-2 py-1 text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+        家族成员 · 点一位 @ 进对话
+      </div>
+      {companions.map(c => (
+        <button
+          key={c.id}
+          type="button"
+          onClick={() => onPick(c)}
+          className="flex items-center gap-2.5 px-2 py-1.5 rounded-xl transition-colors text-left hover:bg-[var(--color-bg-muted)]"
+        >
+          <div
+            className="w-8 h-8 rounded-xl flex items-center justify-center text-[18px] shrink-0"
+            style={{ background: `${c.color_hex}22` }}
+          >
+            {c.avatar_emoji}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-medium truncate" style={{ color: 'var(--color-text)' }}>
+              {c.name}
+            </div>
+            <div className="text-[11px] truncate" style={{ color: 'var(--color-text-muted)' }}>
+              {companionRoleLabel(c)}
+            </div>
+          </div>
+        </button>
+      ))}
+    </div>
+  );
+}

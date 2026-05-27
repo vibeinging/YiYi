@@ -468,6 +468,9 @@ mod tests {
             metadata: Some(
                 r#"{"tool_calls":[{"id":"a","name":"shell","arguments":"ls"},{"id":"b","name":"read_file","arguments":""}]}"#.into(),
             ),
+            collaboration_id: None,
+            step_id: None,
+            companion_id: None,
         }];
         let tools = extract_tool_names(&msgs);
         assert_eq!(tools, vec!["shell", "read_file"]);

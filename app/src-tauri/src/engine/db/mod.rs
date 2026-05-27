@@ -563,7 +563,7 @@ impl Database {
             "CREATE TABLE IF NOT EXISTS companions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,                  -- 用户起的名字，例如 \"阿狸\"
-                agent_definition_name TEXT NOT NULL,        -- 对应 AgentDefinition.name (slug)
+                agent_definition_name TEXT NOT NULL,        -- 工具权限模板（code_reviewer / blank / ...）
                 avatar_emoji TEXT NOT NULL,                 -- 🦉 / 🐧 / 🦊 ...
                 color_hex TEXT NOT NULL,                    -- 主色 \"#F97316\" 等
                 persona_md_path TEXT,                       -- 用户编辑的人格 prompt 文件（绝对路径）
@@ -573,12 +573,28 @@ impl Database {
                 personality_stats_json TEXT,                -- Phase 2 用，本期 NULL
                 invocation_count INTEGER NOT NULL DEFAULT 0,-- 一起做过 X 件事
                 last_used_at INTEGER,
-                metadata_json TEXT
+                metadata_json TEXT,
+                role_label TEXT                             -- UI 显示用「擅长」短句，与 agent_definition_name 解耦
             );
             CREATE INDEX IF NOT EXISTS idx_companions_retired ON companions(retired_at);
             CREATE INDEX IF NOT EXISTS idx_companions_adopted ON companions(adopted_at);",
         )
         .map_err(|e| format!("Failed to create companions table: {}", e))?;
+
+        // Migration: companions.role_label was added 2026-05-18 to decouple
+        // the user-facing "擅长" label from the agent_definition_name
+        // template slug (which is just tool-permission grouping).
+        // Idempotent: only ALTER if the column doesn't exist yet.
+        let has_role_label = conn
+            .prepare("SELECT role_label FROM companions LIMIT 0")
+            .is_ok();
+        if !has_role_label {
+            conn.execute_batch(
+                "ALTER TABLE companions ADD COLUMN role_label TEXT DEFAULT NULL;",
+            )
+            .map_err(|e| format!("Failed to add role_label column: {}", e))?;
+            log::info!("Migrated companions table: added role_label column");
+        }
 
         // Agent traces: turn-level ShareGPT-format trace for offline fine-tune
         // data path. OPT-IN — gated by `config.tracing.enabled`.

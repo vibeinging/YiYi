@@ -35,7 +35,7 @@ use super::events;
 use super::{
     Actor, AuditKind, Collaboration, CollaborationEvent, CollaborationId, CollaborationMode,
     CollaborationOrchestrator, CollaborationPlan, CollaborationStatus, Executor, ExecutorHandle,
-    Mutation, Step, StepId, StepKind, StepOutput, StepStatus,
+    Mutation, Participant, Step, StepId, StepKind, StepOutput, StepStatus,
 };
 use crate::engine::db::Database;
 
@@ -483,6 +483,14 @@ impl SqliteOrchestrator {
         .map_err(|e| format!("finalize collaboration: {e}"))?;
         drop(conn);
 
+        // Persist a verdict message into the chat stream so the主精灵
+        // sees it on the next turn and a refresh re-hydrates the inline
+        // CollaborationMessageCard. Best-effort: log on failure but
+        // don't block the finalize.
+        if let Err(e) = self.write_verdict_message(collab_id, &status) {
+            log::warn!("collab {collab_id}: failed to write verdict message: {e}");
+        }
+
         let kind = match &status {
             CollaborationStatus::Done => AuditKind::CollaborationCompleted,
             CollaborationStatus::Aborted => AuditKind::Aborted,
@@ -499,6 +507,99 @@ impl SqliteOrchestrator {
             serde_json::json!({ "final_status": Self::status_label(&status) }),
         )?;
         Ok(())
+    }
+
+    /// Write a single verdict message into the host session so the main
+    /// agent can read it on subsequent turns and the frontend hydrates
+    /// the inline collaboration card. No-op if the message already
+    /// exists for this collaboration id (idempotent on retried finalize).
+    fn write_verdict_message(
+        &self,
+        collab_id: CollaborationId,
+        status: &CollaborationStatus,
+    ) -> Result<(), String> {
+        let conn = self.db.get_conn().ok_or_else(|| "db lock".to_string())?;
+        let chat_session_id: String = conn
+            .query_row(
+                "SELECT chat_session_id FROM collaborations WHERE id = ?1",
+                params![collab_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("read chat_session_id: {e}"))?;
+
+        let text = match status {
+            CollaborationStatus::Done => Self::compose_done_verdict(&conn, collab_id)?,
+            CollaborationStatus::Failed(reason) => {
+                if reason.trim().is_empty() {
+                    "（家族协作未完成）".to_string()
+                } else {
+                    format!("（家族协作未完成）{reason}")
+                }
+            }
+            CollaborationStatus::Aborted => "（家族协作已中止）".to_string(),
+            _ => return Ok(()),
+        };
+        drop(conn);
+
+        self.db
+            .upsert_collaboration_message(&chat_session_id, collab_id, &text)?;
+        Ok(())
+    }
+
+    /// Read all `single_agent` steps in `position` order and stitch the
+    /// completed participants' outputs into a verdict block. Falls back
+    /// to `summary` if `full_output` is empty.
+    fn compose_done_verdict(
+        conn: &rusqlite::Connection,
+        collab_id: CollaborationId,
+    ) -> Result<String, String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT participants_json, output_json, status FROM collaboration_steps
+                 WHERE collaboration_id = ?1 AND kind = 'single_agent'
+                 ORDER BY position ASC",
+            )
+            .map_err(|e| format!("prep verdict query: {e}"))?;
+
+        let rows = stmt
+            .query_map(params![collab_id], |row| {
+                let p: String = row.get(0)?;
+                let o: Option<String> = row.get(1)?;
+                let s: String = row.get(2)?;
+                Ok((p, o, s))
+            })
+            .map_err(|e| format!("query verdict steps: {e}"))?;
+
+        let mut parts = Vec::new();
+        for r in rows {
+            let (p_json, o_json, status) = r.map_err(|e| format!("verdict row: {e}"))?;
+            if status != "completed" {
+                continue;
+            }
+            let participants: Vec<Participant> = serde_json::from_str(&p_json)
+                .map_err(|e| format!("decode participants: {e}"))?;
+            let Some(out_raw) = o_json else { continue };
+            let output: StepOutput = serde_json::from_str(&out_raw)
+                .map_err(|e| format!("decode output: {e}"))?;
+            let Some(participant) = participants.first() else {
+                continue;
+            };
+            let body = if output.full_output.trim().is_empty() {
+                output.summary.clone()
+            } else {
+                output.full_output.clone()
+            };
+            if body.trim().is_empty() {
+                continue;
+            }
+            parts.push(format!("[{}] {body}", participant.name));
+        }
+
+        if parts.is_empty() {
+            Ok("（家族协作已完成，但没有可见产出）".to_string())
+        } else {
+            Ok(parts.join("\n\n"))
+        }
     }
 }
 

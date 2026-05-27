@@ -30,6 +30,8 @@ mod bot_tools;
 mod browser_tools;
 mod canvas_tools;
 mod cheap_browser;
+mod companion_tools;
+mod delegate_tools;
 mod cron_tools;
 mod file_tools;
 mod flash_tools;

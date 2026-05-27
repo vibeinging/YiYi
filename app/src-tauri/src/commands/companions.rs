@@ -14,6 +14,7 @@ use crate::state::AppState;
 
 // ── Adopt ────────────────────────────────────────────────────────────
 
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdoptCompanionInput {
     pub name: String,
@@ -25,6 +26,9 @@ pub struct AdoptCompanionInput {
     /// and record the path. Empty/None leaves persona unset.
     pub persona_md: Option<String>,
     pub metadata_json: Option<String>,
+    /// Free-text "擅长" label shown in the UI (e.g. "小红书爆款写手").
+    /// Optional — when absent the UI falls back to a template-derived label.
+    pub role_label: Option<String>,
 }
 
 #[tauri::command]
@@ -46,6 +50,10 @@ pub async fn adopt_companion(
         persona_md_path: None,
         memory_user_id,
         metadata_json: input.metadata_json,
+        role_label: input.role_label.and_then(|s| {
+            let trimmed = s.trim().to_string();
+            if trimmed.is_empty() { None } else { Some(trimmed) }
+        }),
     })?;
 
     if let Some(path) = persist_persona(state.working_dir.as_path(), id, input.persona_md.as_deref())? {
@@ -61,6 +69,21 @@ pub async fn adopt_companion(
     Ok(id)
 }
 
+/// Persists the user's adopt / dismiss action on a CompanionDraftCard
+/// back into the source message's `metadata.draft_state`. Refreshing the
+/// session afterwards keeps the card in its terminal state.
+#[tauri::command]
+pub async fn update_companion_draft_state(
+    state: State<'_, AppState>,
+    message_id: i64,
+    new_state: String,
+    adopted_companion_id: Option<i64>,
+) -> Result<(), String> {
+    state
+        .db
+        .update_companion_draft_state(message_id, &new_state, adopted_companion_id)
+}
+
 // ── Update ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -71,6 +94,10 @@ pub struct UpdateCompanionInput {
     /// Persona body text. `Some("")` clears the persona. `None` leaves untouched.
     pub persona_md: Option<String>,
     pub metadata_json: Option<Option<String>>,
+    /// Free-text "擅长" label. `Some(Some("x"))` sets, `Some(None)` clears,
+    /// `None` leaves untouched. (Same three-state convention as the other
+    /// nullable fields here.)
+    pub role_label: Option<Option<String>>,
 }
 
 #[tauri::command]
@@ -106,6 +133,7 @@ pub async fn update_companion(
             color_hex: input.color_hex,
             persona_md_path: persona_md_path_update,
             metadata_json: input.metadata_json,
+            role_label: input.role_label,
             ..Default::default()
         },
     )?;

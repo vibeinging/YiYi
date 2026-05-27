@@ -1024,9 +1024,44 @@ pub async fn get_history_impl(
                 None
             };
 
+            // Verdict rows are stored as role='assistant' so the LLM
+            // reads them naturally on the next turn; the frontend gets
+            // role='collaboration' so it renders the inline
+            // CollaborationMessageCard instead of a plain bubble.
+            // Same trick for companion drafts: stored as 'assistant'
+            // (LLM sees the intro line, tool result already informed it),
+            // returned as 'companion_draft' so the frontend renders the
+            // adopt-or-edit card.
+            // Frontend expects the full envelope shape:
+            //   { companion_draft: <payload>, draft_state, adopted_companion_id }
+            // — so reconstruct it from the raw metadata fields instead of
+            // returning just the inner payload (which would crash the card
+            // when it dereferences envelope.companion_draft.x).
+            let companion_draft = meta.as_ref().and_then(|mv| {
+                let payload = &mv["companion_draft"];
+                if payload.is_null() {
+                    return None;
+                }
+                Some(serde_json::json!({
+                    "companion_draft": payload.clone(),
+                    "draft_state": mv.get("draft_state").and_then(|v| v.as_str()).unwrap_or("pending"),
+                    "adopted_companion_id": mv.get("adopted_companion_id").and_then(|v| v.as_i64()),
+                }))
+            });
+
+            let (role_for_frontend, collaboration_id, companion_draft_out) = if m.role == "assistant"
+                && companion_draft.is_some()
+            {
+                ("companion_draft".to_string(), None, companion_draft)
+            } else if m.role == "assistant" && m.collaboration_id.is_some() {
+                ("collaboration".to_string(), m.collaboration_id, None)
+            } else {
+                (m.role, None, None)
+            };
+
             ChatMessage {
                 id: Some(m.id),
-                role: m.role,
+                role: role_for_frontend,
                 content: m.content,
                 timestamp: Some(m.timestamp as u64),
                 attachments,
@@ -1037,6 +1072,8 @@ pub async fn get_history_impl(
                 spawn_agents,
                 thinking,
                 tool_artifacts,
+                collaboration_id,
+                companion_draft: companion_draft_out,
             }
         })
         .collect())

@@ -689,6 +689,7 @@ pub fn run() {
             // Companions (Buddy > 家族 子标签)
             commands::companions::adopt_companion,
             commands::companions::update_companion,
+            commands::companions::update_companion_draft_state,
             commands::companions::retire_companion,
             commands::companions::list_companions,
             commands::companions::get_companion,

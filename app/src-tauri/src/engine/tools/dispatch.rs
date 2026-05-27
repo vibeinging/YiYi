@@ -15,9 +15,9 @@ use super::state::{
 };
 use super::types::{ToolCall, ToolResult};
 use super::{
-    bot_tools, browser_tools, canvas_tools, cheap_browser, cron_tools, file_tools, flash_tools,
-    git_tools, lsp_tools, memory_tools, skill_tools, snapshot_tools, spawn_tools, system_tools,
-    task_tools, web_tools,
+    bot_tools, browser_tools, canvas_tools, cheap_browser, companion_tools, cron_tools,
+    delegate_tools, file_tools, flash_tools, git_tools, lsp_tools, memory_tools, skill_tools,
+    snapshot_tools, spawn_tools, system_tools, task_tools, web_tools,
 };
 
 /// After a tool returns, report touched paths into the session dirty-set
@@ -379,6 +379,8 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         }
         "tool_search" => super::catalog::execute_tool_search(&args),
         "revert_turn" => snapshot_tools::revert_turn_tool(&args).await,
+        "propose_companion" => companion_tools::propose_companion_tool(&args).await,
+        "delegate_to_companion" => delegate_tools::delegate_to_companion_tool(&args).await,
         _ => {
             // Deferred-MCP stub interception: if the tool name belongs to
             // an MCP server that's waiting on a missing prerequisite, ask

@@ -13,7 +13,19 @@ import { toast } from '../Toast'
 interface Props {
   onClose: () => void
   onAdopted: () => void
+  /** Pre-fills name / emoji / role from a propose_companion draft. */
+  initialDraft?: {
+    name?: string
+    avatar_emoji?: string
+    agent_definition_name?: string
+    /** Free-text "擅长" label from the draft — pre-fills the customRole input. */
+    role_label?: string
+  }
+  /** When opening to edit a draft, jump straight to the vibe step. */
+  initialStep?: 1 | 2 | 3 | 4
 }
+
+const PRESET_SLUGS = ['code_reviewer', 'product_strategist', 'life_coach']
 
 const EMOJI_POOL = [
   '🦉', '🦊', '🐧', '🐱', '🐰', '🐻', '🐢', '🦦',
@@ -71,13 +83,22 @@ function pickEmojis(seed: number): string[] {
   return arr.slice(0, 8)
 }
 
-export function AdoptModal({ onClose, onAdopted }: Props) {
-  const [step, setStep] = useState<1 | 2 | 3 | 4>(1)
+export function AdoptModal({ onClose, onAdopted, initialDraft, initialStep }: Props) {
+  const draftRoleIsPreset = initialDraft?.agent_definition_name
+    ? PRESET_SLUGS.includes(initialDraft.agent_definition_name)
+    : false
+  const [step, setStep] = useState<1 | 2 | 3 | 4>(initialStep ?? 1)
   const [seed, setSeed] = useState(1)
-  const [emoji, setEmoji] = useState<string>('🦉')
-  const [name, setName] = useState('')
-  const [roleSlug, setRoleSlug] = useState<string>(ROLE_PRESETS[0].slug)
-  const [customRole, setCustomRole] = useState('')
+  const [emoji, setEmoji] = useState<string>(initialDraft?.avatar_emoji || '🦉')
+  const [name, setName] = useState(initialDraft?.name ?? '')
+  const [roleSlug, setRoleSlug] = useState<string>(
+    draftRoleIsPreset ? initialDraft!.agent_definition_name! : ROLE_PRESETS[0].slug,
+  )
+  // If the draft brought a free-text role_label, seed customRole with
+  // it so the user sees the LLM's "擅长" pre-filled and editable.
+  const [customRole, setCustomRole] = useState(
+    initialDraft?.role_label && !draftRoleIsPreset ? initialDraft.role_label : '',
+  )
   const [harshness, setHarshness] = useState(5)
   const [formality, setFormality] = useState(5)
   const [verbosity, setVerbosity] = useState(5)
@@ -159,6 +180,7 @@ export function AdoptModal({ onClose, onAdopted }: Props) {
         avatar_emoji: emoji,
         color_hex: accent,
         persona_md: personaParts,
+        role_label: effectiveRoleLabel,
       })
       toast.success(`${trimmedName} 已收养 ✨`)
       onAdopted()

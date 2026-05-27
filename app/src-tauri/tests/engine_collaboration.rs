@@ -539,6 +539,144 @@ async fn add_step_mutation_invokes_added_step_before_completion() {
     }
 }
 
+// ── Tests: verdict message persistence ───────────────────────────────
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn done_collaboration_writes_verdict_message_to_session() {
+    let t = TempDb::new();
+    let (orch, _executor) = build_orchestrator(&t);
+    let plan = CollaborationPlan {
+        steps: vec![step_single(1, "hi", 7)],
+    };
+    let id = orch
+        .submit(
+            "sess-1".into(),
+            "用户问的事".into(),
+            plan,
+            CollaborationMode::Manual,
+            None,
+        )
+        .await
+        .unwrap();
+    let status = wait_for_terminal(&orch, id).await;
+    assert!(matches!(status, CollaborationStatus::Done));
+
+    let msgs = t.db().get_messages("sess-1", None).expect("messages");
+    let verdict: Vec<_> = msgs.iter().filter(|m| m.collaboration_id == Some(id)).collect();
+    assert_eq!(verdict.len(), 1, "exactly one verdict message expected");
+    let m = verdict[0];
+    assert_eq!(m.role, "assistant");
+    // step_single() uses name "tester"; default mock output is "mock full output".
+    assert!(m.content.contains("tester"), "name missing: {}", m.content);
+    assert!(
+        m.content.contains("mock full output"),
+        "body missing: {}",
+        m.content
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn failed_collaboration_writes_failure_verdict() {
+    let t = TempDb::new();
+    let (orch, executor) = build_orchestrator(&t);
+    executor.fail_step(1, "ran out of magic");
+    let plan = CollaborationPlan {
+        steps: vec![step_single(1, "hi", 7)],
+    };
+    let id = orch
+        .submit(
+            "sess-1".into(),
+            "用户问的事".into(),
+            plan,
+            CollaborationMode::Manual,
+            None,
+        )
+        .await
+        .unwrap();
+    wait_for_status(&orch, id, 2000, |s| matches!(s, CollaborationStatus::Failed(_))).await;
+
+    let msgs = t.db().get_messages("sess-1", None).expect("messages");
+    let verdict: Vec<_> = msgs.iter().filter(|m| m.collaboration_id == Some(id)).collect();
+    assert_eq!(verdict.len(), 1);
+    assert!(verdict[0].content.contains("未完成"));
+    assert!(verdict[0].content.contains("ran out of magic"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn aborted_collaboration_writes_aborted_verdict() {
+    let t = TempDb::new();
+    let (orch, _executor) = build_orchestrator(&t);
+    let plan = CollaborationPlan {
+        steps: vec![
+            step_parallel(1, "x", &[1, 2]),
+            step_host_summary(2, vec![1]),
+        ],
+    };
+    let id = orch
+        .submit(
+            "sess-1".into(),
+            "用户问的事".into(),
+            plan,
+            CollaborationMode::Dispatched(99),
+            None,
+        )
+        .await
+        .unwrap();
+    orch.abort(id).await.unwrap();
+    wait_for_status(&orch, id, 2000, |s| matches!(s, CollaborationStatus::Aborted)).await;
+
+    let msgs = t.db().get_messages("sess-1", None).expect("messages");
+    let verdict: Vec<_> = msgs.iter().filter(|m| m.collaboration_id == Some(id)).collect();
+    assert_eq!(verdict.len(), 1);
+    assert!(verdict[0].content.contains("已中止"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn verdict_message_is_idempotent_across_retries() {
+    // Two transitions to Done shouldn't write two verdicts (the underlying
+    // INSERT is guarded by collaboration_id uniqueness).
+    let t = TempDb::new();
+    let (orch, executor) = build_orchestrator(&t);
+    executor.fail_step(1, "boom");
+    let plan = CollaborationPlan {
+        steps: vec![step_single(1, "hi", 7)],
+    };
+    let id = orch
+        .submit(
+            "sess-1".into(),
+            "用户问的事".into(),
+            plan,
+            CollaborationMode::Manual,
+            None,
+        )
+        .await
+        .unwrap();
+    wait_for_status(&orch, id, 2000, |s| matches!(s, CollaborationStatus::Failed(_))).await;
+
+    // Switch the mock to success, then retry.
+    executor.succeed_with(1, default_success_output());
+    orch.mutate(id, Mutation::RetryStep { step_id: 1 })
+        .await
+        .unwrap();
+    wait_for_status(&orch, id, 2000, |s| matches!(s, CollaborationStatus::Done)).await;
+
+    let msgs = t.db().get_messages("sess-1", None).expect("messages");
+    let verdict: Vec<_> = msgs.iter().filter(|m| m.collaboration_id == Some(id)).collect();
+    assert_eq!(
+        verdict.len(),
+        1,
+        "verdict must be idempotent; got {}",
+        verdict.len()
+    );
+    // The first finalize (Failed) wins because it lands first; that's fine,
+    // the panel still shows the live state via the orchestrator. What matters
+    // is that we don't double-insert.
+}
+
 // ── Tests: audit log completeness ────────────────────────────────────
 
 #[tokio::test(flavor = "multi_thread")]

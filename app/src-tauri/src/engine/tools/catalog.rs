@@ -15,9 +15,9 @@
 
 use super::types::{tool_def, ToolDefinition};
 use super::{
-    bot_tools, canvas_tools, cheap_browser, cron_tools, file_tools, flash_tools, git_tools,
-    lsp_tools, memory_tools, skill_tools, snapshot_tools, spawn_tools, system_tools, task_tools,
-    web_tools,
+    bot_tools, canvas_tools, cheap_browser, companion_tools, cron_tools, delegate_tools,
+    file_tools, flash_tools, git_tools, lsp_tools, memory_tools, skill_tools, snapshot_tools,
+    spawn_tools, system_tools, task_tools, web_tools,
 };
 
 /// Tools whose only purpose is to feed image data BACK INTO the model.
@@ -125,6 +125,8 @@ fn deferred_tools_static() -> &'static Vec<ToolDefinition> {
         tools.extend(git_tools::definitions());
         tools.extend(flash_tools::definitions());
         tools.extend(snapshot_tools::definitions());
+        tools.extend(companion_tools::definitions());
+        tools.extend(delegate_tools::definitions());
 
         // Buddy delegate tool — consult the user's digital twin
         tools.push(tool_def(

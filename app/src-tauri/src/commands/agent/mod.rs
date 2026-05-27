@@ -104,6 +104,18 @@ pub struct ChatMessage {
     /// time via the `read_artifact_data_uri` Tauri command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_artifacts: Option<Vec<crate::engine::react_agent::ToolArtifact>>,
+    /// Set when this message is the persisted verdict of a finished
+    /// collaboration. The frontend treats these messages as
+    /// `role: "collaboration"` and renders them via
+    /// CollaborationMessageCard rather than a regular assistant bubble.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collaboration_id: Option<i64>,
+    /// Set when this message carries a propose_companion draft.
+    /// Frontend treats these as `role: "companion_draft"` and renders
+    /// CompanionDraftCard. Contents are the verbatim JSON the
+    /// propose_companion tool produced (plus a draft_state string).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub companion_draft: Option<serde_json::Value>,
 }
 
 // Agent CRUD commands removed — switched to dynamic agent spawning.

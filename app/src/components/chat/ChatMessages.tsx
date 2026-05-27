@@ -40,6 +40,8 @@ import { useTaskStore } from '../../stores/taskStore';
 import { cancelTask, pauseTask, openTaskFolder } from '../../api/tasks';
 import type { ChatMessage, Attachment, ToolArtifact } from '../../api/agent';
 import { ToolArtifactCard } from '../ToolArtifactCard';
+import { CollaborationMessageCard } from '../collaboration/CollaborationMessageCard';
+import { CompanionDraftCard } from '../companions/CompanionDraftCard';
 
 import type { SpawnAgent, TaskStreamState } from '../../stores/chatStreamStore';
 import logoFaceRight from '../../assets/yiyi-logo-face-right.png';
@@ -543,6 +545,30 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                       上下文已重置
                     </span>
                     <div className="flex-1 h-px" style={{ background: 'var(--color-border)' }} />
+                  </div>
+                );
+              }
+              if (msg.role === 'collaboration' && msg.collaboration_id !== undefined) {
+                return (
+                  <div key={idx} className="flex gap-3 justify-start">
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5">
+                      <img src={logoFaceRight} alt="YiYi" width={28} height={28} />
+                    </div>
+                    <div className="max-w-[80%] flex-1">
+                      <CollaborationMessageCard collaborationId={msg.collaboration_id} />
+                    </div>
+                  </div>
+                );
+              }
+              if (msg.role === 'companion_draft' && msg.companion_draft) {
+                return (
+                  <div key={idx} className="flex gap-3 justify-start">
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5">
+                      <img src={logoFaceRight} alt="YiYi" width={28} height={28} />
+                    </div>
+                    <div className="max-w-[80%] flex-1">
+                      <CompanionDraftCard messageId={msg.id} envelope={msg.companion_draft} />
+                    </div>
                   </div>
                 );
               }

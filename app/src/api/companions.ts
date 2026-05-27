@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core'
 export interface Companion {
   id: number
   name: string
+  /** 工具权限模板（code_reviewer / blank / ...）— 不展示。 */
   agent_definition_name: string
   avatar_emoji: string
   color_hex: string
@@ -16,6 +17,8 @@ export interface Companion {
   invocation_count: number
   last_used_at: number | null
   metadata_json: string | null
+  /** UI 显示的「擅长」短句，自由文本。老数据可能为 null。 */
+  role_label: string | null
 }
 
 export interface AdoptCompanionInput {
@@ -26,6 +29,8 @@ export interface AdoptCompanionInput {
   /** 用户编辑的人格 Markdown。空 / 缺省 = 不设置自定义人格。 */
   persona_md?: string
   metadata_json?: string
+  /** 自由文本「擅长」标签。 */
+  role_label?: string
 }
 
 export interface UpdateCompanionInput {
@@ -36,6 +41,8 @@ export interface UpdateCompanionInput {
   persona_md?: string
   /** 双层 Option：外层不动；内层 null = 清空，非空 = 替换。 */
   metadata_json?: string | null
+  /** 双层 Option：`undefined` = 不动；`null` = 清空；非空 = 替换。 */
+  role_label?: string | null
 }
 
 export interface PreviewPersonaToneInput {
@@ -71,4 +78,16 @@ export async function getCompanion(id: number): Promise<Companion | null> {
 
 export async function previewPersonaTone(input: PreviewPersonaToneInput): Promise<string> {
   return await invoke<string>('preview_persona_tone', { input })
+}
+
+export async function updateCompanionDraftState(
+  messageId: number,
+  newState: 'pending' | 'adopted' | 'dismissed',
+  adoptedCompanionId?: number,
+): Promise<void> {
+  await invoke('update_companion_draft_state', {
+    messageId,
+    newState,
+    adoptedCompanionId,
+  })
 }

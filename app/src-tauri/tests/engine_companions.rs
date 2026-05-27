@@ -19,6 +19,7 @@ fn sample_new(name: &str, mem_id: &str) -> NewCompanion {
         persona_md_path: None,
         memory_user_id: mem_id.into(),
         metadata_json: None,
+        role_label: None,
     }
 }
 
@@ -219,4 +220,118 @@ fn gc_retired_companions_returns_freed_memory_ids() {
     // Idempotent — second run returns empty.
     let again = db.gc_retired_companions(30).expect("gc 2");
     assert!(again.is_empty());
+}
+
+// ── propose_companion draft persistence ─────────────────────────────
+
+#[test]
+#[serial]
+fn update_companion_draft_state_patches_metadata() {
+    let t = TempDb::new();
+    let db = t.db();
+    let sess = "draft-sess-1";
+    let envelope = serde_json::json!({
+        "companion_draft": {
+            "name": "小红",
+            "avatar_emoji": "📝",
+            "color_hex": "#F87171",
+            "agent_definition_name": "blank",
+            "persona_md": "## 风格\n爆款",
+            "tone_preview": "姐妹这条必爆",
+            "rationale": "粉色火热"
+        },
+        "draft_state": "pending"
+    });
+    db.push_message_with_metadata(
+        sess,
+        "assistant",
+        "我帮你想了一位伙伴 — 小红（📝）。",
+        Some(&envelope.to_string()),
+    )
+    .expect("push");
+
+    let msgs = db.get_messages(sess, None).expect("read");
+    assert_eq!(msgs.len(), 1);
+    let msg_id = msgs[0].id;
+
+    db.update_companion_draft_state(msg_id, "adopted", Some(42))
+        .expect("update");
+
+    let msgs2 = db.get_messages(sess, None).expect("read 2");
+    let meta: serde_json::Value =
+        serde_json::from_str(msgs2[0].metadata.as_deref().unwrap()).unwrap();
+    assert_eq!(meta["draft_state"], "adopted");
+    assert_eq!(meta["adopted_companion_id"], 42);
+    // companion_draft payload preserved verbatim
+    assert_eq!(meta["companion_draft"]["name"], "小红");
+}
+
+#[test]
+#[serial]
+fn update_companion_draft_state_rejects_non_draft_message() {
+    let t = TempDb::new();
+    let db = t.db();
+    let sess = "draft-sess-2";
+    db.push_message(sess, "user", "随便说话").expect("push");
+    let msgs = db.get_messages(sess, None).expect("read");
+    let err = db
+        .update_companion_draft_state(msgs[0].id, "adopted", None)
+        .unwrap_err();
+    assert!(err.contains("not a companion draft"), "got {err}");
+}
+
+// ── upsert_collaboration_message lifecycle ──────────────────────────
+
+#[test]
+#[serial]
+fn upsert_collaboration_message_inserts_then_updates() {
+    let t = TempDb::new();
+    let db = t.db();
+    let sess = "collab-sess-1";
+
+    // First call: insert placeholder (no row exists yet).
+    let id1 = db
+        .upsert_collaboration_message(sess, 42, "@闪闪 写文案")
+        .expect("insert");
+
+    let msgs = db.get_messages(sess, None).expect("read");
+    let collab_msgs: Vec<_> = msgs
+        .iter()
+        .filter(|m| m.collaboration_id == Some(42))
+        .collect();
+    assert_eq!(collab_msgs.len(), 1, "exactly one collab row after insert");
+    assert_eq!(collab_msgs[0].content, "@闪闪 写文案");
+    assert_eq!(collab_msgs[0].id, id1);
+
+    // Second call (simulates finalize verdict): updates the same row.
+    let id2 = db
+        .upsert_collaboration_message(sess, 42, "[闪闪] 这是终稿…")
+        .expect("update");
+    assert_eq!(id1, id2, "upsert reuses the existing message id");
+
+    let msgs2 = db.get_messages(sess, None).expect("read 2");
+    let collab_msgs2: Vec<_> = msgs2
+        .iter()
+        .filter(|m| m.collaboration_id == Some(42))
+        .collect();
+    assert_eq!(collab_msgs2.len(), 1, "still only one row after update");
+    assert_eq!(collab_msgs2[0].content, "[闪闪] 这是终稿…");
+}
+
+#[test]
+#[serial]
+fn upsert_collaboration_message_distinct_collab_ids_get_distinct_rows() {
+    let t = TempDb::new();
+    let db = t.db();
+    let sess = "collab-sess-2";
+
+    db.upsert_collaboration_message(sess, 10, "first").expect("a");
+    db.upsert_collaboration_message(sess, 20, "second").expect("b");
+
+    let msgs = db.get_messages(sess, None).expect("read");
+    let collabs: Vec<_> = msgs
+        .iter()
+        .filter(|m| m.collaboration_id.is_some())
+        .collect();
+    assert_eq!(collabs.len(), 2);
 }
