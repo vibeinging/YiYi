@@ -48,7 +48,7 @@ async fn buddy_observe_returns_reaction_text_when_mock_llm_says_react_true() {
     )
     .await;
 
-    // 2. Build test state, seed the "openai" provider pointing at the mock URI.
+    // 2. Build test state, seed the "deepseek" provider pointing at the mock URI.
     let t = build_test_app_state().await;
     seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
 

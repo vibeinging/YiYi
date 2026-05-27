@@ -199,9 +199,11 @@ impl MockLlmServer {
 }
 
 /// Seed an active LLM provider in the given `AppState.providers` pointing at
-/// the mock server. Uses the "openai" built-in provider id so the OpenAI-format
-/// adapter is dispatched to, overriding its `base_url`. A fake API key keeps
-/// `resolve_config_from_providers` happy.
+/// the mock server. Uses the "deepseek" built-in provider id (the sole V4-only
+/// provider) and overrides its `base_url` to the mock. The LLM client collapsed
+/// to a single OpenAI-compatible adapter, so any provider id routes to the
+/// mock's `/chat/completions`. A fake API key keeps `resolve_config_from_providers`
+/// happy.
 pub async fn seed_mock_llm_provider(
     state: &crate::state::AppState,
     mock: &MockLlmServer,
@@ -211,7 +213,7 @@ pub async fn seed_mock_llm_provider(
 
     let mut providers = state.providers.write().await;
     providers.providers.insert(
-        "openai".to_string(),
+        "deepseek".to_string(),
         ProviderSettings {
             base_url: Some(mock.uri()),
             api_key: Some("test-fake-key".to_string()),
@@ -219,7 +221,7 @@ pub async fn seed_mock_llm_provider(
         },
     );
     providers.active_llm = Some(ModelSlotConfig {
-        provider_id: "openai".to_string(),
+        provider_id: "deepseek".to_string(),
         model: model.to_string(),
     });
 }
@@ -329,10 +331,10 @@ mod tests {
 
         let providers = t.state().providers.read().await;
         let active = providers.active_llm.as_ref().expect("active_llm set");
-        assert_eq!(active.provider_id, "openai");
+        assert_eq!(active.provider_id, "deepseek");
         assert_eq!(active.model, "mock-model");
 
-        let settings = providers.providers.get("openai").expect("provider seeded");
+        let settings = providers.providers.get("deepseek").expect("provider seeded");
         assert_eq!(settings.base_url.as_deref(), Some(mock.uri().as_str()));
         assert_eq!(settings.api_key.as_deref(), Some("test-fake-key"));
     }
