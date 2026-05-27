@@ -51,27 +51,27 @@ async fn list_models_returns_builtin_models_even_without_config() {
     // Built-in providers ship with model catalogs — should be non-empty even
     // on a fresh DB.
     assert!(!models.is_empty(), "expected built-in models, got empty");
-    // At least one well-known model should be present.
+    // V4-only build: DeepSeek V4 models are the built-in catalog.
     assert!(
-        models.iter().any(|m| m.id == "gpt-5-chat")
-            || models.iter().any(|m| m.id.starts_with("claude-")),
-        "expected a known model, got {:?}",
+        models.iter().any(|m| m.id.starts_with("deepseek-v4")),
+        "expected a DeepSeek V4 model, got {:?}",
         models.iter().map(|m| &m.id).collect::<Vec<_>>()
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn list_models_flattens_across_providers() {
+async fn list_models_returns_distinct_deepseek_v4_models() {
     let t = build_test_app_state().await;
     let models = list_models_impl(t.state()).await.unwrap();
-    // Distinct model IDs across providers — there should be more than any
-    // single provider's catalog.
+    // V4-only build: the sole provider (DeepSeek) ships pro + flash; the flatten
+    // yields exactly those two distinct model IDs.
     let distinct = models
         .iter()
         .map(|m| m.id.as_str())
         .collect::<std::collections::HashSet<_>>();
-    assert!(distinct.len() >= 3, "expected multiple distinct models");
+    assert!(distinct.contains("deepseek-v4-pro"));
+    assert!(distinct.contains("deepseek-v4-flash"));
 }
 
 // === set_model / get_current_model ===========================================
@@ -80,13 +80,13 @@ async fn list_models_flattens_across_providers() {
 #[serial]
 async fn set_model_on_known_model_persists_active_llm() {
     let t = build_test_app_state().await;
-    let resp = set_model_impl(t.state(), "gpt-5-chat".into()).await.unwrap();
+    let resp = set_model_impl(t.state(), "deepseek-v4-pro".into()).await.unwrap();
     assert_eq!(resp["status"], "ok");
-    assert_eq!(resp["model"], "gpt-5-chat");
+    assert_eq!(resp["model"], "deepseek-v4-pro");
 
     let got = get_current_model_impl(t.state()).await.unwrap();
-    assert_eq!(got["model"], "gpt-5-chat");
-    assert_eq!(got["provider_id"], "openai");
+    assert_eq!(got["model"], "deepseek-v4-pro");
+    assert_eq!(got["provider_id"], "deepseek");
 }
 
 #[tokio::test(flavor = "multi_thread")]

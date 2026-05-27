@@ -25,20 +25,19 @@ You are the {name} test agent.
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn list_agents_returns_builtins_on_fresh_state() {
+async fn list_agents_hides_builtins_on_fresh_state() {
     let t = build_test_app_state().await;
     let agents = list_agents_impl(t.state()).await.unwrap();
-    // AgentRegistry::load always embeds the 3 builtins (explore, planner,
-    // desktop_operator). No resource_dir + empty custom dir = just builtins.
-    assert!(agents.len() >= 3, "expected >=3 builtin agents, got {}", agents.len());
-    let names: Vec<&str> = agents.iter().map(|a| a.name.as_str()).collect();
-    assert!(names.contains(&"explore"));
-    assert!(names.contains(&"planner"));
-    assert!(names.contains(&"desktop_operator"));
-
-    // Builtin check should be true for these.
-    let explore = agents.iter().find(|a| a.name == "explore").unwrap();
-    assert!(explore.is_builtin);
+    // All built-in agents (explore / desktop_operator) and companion role
+    // templates are marked `hidden` — users reach them via Buddy > 家族 > 收养,
+    // not the @-mention picker — so a fresh state (no custom agents) lists none.
+    // Registry-level loading of the builtins is covered by unit tests in
+    // engine/agents (agent_registry_loads_all_builtin_agents).
+    assert!(
+        agents.is_empty(),
+        "fresh state should list no user-visible agents, got {:?}",
+        agents.iter().map(|a| &a.name).collect::<Vec<_>>()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
