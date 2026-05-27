@@ -14,8 +14,8 @@ async fn get_usage_summary_returns_zero_on_empty_db() {
     let summary = get_usage_summary_impl(t.state(), None, None).unwrap();
     assert_eq!(summary.total_input_tokens, 0);
     assert_eq!(summary.total_output_tokens, 0);
-    assert_eq!(summary.total_cache_read_tokens, 0);
-    assert_eq!(summary.total_cache_write_tokens, 0);
+    assert_eq!(summary.total_prompt_cache_hit_tokens, 0);
+    assert_eq!(summary.total_prompt_cache_miss_tokens, 0);
     assert_eq!(summary.call_count, 0);
     assert!((summary.total_cost_usd - 0.0).abs() < 1e-9);
 }
@@ -32,8 +32,8 @@ async fn get_usage_summary_aggregates_recorded_rows() {
     let summary = get_usage_summary_impl(state, None, None).unwrap();
     assert_eq!(summary.total_input_tokens, 300);
     assert_eq!(summary.total_output_tokens, 130);
-    assert_eq!(summary.total_cache_read_tokens, 30);
-    assert_eq!(summary.total_cache_write_tokens, 20);
+    assert_eq!(summary.total_prompt_cache_hit_tokens, 30);
+    assert_eq!(summary.total_prompt_cache_miss_tokens, 20);
     assert_eq!(summary.call_count, 2);
     assert!((summary.total_cost_usd - 0.03).abs() < 1e-6);
 }
