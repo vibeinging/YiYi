@@ -39,6 +39,7 @@ import { toast } from '../components/Toast';
 import { ChatWelcome } from '../components/chat/ChatWelcome';
 import { ChatMessages, type ChatMessagesHandle } from '../components/chat/ChatMessages';
 import { ChatInput, type ChatInputHandle } from '../components/chat/ChatInput';
+import { FamilyHeader } from '../components/chat/FamilyHeader';
 import { PermissionCard } from '../components/chat/PermissionCard';
 import { VoiceOverlay } from '../components/voice/VoiceOverlay';
 import { useBuddyStore } from '../stores/buddyStore';
@@ -602,6 +603,15 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
           </button>
         )}
       </div>
+
+      {/* Family header — IM 群聊心智:对话里看见/管理家族,无家族时给 + 邀请入口 */}
+      {activeSessionId && !isTaskSession && !isCronSession && (
+        <FamilyHeader
+          sessionId={activeSessionId}
+          familyGroupId={familyGroupId}
+          onSetFamily={handleSetFamily}
+        />
+      )}
 
       {/* Messages or Welcome */}
       {showWelcome ? (

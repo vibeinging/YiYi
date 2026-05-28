@@ -11,6 +11,11 @@ pub struct ChatSession {
     pub source: String,
     #[serde(default)]
     pub source_meta: Option<String>,
+    /// 当前会话绑定的具名家族(Approach B)。None = 未绑(Phase A 回落:family_mode=1
+    /// 时全 active 隐式家族,family_mode=0 时普通单聊)。前端据此在 session 列表
+    /// 渲染家族 emoji + 名前缀。
+    #[serde(default)]
+    pub group_id: Option<i64>,
 }
 
 fn default_source() -> String {
@@ -23,7 +28,7 @@ impl super::Database {
     pub fn list_sessions(&self) -> Result<Vec<ChatSession>, String> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
-            .prepare("SELECT id, name, created_at, updated_at, source, source_meta FROM sessions ORDER BY updated_at DESC")
+            .prepare("SELECT id, name, created_at, updated_at, source, source_meta, group_id FROM sessions ORDER BY updated_at DESC")
             .map_err(|e| format!("Query error: {}", e))?;
 
         let sessions = stmt
@@ -35,6 +40,7 @@ impl super::Database {
                     updated_at: row.get(3)?,
                     source: row.get::<_, String>(4).unwrap_or_else(|_| "chat".into()),
                     source_meta: row.get(5)?,
+                    group_id: row.get(6)?,
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?
@@ -48,7 +54,7 @@ impl super::Database {
     pub fn list_sessions_by_source(&self, source: &str) -> Result<Vec<ChatSession>, String> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
-            .prepare("SELECT id, name, created_at, updated_at, source, source_meta FROM sessions WHERE source = ?1 ORDER BY updated_at DESC")
+            .prepare("SELECT id, name, created_at, updated_at, source, source_meta, group_id FROM sessions WHERE source = ?1 ORDER BY updated_at DESC")
             .map_err(|e| format!("Query error: {}", e))?;
 
         let sessions = stmt
@@ -60,6 +66,7 @@ impl super::Database {
                     updated_at: row.get(3)?,
                     source: row.get::<_, String>(4).unwrap_or_else(|_| "chat".into()),
                     source_meta: row.get(5)?,
+                    group_id: row.get(6)?,
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?
@@ -79,7 +86,7 @@ impl super::Database {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, created_at, updated_at, source, source_meta \
+                "SELECT id, name, created_at, updated_at, source, source_meta, group_id \
                  FROM sessions WHERE source = ?1 \
                  ORDER BY updated_at DESC LIMIT ?2 OFFSET ?3",
             )
@@ -94,6 +101,7 @@ impl super::Database {
                     updated_at: row.get(3)?,
                     source: row.get::<_, String>(4).unwrap_or_else(|_| "chat".into()),
                     source_meta: row.get(5)?,
+                    group_id: row.get(6)?,
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?
@@ -114,7 +122,7 @@ impl super::Database {
         let pattern = format!("%{}%", query);
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, created_at, updated_at, source, source_meta \
+                "SELECT id, name, created_at, updated_at, source, source_meta, group_id \
                  FROM sessions WHERE source = ?1 AND name LIKE ?2 \
                  ORDER BY updated_at DESC LIMIT ?3",
             )
@@ -129,6 +137,7 @@ impl super::Database {
                     updated_at: row.get(3)?,
                     source: row.get::<_, String>(4).unwrap_or_else(|_| "chat".into()),
                     source_meta: row.get(5)?,
+                    group_id: row.get(6)?,
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?
@@ -164,6 +173,7 @@ impl super::Database {
             updated_at: now,
             source: "chat".into(),
             source_meta: None,
+            group_id: None,
         })
     }
 
@@ -190,6 +200,7 @@ impl super::Database {
             updated_at: now,
             source: source.to_string(),
             source_meta: source_meta.map(|s| s.to_string()),
+            group_id: None,
         })
     }
 
@@ -200,7 +211,7 @@ impl super::Database {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, created_at, updated_at, source, source_meta \
+                "SELECT id, name, created_at, updated_at, source, source_meta, group_id \
                  FROM sessions WHERE id = ?1 LIMIT 1",
             )
             .map_err(|e| format!("Query error: {}", e))?;
@@ -215,6 +226,7 @@ impl super::Database {
                 updated_at: row.get(3).map_err(|e| e.to_string())?,
                 source: row.get::<_, String>(4).unwrap_or_else(|_| "chat".into()),
                 source_meta: row.get(5).map_err(|e| e.to_string())?,
+                group_id: row.get(6).map_err(|e| e.to_string())?,
             }))
         } else {
             Ok(None)

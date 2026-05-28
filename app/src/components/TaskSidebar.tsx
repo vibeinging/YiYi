@@ -16,6 +16,8 @@ import {
 import { useTranslation } from 'react-i18next';
 import { useTaskSidebarStore } from '../stores/taskSidebarStore';
 import { useSessionStore } from '../stores/sessionStore';
+import { useGroupsStore } from '../stores/groupsStore';
+import { NewChatPicker } from './chat/NewChatPicker';
 import { timeAgo } from '../utils/taskStatus';
 import type { Page } from '../App';
 import type { ChatSession } from '../api/agent';
@@ -107,6 +109,11 @@ function SidebarSessionCard({ session, isActive, onPageChange }: {
   onPageChange: (page: Page) => void;
 }) {
   const { switchToSession, renameSession } = useSessionStore();
+  // 若 session 绑了具名家族,从 groupsStore 取 emoji+name(失败时 group 为 undefined,
+  // 不渲染前缀。stale 容忍:用户在 BuddyPanel 改了家族 emoji,下次 store.load() 自动刷新)。
+  const group = useGroupsStore(s =>
+    session.group_id != null ? s.byId.get(session.group_id) : undefined,
+  );
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
@@ -160,6 +167,15 @@ function SidebarSessionCard({ session, isActive, onPageChange }: {
             />
           ) : (
             <span className="flex-1 truncate text-[12.5px] font-medium" style={{ color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)' }}>
+              {group && (
+                <span
+                  className="mr-1"
+                  title={group.name}
+                  style={{ color: group.color_hex || undefined }}
+                >
+                  {group.emoji || '👪'}
+                </span>
+              )}
               {session.name || 'New Chat'}
             </span>
           )}
@@ -254,7 +270,6 @@ export const TaskSidebar = memo(function TaskSidebar({
 
   const chatSessions = useSessionStore((s) => s.chatSessions);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
-  const createNewChat = useSessionStore((s) => s.createNewChat);
   const hasMore = useSessionStore((s) => s.hasMore);
   const loadingMore = useSessionStore((s) => s.loadingMore);
   const loadMoreSessions = useSessionStore((s) => s.loadMoreSessions);
@@ -263,9 +278,22 @@ export const TaskSidebar = memo(function TaskSidebar({
   const searchSessionsFn = useSessionStore((s) => s.searchSessions);
   const clearSearch = useSessionStore((s) => s.clearSearch);
 
+  // 初始化:挂载时拉一次家族列表到 store —— session 卡渲染前缀、新对话 picker、
+  // chat header 选择器都从这个 store 读。FamilyGroupsSection 的 CRUD 完成后会
+  // 调 .load() 触发刷新。
+  useEffect(() => {
+    void useGroupsStore.getState().load();
+  }, []);
+
+  // L3:点"+新对话"不直接 createNewChat,先出 NewChatPicker 让用户挑(单聊 /
+  // 已建家族 / 新建家族)。WeChat 模式。
+  const [showNewChatPicker, setShowNewChatPicker] = useState(false);
+  const openNewChatPicker = () => setShowNewChatPicker(true);
+
   // ─── Collapsed ───
   if (sidebarCollapsed) {
     return (
+      <>
       <aside
         className="flex flex-col shrink-0 items-center py-2 relative z-40"
         style={{
@@ -277,7 +305,7 @@ export const TaskSidebar = memo(function TaskSidebar({
         <div className="h-10 shrink-0 flex items-center justify-center app-drag-region" onMouseDown={onDragMouseDown} />
 
         <button
-          onClick={() => { createNewChat(); onPageChange('chat'); }}
+          onClick={openNewChatPicker}
           className="mt-1 w-9 h-9 flex items-center justify-center rounded-xl transition-colors"
           style={{ color: 'var(--sidebar-text)' }}
           onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
@@ -325,6 +353,13 @@ export const TaskSidebar = memo(function TaskSidebar({
           <PanelLeft size={15} />
         </button>
       </aside>
+      {showNewChatPicker && (
+        <NewChatPicker
+          onClose={() => setShowNewChatPicker(false)}
+          onNavigate={() => onPageChange('chat')}
+        />
+      )}
+      </>
     );
   }
 
@@ -357,6 +392,7 @@ export const TaskSidebar = memo(function TaskSidebar({
   }, [loadMoreSessions, isSearching]);
 
   return (
+    <>
     <aside
       className="flex flex-col shrink-0 relative z-40"
       style={{
@@ -371,7 +407,7 @@ export const TaskSidebar = memo(function TaskSidebar({
       {/* ── New Chat ── */}
       <div className="shrink-0 px-2 pb-1">
         <button
-          onClick={() => { createNewChat(); onPageChange('chat'); }}
+          onClick={openNewChatPicker}
           className="w-full flex items-center gap-2 px-3 py-[7px] rounded-[10px] transition-colors text-[12.5px] font-medium"
           style={{ color: 'var(--sidebar-text-active)' }}
           onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
@@ -527,5 +563,12 @@ export const TaskSidebar = memo(function TaskSidebar({
         </button>
       </div>
     </aside>
+    {showNewChatPicker && (
+      <NewChatPicker
+        onClose={() => setShowNewChatPicker(false)}
+        onNavigate={() => onPageChange('chat')}
+      />
+    )}
+    </>
   );
 });

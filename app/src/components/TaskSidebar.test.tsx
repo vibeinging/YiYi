@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '../i18n';
 import { mockInvoke } from '../test-utils/mockTauri';
 import { TaskSidebar } from './TaskSidebar';
@@ -83,15 +83,23 @@ describe('TaskSidebar collapsed mode', () => {
     expect(buttons[buttons.length - 1]).toBeInTheDocument();
   });
 
-  it('collapsed new-chat button invokes createNewChat + onPageChange', () => {
+  it('collapsed new-chat button opens picker; solo option invokes createNewChat + onPageChange', async () => {
+    // L3:点新对话不直接 createNewChat,先弹 picker 让用户挑(单聊/已建家族/新建)。
+    // 这里测「单聊主精灵」一路 —— 等同旧逻辑。
     const createNewChat = vi.fn().mockResolvedValue('new-id');
     const { onPageChange } = renderSidebar({
       collapsed: true,
       sessionOverrides: { createNewChat },
     });
     fireEvent.click(screen.getByTitle('新对话'));
-    expect(createNewChat).toHaveBeenCalled();
-    expect(onPageChange).toHaveBeenCalledWith('chat');
+    // Picker opens.
+    await waitFor(() => expect(screen.getByText('和谁聊?')).toBeInTheDocument());
+    // 点「和主精灵单聊」一路。
+    fireEvent.click(screen.getByText('和主精灵单聊'));
+    await waitFor(() => {
+      expect(createNewChat).toHaveBeenCalled();
+      expect(onPageChange).toHaveBeenCalledWith('chat');
+    });
   });
 
   it('does not render any task section in collapsed mode', () => {

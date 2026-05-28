@@ -122,6 +122,8 @@ export interface ChatSession {
   updated_at: number;
   source: string;
   source_meta: string | null;
+  /** 当前会话绑定的具名家族(Approach B);null = 未绑(Phase A 回落或普通单聊)。 */
+  group_id: number | null;
 }
 
 export async function listSessions(): Promise<ChatSession[]> {

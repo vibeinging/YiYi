@@ -22,6 +22,7 @@ import {
 } from '../../api/groups'
 import { listCompanions, type Companion } from '../../api/companions'
 import { toast } from '../Toast'
+import { useGroupsStore } from '../../stores/groupsStore'
 
 type EditForm = {
   /** undefined = 新建模式;非空 = 编辑既有组。 */
@@ -114,6 +115,9 @@ export function FamilyGroupsSection() {
       }
       setForm(null)
       await refreshGroups()
+      // 同步刷新全局 store —— 让 TaskSidebar 的 session 前缀、ChatInput 家族下拉、
+      // BuddyPanel 共享记忆 chips 等所有订阅方立即看到新组/改名。
+      void useGroupsStore.getState().load()
     } catch (e) {
       toast.error(`操作失败: ${e}`)
     }
@@ -126,6 +130,7 @@ export function FamilyGroupsSection() {
       toast.info(`已删除家族「${g.name}」`)
       if (form?.id === g.id) setForm(null)
       await refreshGroups()
+      void useGroupsStore.getState().load()
     } catch (e) {
       toast.error(`删除失败: ${e}`)
     }
