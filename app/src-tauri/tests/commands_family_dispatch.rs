@@ -13,11 +13,14 @@ use std::sync::Arc;
 
 use app_lib::commands::agent::family_dispatch::{try_family_dispatch, FamilyDispatchOutcome};
 use app_lib::commands::agent::resolve_llm_config;
+use app_lib::commands::companion_groups::{
+    add_companion_to_group_impl, create_companion_group_impl, set_session_group_impl,
+};
 use app_lib::engine::collaboration::audit::AuditTrail;
 use app_lib::engine::collaboration::executor::ConcreteExecutor;
 use app_lib::engine::collaboration::orchestrator::SqliteOrchestrator;
 use app_lib::engine::agents::MemoryScope;
-use app_lib::engine::collaboration::{AuditKind, CollaborationMode};
+use app_lib::engine::collaboration::{family_group_bucket, AuditKind, CollaborationMode};
 use app_lib::engine::db::NewCompanion;
 use serial_test::serial;
 
@@ -218,4 +221,77 @@ async fn try_family_dispatch_chains_parent_id_across_turns() {
     let collabs = orch.list_recent_by_session(sid, 5).unwrap();
     let c2 = collabs.iter().find(|c| c.id == second).expect("第二轮协作应已持久化");
     assert_eq!(c2.parent_id, Some(first), "第二轮应以 parent_id 串到第一轮");
+}
+
+// === Approach B:绑定具名家族后,roster 从组取 + scope 升级到 FamilyGroup ===
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn try_family_dispatch_uses_group_roster_and_scope_when_session_bound() {
+    let t = build_test_app_state().await;
+    let db = t.state().db.clone();
+
+    // Setup:adopt 3 个 companion, 把其中 2 个加进"创作小队" group,session 绑这个组。
+    let cid_in_a = db.adopt_companion(&new_companion("阿狸")).unwrap();
+    let cid_in_b = db.adopt_companion(&new_companion("小冰")).unwrap();
+    let cid_other = db.adopt_companion(&new_companion("九尾")).unwrap();
+    let gid = create_companion_group_impl(t.state(), "创作小队".into(), Some("📝".into()), None)
+        .await
+        .unwrap();
+    add_companion_to_group_impl(t.state(), gid, cid_in_a).await.unwrap();
+    add_companion_to_group_impl(t.state(), gid, cid_in_b).await.unwrap();
+    // cid_other 故意不加 —— 验证它**不会**出现在 dispatch 候选里。
+
+    let sid = "fam-group-binding";
+    db.ensure_session(sid, "家族测试", "chat", None).unwrap();
+    set_session_group_impl(t.state(), sid.into(), Some(gid)).await.unwrap();
+
+    // mock judge:返回组内成员 cid_in_a 高置信度。
+    let mock = MockLlmServer::start().await;
+    mock.mock_chat_completion_response(&decision_json(cid_in_a, 0.9)).await;
+    seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
+    let cfg = resolve_llm_config(t.state()).await.unwrap();
+
+    let outcome = try_family_dispatch(db.clone(), cfg.clone(), sid, "帮我想个文案")
+        .await
+        .unwrap();
+    let collab_id = match outcome {
+        FamilyDispatchOutcome::Dispatched { collaboration_id, companion_id, .. } => {
+            assert_eq!(companion_id, cid_in_a, "应派给组内成员阿狸");
+            collaboration_id
+        }
+        other => panic!("应派遣,got {other:?}"),
+    };
+
+    // 协作落库的 plan participant.memory_scope 是 FamilyGroup(gid) —— 桶名
+    // 是 family_shared_<gid>,与 Phase A 单桶 family_shared 隔离。
+    let orch = SqliteOrchestrator::new(db.clone(), Arc::new(ConcreteExecutor::new(cfg)));
+    let collabs = orch.list_recent_by_session(sid, 5).unwrap();
+    let c = collabs.iter().find(|c| c.id == collab_id).expect("协作已落库");
+    let participant = c
+        .plan
+        .steps
+        .first()
+        .and_then(|s| s.participants.first())
+        .expect("step 应含 participant");
+    assert_eq!(
+        participant.memory_scope,
+        MemoryScope::FamilyGroup(gid),
+        "scope 应升级为该组的 FamilyGroup",
+    );
+    // 桶命名约定:family_shared_<gid>,不应等于 Phase A 单桶。
+    assert_eq!(family_group_bucket(gid), format!("family_shared_{}", gid));
+    assert_ne!(family_group_bucket(gid), "family_shared");
+
+    // 反向验证:组外的 cid_other 没法被 judge 选到 —— 它根本不在 DispatchContext.family
+    // 里。这里通过让 mock 试图选 cid_other 来验:judge 的 roster 校验会让它回落自答。
+    let mock2 = MockLlmServer::start().await;
+    mock2.mock_chat_completion_response(&decision_json(cid_other, 0.95)).await;
+    seed_mock_llm_provider(t.state(), &mock2, "mock-model").await;
+    let cfg2 = resolve_llm_config(t.state()).await.unwrap();
+    let outcome2 = try_family_dispatch(db, cfg2, sid, "另一个问题").await.unwrap();
+    assert!(
+        matches!(outcome2, FamilyDispatchOutcome::SelfAnswer { .. }),
+        "组外成员 cid_other 不在 roster 里,judge 应回落自答,got {outcome2:?}",
+    );
 }

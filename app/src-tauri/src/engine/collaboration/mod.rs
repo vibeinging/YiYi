@@ -410,12 +410,20 @@ pub type ExecutorHandle = Arc<dyn Executor>;
 /// companions whose `memory_scope` is `Family` read/write here.
 pub const FAMILY_SHARED_USER_ID: &str = "family_shared";
 
+/// 单个具名家族的共享记忆桶名(Approach B):每组独占一个 `family_shared_{id}`,
+/// 与 Phase A 的单桶 `family_shared` 共存且互不可见。前端 BuddyPanel 浏览各家
+/// 族记忆时按这个约定算 user_id。
+pub fn family_group_bucket(group_id: CompanionId) -> String {
+    format!("family_shared_{}", group_id)
+}
+
 /// Resolve which MemMe bucket a step's participant should use.
 ///
 /// `Private` → companion's own isolated bucket.
 /// `Shared` → main user bucket (`DEFAULT_MEMME_USER_ID`). Used by the host
 /// in a jury (the host represents the user's perspective when summarising).
-/// `Family` → `FAMILY_SHARED_USER_ID`, visible to every companion.
+/// `Family` → `FAMILY_SHARED_USER_ID`(Phase A 隐式家族单桶)。
+/// `FamilyGroup(id)` → `family_shared_{id}`(Approach B 具名家族独占桶)。
 pub fn resolve_memme_user_id(
     scope: crate::engine::agents::MemoryScope,
     companion_memory_user_id: &str,
@@ -425,6 +433,7 @@ pub fn resolve_memme_user_id(
         MemoryScope::Private => companion_memory_user_id.to_string(),
         MemoryScope::Shared => crate::engine::tools::DEFAULT_MEMME_USER_ID.to_string(),
         MemoryScope::Family => FAMILY_SHARED_USER_ID.to_string(),
+        MemoryScope::FamilyGroup(id) => family_group_bucket(id),
     }
 }
 

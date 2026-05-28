@@ -64,9 +64,21 @@ pub async fn try_family_dispatch(
     session_id: &str,
     user_message: &str,
 ) -> Result<FamilyDispatchOutcome, String> {
-    // 1. 组家族 roster（Phase A：所有 active companions）。
-    let family: Vec<CompanionProfile> = db
-        .list_active_companions()
+    // 1. 组家族 roster + 决定记忆 scope。两条路径:
+    //    - session 绑了具名家族(Approach B):roster = 该组成员,scope = FamilyGroup(id)
+    //    - 未绑(Phase A 回落):roster = 全部 active companions,scope = Family(单桶)
+    let session_group_id = db.get_session_group(session_id);
+    let (companions, family_scope) = match session_group_id {
+        Some(gid) => (
+            db.list_group_members(gid),
+            crate::engine::agents::MemoryScope::FamilyGroup(gid),
+        ),
+        None => (
+            db.list_active_companions(),
+            crate::engine::agents::MemoryScope::Family,
+        ),
+    };
+    let family: Vec<CompanionProfile> = companions
         .into_iter()
         .map(|c| CompanionProfile {
             id: c.id,
@@ -120,14 +132,15 @@ pub async fn try_family_dispatch(
         return Ok(FamilyDispatchOutcome::SelfAnswer { reason: decision.reason });
     }
 
-    // 4.5. 记忆 scope 升级到 Family —— strategy 的 build_plan 默认 Private（保守
-    //      兜底），但家族会话本期决定让 dispatched 成员共享 `family_shared` bucket
-    //      以保持群内连贯（Open Q2 的倾向 + 白盒原则:用户在 BuddyPanel 的"家族共
-    //      享记忆"区可见可删）。这里 mutate 决策合法 —— strategy 本体不动，调整
-    //      的是 family_dispatch 这层 wiring。
+    // 4.5. 记忆 scope 翻成共享桶 —— strategy 的 build_plan 默认 Private(保守
+    //      兜底),但家族会话本期决定让 dispatched 成员共享桶以保持群内连贯。
+    //      具体桶按上面 step 1 决定的 family_scope:
+    //      - FamilyGroup(id) → family_shared_<id>(Approach B)
+    //      - Family → family_shared(Phase A 回落,单桶)
+    //      strategy 本体不动,调整的是这层 wiring。
     for step in &mut decision.plan.steps {
         for p in &mut step.participants {
-            p.memory_scope = crate::engine::agents::MemoryScope::Family;
+            p.memory_scope = family_scope;
         }
     }
 
