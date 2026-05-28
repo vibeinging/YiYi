@@ -15,6 +15,7 @@
 
 use std::sync::Arc;
 
+use crate::engine::collaboration::audit::AuditTrail;
 use crate::engine::collaboration::dispatch::llm_strategy::LLMDispatchStrategy;
 use crate::engine::collaboration::dispatch::DispatchStrategy;
 use crate::engine::collaboration::executor::ConcreteExecutor;
@@ -22,8 +23,8 @@ use crate::engine::collaboration::learning::sqlite_sink::SqliteLearningSink;
 use crate::engine::collaboration::learning::LearningSink;
 use crate::engine::collaboration::orchestrator::SqliteOrchestrator;
 use crate::engine::collaboration::{
-    ChatTurnSummary, CollaborationMode, CollaborationOrchestrator, CompanionProfile,
-    DispatchContext,
+    Actor, AuditKind, ChatTurnSummary, CollaborationMode, CollaborationOrchestrator,
+    CompanionProfile, DispatchContext,
 };
 use crate::engine::db::Database;
 use crate::engine::llm_client::LLMConfig;
@@ -138,6 +139,23 @@ pub async fn try_family_dispatch(
             parent_id,
         )
         .await?;
+
+    // 持久化路由决策 —— `DispatchJudged` audit 让刷新 / 重放也能看到 judge 给的理由。
+    // emit 同时广播到 collaboration://event 流（live 推送），collab_id 与 actor=Companion(0)
+    // 与 `Dispatched(0)` 派遣者身份一致。emit 失败不应阻断派遣，故 `let _`。
+    let _ = AuditTrail::new(db.clone()).emit(
+        collab_id,
+        Actor::Companion(0),
+        AuditKind::DispatchJudged,
+        serde_json::json!({
+            "companion_id": participant.companion_id,
+            "companion_name": &participant.name,
+            "avatar_emoji": &participant.avatar_emoji,
+            "color_hex": &participant.color_hex,
+            "reason": &decision.reason,
+            "confidence": decision.confidence,
+        }),
+    );
 
     // 预写内联 collaboration 消息，turn 结束时前端立刻渲染卡片（同 delegate_to_companion）。
     let placeholder = format!("@{} {}", participant.name, user_message);

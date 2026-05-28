@@ -191,6 +191,12 @@ export async function getCollaboration(id: CollaborationId): Promise<Collaborati
   return await invoke<Collaboration | null>('collaboration_get', { id })
 }
 
+/** 拉一个 collaboration 的全部 audit 事件(最早→最新)。前端 hydrate 后调,
+ *  让刷新 / 重放也能看到诸如 `dispatch_judged` 的路由理由。 */
+export async function getCollaborationAudit(id: CollaborationId): Promise<AuditEvent[]> {
+  return await invoke<AuditEvent[]>('collaboration_audit', { id })
+}
+
 export async function listRecentCollaborations(
   chatSessionId: string,
   limit?: number,

@@ -10,8 +10,9 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::commands::agent::resolve_llm_config;
+use crate::engine::collaboration::audit::AuditTrail;
 use crate::engine::collaboration::{
-    executor::ConcreteExecutor, orchestrator::SqliteOrchestrator, Collaboration,
+    executor::ConcreteExecutor, orchestrator::SqliteOrchestrator, AuditEvent, Collaboration,
     CollaborationId, CollaborationMode, CollaborationOrchestrator, CollaborationPlan,
     Mutation,
 };
@@ -88,4 +89,15 @@ pub async fn collaboration_list_recent(
     let orch = orchestrator(&state).await?;
     let limit = limit.unwrap_or(20).min(100);
     orch.list_recent_by_session(&chat_session_id, limit)
+}
+
+/// 回放一个协作的全部 audit 事件（最早→最新）。前端 hydrate 时调一次，
+/// 把跨次进入也能看到的事实（如 `DispatchJudged` 的路由理由）拼回 UI；
+/// 无 LLMConfig 依赖故不走 `orchestrator()` helper，直接构造 AuditTrail。
+#[tauri::command]
+pub async fn collaboration_audit(
+    state: State<'_, AppState>,
+    id: CollaborationId,
+) -> Result<Vec<AuditEvent>, String> {
+    AuditTrail::new(state.db.clone()).list(id)
 }

@@ -16,8 +16,10 @@ import { create } from 'zustand'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import {
   getCollaboration,
+  getCollaborationAudit,
   isTerminalStatus,
   subscribeCollaborationEvents,
+  type AuditEvent,
   type Collaboration,
   type CollaborationEventWire,
   type CollaborationId,
@@ -164,14 +166,26 @@ export const useCollaborationStore = create<StoreState & StoreActions>((set, get
   },
 
   hydrate: async (id: CollaborationId) => {
-    const snapshot = await getCollaboration(id)
+    // 并行拉 snapshot 与 audit。audit 失败容忍（不阻断卡片渲染）—— 旧 collaboration
+    // 的事件列可能缺失，但 plan + status 仍可用。
+    const [snapshot, audit] = await Promise.all([
+      getCollaboration(id),
+      getCollaborationAudit(id).catch(() => [] as AuditEvent[]),
+    ])
     if (!snapshot) return null
     set(prev => {
       const next = new Map(prev.collaborations)
       const existing = next.get(id)
       next.set(id, {
         collaboration: snapshot,
-        audit: existing?.audit ?? [],
+        // 持久 audit 是权威源（emit 先落库再广播，所以至少不少于 live 累积）。
+        // 后续 live 事件继续 append 到这里。
+        audit: audit.map(e => ({
+          timestamp: e.timestamp,
+          actor: e.actor,
+          kind: e.kind,
+          payload: e.payload,
+        })),
         streams: existing?.streams ?? new Map(),
       })
       return { collaborations: next }

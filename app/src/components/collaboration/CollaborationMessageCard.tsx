@@ -49,13 +49,35 @@ export function CollaborationMessageCard({ collaborationId }: Props) {
   const terminal = isTerminalStatus(collaboration.status)
   const steps = [...collaboration.plan.steps].sort((a, b) => a.id - b.id)
 
-  // 路由头来源:live 的 dispatches map（带 reason，仅本次会话内）优先；刷新后
-  // 它清空，则从已持久化的 collaboration 派生（mode=dispatched + 首个成员）——
-  // 成员归属持久可见，reason 是 live-only 的加成。手动 @ 召唤（manual）不显示。
+  // 路由头三级兜底，按"信息越多越好"排序:
+  //   1) live dispatches map —— 当前会话内即时拿到的 reason + confidence。
+  //   2) 持久化的 dispatch_judged audit —— 刷新后仍能看到 reason（family_dispatch
+  //      在 submit 后用 AuditTrail emit 落库）。
+  //   3) collaboration 自身派生（mode=dispatched + 首个 participant）—— 兜底,
+  //      只有成员归属,没有 reason。手动 @ 召唤（manual）三级都不显示。
   const dispatchedParticipant =
     collaboration.mode.kind === 'dispatched' ? collaboration.plan.steps[0]?.participants[0] : undefined
+  const judgedFromAudit = (() => {
+    const event = entry.audit.find(a => a.kind === 'dispatch_judged')
+    if (!event) return undefined
+    const p = event.payload as {
+      companion_name?: string
+      avatar_emoji?: string
+      color_hex?: string
+      reason?: string
+      confidence?: number
+    }
+    return {
+      companion_name: p.companion_name ?? '',
+      avatar_emoji: p.avatar_emoji ?? '🤖',
+      color_hex: p.color_hex ?? 'var(--color-text-muted)',
+      reason: p.reason ?? '',
+      confidence: p.confidence ?? 0,
+    }
+  })()
   const routing =
     dispatch ??
+    judgedFromAudit ??
     (dispatchedParticipant
       ? {
           companion_name: dispatchedParticipant.name,

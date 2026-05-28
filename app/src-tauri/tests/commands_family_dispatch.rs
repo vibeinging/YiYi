@@ -13,9 +13,10 @@ use std::sync::Arc;
 
 use app_lib::commands::agent::family_dispatch::{try_family_dispatch, FamilyDispatchOutcome};
 use app_lib::commands::agent::resolve_llm_config;
+use app_lib::engine::collaboration::audit::AuditTrail;
 use app_lib::engine::collaboration::executor::ConcreteExecutor;
 use app_lib::engine::collaboration::orchestrator::SqliteOrchestrator;
-use app_lib::engine::collaboration::CollaborationMode;
+use app_lib::engine::collaboration::{AuditKind, CollaborationMode};
 use app_lib::engine::db::NewCompanion;
 use serial_test::serial;
 
@@ -123,6 +124,28 @@ async fn try_family_dispatch_high_confidence_dispatches() {
         .expect("collaboration 应已持久化");
     assert_eq!(c.mode, CollaborationMode::Dispatched(0));
     assert_eq!(c.parent_id, None);
+
+    // 路由理由持久化:派遣时应写一条 DispatchJudged audit,刷新/重放可读出 reason。
+    let events = AuditTrail::new(db.clone()).list(collab_id).expect("audit list");
+    let judged = events
+        .iter()
+        .find(|e| e.kind == AuditKind::DispatchJudged)
+        .expect("应写入 DispatchJudged audit");
+    assert_eq!(
+        judged.payload["companion_id"].as_i64().expect("companion_id"),
+        cid,
+    );
+    assert!(
+        judged.payload["reason"]
+            .as_str()
+            .unwrap_or("")
+            .contains("代码评审"),
+        "reason 应含 mock 返回的文本，got: {:?}",
+        judged.payload["reason"],
+    );
+    assert!(
+        (judged.payload["confidence"].as_f64().expect("confidence") - 0.9).abs() < 0.01,
+    );
 }
 
 // === 低置信 → 主精灵自答（测 confidence 门控）===

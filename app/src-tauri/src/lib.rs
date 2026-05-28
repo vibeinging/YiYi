@@ -703,6 +703,7 @@ pub fn run() {
             commands::collaboration::collaboration_mutate,
             commands::collaboration::collaboration_get,
             commands::collaboration::collaboration_list_recent,
+            commands::collaboration::collaboration_audit,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
