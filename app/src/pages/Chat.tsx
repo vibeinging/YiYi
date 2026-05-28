@@ -654,9 +654,6 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
           onSelectTask={(task) => navigateToSession(task.sessionId)}
           onFileSelect={() => {}}
           onFetchWorkspaceFiles={fetchWorkspaceFiles}
-          familyMode={familyMode}
-          familyGroupId={familyGroupId}
-          onSetFamily={handleSetFamily}
         />
       )}
 
