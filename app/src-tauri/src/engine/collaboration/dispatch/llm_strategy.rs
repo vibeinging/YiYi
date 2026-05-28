@@ -224,12 +224,21 @@ impl DispatchStrategy for LLMDispatchStrategy {
         };
 
         // 过滤:confidence ≥ 阈值 + id 在家族里。LLM 偶尔幻觉个不存在的 id,丢弃。
-        let selected: Vec<&CompanionProfile> = decision
+        // 同时按 confidence 降序 —— 让 plan.participants[0] 是 confidence 最高的那位,
+        // family_dispatch L2 走 claim_round 后,若全 no 可拿首位做"防沉默"兜底。
+        let mut scored: Vec<(&CompanionProfile, f64)> = decision
             .members
             .iter()
             .filter(|m| m.confidence >= MEMBER_CONFIDENCE_THRESHOLD)
-            .filter_map(|m| ctx.family.iter().find(|c| c.id == m.id))
+            .filter_map(|m| {
+                ctx.family
+                    .iter()
+                    .find(|c| c.id == m.id)
+                    .map(|p| (p, m.confidence))
+            })
             .collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let selected: Vec<&CompanionProfile> = scored.iter().map(|(p, _)| *p).collect();
 
         if selected.is_empty() {
             return Ok(fallback("没有合适成员响应,主精灵自答"));

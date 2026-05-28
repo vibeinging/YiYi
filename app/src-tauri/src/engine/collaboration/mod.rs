@@ -12,6 +12,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod audit;
+pub mod claim;
 pub mod dispatch;
 pub mod events;
 pub mod executor;

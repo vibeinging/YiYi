@@ -16,6 +16,7 @@
 use std::sync::Arc;
 
 use crate::engine::collaboration::audit::AuditTrail;
+use crate::engine::collaboration::claim::run_claim_round;
 use crate::engine::collaboration::dispatch::llm_strategy::LLMDispatchStrategy;
 use crate::engine::collaboration::dispatch::DispatchStrategy;
 use crate::engine::collaboration::executor::ConcreteExecutor;
@@ -123,12 +124,12 @@ pub async fn try_family_dispatch(
         recent_corrections,
     };
 
-    // 3. 路由判断。strategy 从不硬失败：任何错误都回落到空 plan + confidence 0.0。
+    // 3. L1 集中粗筛:strategy 一次 LLM 选出"该响应的所有成员"。
+    //    strategy 从不硬失败,任何错误都回落空 plan + confidence 0.0。
     let mut decision = LLMDispatchStrategy::new(cfg.clone()).judge(&ctx).await?;
 
     // 4. 门控:空 plan / 无成员 / 置信度不足 → 主精灵自答。
-    //    L1 多成员:plan.steps[0].participants 可能含 1+ 人,各自独立流式响应。
-    let Some(participants_snapshot) = decision
+    let Some(candidates_snapshot) = decision
         .plan
         .steps
         .first()
@@ -140,20 +141,48 @@ pub async fn try_family_dispatch(
     if decision.confidence < DISPATCH_CONFIDENCE_FLOOR {
         return Ok(FamilyDispatchOutcome::SelfAnswer { reason: decision.reason });
     }
-    // participants_snapshot 是 Participant 列表的 Clone(memory_scope 此刻还是 Private)
-    // —— 用于 audit / outcome / placeholder;后面 4.5 会 mutate decision.plan 的 scope。
 
-    // 4.5. 记忆 scope 翻成共享桶 —— strategy 的 build_plan 默认 Private(保守
-    //      兜底),但家族会话本期决定让 dispatched 成员共享桶以保持群内连贯。
-    //      具体桶按上面 step 1 决定的 family_scope:
-    //      - FamilyGroup(id) → family_shared_<id>(Approach B)
-    //      - Family → family_shared(Phase A 回落,单桶)
-    //      strategy 本体不动,调整的是这层 wiring。
+    // 4.5. L2 个体精筛:每位候选自己看消息决定接不接(slock 风格 self-claim)。
+    //      claim_round 并发跑 N 次轻量 LLM,wall clock ≈ 1 次。每位返回
+    //      {claimed, reason}。失败默认不接(保守不抢话)。
+    //      候选 profiles 从 ctx.family 按 id 反查 —— Participant 没带回 description,
+    //      但 ctx.family 里有,直接复用。
+    let candidate_profiles: Vec<CompanionProfile> = candidates_snapshot
+        .iter()
+        .filter_map(|p| ctx.family.iter().find(|c| c.id == p.companion_id).cloned())
+        .collect();
+    let claims = run_claim_round(&cfg, user_message, &ctx.chat_history, &candidate_profiles).await;
+
+    // 选 claimed=true 的成员;若全 no but 候选非空 → 防沉默,挑 confidence 最高的
+    // 那位(strategy 已按 confidence desc 排序,候选[0] 即最高)。
+    let mut claimed_ids: Vec<i64> =
+        claims.iter().filter(|c| c.claimed).map(|c| c.companion_id).collect();
+    let used_silence_fallback = claimed_ids.is_empty();
+    if used_silence_fallback {
+        if let Some(first) = candidates_snapshot.first() {
+            claimed_ids.push(first.companion_id);
+        } else {
+            // 不应到这里(上面 filter 已确保非空),保险起见仍走自答。
+            return Ok(FamilyDispatchOutcome::SelfAnswer { reason: decision.reason });
+        }
+    }
+
+    // 用 claimed_ids 过滤 plan.participants(保序),同时翻成 family scope。
+    // 这里 mutate plan 是为了 submit 的 plan 与 outcome / audit 对齐。
     for step in &mut decision.plan.steps {
+        step.participants.retain(|p| claimed_ids.contains(&p.companion_id));
         for p in &mut step.participants {
             p.memory_scope = family_scope;
         }
     }
+    // participants_snapshot 是过滤后的最终上场名单 —— 用于 audit / outcome /
+    // placeholder。strategy 已按 confidence desc 排序,这里保序。
+    let participants_snapshot: Vec<Participant> = decision
+        .plan
+        .steps
+        .first()
+        .map(|s| s.participants.clone())
+        .unwrap_or_default();
 
     // 5. 派遣：提交单 companion 协作，并以 parent_id 串到本 session 上一个协作
     //    （每轮独立可审计 —— 设计步骤 5 拍板用 parent_id 链）。
@@ -176,7 +205,8 @@ pub async fn try_family_dispatch(
         .await?;
 
     // 持久化路由决策 —— `DispatchJudged` audit 让刷新 / 重放也能看到 judge 选了谁。
-    // L1 多成员:payload 用 members 数组列出所有入选者(取代原单一 companion_id 字段)。
+    // L2 形态:audit payload 同时记录 L1 候选 + L2 每位 claim 决定 + 是否走了
+    // 沉默兜底,让用户事后能审"判断链"(透明 > 智能)。
     // emit 同时广播 collaboration://event 流(live 推送),失败不阻断派遣。
     let member_audit: Vec<_> = participants_snapshot
         .iter()
@@ -189,12 +219,34 @@ pub async fn try_family_dispatch(
             })
         })
         .collect();
+    let candidates_audit: Vec<_> = candidates_snapshot
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "companion_id": p.companion_id,
+                "name": &p.name,
+            })
+        })
+        .collect();
+    let claims_audit: Vec<_> = claims
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "companion_id": c.companion_id,
+                "claimed": c.claimed,
+                "reason": &c.reason,
+            })
+        })
+        .collect();
     let _ = AuditTrail::new(db.clone()).emit(
         collab_id,
         Actor::Companion(0),
         AuditKind::DispatchJudged,
         serde_json::json!({
             "members": member_audit,
+            "candidates": candidates_audit,
+            "claims": claims_audit,
+            "silence_fallback": used_silence_fallback,
             "reason": &decision.reason,
             "confidence": decision.confidence,
         }),

@@ -1,10 +1,17 @@
 //! 家族会话「host 上游路由」的集成测试 —— `commands/agent/family_dispatch.rs`。
 //!
-//! L1 多成员模型:judge 现在返回 `members: [{id, confidence, reason}, ...]`,
-//! family_dispatch 转成 ParallelAgents plan(1+ 成员)。本文件覆盖:
-//! family_mode 持久化、空家族自答、单成员高置信派遣、多成员同框派遣、
-//! 低置信自答(测 confidence 门控)、多轮 parent_id 链、Approach B 组绑定。
-//! 用 MockLlmServer 驱动 judge,TempDb 隔离,#[serial](SQLite + 全局 usage 追踪)。
+//! L1 + L2 形态:
+//! - L1 集中粗筛:strategy 返回 `members: [...]` 候选(N≥0)。
+//! - L2 个体精筛:每位候选并发跑 claim,yes 才进 ParallelAgents;
+//!   全 no 但候选非空 → 沉默兜底,挑 confidence 最高的 1 位上。
+//!
+//! Mock 复用:wiremock 同 path 的固定 response 同时供 judge(读 members 字段)
+//! 和 claim(读 claim/reason 字段)用。serde 默认忽略未知字段,所以一个 JSON
+//! 可以同时表达"judge 选谁 + claim 接不接"。
+//!
+//! 覆盖:family_mode 持久化、空家族自答、单成员高置信派遣、多成员同框派遣、
+//! 低置信自答、L2 沉默兜底、多轮 parent_id 链、Approach B 组绑定。
+//! 用 MockLlmServer 驱动 judge + claim,TempDb 隔离,#[serial]。
 
 mod common;
 
@@ -39,17 +46,29 @@ fn new_companion(name: &str) -> NewCompanion {
     }
 }
 
-/// Mock LLM 返回的 dispatch JSON —— 新形态 `members` 数组。
-/// 传一个 `(companion_id, confidence)` 列表,每项理由固定一句话(测试只关心
-/// id/confidence 走通 judge,文案细节归 strategy 单测)。
-fn decision_json(members: &[(i64, f64)]) -> String {
+/// Mock LLM 返回的 JSON,兼容 judge + claim:
+/// - judge 读顶层 `members: [{id, confidence, reason}]`
+/// - claim 读顶层 `claim: bool` + `reason: string`(默认 true,所有候选都接)
+///
+/// `accept_all_claims=false` 时把 claim 翻成 false,用来测 L2 沉默兜底。
+fn dispatch_and_claim_json(members: &[(i64, f64)], accept_all_claims: bool) -> String {
     let parts: Vec<String> = members
         .iter()
         .map(|(id, conf)| {
             format!(r#"{{"id": {id}, "confidence": {conf}, "reason": "代码评审交给它"}}"#)
         })
         .collect();
-    format!(r#"{{"members": [{}]}}"#, parts.join(","))
+    format!(
+        r#"{{"members": [{}], "claim": {}, "reason": "{}"}}"#,
+        parts.join(","),
+        accept_all_claims,
+        if accept_all_claims { "我能帮上" } else { "话题别人更合适" },
+    )
+}
+
+/// 兼容旧用法:默认 claim 全接(L1 行为等价)。
+fn decision_json(members: &[(i64, f64)]) -> String {
+    dispatch_and_claim_json(members, true)
 }
 
 // === family_mode 持久化 ===
@@ -243,6 +262,61 @@ async fn try_family_dispatch_multi_member_dispatches_in_one_step() {
         .expect("应写入 DispatchJudged audit");
     let members_arr = judged.payload["members"].as_array().expect("members 数组");
     assert_eq!(members_arr.len(), 2, "audit payload 应含 2 个成员");
+}
+
+// === L2 沉默兜底:judge 选了候选但全员 claim=no → 挑 confidence 最高的兜底上 ===
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn try_family_dispatch_silence_fallback_when_all_claims_decline() {
+    let t = build_test_app_state().await;
+    let db = t.state().db.clone();
+    let cid_a = db.adopt_companion(&new_companion("阿狸")).unwrap();
+    let cid_b = db.adopt_companion(&new_companion("小冰")).unwrap();
+
+    // judge 选两个候选(A 0.85 > B 0.7),但 claim 阶段每位都说"我不接"。
+    // 期望:strategy 按 confidence desc 排序,A 在前;沉默兜底用候选[0] = A。
+    let mock = MockLlmServer::start().await;
+    mock.mock_chat_completion_response(&dispatch_and_claim_json(
+        &[(cid_a, 0.85), (cid_b, 0.7)],
+        false, // claim all decline
+    ))
+    .await;
+    seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
+    let cfg = resolve_llm_config(t.state()).await.unwrap();
+
+    let sid = "fam-silence";
+    db.ensure_session(sid, "家族测试", "chat", None).ok();
+
+    let outcome = try_family_dispatch(db.clone(), cfg.clone(), sid, "随便聊聊")
+        .await
+        .unwrap();
+    let (collab_id, members) = match outcome {
+        FamilyDispatchOutcome::Dispatched { collaboration_id, members } => (collaboration_id, members),
+        other => panic!("沉默兜底应仍派遣(至少 1 人),got {other:?}"),
+    };
+    // 兜底逻辑:候选[0] 上场,即 confidence 最高的 A。
+    assert_eq!(members.len(), 1, "沉默兜底应只派 confidence 最高 1 人");
+    assert_eq!(members[0].companion_id, cid_a, "应派 confidence 最高的阿狸");
+
+    // audit payload 应记 silence_fallback=true,claims 列表里两位都 claimed=false。
+    let events = AuditTrail::new(db.clone()).list(collab_id).expect("audit list");
+    let judged = events
+        .iter()
+        .find(|e| e.kind == AuditKind::DispatchJudged)
+        .expect("应写入 DispatchJudged audit");
+    assert_eq!(
+        judged.payload["silence_fallback"].as_bool(),
+        Some(true),
+        "应标 silence_fallback",
+    );
+    let claims = judged.payload["claims"].as_array().expect("claims 数组");
+    assert_eq!(claims.len(), 2, "claims 列表应含两位候选");
+    for c in claims {
+        assert_eq!(c["claimed"].as_bool(), Some(false), "每位 claim 都应 false");
+    }
+    let candidates = judged.payload["candidates"].as_array().expect("candidates 数组");
+    assert_eq!(candidates.len(), 2, "candidates 列表应含 L1 选出的两人");
 }
 
 // === 低置信 → 主精灵自答（测 confidence 门控）===
