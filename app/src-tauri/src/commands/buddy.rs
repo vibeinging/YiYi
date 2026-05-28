@@ -296,11 +296,15 @@ pub async fn list_recent_episodes(
 pub async fn list_recent_memories_impl(
     state: &AppState,
     limit: Option<usize>,
+    user_id: Option<String>,
 ) -> Result<Vec<MemoryEntry>, String> {
+    // 默认主用户桶（与既有调用方一致）；前端 `user_id = "family_shared"` 即可
+    // 浏览家族共享记忆,满足白盒原则的"可见可删"。
+    let bucket = user_id.unwrap_or_else(|| crate::engine::tools::MEMME_USER_ID.to_string());
     let rows = state
         .memme_store
         .list_traces(
-            memme_core::ListOptions::new(crate::engine::tools::MEMME_USER_ID)
+            memme_core::ListOptions::new(&bucket)
                 .limit(limit.unwrap_or(20)),
         )
         .map_err(|e| format!("查询失败: {}", e))?;
@@ -318,8 +322,9 @@ pub async fn list_recent_memories_impl(
 pub async fn list_recent_memories(
     state: State<'_, AppState>,
     limit: Option<usize>,
+    user_id: Option<String>,
 ) -> Result<Vec<MemoryEntry>, String> {
-    list_recent_memories_impl(&state, limit).await
+    list_recent_memories_impl(&state, limit, user_id).await
 }
 
 /// Search memories by query.
@@ -327,16 +332,18 @@ pub async fn search_memories_impl(
     state: &AppState,
     query: String,
     limit: Option<usize>,
+    user_id: Option<String>,
 ) -> Result<Vec<MemoryEntry>, String> {
     if query.trim().is_empty() {
         return Ok(vec![]);
     }
 
+    let bucket = user_id.unwrap_or_else(|| crate::engine::tools::MEMME_USER_ID.to_string());
     let results = state
         .memme_store
         .search(
             &query,
-            memme_core::SearchOptions::new(crate::engine::tools::MEMME_USER_ID)
+            memme_core::SearchOptions::new(&bucket)
                 .limit(limit.unwrap_or(10))
                 .keyword_search(true),
         )
@@ -356,8 +363,9 @@ pub async fn search_memories(
     state: State<'_, AppState>,
     query: String,
     limit: Option<usize>,
+    user_id: Option<String>,
 ) -> Result<Vec<MemoryEntry>, String> {
-    search_memories_impl(&state, query, limit).await
+    search_memories_impl(&state, query, limit, user_id).await
 }
 
 /// Delete a memory by id.

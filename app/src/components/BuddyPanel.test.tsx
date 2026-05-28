@@ -168,7 +168,7 @@ describe("BuddyPanel", () => {
     // Every happy-path command should be invoked (matching the actual source useEffect).
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("get_memory_stats");
-      expect(invokeMock).toHaveBeenCalledWith("list_recent_memories", { limit: 15 });
+      expect(invokeMock).toHaveBeenCalledWith("list_recent_memories", { limit: 15, userId: undefined });
       expect(invokeMock).toHaveBeenCalledWith("list_corrections");
       expect(invokeMock).toHaveBeenCalledWith("list_meditation_sessions", { limit: 10 });
       expect(invokeMock).toHaveBeenCalledWith("list_buddy_decisions", { limit: 20 });
@@ -202,7 +202,7 @@ describe("BuddyPanel", () => {
     const searchBtn = await screen.findByRole("button", { name: "搜索" });
     await user.click(searchBtn);
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("search_memories", { query: "cookies", limit: 10 });
+      expect(invokeMock).toHaveBeenCalledWith("search_memories", { query: "cookies", limit: 10, userId: undefined });
     });
   });
 

@@ -182,6 +182,7 @@ describe("buddy api", () => {
       expect(result).toEqual(memories);
       expect(invokeMock).toHaveBeenCalledWith("list_recent_memories", {
         limit: 20,
+        userId: undefined,
       });
     });
 
@@ -190,6 +191,7 @@ describe("buddy api", () => {
       await listRecentMemories();
       expect(invokeMock).toHaveBeenCalledWith("list_recent_memories", {
         limit: undefined,
+        userId: undefined,
       });
     });
 
@@ -210,6 +212,7 @@ describe("buddy api", () => {
       expect(invokeMock).toHaveBeenCalledWith("search_memories", {
         query: "coffee",
         limit: 5,
+        userId: undefined,
       });
     });
 
@@ -219,6 +222,7 @@ describe("buddy api", () => {
       expect(invokeMock).toHaveBeenCalledWith("search_memories", {
         query: "coffee",
         limit: undefined,
+        userId: undefined,
       });
     });
 

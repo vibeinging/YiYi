@@ -57,12 +57,20 @@ export async function getMemoryStats(): Promise<MemoryStats> {
   return await invoke<MemoryStats>('get_memory_stats')
 }
 
-export async function listRecentMemories(limit?: number): Promise<MemoryEntry[]> {
-  return await invoke<MemoryEntry[]>('list_recent_memories', { limit })
+/**
+ * 列出最近记忆。`userId` 缺省 = 主用户桶；传 `"family_shared"` 即可浏览家族
+ * 共享桶（家族会话 dispatched 成员的记忆桶，白盒原则要求可见可删）。
+ */
+export async function listRecentMemories(limit?: number, userId?: string): Promise<MemoryEntry[]> {
+  return await invoke<MemoryEntry[]>('list_recent_memories', { limit, userId })
 }
 
-export async function searchMemories(query: string, limit?: number): Promise<MemoryEntry[]> {
-  return await invoke<MemoryEntry[]>('search_memories', { query, limit })
+export async function searchMemories(
+  query: string,
+  limit?: number,
+  userId?: string,
+): Promise<MemoryEntry[]> {
+  return await invoke<MemoryEntry[]>('search_memories', { query, limit, userId })
 }
 
 export async function deleteMemory(id: string): Promise<void> {

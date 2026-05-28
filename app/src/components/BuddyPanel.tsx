@@ -97,6 +97,10 @@ export function BuddyPanel() {
   const [identityTraits, setIdentityTraits] = useState<{ trait_type: string; content: string; confidence: number }[]>([])
   const [memFilter, setMemFilter] = useState<string>('all')
   const [episodes, setEpisodes] = useState<EpisodeEntry[]>([])
+  // 家族会话 dispatched 成员的共享桶（user_id = "family_shared"）。展开时懒加载，
+  // 支持删除——满足白盒原则"被动信息可见可删"。
+  const [familyMemories, setFamilyMemories] = useState<MemoryEntry[]>([])
+  const [familyExpanded, setFamilyExpanded] = useState(false)
 
   useEffect(() => {
     getMemoryStats().then(setMemoryStats).catch(() => {})
@@ -599,6 +603,65 @@ export function BuddyPanel() {
                 )}
               </>
             )}
+
+            {/* 家族共享记忆 —— 家族会话 dispatched 成员的共享桶 (family_shared) */}
+            <div className="mt-4 pt-4" style={{ borderTop: '1px solid var(--color-bg-subtle)' }}>
+              <button
+                onClick={() => {
+                  const next = !familyExpanded
+                  setFamilyExpanded(next)
+                  if (next && familyMemories.length === 0) {
+                    listRecentMemories(15, 'family_shared')
+                      .then(setFamilyMemories)
+                      .catch(() => {})
+                  }
+                }}
+                className="flex items-center gap-1 text-[11px] mb-2 transition-colors hover:opacity-100"
+                style={{ color: 'var(--color-text-muted)' }}
+              >
+                {familyExpanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                家族共享记忆（{familyMemories.length}）
+              </button>
+              {familyExpanded && (
+                familyMemories.length === 0 ? (
+                  <div className="py-3 text-center text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
+                    家族还没共享记忆 —— 让成员在家族会话里聊几轮就有了
+                  </div>
+                ) : (
+                  <div className="space-y-1 max-h-[300px] overflow-y-auto">
+                    {familyMemories.map(m => (
+                      <div key={m.id} className="group flex gap-3 py-2.5 px-3 -mx-3 rounded-lg hover:bg-[var(--color-bg-subtle)] transition-colors">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[12px] leading-relaxed" style={{ color: 'var(--color-text)' }}>
+                            {m.content.length > 200 ? m.content.slice(0, 200) + '...' : m.content}
+                          </div>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-muted)' }}>
+                              {catLabel(m.categories[0] || 'note')}
+                            </span>
+                            <span className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>{m.created_at.slice(0, 10)}</span>
+                          </div>
+                        </div>
+                        <button
+                          onClick={async () => {
+                            try {
+                              await deleteMemory(m.id)
+                              setFamilyMemories(p => p.filter(x => x.id !== m.id))
+                              toast.success('记忆已删除')
+                            } catch {
+                              toast.error('删除失败')
+                            }
+                          }}
+                          className="p-1 rounded shrink-0 self-start opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          <Trash2 size={12} style={{ color: 'var(--color-error)' }} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )
+              )}
+            </div>
 
             {/* 最近的对话回忆 — 折叠在「她记得」卡底部 */}
             {episodes.length > 0 && (

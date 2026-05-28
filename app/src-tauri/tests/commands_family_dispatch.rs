@@ -16,6 +16,7 @@ use app_lib::commands::agent::resolve_llm_config;
 use app_lib::engine::collaboration::audit::AuditTrail;
 use app_lib::engine::collaboration::executor::ConcreteExecutor;
 use app_lib::engine::collaboration::orchestrator::SqliteOrchestrator;
+use app_lib::engine::agents::MemoryScope;
 use app_lib::engine::collaboration::{AuditKind, CollaborationMode};
 use app_lib::engine::db::NewCompanion;
 use serial_test::serial;
@@ -145,6 +146,20 @@ async fn try_family_dispatch_high_confidence_dispatches() {
     );
     assert!(
         (judged.payload["confidence"].as_f64().expect("confidence") - 0.9).abs() < 0.01,
+    );
+
+    // 记忆 scope 升级 Family:family_dispatch 在 submit 前把 participant.memory_scope
+    // 从 build_plan 默认的 Private 翻成 Family,共享 family_shared bucket。
+    let participant = c
+        .plan
+        .steps
+        .first()
+        .and_then(|s| s.participants.first())
+        .expect("step 应含 participant");
+    assert!(
+        matches!(participant.memory_scope, MemoryScope::Family),
+        "派遣成员 memory_scope 应升级为 Family,got {:?}",
+        participant.memory_scope,
     );
 }
 

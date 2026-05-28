@@ -104,7 +104,7 @@ pub async fn try_family_dispatch(
     };
 
     // 3. 路由判断。strategy 从不硬失败：任何错误都回落到空 plan + confidence 0.0。
-    let decision = LLMDispatchStrategy::new(cfg.clone()).judge(&ctx).await?;
+    let mut decision = LLMDispatchStrategy::new(cfg.clone()).judge(&ctx).await?;
 
     // 4. 门控：空 plan 或置信度不足 → 主精灵自答。
     let Some(participant) = decision
@@ -118,6 +118,17 @@ pub async fn try_family_dispatch(
     };
     if decision.confidence < DISPATCH_CONFIDENCE_FLOOR {
         return Ok(FamilyDispatchOutcome::SelfAnswer { reason: decision.reason });
+    }
+
+    // 4.5. 记忆 scope 升级到 Family —— strategy 的 build_plan 默认 Private（保守
+    //      兜底），但家族会话本期决定让 dispatched 成员共享 `family_shared` bucket
+    //      以保持群内连贯（Open Q2 的倾向 + 白盒原则:用户在 BuddyPanel 的"家族共
+    //      享记忆"区可见可删）。这里 mutate 决策合法 —— strategy 本体不动，调整
+    //      的是 family_dispatch 这层 wiring。
+    for step in &mut decision.plan.steps {
+        for p in &mut step.participants {
+            p.memory_scope = crate::engine::agents::MemoryScope::Family;
+        }
     }
 
     // 5. 派遣：提交单 companion 协作，并以 parent_id 串到本 session 上一个协作

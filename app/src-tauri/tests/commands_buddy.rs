@@ -613,7 +613,7 @@ async fn list_recent_episodes_returns_seeded_rows_respecting_limit() {
 #[serial]
 async fn list_recent_memories_returns_empty_for_fresh_store() {
     let t = build_test_app_state().await;
-    let got = list_recent_memories_impl(t.state(), None).await.unwrap();
+    let got = list_recent_memories_impl(t.state(), None, None).await.unwrap();
     assert!(got.is_empty());
 }
 
@@ -625,7 +625,7 @@ async fn list_recent_memories_returns_seeded_rows_with_expected_shape() {
     let id_a = seed_memory(&t, "first", vec!["cat-a"], Some(0.4));
     let id_b = seed_memory(&t, "second", vec!["cat-b"], Some(0.8));
 
-    let rows = list_recent_memories_impl(t.state(), Some(10))
+    let rows = list_recent_memories_impl(t.state(), Some(10), None)
         .await
         .unwrap();
     assert_eq!(rows.len(), 2);
@@ -645,7 +645,7 @@ async fn list_recent_memories_honors_explicit_limit() {
     for i in 0..5 {
         seed_memory(&t, &format!("m-{}", i), vec!["x"], None);
     }
-    let rows = list_recent_memories_impl(t.state(), Some(2))
+    let rows = list_recent_memories_impl(t.state(), Some(2), None)
         .await
         .unwrap();
     assert_eq!(rows.len(), 2);
@@ -660,7 +660,7 @@ async fn search_memories_with_blank_query_short_circuits_to_empty() {
     seed_memory(&t, "hello world", vec!["greeting"], None);
 
     // Blank query returns empty without hitting the store.
-    let got = search_memories_impl(t.state(), "   ".into(), None)
+    let got = search_memories_impl(t.state(), "   ".into(), None, None)
         .await
         .unwrap();
     assert!(got.is_empty());
@@ -674,7 +674,7 @@ async fn search_memories_finds_seeded_content_via_keyword_search() {
     let id_match = seed_memory(&t, "rust programming language", vec!["code"], None);
     let _id_other = seed_memory(&t, "cats are fluffy", vec!["pets"], None);
 
-    let got = search_memories_impl(t.state(), "rust".into(), Some(10))
+    let got = search_memories_impl(t.state(), "rust".into(), Some(10), None)
         .await
         .unwrap();
 
@@ -697,12 +697,12 @@ async fn delete_memory_removes_seeded_row() {
 
     let id = seed_memory(&t, "to be deleted", vec!["temp"], None);
     // Verify it's there first.
-    let before = list_recent_memories_impl(t.state(), None).await.unwrap();
+    let before = list_recent_memories_impl(t.state(), None, None).await.unwrap();
     assert!(before.iter().any(|r| r.id == id));
 
     delete_memory_impl(t.state(), id.clone()).await.unwrap();
 
-    let after = list_recent_memories_impl(t.state(), None).await.unwrap();
+    let after = list_recent_memories_impl(t.state(), None, None).await.unwrap();
     assert!(!after.iter().any(|r| r.id == id), "deleted row should be gone");
 }
 
