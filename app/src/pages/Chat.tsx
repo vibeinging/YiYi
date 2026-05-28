@@ -21,6 +21,7 @@ import {
   type ChatMessage,
   type Attachment,
 } from '../api/agent';
+import { setSessionGroup, getSessionGroup } from '../api/groups';
 import { listWorkspaceFiles, loadWorkspaceFile, getWorkspacePath, type WorkspaceFile } from '../api/workspace';
 import { listSkills } from '../api/skills';
 import { type MentionTag } from '../components/MentionInput';
@@ -81,8 +82,11 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   const messagesRef = useRef<ChatMessagesHandle>(null);
   const inputRef = useRef<ChatInputHandle>(null);
 
-  // --- 家族会话模式（按 session 持久化，切换会话时 hydrate）---
+  // --- 家族会话模式 + 绑定的家族 id(按 session 持久化,切换会话时 hydrate)---
+  // group_id = null 时回落 Phase A 的"全 active 隐式家族 + 单一 family_shared 桶";
+  // group_id 非 null 时锁定到该具名家族 + 其独占 family_shared_<id> 桶。
   const [familyMode, setFamilyModeState] = useState(false);
+  const [familyGroupId, setFamilyGroupId] = useState<number | null>(null);
 
   // --- AI name ---
   const [aiName, setAiName] = useState('YiYi');
@@ -212,6 +216,7 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     useChatStreamStore.getState().setSessionId(activeSessionId);
     loadMessages(activeSessionId);
     getFamilyMode(activeSessionId).then(setFamilyModeState).catch(() => setFamilyModeState(false));
+    getSessionGroup(activeSessionId).then(setFamilyGroupId).catch(() => setFamilyGroupId(null));
 
     invoke('chat_stream_state', { sessionId: activeSessionId })
       .then((snapshot: any) => {
@@ -229,16 +234,27 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     await useSessionStore.getState().createNewChat();
   };
 
-  // 家族会话开关：乐观更新 + 落库，失败回滚。
-  const handleToggleFamilyMode = async () => {
+  // 家族会话选择:三种状态 —— 关 / 全员(group_id=null,Phase A 回落)/ 某具名家族。
+  // 乐观更新 + 双写(family_mode + group_id),失败回滚。
+  const handleSetFamily = async (mode: boolean, groupId: number | null) => {
     if (!activeSessionId) return;
-    const next = !familyMode;
-    setFamilyModeState(next);
+    const prevMode = familyMode;
+    const prevGid = familyGroupId;
+    setFamilyModeState(mode);
+    setFamilyGroupId(groupId);
     try {
-      await setFamilyMode(activeSessionId, next);
-      toast.info(next ? '家族会话已开启 — 主精灵会把任务交给合适的成员' : '已退出家族会话');
+      await setFamilyMode(activeSessionId, mode);
+      await setSessionGroup(activeSessionId, mode ? groupId : null);
+      if (!mode) {
+        toast.info('已退出家族会话');
+      } else if (groupId == null) {
+        toast.info('家族会话:全员(默认) — 主精灵在所有 active 分身里挑');
+      } else {
+        toast.info('家族会话已切换到指定家族');
+      }
     } catch (e) {
-      setFamilyModeState(!next);
+      setFamilyModeState(prevMode);
+      setFamilyGroupId(prevGid);
       toast.error(`切换家族会话失败: ${e}`);
     }
   };
@@ -629,7 +645,8 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
           onFileSelect={() => {}}
           onFetchWorkspaceFiles={fetchWorkspaceFiles}
           familyMode={familyMode}
-          onToggleFamilyMode={handleToggleFamilyMode}
+          familyGroupId={familyGroupId}
+          onSetFamily={handleSetFamily}
         />
       )}
 

@@ -16,6 +16,7 @@ import { VoiceButton } from '../voice/VoiceButton';
 import { listAllTasksBrief } from '../../api/tasks';
 import { listAgents, type AgentSummary } from '../../api/agents';
 import { listCompanions, type Companion } from '../../api/companions';
+import { listCompanionGroups, type CompanionGroup } from '../../api/groups';
 import { companionRoleLabel } from '../../utils/companion';
 import type { Attachment } from '../../api/agent';
 import type { WorkspaceFile } from '../../api/workspace';
@@ -42,7 +43,10 @@ interface ChatInputProps {
   onFetchWorkspaceFiles: () => void;
   /** 家族会话模式开关状态（按 session 持久化，由父组件管理）。 */
   familyMode: boolean;
-  onToggleFamilyMode: () => void;
+  /** session 当前绑定的具名家族 id;null = Phase A 全员(默认)。 */
+  familyGroupId: number | null;
+  /** 设置家族会话状态(三态:关 / 全员 / 具名组)。 */
+  onSetFamily: (mode: boolean, groupId: number | null) => void;
 }
 
 /**
@@ -88,7 +92,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     onFileSelect,
     onFetchWorkspaceFiles,
     familyMode,
-    onToggleFamilyMode,
+    familyGroupId,
+    onSetFamily,
   },
   ref,
 ) {
@@ -103,6 +108,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // Pickers
   const [showQuickActions, setShowQuickActions] = useState(false);
   const [showFamily, setShowFamily] = useState(false);
+  /** 家族会话模式下拉(关 / 全员 / 各具名家族)。 */
+  const [showFamilyMode, setShowFamilyMode] = useState(false);
+  const [availableGroups, setAvailableGroups] = useState<CompanionGroup[]>([]);
 
   // DeepSeek V4 thinking-mode effort: "off" | "high" | "max"
   const [thinkingEffort, setThinkingEffortState] = useState<'off' | 'high' | 'max'>('high');
@@ -556,21 +564,80 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               </span>
             </button>
 
-            <button type="button" aria-label="家族会话模式"
-              onClick={onToggleFamilyMode}
-              onMouseDown={preventFocusSteal}
-              disabled={loading || companions.length === 0}
-              className="w-9 h-9 flex items-center justify-center rounded-xl shrink-0 transition-all disabled:opacity-30"
-              style={{ color: familyMode ? 'var(--color-primary)' : 'var(--color-text-muted)' }}
-              onMouseEnter={(e) => { if (!familyMode) e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
-              onMouseLeave={(e) => { if (!familyMode) e.currentTarget.style.background = 'transparent'; }}
-              title={companions.length === 0
-                ? '还没有家族成员，无法开启家族会话'
-                : familyMode
-                  ? '家族会话：开 — 主精灵会把任务分给合适的成员（点击关闭）'
-                  : '家族会话：关 — 点击开启，主精灵按家族成员路由'}>
-              <MessagesSquare size={16} />
-            </button>
+            <div className="relative" data-family-mode-anchor>
+              <button type="button" aria-label="家族会话模式"
+                onClick={() => {
+                  const next = !showFamilyMode
+                  setShowFamilyMode(next)
+                  if (next) {
+                    // 懒加载:每次打开都重拉,确保 BuddyPanel 刚建的新组立刻可见。
+                    listCompanionGroups().then(setAvailableGroups).catch(() => {})
+                  }
+                }}
+                onMouseDown={preventFocusSteal}
+                disabled={loading || companions.length === 0}
+                className="w-9 h-9 flex items-center justify-center rounded-xl shrink-0 transition-all disabled:opacity-30"
+                style={{ color: familyMode ? 'var(--color-primary)' : 'var(--color-text-muted)' }}
+                onMouseEnter={(e) => { if (!familyMode && !showFamilyMode) e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
+                onMouseLeave={(e) => { if (!familyMode && !showFamilyMode) e.currentTarget.style.background = 'transparent'; }}
+                title={companions.length === 0
+                  ? '还没有分身,无法开启家族会话'
+                  : !familyMode
+                    ? '家族会话:关 — 点击选择'
+                    : familyGroupId == null
+                      ? '家族会话:全员(Phase A 默认)'
+                      : '家族会话:已绑定具名家族'}>
+                <MessagesSquare size={16} />
+              </button>
+              {showFamilyMode && companions.length > 0 && (
+                <div
+                  className="absolute bottom-full left-0 mb-2 w-56 p-1.5 rounded-xl shadow-lg z-50"
+                  style={{ background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)' }}
+                >
+                  <button
+                    onClick={() => { onSetFamily(false, null); setShowFamilyMode(false); }}
+                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-[12px] text-left transition-colors hover:bg-[var(--color-bg-subtle)]"
+                    style={{ color: !familyMode ? 'var(--color-primary)' : 'var(--color-text)' }}
+                  >
+                    <span className="w-3 text-center">{!familyMode ? '✓' : ' '}</span>
+                    关闭家族会话
+                  </button>
+                  <button
+                    onClick={() => { onSetFamily(true, null); setShowFamilyMode(false); }}
+                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-[12px] text-left transition-colors hover:bg-[var(--color-bg-subtle)]"
+                    style={{ color: (familyMode && familyGroupId == null) ? 'var(--color-primary)' : 'var(--color-text)' }}
+                  >
+                    <span className="w-3 text-center">{(familyMode && familyGroupId == null) ? '✓' : ' '}</span>
+                    🏠 全员(默认)
+                  </button>
+                  {availableGroups.length > 0 && (
+                    <>
+                      <div className="mt-1 mb-0.5 px-2 text-[10px]" style={{ color: 'var(--color-text-muted)' }}>—— 我的家族 ——</div>
+                      {availableGroups.map(g => {
+                        const selected = familyMode && familyGroupId === g.id
+                        return (
+                          <button
+                            key={g.id}
+                            onClick={() => { onSetFamily(true, g.id); setShowFamilyMode(false); }}
+                            className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-[12px] text-left transition-colors hover:bg-[var(--color-bg-subtle)]"
+                            style={{ color: selected ? 'var(--color-primary)' : 'var(--color-text)' }}
+                          >
+                            <span className="w-3 text-center">{selected ? '✓' : ' '}</span>
+                            <span>{g.emoji || '👪'}</span>
+                            <span className="truncate">{g.name}</span>
+                          </button>
+                        )
+                      })}
+                    </>
+                  )}
+                  {availableGroups.length === 0 && (
+                    <div className="px-2 py-1.5 text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+                      在「她」面板里建一个有名字的家族 →
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
             <div className="relative" data-family-anchor>
               <button type="button" aria-label="家族成员"
