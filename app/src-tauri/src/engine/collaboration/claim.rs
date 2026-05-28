@@ -162,6 +162,114 @@ pub async fn run_claim_round(
     join_all(futures).await
 }
 
+/// 给一位"第 1 轮没接茬"的成员看的 chime-in prompt —— L3 第 2 轮自决。
+/// 让 LLM 看到第 1 轮其他人说了什么后,决定要不要补一刀。
+///
+/// 与第 1 轮 claim 的差异:
+/// - 在 prompt 顶部带"你刚才没接,但 X、Y 已经说了"的 framing
+/// - 含第 1 轮回复 transcript(让 chime-in 决策有上下文)
+/// - 用"补刀"/"chime-in" 的语境,而不是"接不接"
+///
+/// 这个标志性 framing 也用于测试时按 body 子串区分两轮 claim mock。
+pub fn build_chime_in_prompt(
+    profile: &CompanionProfile,
+    user_intent: &str,
+    first_round_transcript: &str,
+    chat_history: &[ChatTurnSummary],
+) -> String {
+    let mut s = String::new();
+    s.push_str(&format!(
+        "你是 {} {},角色:{}。\n\
+         你刚才没接这一波 —— 觉得别人更合适。但他们已经说了,你看了之后,可能突然觉得自己也能补充点什么。\n\n",
+        profile.avatar_emoji, profile.name, profile.description,
+    ));
+
+    if !chat_history.is_empty() {
+        s.push_str("【更早的群聊】\n");
+        for turn in chat_history.iter().rev().take(4).rev() {
+            s.push_str(&format!("- {}: {}\n", turn.role, turn.text));
+        }
+        s.push('\n');
+    }
+
+    s.push_str("【用户原话】\n");
+    s.push_str(user_intent);
+    s.push_str("\n\n");
+
+    s.push_str("【其他成员刚才说了】\n");
+    s.push_str(first_round_transcript);
+    s.push_str("\n\n");
+
+    s.push_str(
+        r#"【你看了他们的话,要不要补刀】
+判断原则:
+- 他们没覆盖到的角度 / 你的特长 → 补(claim: true)
+- 他们已经说全了 / 你说的会重复 → 不补
+- 群感:补刀是"我有不同视角",不是"我也要说话"
+
+不要为了存在感补,只在真正能加价值时补。
+
+【输出格式】严格 JSON,不要 markdown 围栏:
+{"claim": true/false, "reason": "一句话理由"}
+"#,
+    );
+    s
+}
+
+/// 对未上场的候选并发跑 chime-in claim,过滤出真正想"补刀"的人。
+/// 复用 parse_claim_response(同形态 JSON)和 join_all 并发模型。
+///
+/// 候选为空 → 直接返回空 Vec。
+pub async fn run_chime_in_round(
+    cfg: &LLMConfig,
+    user_intent: &str,
+    first_round_transcript: &str,
+    chat_history: &[ChatTurnSummary],
+    candidates: &[CompanionProfile],
+) -> Vec<ClaimDecision> {
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+
+    let futures = candidates.iter().map(|profile| {
+        let cfg = cfg.clone();
+        let prompt = build_chime_in_prompt(profile, user_intent, first_round_transcript, chat_history);
+        let cid = profile.id;
+        async move {
+            let messages = vec![LLMMessage {
+                role: "user".into(),
+                content: Some(MessageContent::text(prompt)),
+                tool_calls: None,
+                tool_call_id: None,
+                reasoning_content: None,
+            }];
+            let resp =
+                match chat_completion_tracked(UsageSource::CollabDispatch, &cfg, &messages, &[])
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        return ClaimDecision {
+                            companion_id: cid,
+                            claimed: false,
+                            reason: format!("chime-in 调用失败:{e}"),
+                        };
+                    }
+                };
+            let raw_text = resp
+                .message
+                .content
+                .map(|c| c.into_text())
+                .unwrap_or_default();
+            let mut decision = parse_claim_response(&raw_text);
+            decision.companion_id = cid;
+            decision
+        }
+    });
+
+    join_all(futures).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,5 +352,31 @@ mod tests {
         // serde default 应给 claim=false / reason=""。
         let d = parse_claim_response("{}");
         assert!(!d.claimed);
+    }
+
+    #[test]
+    fn chime_in_prompt_includes_transcript_and_role() {
+        let p = profile(5, "九尾", "故事讲解");
+        let transcript = "【阿狸】用了 Rust。\n\n【小冰】配色暖。";
+        let prompt = build_chime_in_prompt(&p, "项目怎么样了", transcript, &[]);
+        assert!(prompt.contains("九尾"), "chime-in prompt 应含成员名");
+        assert!(prompt.contains("故事讲解"), "应含角色描述");
+        assert!(prompt.contains("Rust"), "应含第 1 轮 transcript");
+        assert!(prompt.contains("配色暖"), "transcript 多行都应保留");
+        // chime-in 标志性子串 —— 同时也是 mock body matcher 用的 anchor。
+        assert!(prompt.contains("补刀") || prompt.contains("补充"), "应是 chime-in 语境");
+    }
+
+    #[test]
+    fn chime_in_prompt_differs_from_first_round() {
+        // 关键性质:同一成员、同一 intent,第 1 轮和 chime-in 应产生明显不同的
+        // prompt,这样 wiremock 才能按 body 子串区分两轮 mock。
+        let p = profile(1, "阿狸", "代码评审");
+        let first = build_claim_prompt(&p, "看代码", &[]);
+        let chime = build_chime_in_prompt(&p, "看代码", "【其他人】LGTM", &[]);
+        assert_ne!(first, chime);
+        // chime-in 含 transcript 子串,first 不应含。
+        assert!(chime.contains("LGTM"));
+        assert!(!first.contains("LGTM"));
     }
 }

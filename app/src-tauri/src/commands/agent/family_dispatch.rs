@@ -15,8 +15,9 @@
 
 use std::sync::Arc;
 
+use crate::engine::agents::MemoryScope;
 use crate::engine::collaboration::audit::AuditTrail;
-use crate::engine::collaboration::claim::run_claim_round;
+use crate::engine::collaboration::claim::{run_chime_in_round, run_claim_round};
 use crate::engine::collaboration::dispatch::llm_strategy::LLMDispatchStrategy;
 use crate::engine::collaboration::dispatch::DispatchStrategy;
 use crate::engine::collaboration::executor::ConcreteExecutor;
@@ -24,8 +25,9 @@ use crate::engine::collaboration::learning::sqlite_sink::SqliteLearningSink;
 use crate::engine::collaboration::learning::LearningSink;
 use crate::engine::collaboration::orchestrator::SqliteOrchestrator;
 use crate::engine::collaboration::{
-    Actor, AuditKind, ChatTurnSummary, CollaborationMode, CollaborationOrchestrator,
-    CompanionProfile, DispatchContext, Participant,
+    Actor, AuditKind, ChatTurnSummary, CollaborationEvent, CollaborationMode,
+    CollaborationOrchestrator, CompanionProfile, DispatchContext, Mutation, Participant, Step,
+    StepInput, StepKind, StepStatus,
 };
 use crate::engine::db::Database;
 use crate::engine::llm_client::LLMConfig;
@@ -186,7 +188,8 @@ pub async fn try_family_dispatch(
 
     // 5. 派遣：提交单 companion 协作，并以 parent_id 串到本 session 上一个协作
     //    （每轮独立可审计 —— 设计步骤 5 拍板用 parent_id 链）。
-    let executor = Arc::new(ConcreteExecutor::new(cfg));
+    //    cfg 在这里 clone 进 executor;原始 cfg 后面给 L3 chime-in 用。
+    let executor = Arc::new(ConcreteExecutor::new(cfg.clone()));
     let orch = SqliteOrchestrator::new(db.clone(), executor);
     let parent_id = orch
         .list_recent_by_session(session_id, 1)
@@ -272,8 +275,138 @@ pub async fn try_family_dispatch(
         })
         .collect();
 
+    // 6. L3 chime-in 第 2 轮:第 1 轮没接的候选,可能看了别人说啥后想补一刀。
+    //    后台 tokio task 跑:订阅事件 → 等 step 1 完成 → chime-in claim → AddStep。
+    //    fire-and-forget:失败 / abort / 没人补刀都默默退出,不影响第 1 轮派遣结果。
+    let chime_candidates: Vec<CompanionProfile> = candidate_profiles
+        .into_iter()
+        .filter(|p| !claimed_ids.contains(&p.id))
+        .collect();
+    if !chime_candidates.is_empty() {
+        let db_bg = db.clone();
+        let cfg_bg = cfg.clone();
+        let intent_bg = user_message.to_string();
+        let history_bg = ctx.chat_history.clone();
+        tokio::spawn(async move {
+            run_chime_in_background(
+                db_bg,
+                cfg_bg,
+                collab_id,
+                intent_bg,
+                history_bg,
+                chime_candidates,
+                family_scope,
+            )
+            .await;
+        });
+    }
+
     Ok(FamilyDispatchOutcome::Dispatched {
         collaboration_id: collab_id,
         members: dispatched_members,
     })
+}
+
+/// L3 chime-in 后台流程 —— fire-and-forget,失败不抛错(只打 log)。
+///
+/// 流程:
+/// 1. 订阅 collaboration event,等本 collab_id 的 step 1 `StepCompleted` 事件
+/// 2. 同时监听 terminal 事件(Aborted/Failed/Completed),提前退出
+/// 3. 拿 step 1 transcript → run_chime_in_round → 过滤 yes
+/// 4. 有 yes → 构造 ParallelAgents step 2 → orch.mutate(AddStep) 追加
+///
+/// step 2 自动被 `schedule_ready_steps` 启动,UI 会看到新一组 ParallelAgentStepCard。
+async fn run_chime_in_background(
+    db: Arc<Database>,
+    cfg: LLMConfig,
+    collab_id: i64,
+    intent: String,
+    chat_history: Vec<ChatTurnSummary>,
+    candidates: Vec<CompanionProfile>,
+    family_scope: MemoryScope,
+) {
+    let executor = Arc::new(ConcreteExecutor::new(cfg.clone()));
+    let orch = SqliteOrchestrator::new(db.clone(), executor);
+    let mut rx = orch.subscribe_all();
+
+    // 等 step 1 完成。同时监听 terminal 事件提前退出。lagged / channel 关也退。
+    loop {
+        match rx.recv().await {
+            Ok(CollaborationEvent::Audit { event }) if event.collaboration_id == collab_id => {
+                match event.kind {
+                    AuditKind::StepCompleted => break,
+                    AuditKind::Aborted
+                    | AuditKind::Failed
+                    | AuditKind::CollaborationCompleted => return,
+                    _ => continue,
+                }
+            }
+            Ok(_) => continue,
+            Err(_) => return,
+        }
+    }
+
+    // 拿 step 1 transcript。orch.load 同步版本,避免 Send 跨 await 麻烦。
+    let collab = match orch.load(collab_id) {
+        Ok(Some(c)) => c,
+        _ => return,
+    };
+    let first_step = match collab.plan.steps.first() {
+        Some(s) => s,
+        None => return,
+    };
+    let transcript = first_step
+        .output
+        .as_ref()
+        .map(|o| o.full_output.clone())
+        .unwrap_or_default();
+    if transcript.is_empty() {
+        return;
+    }
+
+    // chime-in claim 并发跑。失败的成员默认 no(claim.rs 内部已保守)。
+    let claims = run_chime_in_round(&cfg, &intent, &transcript, &chat_history, &candidates).await;
+    let chime_yes: Vec<&CompanionProfile> = candidates
+        .iter()
+        .zip(claims.iter())
+        .filter(|(_, c)| c.claimed)
+        .map(|(p, _)| p)
+        .collect();
+    if chime_yes.is_empty() {
+        return;
+    }
+
+    // 构造 step 2 —— 新 id = 现有 max + 1。input.prompt 带第 1 轮 transcript,
+    // 让 chime-in 成员的 ReAct loop 看得见上下文。memory_scope 与第 1 轮一致。
+    let next_id = collab.plan.steps.iter().map(|s| s.id).max().unwrap_or(0) + 1;
+    let step2 = Step {
+        id: next_id,
+        kind: StepKind::ParallelAgents,
+        participants: chime_yes
+            .iter()
+            .map(|c| Participant {
+                companion_id: c.id,
+                name: c.name.clone(),
+                avatar_emoji: c.avatar_emoji.clone(),
+                color_hex: c.color_hex.clone(),
+                memory_scope: family_scope,
+            })
+            .collect(),
+        depends_on: vec![],
+        input: StepInput {
+            prompt: format!(
+                "{}\n\n(其他成员刚才说了:\n{})\n请基于上面补充你的角度。",
+                intent, transcript
+            ),
+            metadata: serde_json::Value::Null,
+        },
+        output: None,
+        status: StepStatus::Pending,
+        started_at: None,
+        finished_at: None,
+    };
+
+    if let Err(e) = orch.mutate(collab_id, Mutation::AddStep { step: step2 }).await {
+        eprintln!("chime-in AddStep 失败:{e}");
+    }
 }
