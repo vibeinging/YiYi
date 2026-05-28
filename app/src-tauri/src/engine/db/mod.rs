@@ -812,6 +812,19 @@ impl Database {
             log::info!("Migrated sessions table: added source, source_meta columns");
         }
 
+        // Add family_mode to sessions table (家族会话: host 调度的群聊体验).
+        // 0 = off (普通单聊), 1 = on (主精灵按 family roster 路由给成员)。
+        let has_family_mode: bool = conn
+            .prepare("SELECT family_mode FROM sessions LIMIT 0")
+            .is_ok();
+        if !has_family_mode {
+            conn.execute_batch(
+                "ALTER TABLE sessions ADD COLUMN family_mode INTEGER NOT NULL DEFAULT 0;",
+            )
+            .map_err(|e| format!("Migration error (sessions family_mode): {}", e))?;
+            log::info!("Migrated sessions table: added family_mode column");
+        }
+
         // Drop legacy session_bots table (replaced by bot_conversations)
         conn.execute_batch("DROP TABLE IF EXISTS session_bots;").ok();
 

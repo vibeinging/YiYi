@@ -13,7 +13,7 @@
  */
 
 import { create } from 'zustand'
-import type { UnlistenFn } from '@tauri-apps/api/event'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import {
   getCollaboration,
   isTerminalStatus,
@@ -30,6 +30,18 @@ import {
 export interface ParticipantStream {
   companion_id: number
   text: string
+}
+
+/**
+ * Host 路由决策（家族会话）。由后端 `collaboration://dispatch` 事件填充，渲染在
+ * 协作卡顶部的「🧭 交给 @X（reason）」头，让"主精灵把活儿交给谁"可见（透明原则）。
+ */
+export interface DispatchRouting {
+  companion_name: string
+  avatar_emoji: string
+  color_hex: string
+  reason: string
+  confidence: number
 }
 
 export interface CollaborationState {
@@ -55,8 +67,12 @@ export interface CollaborationState {
 
 interface StoreState {
   collaborations: Map<CollaborationId, CollaborationState>
+  /** Host 路由决策，keyed by collaboration id（家族会话的派遣卡）。 */
+  dispatches: Map<CollaborationId, DispatchRouting>
   /** Active subscription handle for unsubscribe at app teardown. */
   unlisten: UnlistenFn | null
+  /** `collaboration://dispatch` 监听句柄。 */
+  unlistenDispatch: UnlistenFn | null
   /** Have we wired up the global listener yet? */
   subscribed: boolean
 }
@@ -89,7 +105,9 @@ interface StoreActions {
 
 export const useCollaborationStore = create<StoreState & StoreActions>((set, get) => ({
   collaborations: new Map(),
+  dispatches: new Map(),
   unlisten: null,
+  unlistenDispatch: null,
   subscribed: false,
 
   ensureSubscribed: async () => {
@@ -101,6 +119,33 @@ export const useCollaborationStore = create<StoreState & StoreActions>((set, get
         get()._applyEvent(event)
       })
       set({ unlisten })
+
+      // 家族会话的 host 路由事件（与 collaboration://event 流分开，是普通 emit）。
+      const unlistenDispatch = await listen<{
+        collaboration_id?: number
+        companion_name?: string
+        avatar_emoji?: string
+        color_hex?: string
+        reason?: string
+        confidence?: number
+        self_answer?: boolean
+      }>('collaboration://dispatch', event => {
+        const p = event.payload
+        // self-answer 分支无 collaboration_id（主精灵亲自回，没有协作卡可挂）。
+        if (p.self_answer || p.collaboration_id == null) return
+        set(prev => {
+          const next = new Map(prev.dispatches)
+          next.set(p.collaboration_id!, {
+            companion_name: p.companion_name ?? '',
+            avatar_emoji: p.avatar_emoji ?? '🤖',
+            color_hex: p.color_hex ?? 'var(--color-text-muted)',
+            reason: p.reason ?? '',
+            confidence: p.confidence ?? 0,
+          })
+          return { dispatches: next }
+        })
+      })
+      set({ unlistenDispatch })
     } catch (e) {
       console.error('collaborationStore: subscribe failed', e)
       set({ subscribed: false })
@@ -108,11 +153,14 @@ export const useCollaborationStore = create<StoreState & StoreActions>((set, get
   },
 
   unsubscribe: () => {
-    const { unlisten } = get()
+    const { unlisten, unlistenDispatch } = get()
     if (unlisten) {
       unlisten()
     }
-    set({ unlisten: null, subscribed: false })
+    if (unlistenDispatch) {
+      unlistenDispatch()
+    }
+    set({ unlisten: null, unlistenDispatch: null, subscribed: false })
   },
 
   hydrate: async (id: CollaborationId) => {
@@ -219,3 +267,9 @@ export const selectStream =
     const key = `${stepId}:${companionId}`
     return state.collaborations.get(id)?.streams.get(key)?.text
   }
+
+/** Host 路由决策 for one collaboration（家族会话派遣卡，可能尚未到达）。 */
+export const selectDispatch =
+  (id: CollaborationId) =>
+  (state: StoreState): DispatchRouting | undefined =>
+    state.dispatches.get(id)

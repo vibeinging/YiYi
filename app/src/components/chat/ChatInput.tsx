@@ -5,7 +5,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  Send, X, Paperclip, FileText, Square, Loader2, Sparkles, FolderOpen, Brain, Users,
+  Send, X, Paperclip, FileText, Square, Loader2, Sparkles, FolderOpen, Brain, Users, MessagesSquare,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { QuickActionsOverlay } from './QuickActionsOverlay';
@@ -40,6 +40,9 @@ interface ChatInputProps {
   onSelectTask: (task: TaskSuggestion) => void;
   onFileSelect: (file: WorkspaceFile) => void;
   onFetchWorkspaceFiles: () => void;
+  /** 家族会话模式开关状态（按 session 持久化，由父组件管理）。 */
+  familyMode: boolean;
+  onToggleFamilyMode: () => void;
 }
 
 /**
@@ -84,6 +87,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     onSelectTask,
     onFileSelect,
     onFetchWorkspaceFiles,
+    familyMode,
+    onToggleFamilyMode,
   },
   ref,
 ) {
@@ -549,6 +554,22 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                   : thinkingEffort === 'high' ? t('chat.thinkingEffort.high', '思考')
                   : t('chat.thinkingEffort.max', '深思')}
               </span>
+            </button>
+
+            <button type="button" aria-label="家族会话模式"
+              onClick={onToggleFamilyMode}
+              onMouseDown={preventFocusSteal}
+              disabled={loading || companions.length === 0}
+              className="w-9 h-9 flex items-center justify-center rounded-xl shrink-0 transition-all disabled:opacity-30"
+              style={{ color: familyMode ? 'var(--color-primary)' : 'var(--color-text-muted)' }}
+              onMouseEnter={(e) => { if (!familyMode) e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
+              onMouseLeave={(e) => { if (!familyMode) e.currentTarget.style.background = 'transparent'; }}
+              title={companions.length === 0
+                ? '还没有家族成员，无法开启家族会话'
+                : familyMode
+                  ? '家族会话：开 — 主精灵会把任务分给合适的成员（点击关闭）'
+                  : '家族会话：关 — 点击开启，主精灵按家族成员路由'}>
+              <MessagesSquare size={16} />
             </button>
 
             <div className="relative" data-family-anchor>

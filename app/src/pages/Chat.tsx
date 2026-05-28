@@ -16,6 +16,8 @@ import {
   ensureSession,
   getHistory,
   clearHistory,
+  setFamilyMode,
+  getFamilyMode,
   type ChatMessage,
   type Attachment,
 } from '../api/agent';
@@ -78,6 +80,9 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   activeSessionIdRef.current = activeSessionId;
   const messagesRef = useRef<ChatMessagesHandle>(null);
   const inputRef = useRef<ChatInputHandle>(null);
+
+  // --- 家族会话模式（按 session 持久化，切换会话时 hydrate）---
+  const [familyMode, setFamilyModeState] = useState(false);
 
   // --- AI name ---
   const [aiName, setAiName] = useState('YiYi');
@@ -206,6 +211,7 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     if (!activeSessionId) return;
     useChatStreamStore.getState().setSessionId(activeSessionId);
     loadMessages(activeSessionId);
+    getFamilyMode(activeSessionId).then(setFamilyModeState).catch(() => setFamilyModeState(false));
 
     invoke('chat_stream_state', { sessionId: activeSessionId })
       .then((snapshot: any) => {
@@ -221,6 +227,20 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   // Tray new session
   const handleNewSession = async () => {
     await useSessionStore.getState().createNewChat();
+  };
+
+  // 家族会话开关：乐观更新 + 落库，失败回滚。
+  const handleToggleFamilyMode = async () => {
+    if (!activeSessionId) return;
+    const next = !familyMode;
+    setFamilyModeState(next);
+    try {
+      await setFamilyMode(activeSessionId, next);
+      toast.info(next ? '家族会话已开启 — 主精灵会把任务交给合适的成员' : '已退出家族会话');
+    } catch (e) {
+      setFamilyModeState(!next);
+      toast.error(`切换家族会话失败: ${e}`);
+    }
   };
 
   useEffect(() => {
@@ -608,6 +628,8 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
           onSelectTask={(task) => navigateToSession(task.sessionId)}
           onFileSelect={() => {}}
           onFetchWorkspaceFiles={fetchWorkspaceFiles}
+          familyMode={familyMode}
+          onToggleFamilyMode={handleToggleFamilyMode}
         />
       )}
 

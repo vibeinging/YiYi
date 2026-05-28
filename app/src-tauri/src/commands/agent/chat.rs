@@ -230,6 +230,54 @@ pub async fn chat_stream_start(
 
     let ctx = prepare_chat_context(&state, &sid, &message, &attachments).await?;
 
+    // 家族会话：开了家族模式时，主精灵先用路由 strategy 扫一遍当前 active 家族。
+    // 命中某位成员 → 提交单 companion 协作（成员回复即这轮答案）+ emit 路由卡，并
+    // 提前返回，不跑主精灵自答；否则（置信不足/家族空）回落主精灵照常自答。
+    // 用户消息已由 prepare_chat_context 落库，故提前返回不影响用户气泡渲染。
+    if state.db.get_session_family_mode(&sid) {
+        use crate::commands::agent::family_dispatch::{try_family_dispatch, FamilyDispatchOutcome};
+        match try_family_dispatch(state.db.clone(), ctx.config.clone(), &sid, &message).await {
+            Ok(FamilyDispatchOutcome::Dispatched {
+                collaboration_id,
+                companion_id,
+                companion_name,
+                avatar_emoji,
+                color_hex,
+                reason,
+                confidence,
+            }) => {
+                app.emit("collaboration://dispatch", serde_json::json!({
+                    "session_id": sid,
+                    "collaboration_id": collaboration_id,
+                    "companion_id": companion_id,
+                    "companion_name": companion_name,
+                    "avatar_emoji": avatar_emoji,
+                    "color_hex": color_hex,
+                    "reason": reason,
+                    "confidence": confidence,
+                })).ok();
+                // 成员协作即这轮回答：通知前端结束 loading（前端据此重新拉取消息渲染卡片）。
+                app.emit("chat://complete", serde_json::json!({
+                    "text": "",
+                    "session_id": sid,
+                    "collaboration_id": collaboration_id,
+                })).ok();
+                return Ok(());
+            }
+            Ok(FamilyDispatchOutcome::SelfAnswer { reason }) => {
+                // 路由可见：前端渲染一张「🧭 主精灵亲自回」的小卡，然后照常自答。
+                app.emit("collaboration://dispatch", serde_json::json!({
+                    "session_id": sid,
+                    "self_answer": true,
+                    "reason": reason,
+                })).ok();
+            }
+            Err(e) => {
+                log::warn!("family_dispatch 失败，回落主精灵自答：{e}");
+            }
+        }
+    }
+
     // Task routing — log the route decision for observability
     let route = crate::engine::buddy_delegate::route_task(&message);
     if route != crate::engine::buddy_delegate::TaskRoute::Direct {

@@ -15,7 +15,7 @@ import {
   type CollaborationId,
   type CollaborationStatus,
 } from '../../api/collaboration'
-import { useCollaborationStore } from '../../stores/collaborationStore'
+import { selectDispatch, useCollaborationStore } from '../../stores/collaborationStore'
 import { StepRenderer } from './StepRenderer'
 
 interface Props {
@@ -26,6 +26,7 @@ export function CollaborationMessageCard({ collaborationId }: Props) {
   const entry = useCollaborationStore(s => s.collaborations.get(collaborationId))
   const ensureSubscribed = useCollaborationStore(s => s.ensureSubscribed)
   const hydrate = useCollaborationStore(s => s.hydrate)
+  const dispatch = useCollaborationStore(selectDispatch(collaborationId))
 
   useEffect(() => {
     void ensureSubscribed()
@@ -71,6 +72,21 @@ export function CollaborationMessageCard({ collaborationId }: Props) {
           </button>
         )}
       </div>
+
+      {dispatch && (
+        <div
+          className="flex items-center flex-wrap gap-1.5 text-[12px] px-1"
+          style={{ color: 'var(--color-text-muted)' }}
+          title={`置信度 ${Math.round(dispatch.confidence * 100)}%`}
+        >
+          <span>🧭 主精灵交给</span>
+          <span className="inline-flex items-center gap-1 font-medium" style={{ color: dispatch.color_hex }}>
+            <span>{dispatch.avatar_emoji}</span>
+            {dispatch.companion_name}
+          </span>
+          {dispatch.reason && <span className="opacity-80">· {dispatch.reason}</span>}
+        </div>
+      )}
 
       <div className="flex flex-col gap-2.5">
         {steps.map(step => (

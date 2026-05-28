@@ -239,4 +239,45 @@ impl super::Database {
             .map_err(|e| format!("Failed to delete session: {}", e))?;
         Ok(())
     }
+
+    // --- 家族会话 (family mode) ---
+
+    /// Whether 家族会话 (host-dispatched group chat) is enabled for this session.
+    /// Returns `false` for missing sessions or read errors — family mode is
+    /// opt-in, so the safe default is off.
+    pub fn get_session_family_mode(&self, id: &str) -> bool {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT family_mode FROM sessions WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|v| v != 0)
+        .unwrap_or(false)
+    }
+
+    /// Toggle 家族会话 for a session. UPSERTs so the toggle persists even on a
+    /// brand-new chat whose session row hasn't been created by the first
+    /// message yet — the fallback INSERT uses a neutral name that the normal
+    /// create/rename flow overwrites.
+    pub fn set_session_family_mode(&self, id: &str, enabled: bool) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let flag = enabled as i64;
+        let updated = conn
+            .execute(
+                "UPDATE sessions SET family_mode = ?1 WHERE id = ?2",
+                params![flag, id],
+            )
+            .map_err(|e| format!("Failed to set family_mode: {}", e))?;
+        if updated == 0 {
+            let now = super::now_ts();
+            conn.execute(
+                "INSERT OR IGNORE INTO sessions (id, name, created_at, updated_at, source, family_mode) \
+                 VALUES (?1, ?2, ?3, ?4, 'chat', ?5)",
+                params![id, "新对话", now, now, flag],
+            )
+            .map_err(|e| format!("Failed to create session for family_mode: {}", e))?;
+        }
+        Ok(())
+    }
 }
