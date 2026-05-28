@@ -549,14 +549,12 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                 );
               }
               if (msg.role === 'collaboration' && msg.collaboration_id !== undefined) {
+                // 协作消息(家族会话 / @召唤)直接铺整宽,不外贴 YiYi 头像 ——
+                // 头像由 Step 卡片里每位 participant 自己出(群里 N 个独立账号
+                // 的感觉)。L1 多成员同框靠 ParallelAgentStepCard。
                 return (
-                  <div key={idx} className="flex gap-3 justify-start">
-                    <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5">
-                      <img src={logoFaceRight} alt="YiYi" width={28} height={28} />
-                    </div>
-                    <div className="max-w-[80%] flex-1">
-                      <CollaborationMessageCard collaborationId={msg.collaboration_id} />
-                    </div>
+                  <div key={idx} className="w-full">
+                    <CollaborationMessageCard collaborationId={msg.collaboration_id} />
                   </div>
                 );
               }

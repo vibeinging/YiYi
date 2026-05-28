@@ -17,7 +17,6 @@ import { useTranslation } from 'react-i18next';
 import { useTaskSidebarStore } from '../stores/taskSidebarStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useGroupsStore } from '../stores/groupsStore';
-import { NewChatPicker } from './chat/NewChatPicker';
 import { timeAgo } from '../utils/taskStatus';
 import type { Page } from '../App';
 import type { ChatSession } from '../api/agent';
@@ -285,10 +284,17 @@ export const TaskSidebar = memo(function TaskSidebar({
     void useGroupsStore.getState().load();
   }, []);
 
-  // L3:点"+新对话"不直接 createNewChat,先出 NewChatPicker 让用户挑(单聊 /
-  // 已建家族 / 新建家族)。WeChat 模式。
-  const [showNewChatPicker, setShowNewChatPicker] = useState(false);
-  const openNewChatPicker = () => setShowNewChatPicker(true);
+  // 点"+ 新对话"直接走老路径 —— 创建空白会话进 chat 页,不再走"和谁聊"picker。
+  // 想拉家族成员的话,在对话里通过 ChatHeader 的邀请 / 管理入口操作。
+  const createNewChat = useSessionStore(s => s.createNewChat);
+  const handleNewChatClick = async () => {
+    try {
+      await createNewChat();
+      onPageChange('chat');
+    } catch (e) {
+      console.error('createNewChat failed', e);
+    }
+  };
 
   // ─── Collapsed ───
   if (sidebarCollapsed) {
@@ -305,7 +311,7 @@ export const TaskSidebar = memo(function TaskSidebar({
         <div className="h-10 shrink-0 flex items-center justify-center app-drag-region" onMouseDown={onDragMouseDown} />
 
         <button
-          onClick={openNewChatPicker}
+          onClick={handleNewChatClick}
           className="mt-1 w-9 h-9 flex items-center justify-center rounded-xl transition-colors"
           style={{ color: 'var(--sidebar-text)' }}
           onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
@@ -353,12 +359,6 @@ export const TaskSidebar = memo(function TaskSidebar({
           <PanelLeft size={15} />
         </button>
       </aside>
-      {showNewChatPicker && (
-        <NewChatPicker
-          onClose={() => setShowNewChatPicker(false)}
-          onNavigate={() => onPageChange('chat')}
-        />
-      )}
       </>
     );
   }
@@ -407,7 +407,7 @@ export const TaskSidebar = memo(function TaskSidebar({
       {/* ── New Chat ── */}
       <div className="shrink-0 px-2 pb-1">
         <button
-          onClick={openNewChatPicker}
+          onClick={handleNewChatClick}
           className="w-full flex items-center gap-2 px-3 py-[7px] rounded-[10px] transition-colors text-[12.5px] font-medium"
           style={{ color: 'var(--sidebar-text-active)' }}
           onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
@@ -563,12 +563,6 @@ export const TaskSidebar = memo(function TaskSidebar({
         </button>
       </div>
     </aside>
-    {showNewChatPicker && (
-      <NewChatPicker
-        onClose={() => setShowNewChatPicker(false)}
-        onNavigate={() => onPageChange('chat')}
-      />
-    )}
     </>
   );
 });

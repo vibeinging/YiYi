@@ -53,11 +53,10 @@ export function CollaborationMessageCard({ collaborationId }: Props) {
   // 走 SingleAgentStepCard。
 
   return (
-    <div
-      className="rounded-2xl p-3 flex flex-col gap-2.5"
-      style={{ background: 'var(--color-bg-elevated)' }}
-    >
-      <div className="flex items-center justify-between gap-2">
+    // 协作"卡"不再是卡 —— L1 多成员场景下,N 个家人气泡就是 N 条独立消息。
+    // 外层只剩极淡的元 UI 行(状态 + 中止按钮),不再用 bg-elevated 包住气泡组。
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-2 px-1">
         <StatusPill status={collaboration.status} />
         {!terminal && (
           <button
@@ -76,7 +75,7 @@ export function CollaborationMessageCard({ collaborationId }: Props) {
         )}
       </div>
 
-      <div className="flex flex-col gap-2.5">
+      <div className="flex flex-col gap-3">
         {steps.map(step => (
           <StepRenderer key={step.id} collaborationId={collaboration.id} step={step} />
         ))}
