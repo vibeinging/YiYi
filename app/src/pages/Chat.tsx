@@ -255,12 +255,12 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
       if (!effectiveMode) {
         toast.info('已退回单聊');
       } else {
-        toast.info('已切换到这个家族');
+        toast.info('已切换到这个群');
       }
     } catch (e) {
       setFamilyModeState(prevMode);
       setFamilyGroupId(prevGid);
-      toast.error(`切换家族会话失败: ${e}`);
+      toast.error(`切换群聊失败: ${e}`);
     }
   };
 
@@ -347,7 +347,7 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
         try {
           const companion = await getCompanion(companionId);
           if (!companion) {
-            toast.error(`${companionMentions[0].name} 已不在家族里`);
+            toast.error(`${companionMentions[0].name} 已不在群里`);
             return;
           }
           const participant: Participant = {
@@ -608,7 +608,7 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
         )}
       </div>
 
-      {/* Family header — IM 群聊心智:对话里看见/管理家族,无家族时给 + 邀请入口 */}
+      {/* Family header — IM 心智:对话里看见/管理群,无群时给 + 邀请入口 */}
       {activeSessionId && !isTaskSession && !isCronSession && (
         <FamilyHeader
           sessionId={activeSessionId}

@@ -91,7 +91,7 @@ export function FamilyGroupsSection() {
     if (!form) return
     const name = form.name.trim()
     if (!name) {
-      toast.error('家族名不能为空')
+      toast.error('群名不能为空')
       return
     }
     try {
@@ -113,7 +113,7 @@ export function FamilyGroupsSection() {
         useSessionStore.getState().switchToSession(sid)
         // 切主区到 chat 页(App.tsx 监听 'navigate' 事件 setCurrentPage)。
         window.dispatchEvent(new CustomEvent('navigate', { detail: 'chat' }))
-        toast.info(`已建家族「${name}」并开新对话(${form.memberIds.size} 人)`)
+        toast.info(`已建群「${name}」并开新对话(${form.memberIds.size} 人)`)
       } else {
         // 编辑:diff 成员 → add/remove。
         await updateCompanionGroup(form.id, name, form.emoji || null, null)
@@ -125,7 +125,7 @@ export function FamilyGroupsSection() {
         for (const cid of before) {
           if (!after.has(cid)) await removeCompanionFromGroup(form.id, cid)
         }
-        toast.info(`已更新家族「${name}」`)
+        toast.info(`已更新群「${name}」`)
       }
       setForm(null)
       await refreshGroups()
@@ -138,10 +138,10 @@ export function FamilyGroupsSection() {
   }
 
   const handleDelete = async (g: CompanionGroup) => {
-    if (!window.confirm(`确定删除家族「${g.name}」?成员关系会一起清,这个家族累积的共享记忆桶保留(可在"家族共享记忆"里手动清)。`)) return
+    if (!window.confirm(`确定删除群「${g.name}」?成员关系会一起清,这个群累积的共享记忆桶保留(可在"群共享记忆"里手动清)。`)) return
     try {
       await deleteCompanionGroup(g.id)
-      toast.info(`已删除家族「${g.name}」`)
+      toast.info(`已删除群「${g.name}」`)
       if (form?.id === g.id) setForm(null)
       await refreshGroups()
       void useGroupsStore.getState().load()
@@ -158,7 +158,7 @@ export function FamilyGroupsSection() {
         style={{ color: 'var(--color-text-muted)' }}
       >
         {expanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-        我的家族({groups.length})
+        我的群({groups.length})
       </button>
 
       {expanded && (
@@ -170,10 +170,10 @@ export function FamilyGroupsSection() {
               disabled={companions.length === 0}
               className="flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-lg transition-colors hover:bg-[var(--color-bg-subtle)] disabled:opacity-40"
               style={{ color: 'var(--color-primary)' }}
-              title={companions.length === 0 ? '还没收养任何分身 —— 先去家族里收养一个' : '新建一个家族(像微信群)'}
+              title={companions.length === 0 ? '还没养任何伙伴 —— 先去"我的伙伴"里收养' : '新建一个群(像微信群)'}
             >
               <Plus size={13} />
-              新建家族
+              新建群
             </button>
           ) : (
             <div className="p-3 rounded-lg space-y-2" style={{ background: 'var(--color-bg-subtle)' }}>
@@ -190,7 +190,7 @@ export function FamilyGroupsSection() {
                   type="text"
                   value={form.name}
                   onChange={e => setForm({ ...form, name: e.target.value })}
-                  placeholder={form.id == null ? '家族名(例:创作小队)' : '改名…'}
+                  placeholder={form.id == null ? '群名(例:创作小队)' : '改名…'}
                   className="flex-1 text-[13px] px-2 py-1 rounded outline-none"
                   style={{ background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)' }}
                   autoFocus
@@ -222,7 +222,7 @@ export function FamilyGroupsSection() {
                 })}
                 {companions.length === 0 && (
                   <div className="col-span-2 text-[12px] text-center py-2" style={{ color: 'var(--color-text-muted)' }}>
-                    还没有可加入的分身
+                    还没有可加入的伙伴
                   </div>
                 )}
               </div>
@@ -247,10 +247,10 @@ export function FamilyGroupsSection() {
             </div>
           )}
 
-          {/* 现有家族列表。 */}
+          {/* 现有的群列表。 */}
           {groups.length === 0 && form == null && (
             <div className="py-2 text-center text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
-              还没建任何家族 —— 点上面"新建家族"开始
+              还没建任何群 —— 点上面"新建群"开始
             </div>
           )}
           {groups.map(g => {

@@ -74,11 +74,11 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
   const handleSave = async () => {
     const trimmed = name.trim()
     if (!trimmed) {
-      toast.error('家族名不能为空')
+      toast.error('群名不能为空')
       return
     }
     if (isCreate && memberIds.size < 2) {
-      toast.error('家族需要至少 2 位成员(单聊一位直接在输入框 @)')
+      toast.error('群需要至少 2 位成员(单聊一位直接在输入框 @)')
       return
     }
     setBusy(true)
@@ -91,7 +91,7 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
         // 把当前 session 绑到新建的家族 —— 单聊原地升级成群聊(IM 心智:对话
         // 不动,但从此 YiYi 让位给群成员)。
         await setSessionGroup(mode.sessionId, gid)
-        toast.info(`已创建「${trimmed}」(${memberIds.size} 人),对话已变成群聊`)
+        toast.info(`已建群「${trimmed}」(${memberIds.size} 人),对话已变成群聊`)
         void useGroupsStore.getState().load()
         // 清成员缓存:这是新组,membersByGroup 还没拉过,下次自动拉。
         useGroupsStore.getState().invalidateMembers(gid)
@@ -122,13 +122,13 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
   const handleDelete = async () => {
     if (isCreate) return
     const ok = await confirm(
-      `确定删除家族「${mode.group.name}」?成员关系会一起清,共享记忆桶保留(可在 BuddyPanel 手动清)。`,
+      `确定删除群「${mode.group.name}」?成员关系会一起清,共享记忆桶保留(可在伙伴面板手动清)。`,
     )
     if (!ok) return
     setBusy(true)
     try {
       await deleteCompanionGroup(mode.group.id)
-      toast.info(`已删除「${mode.group.name}」`)
+      toast.info(`已删除群「${mode.group.name}」`)
       void useGroupsStore.getState().load()
       onDeleted?.(mode.group.id)
       onClose()
@@ -152,7 +152,7 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
       >
         <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--color-bg-subtle)' }}>
           <div className="text-[14px] font-semibold" style={{ color: 'var(--color-text)' }}>
-            {isCreate ? '邀请家族成员（建一个家族）' : `管理「${initialGroup?.name}」`}
+            {isCreate ? '邀请伙伴进群(建一个群)' : `管理群「${initialGroup?.name}」`}
           </div>
           <button
             onClick={onClose}
@@ -172,7 +172,7 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
                 border: '1px solid var(--color-border)',
               }}
             >
-              👪 这个对话将变成群聊 —— 拉的家人进群后,以后 YiYi 不再单独回复你,
+              👪 这个对话将变成群聊 —— 拉伙伴进群后,以后 YiYi 不再单独回复你,
               而是大家一起在群里说。想保留纯单聊请新建一个对话。
             </div>
           )}
@@ -189,7 +189,7 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
               type="text"
               value={name}
               onChange={e => setName(e.target.value)}
-              placeholder="家族名(例:创作小队)"
+              placeholder="群名(例:创作小队)"
               autoFocus={isCreate}
               className="flex-1 text-[13px] px-3 py-1.5 rounded outline-none"
               style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)' }}
@@ -222,7 +222,7 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
             })}
             {companions.length === 0 && (
               <div className="py-3 text-center text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
-                还没收养任何分身 —— 先去家族页收养
+                还没养任何伙伴 —— 先去"我的伙伴"里收养
               </div>
             )}
           </div>
@@ -238,7 +238,7 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
                 style={{ color: 'var(--color-error)' }}
               >
                 <Trash2 size={12} />
-                删除家族
+                删除群
               </button>
             )}
           </div>
@@ -257,7 +257,7 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
               className="text-[12px] px-3 py-1.5 rounded font-medium disabled:opacity-50"
               style={{ background: 'var(--color-primary)', color: 'white' }}
             >
-              {isCreate ? '建家族' : '保存'}
+              {isCreate ? '建群' : '保存'}
             </button>
           </div>
         </div>

@@ -75,7 +75,7 @@ export function FamilyHeader({ sessionId, familyGroupId, onSetFamily }: Props) {
             type="button"
             onClick={() => setModal({ kind: 'edit', group })}
             className="flex items-center -space-x-1.5 ml-1 transition-opacity hover:opacity-80"
-            title="点击管理家族(改名 / 加人 / 踢人)"
+            title="点击管理群(改名 / 加人 / 踢人)"
           >
             {members.slice(0, 5).map(m => (
               <div
@@ -112,7 +112,7 @@ export function FamilyHeader({ sessionId, familyGroupId, onSetFamily }: Props) {
             onClick={() => setModal({ kind: 'edit', group })}
             className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded transition-colors hover:bg-[var(--color-bg-subtle)]"
             style={{ color: 'var(--color-text-muted)' }}
-            title="管理这个家族(改名/成员/删除)"
+            title="管理这个群(改名/成员/删除)"
           >
             <Settings size={11} />
             管理
@@ -143,10 +143,10 @@ export function FamilyHeader({ sessionId, familyGroupId, onSetFamily }: Props) {
           onClick={() => setModal({ kind: 'create', sessionId })}
           className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded transition-colors hover:bg-[var(--color-bg-subtle)]"
           style={{ color: 'var(--color-text-muted)' }}
-          title="拉几位家族成员一起聊(自动建一个家族)"
+          title="拉几位伙伴一起聊(自动建一个群)"
         >
           <Plus size={11} />
-          邀请家族成员
+          邀请伙伴进群
         </button>
       </div>
       {modal && modal.kind === 'create' && (

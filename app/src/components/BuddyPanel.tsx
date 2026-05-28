@@ -431,7 +431,7 @@ export function BuddyPanel() {
         )}
       </Card>
 
-      {/* ═══ 家族 — 用户养的小精灵伙伴 ═══ */}
+      {/* ═══ 我的伙伴 — 用户养的小精灵 ═══ */}
       <CompanionsSection
         accent={from}
         reloadToken={companionsReload}
@@ -609,10 +609,10 @@ export function BuddyPanel() {
               </>
             )}
 
-            {/* 我的家族 —— Approach B 持久化家族分组(IM 群聊心智)。 */}
+            {/* 我的群 —— 持久化的 IM 群聊分组。 */}
             <FamilyGroupsSection />
 
-            {/* 家族共享记忆 —— 每个家族独占的 `family_shared_<id>` 桶。chips 切换浏览。 */}
+            {/* 群共享记忆 —— 每个群独占的 `family_shared_<id>` 桶。chips 切换浏览。 */}
             <div className="mt-4 pt-4" style={{ borderTop: '1px solid var(--color-bg-subtle)' }}>
               <button
                 onClick={() => {
@@ -638,14 +638,14 @@ export function BuddyPanel() {
                 style={{ color: 'var(--color-text-muted)' }}
               >
                 {familyExpanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-                家族共享记忆({familyMemories.length})
+                群共享记忆({familyMemories.length})
               </button>
               {familyExpanded && (
                 <>
-                  {/* 桶切换 chips:每个家族一颗 */}
+                  {/* 桶切换 chips:每个群一颗 */}
                   {familyBucketGroups.length === 0 ? (
                     <div className="py-3 text-center text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
-                      还没建任何家族 —— 在上方"我的家族"建一个,群成员在那个群里聊几轮就有共享记忆了
+                      还没建任何群 —— 在上方"我的群"建一个,群里聊几轮就有共享记忆了
                     </div>
                   ) : (
                   <div className="flex items-center gap-1.5 flex-wrap mb-2">
@@ -675,7 +675,7 @@ export function BuddyPanel() {
 
                   {familyBucketGroups.length > 0 && familyMemories.length === 0 ? (
                     <div className="py-3 text-center text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
-                      这个家族还没共享记忆 —— 在这个群里聊几轮就有了
+                      这个群还没共享记忆 —— 在群里聊几轮就有了
                     </div>
                   ) : familyBucketGroups.length === 0 ? null : (
                   <div className="space-y-1 max-h-[300px] overflow-y-auto">

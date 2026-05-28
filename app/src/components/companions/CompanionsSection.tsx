@@ -50,7 +50,7 @@ export function CompanionsSection({ onAdopt, onChatWith, onEdit, accent, reloadT
     >
       <div className="flex items-center gap-2 mb-4">
         <h2 className="text-[15px] font-semibold" style={{ color: 'var(--color-text)' }}>
-          家族
+          我的伙伴
         </h2>
         {list.length > 0 && (
           <span className="text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
@@ -76,7 +76,7 @@ export function CompanionsSection({ onAdopt, onChatWith, onEdit, accent, reloadT
           className="p-3 rounded-lg text-[12px] mb-3"
           style={{ background: 'var(--color-error-bg, #fee)', color: 'var(--color-error, #c00)' }}
         >
-          加载家族失败：{error}
+          加载失败:{error}
         </div>
       )}
 
@@ -105,7 +105,7 @@ function EmptyState({ onAdopt, accent }: { onAdopt: () => void; accent: string }
     <div className="py-6 text-center">
       <div className="text-[40px] mb-2">🫧</div>
       <div className="text-[13px] mb-1" style={{ color: 'var(--color-text-secondary)' }}>
-        家族里还没有伙伴
+        还没养任何伙伴
       </div>
       <div className="text-[12px] mb-4" style={{ color: 'var(--color-text-muted)' }}>
         养一只小精灵在桌面，他会有自己的脾气，记得你们做过的事

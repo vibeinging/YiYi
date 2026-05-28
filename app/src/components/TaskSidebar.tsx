@@ -167,7 +167,7 @@ function SidebarSessionCard({ session, isActive, onPageChange }: {
               />
             ) : (
               <>
-                {/* 主标题:群聊 = 家族名, 单聊 = session.name。 */}
+                {/* 主标题:群聊 = 群名, 单聊 = session.name。 */}
                 <div
                   className="truncate text-[12.5px] font-medium"
                   style={{ color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)' }}
