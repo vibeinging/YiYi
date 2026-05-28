@@ -49,6 +49,23 @@ export function CollaborationMessageCard({ collaborationId }: Props) {
   const terminal = isTerminalStatus(collaboration.status)
   const steps = [...collaboration.plan.steps].sort((a, b) => a.id - b.id)
 
+  // 路由头来源:live 的 dispatches map（带 reason，仅本次会话内）优先；刷新后
+  // 它清空，则从已持久化的 collaboration 派生（mode=dispatched + 首个成员）——
+  // 成员归属持久可见，reason 是 live-only 的加成。手动 @ 召唤（manual）不显示。
+  const dispatchedParticipant =
+    collaboration.mode.kind === 'dispatched' ? collaboration.plan.steps[0]?.participants[0] : undefined
+  const routing =
+    dispatch ??
+    (dispatchedParticipant
+      ? {
+          companion_name: dispatchedParticipant.name,
+          avatar_emoji: dispatchedParticipant.avatar_emoji,
+          color_hex: dispatchedParticipant.color_hex,
+          reason: '',
+          confidence: 0,
+        }
+      : undefined)
+
   return (
     <div
       className="rounded-2xl p-3 flex flex-col gap-2.5"
@@ -73,18 +90,18 @@ export function CollaborationMessageCard({ collaborationId }: Props) {
         )}
       </div>
 
-      {dispatch && (
+      {routing && (
         <div
           className="flex items-center flex-wrap gap-1.5 text-[12px] px-1"
           style={{ color: 'var(--color-text-muted)' }}
-          title={`置信度 ${Math.round(dispatch.confidence * 100)}%`}
+          title={routing.confidence > 0 ? `置信度 ${Math.round(routing.confidence * 100)}%` : undefined}
         >
           <span>🧭 主精灵交给</span>
-          <span className="inline-flex items-center gap-1 font-medium" style={{ color: dispatch.color_hex }}>
-            <span>{dispatch.avatar_emoji}</span>
-            {dispatch.companion_name}
+          <span className="inline-flex items-center gap-1 font-medium" style={{ color: routing.color_hex }}>
+            <span>{routing.avatar_emoji}</span>
+            {routing.companion_name}
           </span>
-          {dispatch.reason && <span className="opacity-80">· {dispatch.reason}</span>}
+          {routing.reason && <span className="opacity-80">· {routing.reason}</span>}
         </div>
       )}
 

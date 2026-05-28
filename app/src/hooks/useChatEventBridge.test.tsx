@@ -4,6 +4,15 @@ import { mockEventBridge } from '../test-utils/mockEvent';
 import { useChatStreamStore } from '../stores/chatStreamStore';
 import { useChatEventBridge } from './useChatEventBridge';
 
+// Local re-mock of `@tauri-apps/api/event` so `mockEventBridge` always sees
+// a `vi.fn()` listen, independent of test-file execution order (setup.ts's
+// global vi.mock can drop in some vitest module-resolution paths).
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn(() => Promise.resolve(() => {})),
+  emit: vi.fn(() => Promise.resolve()),
+  once: vi.fn(() => Promise.resolve(() => {})),
+}));
+
 const SID = 'session-active';
 const pristine = useChatStreamStore.getState();
 

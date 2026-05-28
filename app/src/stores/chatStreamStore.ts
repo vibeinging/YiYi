@@ -114,6 +114,10 @@ interface ChatStreamState {
   // generated images). Updated by chat://tool_artifact event; reset on startStream.
   streamingArtifacts: ToolArtifact[];
 
+  // 家族会话 self-answer 提示:主精灵决定亲自回时展示「🧭 主精灵亲自回（reason）」。
+  // 仅本轮流式期间显示（渲染处 gate on loading），下轮 startStream 清除。
+  selfAnswerHint: { reason: string } | null;
+
   // Actions
   setSessionId: (id: string) => void;
   startStream: () => void;
@@ -129,6 +133,7 @@ interface ChatStreamState {
   resetStreamContent: () => void;
   resetStream: () => void;
   clearStreamState: () => void;
+  setSelfAnswerHint: (hint: { reason: string } | null) => void;
 
   // Canvas actions
   addCanvas: (event: CanvasEvent) => void;
@@ -216,6 +221,7 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
   canvases: [],
   lastUsage: null,
   streamingArtifacts: [],
+  selfAnswerHint: null,
   setSessionId: (id) => set({ sessionId: id }),
 
   startStream: () => set({
@@ -232,6 +238,7 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
     activePermission: null,
     lastUsage: null,
     streamingArtifacts: [],
+    selfAnswerHint: null,
   }),
 
   setUsage: (usage) => set({ lastUsage: usage }),
@@ -294,6 +301,8 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
     claudeCode: null,
     canvases: [],
   }),
+
+  setSelfAnswerHint: (hint) => set({ selfAnswerHint: hint }),
 
   // Canvas actions
   addCanvas: (event) => set((state) => ({
