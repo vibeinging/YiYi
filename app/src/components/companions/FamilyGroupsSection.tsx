@@ -18,11 +18,13 @@ import {
   addCompanionToGroup,
   removeCompanionFromGroup,
   updateCompanionGroup,
+  setSessionGroup,
   type CompanionGroup,
 } from '../../api/groups'
 import { listCompanions, type Companion } from '../../api/companions'
 import { toast } from '../Toast'
 import { useGroupsStore } from '../../stores/groupsStore'
+import { useSessionStore } from '../../stores/sessionStore'
 
 type EditForm = {
   /** undefined = 新建模式;非空 = 编辑既有组。 */
@@ -94,12 +96,24 @@ export function FamilyGroupsSection() {
     }
     try {
       if (form.id == null) {
-        // 新建
+        // 新建:建组 + 加成员 + **自动开一个绑定本组的新对话进入**(IM 心智:
+        // 建群 = 立刻进入这个群聊,而不是建完留在管理面板)。
         const gid = await createCompanionGroup(name, form.emoji || null, null)
         for (const cid of form.memberIds) {
           await addCompanionToGroup(gid, cid)
         }
-        toast.info(`已创建家族「${name}」(${form.memberIds.size} 人)`)
+        const sid = await useSessionStore.getState().createNewChat()
+        try {
+          await setSessionGroup(sid, gid)
+        } catch (e) {
+          // 绑定失败不致命,提示用户手工再做。
+          console.error('setSessionGroup after createCompanionGroup failed', e)
+          toast.error(`已建群但绑定到对话失败: ${e}`)
+        }
+        useSessionStore.getState().switchToSession(sid)
+        // 切主区到 chat 页(App.tsx 监听 'navigate' 事件 setCurrentPage)。
+        window.dispatchEvent(new CustomEvent('navigate', { detail: 'chat' }))
+        toast.info(`已建家族「${name}」并开新对话(${form.memberIds.size} 人)`)
       } else {
         // 编辑:diff 成员 → add/remove。
         await updateCompanionGroup(form.id, name, form.emoji || null, null)

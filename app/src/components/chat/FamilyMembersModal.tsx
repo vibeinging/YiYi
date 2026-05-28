@@ -88,10 +88,13 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
         for (const cid of memberIds) {
           await addCompanionToGroup(gid, cid)
         }
-        // 把当前 session 绑到新建的家族(L2 的核心:对话里加人 → 自动变群)。
+        // 把当前 session 绑到新建的家族 —— 单聊原地升级成群聊(IM 心智:对话
+        // 不动,但从此 YiYi 让位给群成员)。
         await setSessionGroup(mode.sessionId, gid)
-        toast.info(`已创建「${trimmed}」(${memberIds.size} 人)并切换到这个家族`)
+        toast.info(`已创建「${trimmed}」(${memberIds.size} 人),对话已变成群聊`)
         void useGroupsStore.getState().load()
+        // 清成员缓存:这是新组,membersByGroup 还没拉过,下次自动拉。
+        useGroupsStore.getState().invalidateMembers(gid)
         onCreated?.(gid)
         onClose()
       } else {
@@ -104,6 +107,9 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
         }
         toast.info(`已更新「${trimmed}」`)
         void useGroupsStore.getState().load()
+        // 改了成员 → 清缓存,FamilyHeader 头像横排和 SidebarSessionCard 头像
+        // 拼图下次自动拉新成员。
+        useGroupsStore.getState().invalidateMembers(mode.group.id)
         onClose()
       }
     } catch (e) {
@@ -157,6 +163,19 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
         </div>
 
         <div className="px-4 py-3 space-y-3 overflow-y-auto">
+          {isCreate && (
+            <div
+              className="text-[11px] px-3 py-2 rounded-lg"
+              style={{
+                background: 'var(--color-bg-subtle)',
+                color: 'var(--color-text-muted)',
+                border: '1px solid var(--color-border)',
+              }}
+            >
+              👪 这个对话将变成群聊 —— 拉的家人进群后,以后 YiYi 不再单独回复你,
+              而是大家一起在群里说。想保留纯单聊请新建一个对话。
+            </div>
+          )}
           <div className="flex items-center gap-2">
             <input
               type="text"

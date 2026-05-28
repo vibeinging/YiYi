@@ -83,9 +83,10 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   const messagesRef = useRef<ChatMessagesHandle>(null);
   const inputRef = useRef<ChatInputHandle>(null);
 
-  // --- 家族会话模式 + 绑定的家族 id(按 session 持久化,切换会话时 hydrate)---
-  // group_id = null 时回落 Phase A 的"全 active 隐式家族 + 单一 family_shared 桶";
-  // group_id 非 null 时锁定到该具名家族 + 其独占 family_shared_<id> 桶。
+  // --- 群聊状态:familyGroupId 决定一切(IM 心智)---
+  // group_id = null  → 单聊主精灵。
+  // group_id = N     → 群聊家族 N,记忆桶 family_shared_<N>,主精灵让位给群成员。
+  // familyMode 字段为兼容历史保留(代码不再读它,以 group_id 为准)。
   const [familyMode, setFamilyModeState] = useState(false);
   const [familyGroupId, setFamilyGroupId] = useState<number | null>(null);
 
@@ -235,23 +236,26 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     await useSessionStore.getState().createNewChat();
   };
 
-  // 家族会话选择:三种状态 —— 关 / 全员(group_id=null,Phase A 回落)/ 某具名家族。
-  // 乐观更新 + 双写(family_mode + group_id),失败回滚。
+  // 家族会话切换:IM 心智下只有两态 —— group_id=null 单聊 / group_id=N 群聊。
+  // mode 字段保留兼容(派生自 groupId != null),后端的 set_session_family_mode
+  // 还会被调用以让 family_mode 列与 group_id 同步,但代码读取一律以 group_id 为准。
+  // 乐观更新 + 失败回滚。
   const handleSetFamily = async (mode: boolean, groupId: number | null) => {
     if (!activeSessionId) return;
     const prevMode = familyMode;
     const prevGid = familyGroupId;
-    setFamilyModeState(mode);
+    // mode=true 但 groupId=null 在 IM 心智下没意义(被废弃的"全员"态);
+    // 调用方在这种场景不应该出现,这里把它当成"未绑 group → 关"对齐。
+    const effectiveMode = mode && groupId != null;
+    setFamilyModeState(effectiveMode);
     setFamilyGroupId(groupId);
     try {
-      await setFamilyMode(activeSessionId, mode);
-      await setSessionGroup(activeSessionId, mode ? groupId : null);
-      if (!mode) {
-        toast.info('已退出家族会话');
-      } else if (groupId == null) {
-        toast.info('家族会话:全员(默认) — 主精灵在所有 active 分身里挑');
+      await setFamilyMode(activeSessionId, effectiveMode);
+      await setSessionGroup(activeSessionId, groupId);
+      if (!effectiveMode) {
+        toast.info('已退回单聊');
       } else {
-        toast.info('家族会话已切换到指定家族');
+        toast.info('已切换到这个家族');
       }
     } catch (e) {
       setFamilyModeState(prevMode);

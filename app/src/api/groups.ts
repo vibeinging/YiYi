@@ -1,12 +1,11 @@
 /**
- * 家族(companion groups)API —— 持久化的"群聊式"分身分组。
+ * 家族(companion groups)API —— 持久化的"群聊式"分身分组(IM 心智)。
  *
  * 多对多关系:一个 companion 可同时在多个组(类比微信群)。每组对应一个
  * `family_shared_<id>` 记忆桶,通过 `MemoryScope::FamilyGroup(id)` 路由。
- * Phase A 的"全 active 隐式家族 + 单一 family_shared 桶"作为回落保留
- * (session.group_id IS NULL 时生效)。
+ * session 1:1 绑 group:group_id=null → 单聊主精灵;group_id=N → 群聊家族 N。
  *
- * 设计:docs/design/2026-05-27_家族会话-host调度群聊.md Approach B。
+ * 设计:docs/design/2026-05-28_im 心智对齐.md。
  */
 
 import { invoke } from '@tauri-apps/api/core'
@@ -58,8 +57,8 @@ export async function updateCompanionGroup(
 }
 
 /** 删组:成员关系通过 FK 级联清除;sessions.group_id 引用此组的会被置 NULL
- *  (回落 Phase A);**不删** family_shared_<id> 记忆桶(留作孤儿桶,在 BuddyPanel
- *  里手动清,避免误删带来惊讶)。 */
+ *  (那些 session 退化为单聊);**不删** family_shared_<id> 记忆桶(留作孤儿桶,
+ *  在 BuddyPanel 里手动清,避免误删带来惊讶)。 */
 export async function deleteCompanionGroup(id: number): Promise<void> {
   await invoke('delete_companion_group', { id })
 }
@@ -87,7 +86,7 @@ export async function listGroupsForCompanion(companionId: number): Promise<Compa
 
 // ── session ↔ group binding ───────────────────────────────────────────
 
-/** 绑定会话到指定家族(null = 解绑,回落 Phase A 全员)。 */
+/** 绑定会话到指定家族(null = 解绑变回单聊)。 */
 export async function setSessionGroup(sessionId: string, groupId: number | null): Promise<void> {
   await invoke('set_session_group', { sessionId, groupId })
 }
@@ -96,9 +95,8 @@ export async function getSessionGroup(sessionId: string): Promise<number | null>
   return await invoke<number | null>('get_session_group', { sessionId })
 }
 
-/** 桶命名约定(与后端 `family_group_bucket` 同步):BuddyPanel 浏览各家族记忆
- *  时按此算 user_id。Phase A 单桶用 listRecentMemories(limit, 'family_shared'),
- *  具名家族用 listRecentMemories(limit, familyGroupBucket(group_id))。 */
+/** 桶命名约定(与后端 `family_group_bucket` 同步):每个家族独占
+ *  `family_shared_<group_id>` 桶。BuddyPanel 浏览各家族记忆时按这个算 user_id。 */
 export function familyGroupBucket(groupId: number): string {
   return `family_shared_${groupId}`
 }

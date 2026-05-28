@@ -122,7 +122,7 @@ export interface ChatSession {
   updated_at: number;
   source: string;
   source_meta: string | null;
-  /** 当前会话绑定的具名家族(Approach B);null = 未绑(Phase A 回落或普通单聊)。 */
+  /** 当前会话绑定的家族 group id。null = 单聊(IM 心智);number = 群聊家族 N。 */
   group_id: number | null;
 }
 

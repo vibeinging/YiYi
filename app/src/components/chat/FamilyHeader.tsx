@@ -12,8 +12,9 @@
  */
 
 import { useEffect, useState } from 'react'
-import { Plus, Users, Settings } from 'lucide-react'
-import { listGroupMembers, type CompanionGroup } from '../../api/groups'
+import { Plus, Settings } from 'lucide-react'
+import { type CompanionGroup } from '../../api/groups'
+import type { Companion } from '../../api/companions'
 import { useGroupsStore } from '../../stores/groupsStore'
 import { FamilyMembersModal } from './FamilyMembersModal'
 
@@ -32,39 +33,80 @@ interface Props {
 
 export function FamilyHeader({ sessionId, familyGroupId, onSetFamily }: Props) {
   const group = useGroupsStore(s => (familyGroupId != null ? s.byId.get(familyGroupId) : undefined))
-  const [memberCount, setMemberCount] = useState(0)
+  const ensureMembers = useGroupsStore(s => s.ensureMembers)
+  const cachedMembers = useGroupsStore(s => (familyGroupId != null ? s.membersByGroup.get(familyGroupId) : undefined))
+  const [members, setMembers] = useState<Companion[]>(cachedMembers ?? [])
   const [modal, setModal] = useState<ModalMode>(null)
 
-  // 懒查成员数:familyGroupId 变了就重拉。group 自身更新由 store 推动。
+  // 懒查成员:familyGroupId 变了就重拉,命中缓存秒回。
   useEffect(() => {
     if (familyGroupId == null) {
-      setMemberCount(0)
+      setMembers([])
       return
     }
-    void listGroupMembers(familyGroupId)
-      .then(ms => setMemberCount(ms.length))
-      .catch(() => setMemberCount(0))
-  }, [familyGroupId])
+    let cancelled = false
+    ensureMembers(familyGroupId).then(ms => {
+      if (!cancelled) setMembers(ms)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [familyGroupId, ensureMembers])
 
   if (!sessionId) return null
 
-  // 已绑具名家族 → 信息条 + 管理按钮
+  // 已绑具名家族 → 群聊 header:emoji + 名 + 成员头像横排 + 管理菜单
   if (group) {
     return (
       <>
         <div
-          className="shrink-0 flex items-center gap-2 px-3 py-1.5 text-[12px]"
+          className="shrink-0 flex items-center gap-2 px-3 py-2 text-[12px]"
           style={{
             background: 'var(--color-bg)',
             borderBottom: '1px solid var(--color-border)',
           }}
         >
-          <span style={{ color: group.color_hex || 'var(--color-text)' }}>{group.emoji || '👪'}</span>
-          <span className="font-medium" style={{ color: 'var(--color-text)' }}>{group.name}</span>
-          <span className="flex items-center gap-1" style={{ color: 'var(--color-text-muted)' }}>
-            <Users size={11} />
-            {memberCount} 人
+          <span className="text-[15px]" style={{ color: group.color_hex || 'var(--color-text)' }}>
+            {group.emoji || '👪'}
           </span>
+          <span className="font-medium" style={{ color: 'var(--color-text)' }}>{group.name}</span>
+          {/* 成员头像横排 —— 直观感受群里有谁,点击进管理。 */}
+          <button
+            type="button"
+            onClick={() => setModal({ kind: 'edit', group })}
+            className="flex items-center -space-x-1.5 ml-1 transition-opacity hover:opacity-80"
+            title="点击管理家族(改名 / 加人 / 踢人)"
+          >
+            {members.slice(0, 5).map(m => (
+              <div
+                key={m.id}
+                className="w-6 h-6 rounded-full flex items-center justify-center text-[11px] shrink-0"
+                style={{
+                  background: m.color_hex ? `${m.color_hex}33` : 'var(--color-bg-subtle)',
+                  border: '1.5px solid var(--color-bg)',
+                  color: 'var(--color-text)',
+                }}
+                title={m.name}
+              >
+                {m.avatar_emoji || '🤖'}
+              </div>
+            ))}
+            {members.length > 5 && (
+              <div
+                className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] shrink-0 font-medium"
+                style={{
+                  background: 'var(--color-bg-subtle)',
+                  border: '1.5px solid var(--color-bg)',
+                  color: 'var(--color-text-muted)',
+                }}
+              >
+                +{members.length - 5}
+              </div>
+            )}
+            <span className="ml-2 text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+              {members.length} 人
+            </span>
+          </button>
           <div className="flex-1" />
           <button
             onClick={() => setModal({ kind: 'edit', group })}

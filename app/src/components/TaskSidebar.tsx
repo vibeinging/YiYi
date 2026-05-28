@@ -11,12 +11,13 @@ import {
   Settings, Puzzle, Bot, Zap, FolderOpen, Sprout, Sparkles,
   Trash2, MessageCircle, Clock,
   PanelLeftClose, PanelLeft, Grid3X3,
-  Plus, Pencil, MessageSquare, Search, X,
+  Plus, Pencil, Search, X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useTaskSidebarStore } from '../stores/taskSidebarStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useGroupsStore } from '../stores/groupsStore';
+import { AvatarGrid } from './AvatarGrid';
 import { timeAgo } from '../utils/taskStatus';
 import type { Page } from '../App';
 import type { ChatSession } from '../api/agent';
@@ -137,47 +138,55 @@ function SidebarSessionCard({ session, isActive, onPageChange }: {
       <div
         onClick={() => { if (!isRenaming) { switchToSession(session.id); onPageChange('chat'); } }}
         onContextMenu={(e) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY }); }}
-        className="group rounded-[10px] cursor-pointer transition-all duration-150 px-2.5 py-[9px] mx-1"
+        className="group rounded-[10px] cursor-pointer transition-all duration-150 px-2 py-1.5 mx-1"
         style={{ background: isActive ? 'var(--sidebar-active)' : 'transparent' }}
         onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
         onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = isActive ? 'var(--sidebar-active)' : 'transparent'; }}
       >
-        <div className="flex items-center gap-2.5">
-          <div className="shrink-0 w-4 h-4 flex items-center justify-center">
-            <MessageSquare size={12} style={{ color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)', opacity: isActive ? 1 : 0.6 }} />
-          </div>
-          {isRenaming ? (
-            <input
-              ref={renameInputRef}
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              onBlur={commitRename}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') commitRename();
-                if (e.key === 'Escape') setIsRenaming(false);
-              }}
-              onClick={(e) => e.stopPropagation()}
-              className="flex-1 text-[12.5px] font-medium bg-transparent border-none outline-none rounded px-0.5"
-              style={{
-                color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)',
-                boxShadow: '0 0 0 1px var(--color-border)',
-              }}
-              autoFocus
-            />
-          ) : (
-            <span className="flex-1 truncate text-[12.5px] font-medium" style={{ color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)' }}>
-              {group && (
-                <span
-                  className="mr-1"
-                  title={group.name}
-                  style={{ color: group.color_hex || undefined }}
+        <div className="flex items-center gap-2">
+          {/* IM 式头像:群 = 成员 emoji 拼图, 单聊 = YiYi logo。 */}
+          <AvatarGrid groupId={session.group_id ?? null} size={32} radius="md" />
+          <div className="flex-1 min-w-0">
+            {isRenaming ? (
+              <input
+                ref={renameInputRef}
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onBlur={commitRename}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') commitRename();
+                  if (e.key === 'Escape') setIsRenaming(false);
+                }}
+                onClick={(e) => e.stopPropagation()}
+                className="w-full text-[12.5px] font-medium bg-transparent border-none outline-none rounded px-0.5"
+                style={{
+                  color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)',
+                  boxShadow: '0 0 0 1px var(--color-border)',
+                }}
+                autoFocus
+              />
+            ) : (
+              <>
+                {/* 主标题:群聊 = 家族名, 单聊 = session.name。 */}
+                <div
+                  className="truncate text-[12.5px] font-medium"
+                  style={{ color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)' }}
                 >
-                  {group.emoji || '👪'}
-                </span>
-              )}
-              {session.name || 'New Chat'}
-            </span>
-          )}
+                  {group ? group.name : (session.name || 'New Chat')}
+                </div>
+                {/* 副标题:群聊里, session.name 跟 group.name 不同时显示作子标题
+                   (用户自己起的 / 自动生成的对话主题)。单聊无副标题。 */}
+                {group && session.name && session.name !== group.name && (
+                  <div
+                    className="truncate text-[11px] mt-0.5 opacity-70"
+                    style={{ color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)' }}
+                  >
+                    {session.name}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
           <span className="shrink-0 text-[10px] tabular-nums opacity-0 group-hover:opacity-100 transition-opacity" style={{ color: 'var(--sidebar-text)' }}>
             {timeAgo(session.updated_at)}
           </span>
@@ -494,7 +503,7 @@ export const TaskSidebar = memo(function TaskSidebar({
         {!isSearching && chatSessions.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full px-6 text-center">
             <div className="w-10 h-10 rounded-2xl flex items-center justify-center mb-3" style={{ background: 'rgba(255,255,255,0.04)' }}>
-              <MessageSquare size={20} style={{ color: 'var(--sidebar-text)', opacity: 0.4 }} />
+              <Plus size={20} style={{ color: 'var(--sidebar-text)', opacity: 0.4 }} />
             </div>
             <p className="text-[12px] font-medium leading-relaxed" style={{ color: 'var(--sidebar-text)', opacity: 0.4 }}>
               点击上方按钮开始新对话
