@@ -69,7 +69,7 @@ pub struct CompanionUpdate {
     pub role_label: Option<Option<String>>,
 }
 
-fn map_row(row: &rusqlite::Row) -> rusqlite::Result<Companion> {
+pub(super) fn map_row(row: &rusqlite::Row) -> rusqlite::Result<Companion> {
     Ok(Companion {
         id: row.get(0)?,
         name: row.get(1)?,
@@ -88,7 +88,7 @@ fn map_row(row: &rusqlite::Row) -> rusqlite::Result<Companion> {
     })
 }
 
-const SELECT_COLS: &str =
+pub(super) const SELECT_COLS: &str =
     "id, name, agent_definition_name, avatar_emoji, color_hex, persona_md_path, \
      memory_user_id, adopted_at, retired_at, personality_stats_json, \
      invocation_count, last_used_at, metadata_json, role_label";

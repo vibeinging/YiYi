@@ -696,6 +696,18 @@ pub fn run() {
             commands::companions::list_companions,
             commands::companions::get_companion,
             commands::companions::preview_persona_tone,
+            // companion groups (家族) — Approach B
+            commands::companion_groups::create_companion_group,
+            commands::companion_groups::list_companion_groups,
+            commands::companion_groups::get_companion_group,
+            commands::companion_groups::update_companion_group,
+            commands::companion_groups::delete_companion_group,
+            commands::companion_groups::add_companion_to_group,
+            commands::companion_groups::remove_companion_from_group,
+            commands::companion_groups::list_group_members,
+            commands::companion_groups::list_groups_for_companion,
+            commands::companion_groups::set_session_group,
+            commands::companion_groups::get_session_group,
             // Collaboration (Phase 2A): orchestrator-backed协作 lifecycle
             commands::collaboration::collaboration_submit,
             commands::collaboration::collaboration_confirm,

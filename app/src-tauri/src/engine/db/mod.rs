@@ -18,6 +18,7 @@ mod traces;
 pub mod usage;
 mod quick_actions;
 mod companions;
+mod companion_groups;
 
 // Re-export all public types
 pub use sessions::ChatSession;
@@ -33,6 +34,7 @@ pub use inbox::{InboxItem, NewInboxItem};
 pub use traces::{AgentTrace, NewAgentTrace};
 pub use quick_actions::QuickActionRow;
 pub use companions::{Companion, CompanionUpdate, NewCompanion};
+pub use companion_groups::CompanionGroup;
 
 pub struct Database {
     pub(super) conn: Mutex<Connection>,
@@ -596,6 +598,32 @@ impl Database {
             log::info!("Migrated companions table: added role_label column");
         }
 
+        // Companion groups (家族) —— 多 companion 共聊 + 共享记忆桶的载体。
+        // 多对多关系:companion 可同时在多个组(类比微信群)。每组对应一个
+        // family_shared_<id> 记忆桶,通过 MemoryScope::FamilyGroup(id) 路由。
+        // 详见 docs/design/2026-05-27_家族会话-host调度群聊.md Approach B。
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS companion_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,                   -- 用户起的家族名,例如 \"创作小队\"
+                emoji TEXT,                           -- 可选 emoji,UI 显示用
+                color_hex TEXT,                       -- 可选主色 \"#F97316\"
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS companion_group_members (
+                group_id INTEGER NOT NULL,
+                companion_id INTEGER NOT NULL,
+                added_at INTEGER NOT NULL,
+                PRIMARY KEY (group_id, companion_id),
+                FOREIGN KEY (group_id) REFERENCES companion_groups(id) ON DELETE CASCADE,
+                FOREIGN KEY (companion_id) REFERENCES companions(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_group_members_companion ON companion_group_members(companion_id);
+            CREATE INDEX IF NOT EXISTS idx_group_members_group ON companion_group_members(group_id);",
+        )
+        .map_err(|e| format!("Failed to create companion_groups tables: {}", e))?;
+
         // Agent traces: turn-level ShareGPT-format trace for offline fine-tune
         // data path. OPT-IN — gated by `config.tracing.enabled`.
         // See engine/db/traces.rs for read/write API.
@@ -823,6 +851,20 @@ impl Database {
             )
             .map_err(|e| format!("Migration error (sessions family_mode): {}", e))?;
             log::info!("Migrated sessions table: added family_mode column");
+        }
+
+        // Add group_id to sessions (Approach B 家族会话绑定到具名家族)。
+        // NULL = 无具名家族 —— 与 family_mode=1 配合时回落 Phase A 的"全 active"
+        // 隐式家族 + 单一 family_shared 桶;非 NULL = 该 session 绑定到这个 group。
+        let has_group_id: bool = conn
+            .prepare("SELECT group_id FROM sessions LIMIT 0")
+            .is_ok();
+        if !has_group_id {
+            conn.execute_batch(
+                "ALTER TABLE sessions ADD COLUMN group_id INTEGER DEFAULT NULL;",
+            )
+            .map_err(|e| format!("Migration error (sessions group_id): {}", e))?;
+            log::info!("Migrated sessions table: added group_id column");
         }
 
         // Drop legacy session_bots table (replaced by bot_conversations)
