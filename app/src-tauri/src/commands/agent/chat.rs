@@ -239,24 +239,16 @@ pub async fn chat_stream_start(
         match try_family_dispatch(state.db.clone(), ctx.config.clone(), &sid, &message).await {
             Ok(FamilyDispatchOutcome::Dispatched {
                 collaboration_id,
-                companion_id,
-                companion_name,
-                avatar_emoji,
-                color_hex,
-                reason,
-                confidence,
+                members,
             }) => {
-                app.emit("collaboration://dispatch", serde_json::json!({
-                    "session_id": sid,
-                    "collaboration_id": collaboration_id,
-                    "companion_id": companion_id,
-                    "companion_name": companion_name,
-                    "avatar_emoji": avatar_emoji,
-                    "color_hex": color_hex,
-                    "reason": reason,
-                    "confidence": confidence,
-                })).ok();
-                // 成员协作即这轮回答：通知前端结束 loading（前端据此重新拉取消息渲染卡片）。
+                log::info!(
+                    "family_dispatch → ParallelAgents collab {} with {} 成员: {}",
+                    collaboration_id,
+                    members.len(),
+                    members.iter().map(|m| m.name.as_str()).collect::<Vec<_>>().join(", ")
+                );
+                // 没有路由卡 —— UI 直接渲染多个成员气泡(同框群聊感)。
+                // collaboration_id 让前端 chat://complete 后 loadMessages 拉到协作消息行。
                 app.emit("chat://complete", serde_json::json!({
                     "text": "",
                     "session_id": sid,
@@ -265,15 +257,12 @@ pub async fn chat_stream_start(
                 return Ok(());
             }
             Ok(FamilyDispatchOutcome::SelfAnswer { reason }) => {
-                // 路由可见：前端渲染一张「🧭 主精灵亲自回」的小卡，然后照常自答。
-                app.emit("collaboration://dispatch", serde_json::json!({
-                    "session_id": sid,
-                    "self_answer": true,
-                    "reason": reason,
-                })).ok();
+                // 主精灵自答 —— 不显示任何"亲自回"提示(用户决策:路由卡不要),
+                // 直接走主 agent 流程(下面 spawn 处)。reason 只走日志。
+                log::info!("family_dispatch → self-answer: {reason}");
             }
             Err(e) => {
-                log::warn!("family_dispatch 失败，回落主精灵自答：{e}");
+                log::warn!("family_dispatch 失败,回落主精灵自答:{e}");
             }
         }
     }

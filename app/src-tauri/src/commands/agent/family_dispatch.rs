@@ -24,7 +24,7 @@ use crate::engine::collaboration::learning::LearningSink;
 use crate::engine::collaboration::orchestrator::SqliteOrchestrator;
 use crate::engine::collaboration::{
     Actor, AuditKind, ChatTurnSummary, CollaborationMode, CollaborationOrchestrator,
-    CompanionProfile, DispatchContext,
+    CompanionProfile, DispatchContext, Participant,
 };
 use crate::engine::db::Database;
 use crate::engine::llm_client::LLMConfig;
@@ -37,21 +37,29 @@ const RECENT_CORRECTIONS: usize = 8;
 /// 低于此置信度主精灵自答。与 `DispatchDecision` 文档及 judge 的 fallback 一致。
 const DISPATCH_CONFIDENCE_FLOOR: f64 = 0.5;
 
-/// 一次家族路由的结果。调用方据此 emit 路由卡事件、决定是否继续跑主精灵自答。
+/// 一次家族路由的结果。调用方据此决定是否继续跑主精灵自答。
+///
+/// L1 多成员模型:Dispatched 携带 N 个成员(1+);UI 同框冒出多个气泡(群聊感)。
+/// 没有路由卡 —— "谁选的、为什么"沉到 audit / 日志,前台只见成员发言。
 #[derive(Debug, Clone)]
 pub enum FamilyDispatchOutcome {
-    /// 主精灵自答 —— 置信度不足 / 家族为空 / judge 兜底。`reason` 可展示给用户。
+    /// 主精灵自答 —— 家族为空 / 没人入选 / judge 兜底。`reason` 仅用于日志和 audit。
     SelfAnswer { reason: String },
-    /// 已路由给某位家族成员，对应协作正在后台执行。
+    /// 已派遣给 N 位家族成员(1 或多个),对应 ParallelAgents 协作正在后台并发执行。
     Dispatched {
         collaboration_id: i64,
-        companion_id: i64,
-        companion_name: String,
-        avatar_emoji: String,
-        color_hex: String,
-        reason: String,
-        confidence: f64,
+        /// 入选成员快照,顺序与 plan 中 participants 一致。
+        members: Vec<DispatchedMember>,
     },
+}
+
+/// 派遣成员的轻量快照 —— 给上层日志 / 后续可能的事件回播用。
+#[derive(Debug, Clone)]
+pub struct DispatchedMember {
+    pub companion_id: i64,
+    pub name: String,
+    pub avatar_emoji: String,
+    pub color_hex: String,
 }
 
 /// 在家族模式下尝试把 `user_message` 路由给某位成员。
@@ -118,19 +126,22 @@ pub async fn try_family_dispatch(
     // 3. 路由判断。strategy 从不硬失败：任何错误都回落到空 plan + confidence 0.0。
     let mut decision = LLMDispatchStrategy::new(cfg.clone()).judge(&ctx).await?;
 
-    // 4. 门控：空 plan 或置信度不足 → 主精灵自答。
-    let Some(participant) = decision
+    // 4. 门控:空 plan / 无成员 / 置信度不足 → 主精灵自答。
+    //    L1 多成员:plan.steps[0].participants 可能含 1+ 人,各自独立流式响应。
+    let Some(participants_snapshot) = decision
         .plan
         .steps
         .first()
-        .and_then(|s| s.participants.first())
-        .cloned()
+        .map(|s| s.participants.clone())
+        .filter(|ps| !ps.is_empty())
     else {
         return Ok(FamilyDispatchOutcome::SelfAnswer { reason: decision.reason });
     };
     if decision.confidence < DISPATCH_CONFIDENCE_FLOOR {
         return Ok(FamilyDispatchOutcome::SelfAnswer { reason: decision.reason });
     }
+    // participants_snapshot 是 Participant 列表的 Clone(memory_scope 此刻还是 Private)
+    // —— 用于 audit / outcome / placeholder;后面 4.5 会 mutate decision.plan 的 scope。
 
     // 4.5. 记忆 scope 翻成共享桶 —— strategy 的 build_plan 默认 Private(保守
     //      兜底),但家族会话本期决定让 dispatched 成员共享桶以保持群内连贯。
@@ -164,34 +175,53 @@ pub async fn try_family_dispatch(
         )
         .await?;
 
-    // 持久化路由决策 —— `DispatchJudged` audit 让刷新 / 重放也能看到 judge 给的理由。
-    // emit 同时广播到 collaboration://event 流（live 推送），collab_id 与 actor=Companion(0)
-    // 与 `Dispatched(0)` 派遣者身份一致。emit 失败不应阻断派遣，故 `let _`。
+    // 持久化路由决策 —— `DispatchJudged` audit 让刷新 / 重放也能看到 judge 选了谁。
+    // L1 多成员:payload 用 members 数组列出所有入选者(取代原单一 companion_id 字段)。
+    // emit 同时广播 collaboration://event 流(live 推送),失败不阻断派遣。
+    let member_audit: Vec<_> = participants_snapshot
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "companion_id": p.companion_id,
+                "name": &p.name,
+                "avatar_emoji": &p.avatar_emoji,
+                "color_hex": &p.color_hex,
+            })
+        })
+        .collect();
     let _ = AuditTrail::new(db.clone()).emit(
         collab_id,
         Actor::Companion(0),
         AuditKind::DispatchJudged,
         serde_json::json!({
-            "companion_id": participant.companion_id,
-            "companion_name": &participant.name,
-            "avatar_emoji": &participant.avatar_emoji,
-            "color_hex": &participant.color_hex,
+            "members": member_audit,
             "reason": &decision.reason,
             "confidence": decision.confidence,
         }),
     );
 
-    // 预写内联 collaboration 消息，turn 结束时前端立刻渲染卡片（同 delegate_to_companion）。
-    let placeholder = format!("@{} {}", participant.name, user_message);
+    // 预写内联 collaboration 消息,turn 结束时前端立刻渲染卡片。N 个成员都 @ 上,
+    // 用户看消息列表 placeholder 就知道这一轮邀了谁。
+    let mention_chain: String = participants_snapshot
+        .iter()
+        .map(|p| format!("@{}", p.name))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let placeholder = format!("{} {}", mention_chain, user_message);
     let _ = db.upsert_collaboration_message(session_id, collab_id, &placeholder);
+
+    let dispatched_members: Vec<DispatchedMember> = participants_snapshot
+        .into_iter()
+        .map(|p: Participant| DispatchedMember {
+            companion_id: p.companion_id,
+            name: p.name,
+            avatar_emoji: p.avatar_emoji,
+            color_hex: p.color_hex,
+        })
+        .collect();
 
     Ok(FamilyDispatchOutcome::Dispatched {
         collaboration_id: collab_id,
-        companion_id: participant.companion_id,
-        companion_name: participant.name,
-        avatar_emoji: participant.avatar_emoji,
-        color_hex: participant.color_hex,
-        reason: decision.reason,
-        confidence: decision.confidence,
+        members: dispatched_members,
     })
 }

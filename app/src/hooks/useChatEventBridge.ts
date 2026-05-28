@@ -61,19 +61,6 @@ export function useChatEventBridge() {
         store().endStream();
       }),
 
-      // 家族会话:主精灵决定亲自回（self-answer）时,展示「🧭 主精灵亲自回」提示。
-      // 派遣到成员的分支由 collaborationStore 处理（渲染协作卡的路由头）。
-      listen<{ session_id: string; self_answer?: boolean; reason?: string }>(
-        'collaboration://dispatch',
-        (event) => {
-          if (cancelled) return;
-          if (event.payload.session_id !== store().sessionId) return;
-          if (event.payload.self_answer) {
-            store().setSelfAnswerHint({ reason: event.payload.reason ?? '' });
-          }
-        },
-      ),
-
       listen<{ text: string; session_id: string }>('chat://error', (event) => {
         if (cancelled) return;
         if (event.payload.session_id !== store().sessionId) return;

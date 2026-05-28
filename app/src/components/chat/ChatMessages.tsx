@@ -401,7 +401,6 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
   const longTask = useChatStreamStore((s) => s.longTask);
   const taskStreams = useChatStreamStore((s) => s.taskStreams);
   const canvases = useChatStreamStore((s) => s.canvases);
-  const selfAnswerHint = useChatStreamStore((s) => s.selfAnswerHint);
 
   // Task-specific streaming
   const allTasks = useTaskStore((s) => s.tasks);
@@ -784,13 +783,6 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                   <img src={logoFaceRight} alt="YiYi" width={28} height={28} />
                 </div>
                 <div className="max-w-[80%] space-y-2">
-                  {/* 家族会话:主精灵决定亲自回（而非派给成员）时的路由提示。 */}
-                  {selfAnswerHint && (
-                    <div className="flex items-center flex-wrap gap-1.5 text-[12px] px-1" style={{ color: 'var(--color-text-muted)' }}>
-                      <span>🧭 主精灵亲自回</span>
-                      {selfAnswerHint.reason && <span className="opacity-80">· {selfAnswerHint.reason}</span>}
-                    </div>
-                  )}
                   {(activeTools.length > 0 || claudeCode) && (() => {
                     const taskCards: string[] = [];
                     const streamPtySessions: PtySessionInfo[] = [];

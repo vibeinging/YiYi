@@ -15,7 +15,7 @@ import {
   type CollaborationId,
   type CollaborationStatus,
 } from '../../api/collaboration'
-import { selectDispatch, useCollaborationStore } from '../../stores/collaborationStore'
+import { useCollaborationStore } from '../../stores/collaborationStore'
 import { StepRenderer } from './StepRenderer'
 
 interface Props {
@@ -26,7 +26,6 @@ export function CollaborationMessageCard({ collaborationId }: Props) {
   const entry = useCollaborationStore(s => s.collaborations.get(collaborationId))
   const ensureSubscribed = useCollaborationStore(s => s.ensureSubscribed)
   const hydrate = useCollaborationStore(s => s.hydrate)
-  const dispatch = useCollaborationStore(selectDispatch(collaborationId))
 
   useEffect(() => {
     void ensureSubscribed()
@@ -49,44 +48,9 @@ export function CollaborationMessageCard({ collaborationId }: Props) {
   const terminal = isTerminalStatus(collaboration.status)
   const steps = [...collaboration.plan.steps].sort((a, b) => a.id - b.id)
 
-  // 路由头三级兜底，按"信息越多越好"排序:
-  //   1) live dispatches map —— 当前会话内即时拿到的 reason + confidence。
-  //   2) 持久化的 dispatch_judged audit —— 刷新后仍能看到 reason（family_dispatch
-  //      在 submit 后用 AuditTrail emit 落库）。
-  //   3) collaboration 自身派生（mode=dispatched + 首个 participant）—— 兜底,
-  //      只有成员归属,没有 reason。手动 @ 召唤（manual）三级都不显示。
-  const dispatchedParticipant =
-    collaboration.mode.kind === 'dispatched' ? collaboration.plan.steps[0]?.participants[0] : undefined
-  const judgedFromAudit = (() => {
-    const event = entry.audit.find(a => a.kind === 'dispatch_judged')
-    if (!event) return undefined
-    const p = event.payload as {
-      companion_name?: string
-      avatar_emoji?: string
-      color_hex?: string
-      reason?: string
-      confidence?: number
-    }
-    return {
-      companion_name: p.companion_name ?? '',
-      avatar_emoji: p.avatar_emoji ?? '🤖',
-      color_hex: p.color_hex ?? 'var(--color-text-muted)',
-      reason: p.reason ?? '',
-      confidence: p.confidence ?? 0,
-    }
-  })()
-  const routing =
-    dispatch ??
-    judgedFromAudit ??
-    (dispatchedParticipant
-      ? {
-          companion_name: dispatchedParticipant.name,
-          avatar_emoji: dispatchedParticipant.avatar_emoji,
-          color_hex: dispatchedParticipant.color_hex,
-          reason: '',
-          confidence: 0,
-        }
-      : undefined)
+  // 路由卡已彻底去掉(用户决策)。"谁选的、为什么"沉到 audit 里,UI 只见成员发言。
+  // 多成员同框靠 ParallelAgentStepCard 渲染气泡组,SingleAgent 路径(Phase 2B @召唤)
+  // 走 SingleAgentStepCard。
 
   return (
     <div
@@ -111,21 +75,6 @@ export function CollaborationMessageCard({ collaborationId }: Props) {
           </button>
         )}
       </div>
-
-      {routing && (
-        <div
-          className="flex items-center flex-wrap gap-1.5 text-[12px] px-1"
-          style={{ color: 'var(--color-text-muted)' }}
-          title={routing.confidence > 0 ? `置信度 ${Math.round(routing.confidence * 100)}%` : undefined}
-        >
-          <span>🧭 主精灵交给</span>
-          <span className="inline-flex items-center gap-1 font-medium" style={{ color: routing.color_hex }}>
-            <span>{routing.avatar_emoji}</span>
-            {routing.companion_name}
-          </span>
-          {routing.reason && <span className="opacity-80">· {routing.reason}</span>}
-        </div>
-      )}
 
       <div className="flex flex-col gap-2.5">
         {steps.map(step => (

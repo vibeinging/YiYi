@@ -1,11 +1,14 @@
 /**
- * StepRenderer — dispatches one step to the correct card component by
- * `step.kind`. Phase 2B implements SingleAgent only; the other kinds
- * render an "暂未支持" placeholder so future plans don't crash.
+ * StepRenderer — dispatches one step to the correct card component by `step.kind`.
+ *
+ * - `single_agent` → Phase 2B @召唤 路径(SingleAgentStepCard,卡片化单 bubble)
+ * - `parallel_agents` → L1 家族会话多成员并发(ParallelAgentStepCard,群聊式 N bubble)
+ * - `host_summarize` / `user_confirmation` → 未来 plan DAG 留位(暂用 PlaceholderCard)
  */
 
 import type { CollaborationId, Step } from '../../api/collaboration'
 import { SingleAgentStepCard } from './SingleAgentStepCard'
+import { ParallelAgentStepCard } from './ParallelAgentStepCard'
 
 interface Props {
   collaborationId: CollaborationId
@@ -17,6 +20,7 @@ export function StepRenderer({ collaborationId, step }: Props) {
     case 'single_agent':
       return <SingleAgentStepCard collaborationId={collaborationId} step={step} />
     case 'parallel_agents':
+      return <ParallelAgentStepCard collaborationId={collaborationId} step={step} />
     case 'host_summarize':
     case 'user_confirmation':
       return <PlaceholderCard step={step} />
@@ -24,12 +28,7 @@ export function StepRenderer({ collaborationId, step }: Props) {
 }
 
 function PlaceholderCard({ step }: { step: Step }) {
-  const label =
-    step.kind === 'parallel_agents'
-      ? '陪审团（多位伙伴一起聊）'
-      : step.kind === 'host_summarize'
-        ? '主精灵汇总'
-        : '等你拍板'
+  const label = step.kind === 'host_summarize' ? '主精灵汇总' : '等你拍板'
   return (
     <div
       className="p-4 rounded-2xl text-[13px]"
