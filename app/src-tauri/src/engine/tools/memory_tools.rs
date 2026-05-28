@@ -6,33 +6,35 @@
 use std::collections::HashSet;
 
 use super::{current_memme_user_id, DEFAULT_MEMME_USER_ID};
-use crate::engine::collaboration::FAMILY_SHARED_USER_ID;
 
 /// Where a memory operation reads / writes.
 ///
-/// - `Mine` (default) — the current speaker's own bucket. For a companion
-///   sub-agent that's their isolated `companion_<id>` MemMe user_id; for
-///   the main session it's the default user.
+/// - `Mine` (default) — current speaker's bucket. For a companion that's
+///   their isolated `companion_<id>` MemMe user_id; **in a group chat the
+///   executor overrides it to `family_shared_<group_id>` so writes naturally
+///   land in the shared family bucket** without the agent specifying.
 /// - `Shared` — the main user bucket. Companions can opt-in to write here
 ///   when they're recording an objective fact about the user (rather than
 ///   their own opinion of the user).
-/// - `Family` — the cross-companion bucket. Use for context that every
-///   family member should see ("user is working on YiYi project").
-/// - `All` — search-only fan-out: query Mine ∪ Family. Doesn't include
-///   Shared by default (主用户 bucket is privileged; explicit opt-in).
+/// - `All` — search-only fan-out: query Mine ∪ Shared.
+///
+/// Note: `family` scope is deprecated — group sharing now happens
+/// automatically via the `with_memme_user_id` override when a companion
+/// runs inside a FamilyGroup-scoped step.
 #[derive(Debug, Clone, Copy)]
 enum MemoryScopeArg {
     Mine,
     Shared,
-    Family,
     All,
 }
 
 fn parse_scope(args: &serde_json::Value) -> MemoryScopeArg {
     match args.get("scope").and_then(|v| v.as_str()) {
         Some("shared") => MemoryScopeArg::Shared,
-        Some("family") => MemoryScopeArg::Family,
         Some("all") => MemoryScopeArg::All,
+        // 兼容旧 prompt 写 "family" 的情况:既然群上下文已自动接管 mine,
+        // 把 family 等价 mine 处理(写群桶,读群桶)。
+        Some("family") => MemoryScopeArg::Mine,
         _ => MemoryScopeArg::Mine,
     }
 }
@@ -42,14 +44,13 @@ fn read_buckets(scope: MemoryScopeArg) -> Vec<String> {
     match scope {
         MemoryScopeArg::Mine => vec![current_memme_user_id()],
         MemoryScopeArg::Shared => vec![DEFAULT_MEMME_USER_ID.to_string()],
-        MemoryScopeArg::Family => vec![FAMILY_SHARED_USER_ID.to_string()],
         MemoryScopeArg::All => {
             let mine = current_memme_user_id();
-            let family = FAMILY_SHARED_USER_ID.to_string();
-            if mine == family {
+            let shared = DEFAULT_MEMME_USER_ID.to_string();
+            if mine == shared {
                 vec![mine]
             } else {
-                vec![mine, family]
+                vec![mine, shared]
             }
         }
     }
@@ -61,9 +62,8 @@ fn write_bucket(scope: MemoryScopeArg) -> Result<String, &'static str> {
     Ok(match scope {
         MemoryScopeArg::Mine => current_memme_user_id(),
         MemoryScopeArg::Shared => DEFAULT_MEMME_USER_ID.to_string(),
-        MemoryScopeArg::Family => FAMILY_SHARED_USER_ID.to_string(),
         MemoryScopeArg::All => {
-            return Err("scope='all' is read-only; pick mine / shared / family for writes")
+            return Err("scope='all' is read-only; pick mine / shared for writes")
         }
     })
 }

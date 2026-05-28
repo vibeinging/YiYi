@@ -407,13 +407,8 @@ pub type ExecutorHandle = Arc<dyn Executor>;
 
 // ── Memory bucket resolution ──────────────────────────────────────────
 
-/// MemMe user_id reserved for cross-companion family context. All
-/// companions whose `memory_scope` is `Family` read/write here.
-pub const FAMILY_SHARED_USER_ID: &str = "family_shared";
-
-/// 单个具名家族的共享记忆桶名(Approach B):每组独占一个 `family_shared_{id}`,
-/// 与 Phase A 的单桶 `family_shared` 共存且互不可见。前端 BuddyPanel 浏览各家
-/// 族记忆时按这个约定算 user_id。
+/// 单个具名家族的共享记忆桶名:每个 group 独占 `family_shared_{id}`。
+/// 一个 group = 一个群聊 = 一个共享桶(IM 心智)。
 pub fn family_group_bucket(group_id: CompanionId) -> String {
     format!("family_shared_{}", group_id)
 }
@@ -423,8 +418,7 @@ pub fn family_group_bucket(group_id: CompanionId) -> String {
 /// `Private` → companion's own isolated bucket.
 /// `Shared` → main user bucket (`DEFAULT_MEMME_USER_ID`). Used by the host
 /// in a jury (the host represents the user's perspective when summarising).
-/// `Family` → `FAMILY_SHARED_USER_ID`(Phase A 隐式家族单桶)。
-/// `FamilyGroup(id)` → `family_shared_{id}`(Approach B 具名家族独占桶)。
+/// `FamilyGroup(id)` → `family_shared_{id}`(具名家族独占桶)。
 pub fn resolve_memme_user_id(
     scope: crate::engine::agents::MemoryScope,
     companion_memory_user_id: &str,
@@ -433,7 +427,6 @@ pub fn resolve_memme_user_id(
     match scope {
         MemoryScope::Private => companion_memory_user_id.to_string(),
         MemoryScope::Shared => crate::engine::tools::DEFAULT_MEMME_USER_ID.to_string(),
-        MemoryScope::Family => FAMILY_SHARED_USER_ID.to_string(),
         MemoryScope::FamilyGroup(id) => family_group_bucket(id),
     }
 }
@@ -456,16 +449,16 @@ mod resolve_memme_tests {
     }
 
     #[test]
-    fn family_returns_family_shared() {
-        let result = resolve_memme_user_id(MemoryScope::Family, "ignored");
-        assert_eq!(result, FAMILY_SHARED_USER_ID);
+    fn family_group_returns_group_specific_bucket() {
+        let result = resolve_memme_user_id(MemoryScope::FamilyGroup(7), "ignored");
+        assert_eq!(result, "family_shared_7");
     }
 
     #[test]
-    fn family_shared_constant_is_stable() {
+    fn family_group_bucket_naming_is_stable() {
         // Persisted MemMe data keyed by this string; never rename without a
         // migration.
-        assert_eq!(FAMILY_SHARED_USER_ID, "family_shared");
+        assert_eq!(family_group_bucket(42), "family_shared_42");
     }
 }
 

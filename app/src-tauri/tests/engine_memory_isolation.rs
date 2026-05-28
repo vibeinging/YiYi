@@ -1,7 +1,10 @@
 //! Memory isolation contract: companion private buckets stay disjoint,
-//! `family_shared` is visible across companions, the main user bucket
-//! never leaks into a companion's `memory_search`, and the resolver
-//! returns stable user_ids for the three scopes.
+//! each `FamilyGroup(id)` has its own `family_shared_{id}` bucket isolated
+//! from other groups and from main, and the resolver returns stable
+//! user_ids per scope.
+//!
+//! IM 心智后(本次重构):没有"全员家族" Phase A 单桶,所有家族共享桶都按
+//! group_id 切片(`family_shared_<gid>`)。
 //!
 //! Tests hit MemMe directly (via the `FakeEmbedder`-backed test app
 //! state) so the assertions are about the actual bucket semantics, not
@@ -12,7 +15,7 @@ mod common;
 #[allow(unused_imports)]
 use common::*;
 use app_lib::engine::agents::MemoryScope;
-use app_lib::engine::collaboration::{resolve_memme_user_id, FAMILY_SHARED_USER_ID};
+use app_lib::engine::collaboration::{family_group_bucket, resolve_memme_user_id};
 use app_lib::test_support::build_test_app_state;
 use serial_test::serial;
 use std::collections::HashSet;
@@ -61,20 +64,32 @@ async fn private_buckets_are_disjoint_across_companions() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn family_shared_bucket_is_visible_to_every_companion() {
+async fn family_group_buckets_are_isolated_across_groups_and_from_privates() {
+    // 每个 group 独占一个 `family_shared_<gid>` 桶。两个不同 group 写各自桶,
+    // 互不可见;companion 私桶也看不到 group 桶。
     let t = build_test_app_state().await;
     let store = &t.app_state.memme_store;
 
-    let shared_entry = add_memory(store, FAMILY_SHARED_USER_ID, "用户在做 YiYi 项目");
+    let group_a_bucket = family_group_bucket(1);
+    let group_b_bucket = family_group_bucket(2);
 
-    // From `family_shared` itself.
-    let family_results = list_ids(store, FAMILY_SHARED_USER_ID);
-    assert!(family_results.contains(&shared_entry.id));
+    let entry_a = add_memory(store, &group_a_bucket, "群 A 的项目共识");
+    let entry_b = add_memory(store, &group_b_bucket, "群 B 的产品路线");
 
-    // Companion's own bucket is *not* the family bucket — confirms our
-    // resolver returns a different id and MemMe respects the scoping.
-    let alpha_results = list_ids(store, "companion_alpha");
-    assert!(!alpha_results.contains(&shared_entry.id));
+    // group A 只看到自己的。
+    let a_results = list_ids(store, &group_a_bucket);
+    assert!(a_results.contains(&entry_a.id), "group A 看自己的桶");
+    assert!(!a_results.contains(&entry_b.id), "group A 不该看到 group B");
+
+    // group B 同理。
+    let b_results = list_ids(store, &group_b_bucket);
+    assert!(b_results.contains(&entry_b.id));
+    assert!(!b_results.contains(&entry_a.id));
+
+    // companion 私桶也看不到任何 group 桶。
+    let alpha = list_ids(store, "companion_alpha");
+    assert!(!alpha.contains(&entry_a.id));
+    assert!(!alpha.contains(&entry_b.id));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -109,8 +124,8 @@ async fn resolver_returns_stable_user_ids_per_scope() {
         "yiyi_default_user"
     );
     assert_eq!(
-        resolve_memme_user_id(MemoryScope::Family, "ignored"),
-        FAMILY_SHARED_USER_ID
+        resolve_memme_user_id(MemoryScope::FamilyGroup(7), "ignored"),
+        "family_shared_7"
     );
 }
 
@@ -165,18 +180,18 @@ async fn many_companion_buckets_remain_isolated_under_concurrent_writes() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn family_shared_bucket_lazy_creates_on_first_write() {
+async fn family_group_bucket_lazy_creates_on_first_write() {
     // No special setup — MemMe creates the bucket lazily on first add.
-    // The fact that the previous tests run cleanly is itself the proof,
-    // but this test pins the expectation explicitly.
+    // 任意 group id 的桶都是按需懒建。
     let t = build_test_app_state().await;
     let store = &t.app_state.memme_store;
+    let bucket = family_group_bucket(99);
 
     // Read before write returns empty (no panic / "user not found").
-    let before = list_ids(store, FAMILY_SHARED_USER_ID);
+    let before = list_ids(store, &bucket);
     assert!(before.is_empty());
 
-    let entry = add_memory(store, FAMILY_SHARED_USER_ID, "首次写入");
-    let after = list_ids(store, FAMILY_SHARED_USER_ID);
+    let entry = add_memory(store, &bucket, "首次写入");
+    let after = list_ids(store, &bucket);
     assert!(after.contains(&entry.id));
 }

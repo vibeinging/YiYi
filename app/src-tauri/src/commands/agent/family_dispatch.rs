@@ -75,20 +75,16 @@ pub async fn try_family_dispatch(
     session_id: &str,
     user_message: &str,
 ) -> Result<FamilyDispatchOutcome, String> {
-    // 1. 组家族 roster + 决定记忆 scope。两条路径:
-    //    - session 绑了具名家族(Approach B):roster = 该组成员,scope = FamilyGroup(id)
-    //    - 未绑(Phase A 回落):roster = 全部 active companions,scope = Family(单桶)
-    let session_group_id = db.get_session_group(session_id);
-    let (companions, family_scope) = match session_group_id {
-        Some(gid) => (
-            db.list_group_members(gid),
-            crate::engine::agents::MemoryScope::FamilyGroup(gid),
-        ),
-        None => (
-            db.list_active_companions(),
-            crate::engine::agents::MemoryScope::Family,
-        ),
+    // 1. session 必须绑定具名 group(IM 心智:group = 群聊窗口,1:1)。
+    //    未绑 → 直接当单聊,回退主精灵自答。caller 应已用 group_id 判断,
+    //    这里再守一遍。
+    let Some(gid) = db.get_session_group(session_id) else {
+        return Ok(FamilyDispatchOutcome::SelfAnswer {
+            reason: "session 未绑家族,单聊主精灵".into(),
+        });
     };
+    let companions = db.list_group_members(gid);
+    let family_scope = crate::engine::agents::MemoryScope::FamilyGroup(gid);
     let family: Vec<CompanionProfile> = companions
         .into_iter()
         .map(|c| CompanionProfile {

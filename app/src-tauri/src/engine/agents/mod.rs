@@ -19,15 +19,14 @@ pub mod persona_loader;
 /// or the host companion in a jury).
 /// `Family` — companion uses the singleton `family_shared` bucket, visible to
 /// all companions. Phase A 隐式家族(全 active companions)用这个桶。
-/// `FamilyGroup(id)` — companion 写入某具名家族独占的 `family_shared_{id}` 桶
-/// (Approach B 的多家族模式),与其他家族 / Phase A 桶完全隔离。
+/// `FamilyGroup(id)` — companion 写入某具名家族独占的 `family_shared_{id}` 桶。
+/// 一个 group 一个桶,session 1:1 绑 group(IM 心智),群内成员共享记忆。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryScope {
     #[default]
     Private,
     Shared,
-    Family,
     /// id = `companion_groups.id`。序列化为 `{"family_group": 42}`。
     FamilyGroup(i64),
 }
@@ -356,15 +355,20 @@ memory_scope: shared
     }
 
     #[test]
-    fn memory_scope_parses_family_variant() {
+    fn memory_scope_parses_family_variant_deprecated_falls_back() {
+        // `memory_scope: family` 是 Phase A 全员家族遗留写法。IM 心智后
+        // Family 变体已删,带这个字段的 agent.md 应当 parse 失败(返回 None);
+        // 上层 loader 会跳过、记 warning,这是预期的"明显失败优于静默吃掉"。
         let family = r#"---
 name: with_family
 description: "x"
 memory_scope: family
 ---
 "#;
-        let def = parse_agent_md(family, Path::new("memory:test")).expect("family parses");
-        assert_eq!(def.memory_scope, MemoryScope::Family);
+        assert!(
+            parse_agent_md(family, Path::new("memory:test")).is_none(),
+            "deprecated memory_scope: family 应使整个 agent.md 解析失败"
+        );
     }
 
     #[test]

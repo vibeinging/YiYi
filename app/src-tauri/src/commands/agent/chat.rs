@@ -230,11 +230,10 @@ pub async fn chat_stream_start(
 
     let ctx = prepare_chat_context(&state, &sid, &message, &attachments).await?;
 
-    // 家族会话：开了家族模式时，主精灵先用路由 strategy 扫一遍当前 active 家族。
-    // 命中某位成员 → 提交单 companion 协作（成员回复即这轮答案）+ emit 路由卡，并
-    // 提前返回，不跑主精灵自答；否则（置信不足/家族空）回落主精灵照常自答。
-    // 用户消息已由 prepare_chat_context 落库，故提前返回不影响用户气泡渲染。
-    if state.db.get_session_family_mode(&sid) {
+    // 家族会话(群聊):session 绑定了具名 group 时,主精灵 L1+L2 调度,
+    // 命中成员 → ParallelAgents 同框;否则回落主精灵自答。
+    // group_id == None 直接当单聊(family_mode 字段已退役,只读 group_id)。
+    if state.db.get_session_group(&sid).is_some() {
         use crate::commands::agent::family_dispatch::{try_family_dispatch, FamilyDispatchOutcome};
         match try_family_dispatch(state.db.clone(), ctx.config.clone(), &sid, &message).await {
             Ok(FamilyDispatchOutcome::Dispatched {
