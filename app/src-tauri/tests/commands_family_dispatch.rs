@@ -106,7 +106,7 @@ async fn try_family_dispatch_without_group_self_answers() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn try_family_dispatch_with_empty_group_self_answers() {
+async fn try_family_dispatch_with_empty_group_returns_empty_group() {
     let mock = MockLlmServer::start().await;
     let t = build_test_app_state().await;
     seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
@@ -123,9 +123,10 @@ async fn try_family_dispatch_with_empty_group_self_answers() {
     let outcome = try_family_dispatch(db, cfg, sid, "帮我写点东西")
         .await
         .unwrap();
+    // 空群不再无声让主精灵冒充群成员,而是返回 EmptyGroup,由 chat.rs 给可见提示。
     assert!(
-        matches!(outcome, FamilyDispatchOutcome::SelfAnswer { .. }),
-        "空 group 应主精灵自答,got {outcome:?}"
+        matches!(outcome, FamilyDispatchOutcome::EmptyGroup),
+        "空 group 应返回 EmptyGroup,got {outcome:?}"
     );
 }
 

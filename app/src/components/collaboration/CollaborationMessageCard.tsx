@@ -16,6 +16,7 @@ import {
   type CollaborationStatus,
 } from '../../api/collaboration'
 import { useCollaborationStore } from '../../stores/collaborationStore'
+import { confirm } from '../Toast'
 import { StepRenderer } from './StepRenderer'
 
 interface Props {
@@ -61,9 +62,9 @@ export function CollaborationMessageCard({ collaborationId }: Props) {
         {!terminal && (
           <button
             onClick={() => {
-              if (window.confirm('真的要中止整场协作吗？')) {
-                void abortCollaboration(collaboration.id)
-              }
+              void confirm('真的要中止这一轮群聊吗？').then(ok => {
+                if (ok) void abortCollaboration(collaboration.id)
+              })
             }}
             className="text-[11px] px-2 py-0.5 rounded-full transition-colors hover:bg-[var(--color-bg-subtle)]"
             style={{ color: 'var(--color-text-muted)' }}

@@ -22,8 +22,8 @@ interface GroupsStore {
   loaded: boolean
   /** id → group members 的懒加载缓存。undefined = 没拉过;[] = 拉过但空。 */
   membersByGroup: Map<number, Companion[]>
-  /** 正在拉的 group(防止并发重复拉)。 */
-  pendingMembers: Set<number>
+  /** 正在拉的 group → 共享 Promise(并发调用方 await 同一个,而非靠 setTimeout 猜时间)。 */
+  pendingMembers: Map<number, Promise<Companion[]>>
 
   /** 拉一次全量元数据,刷新缓存。失败不抛(空缓存退化为"没有家族")。 */
   load: () => Promise<void>
@@ -38,7 +38,7 @@ export const useGroupsStore = create<GroupsStore>((set, get) => ({
   byId: new Map(),
   loaded: false,
   membersByGroup: new Map(),
-  pendingMembers: new Set(),
+  pendingMembers: new Map(),
 
   load: async () => {
     try {
@@ -55,36 +55,37 @@ export const useGroupsStore = create<GroupsStore>((set, get) => ({
   ensureMembers: async (groupId: number) => {
     const cached = get().membersByGroup.get(groupId)
     if (cached) return cached
-    if (get().pendingMembers.has(groupId)) {
-      // 已经在拉,等一小会儿命中缓存。简单做法:等下次微任务再查。
-      // 避免并发拉同一个 group(高频出现:列表里多个 session 同时绑这个 group)。
-      await new Promise(resolve => setTimeout(resolve, 0))
-      return get().membersByGroup.get(groupId) ?? []
-    }
-    set(prev => {
-      const next = new Set(prev.pendingMembers)
-      next.add(groupId)
-      return { pendingMembers: next }
-    })
-    try {
-      const members = await listGroupMembers(groupId)
+    // 已经在拉 → 并发调用方共享同一个 Promise(而非靠 setTimeout(0) 猜时间,
+    // 那样会在真正拉好前返回空数组,把组件钉死在空成员)。
+    const inflight = get().pendingMembers.get(groupId)
+    if (inflight) return inflight
+
+    const clearPending = () =>
       set(prev => {
-        const nextMembers = new Map(prev.membersByGroup)
-        nextMembers.set(groupId, members)
-        const nextPending = new Set(prev.pendingMembers)
+        const nextPending = new Map(prev.pendingMembers)
         nextPending.delete(groupId)
-        return { membersByGroup: nextMembers, pendingMembers: nextPending }
+        return { pendingMembers: nextPending }
       })
-      return members
-    } catch (e) {
-      console.error(`groupsStore.ensureMembers(${groupId}) failed`, e)
-      set(prev => {
-        const next = new Set(prev.pendingMembers)
-        next.delete(groupId)
-        return { pendingMembers: next }
+    const promise = listGroupMembers(groupId)
+      .then(members => {
+        set(prev => {
+          const nextMembers = new Map(prev.membersByGroup)
+          nextMembers.set(groupId, members)
+          return { membersByGroup: nextMembers }
+        })
+        return members
       })
-      return []
-    }
+      .catch(e => {
+        console.error(`groupsStore.ensureMembers(${groupId}) failed`, e)
+        return [] as Companion[]
+      })
+      .finally(clearPending)
+    set(prev => {
+      const nextPending = new Map(prev.pendingMembers)
+      nextPending.set(groupId, promise)
+      return { pendingMembers: nextPending }
+    })
+    return promise
   },
 
   invalidateMembers: (groupId: number) => {

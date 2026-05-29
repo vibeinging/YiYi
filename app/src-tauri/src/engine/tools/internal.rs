@@ -35,6 +35,18 @@ pub(crate) fn truncate_output(s: &str, max_chars: usize) -> String {
 }
 
 /// Try to execute a tool via MCP runtime.
+/// 把 MCP server 返回的内容包进 trust 信封 —— MCP 输出是第三方不可信外部内容,
+/// 不包则恶意 MCP server 的注入文本会被 LLM 当可信指令执行。系统提示词
+/// (prompt.rs)已向 LLM 承诺 MCP 内容会被 `<external-content>` 包裹,这里兑现。
+/// 见防屎山修复 C。
+fn wrap_mcp_output(server_key: &str, result: &str) -> String {
+    super::output_envelope::wrap_external(
+        &format!("mcp:{server_key}"),
+        super::output_envelope::Trust::Medium,
+        &truncate_output(result, 8000),
+    )
+}
+
 pub(crate) async fn try_mcp_tool(
     runtime: &MCPRuntime,
     tool_name: &str,
@@ -47,7 +59,7 @@ pub(crate) async fn try_mcp_tool(
                 .call_tool(&tool.server_key, tool_name, args.clone())
                 .await
             {
-                Ok(result) => return Some(truncate_output(&result, 8000)),
+                Ok(result) => return Some(wrap_mcp_output(&tool.server_key, &result)),
                 Err(e) => return Some(format!("MCP tool error: {}", e)),
             }
         }
@@ -59,7 +71,7 @@ pub(crate) async fn try_mcp_tool(
         let tools = runtime.get_tools(key).await;
         if tools.iter().any(|t| t.name == tool_name) {
             match runtime.call_tool(key, tool_name, args.clone()).await {
-                Ok(result) => return Some(truncate_output(&result, 8000)),
+                Ok(result) => return Some(wrap_mcp_output(key, &result)),
                 Err(e) => return Some(format!("MCP tool error: {}", e)),
             }
         }
@@ -156,6 +168,95 @@ fn remove_trailing_commas(s: &str) -> String {
     result
 }
 
+/// Scavenge:DeepSeek/R1 有时把工具调用写进 `content` 或 `reasoning_content` 的
+/// 文本里,而**没有**走结构化 `tool_calls` 字段。不捞回来的话,这次工具调用会被
+/// 当成最终答案吐给用户、工具根本不执行 → 任务静默失败 + 重试膨胀 + 拉低 cache。
+///
+/// 保守策略防误判:只有当文本里解析出的对象带 `name` 字段、**且 name ∈ 已知工具名**
+/// 时才认定为工具调用。先扫 content 再扫 reasoning,任一命中即返回。见缓存 P0-3。
+pub(crate) fn scavenge_tool_calls(
+    content: &str,
+    reasoning: &str,
+    known_tool_names: &[String],
+) -> Vec<super::types::ToolCall> {
+    for src in [content, reasoning] {
+        if src.trim().is_empty() {
+            continue;
+        }
+        if let Some(v) = extract_json_candidate(src) {
+            let calls = collect_scavenged_calls(&v, known_tool_names);
+            if !calls.is_empty() {
+                return calls;
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// 从一段可能夹杂散文/围栏/`<tool_call>` 包裹的文本里,提取最可能的 JSON 候选。
+fn extract_json_candidate(s: &str) -> Option<serde_json::Value> {
+    let mut t = s.trim();
+    // 去 <tool_call>...</tool_call> 包裹(DSML 风格)。
+    if let Some(rest) = t.strip_prefix("<tool_call>") {
+        t = rest.strip_suffix("</tool_call>").unwrap_or(rest).trim();
+    }
+    // 整段先试(repair_json 已处理 ```json 围栏 + 截断闭合)。
+    if let Some(v) = repair_json(t) {
+        if v.is_object() || v.is_array() {
+            return Some(v);
+        }
+    }
+    // 散文包裹的 JSON:取第一个 '{' 到最后一个 '}'(都是 ASCII,字节切片安全)。
+    let start = t.find('{')?;
+    let end = t.rfind('}')?;
+    if end > start {
+        repair_json(&t[start..=end]).filter(|v| v.is_object() || v.is_array())
+    } else {
+        None
+    }
+}
+
+fn collect_scavenged_calls(
+    v: &serde_json::Value,
+    known: &[String],
+) -> Vec<super::types::ToolCall> {
+    match v {
+        serde_json::Value::Array(arr) => arr
+            .iter()
+            .enumerate()
+            .filter_map(|(i, x)| one_scavenged_call(x, known, i))
+            .collect(),
+        obj => one_scavenged_call(obj, known, 0).into_iter().collect(),
+    }
+}
+
+fn one_scavenged_call(
+    v: &serde_json::Value,
+    known: &[String],
+    idx: usize,
+) -> Option<super::types::ToolCall> {
+    let name = v.get("name")?.as_str()?;
+    // 关键防误判:name 必须是已知工具,否则不认(避免把含 "name" 字段的普通 JSON
+    // 数据误当工具调用)。
+    if !known.iter().any(|k| k == name) {
+        return None;
+    }
+    let args = v.get("arguments").or_else(|| v.get("parameters"));
+    let arguments = match args {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(other) => other.to_string(),
+        None => "{}".to_string(),
+    };
+    Some(super::types::ToolCall {
+        id: format!("scavenged_{idx}_{name}"),
+        r#type: "function".into(),
+        function: super::types::FunctionCall {
+            name: name.to_string(),
+            arguments,
+        },
+    })
+}
+
 /// Strip YAML frontmatter (between --- delimiters) from SKILL.md content.
 #[allow(dead_code)]
 pub(crate) fn strip_frontmatter(content: &str) -> &str {
@@ -218,3 +319,54 @@ pub fn build_mcp_skill_overrides(
     overrides
 }
 
+
+#[cfg(test)]
+mod scavenge_tests {
+    use super::scavenge_tool_calls;
+
+    fn known() -> Vec<String> {
+        vec!["read_file".to_string(), "execute_shell".to_string()]
+    }
+
+    #[test]
+    fn scavenges_bare_json_object_with_known_tool() {
+        let c = r#"{"name": "read_file", "arguments": {"path": "a.txt"}}"#;
+        let calls = scavenge_tool_calls(c, "", &known());
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.name, "read_file");
+        assert!(calls[0].function.arguments.contains("a.txt"));
+    }
+
+    #[test]
+    fn scavenges_from_reasoning_when_content_empty() {
+        let r = r#"I should call {"name": "execute_shell", "arguments": {"cmd": "ls"}} now"#;
+        let calls = scavenge_tool_calls("", r, &known());
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.name, "execute_shell");
+    }
+
+    #[test]
+    fn scavenges_tool_call_wrapper() {
+        let c = r#"<tool_call>{"name": "read_file", "arguments": {"path": "x"}}</tool_call>"#;
+        assert_eq!(scavenge_tool_calls(c, "", &known()).len(), 1);
+    }
+
+    #[test]
+    fn ignores_unknown_tool_name() {
+        // 防误判:name 不在已知工具里 → 不当工具调用。
+        let c = r#"{"name": "some_random_thing", "arguments": {}}"#;
+        assert!(scavenge_tool_calls(c, "", &known()).is_empty());
+    }
+
+    #[test]
+    fn ignores_plain_prose_with_name_field() {
+        // 普通含 "name" 字段的数据 JSON,工具名不匹配 → 不误判。
+        let c = r#"Here is some data: {"name": "Alice", "age": 30}"#;
+        assert!(scavenge_tool_calls(c, "", &known()).is_empty());
+    }
+
+    #[test]
+    fn ignores_plain_text() {
+        assert!(scavenge_tool_calls("Just a normal answer, no tools.", "", &known()).is_empty());
+    }
+}

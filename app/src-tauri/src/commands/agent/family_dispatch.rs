@@ -1,6 +1,6 @@
 //! family_dispatch — 家族会话的「host 上游路由」。
 //!
-//! 当一个 session 开启了家族模式（见 `db.get_session_family_mode`），主精灵
+//! 当一个 session 绑定了群（`db.get_session_group` 返回 Some），主精灵
 //! 在自己回答之前先用 `LLMDispatchStrategy::judge` 扫一遍当前 active 家族：
 //! 若它以足够置信度选中某个成员，就**派遣**一个单 companion 协作（复用 Phase 2B
 //! 的 `delegate_to_companion` → orchestrator 路径）而不是自答；否则主精灵照常自答。
@@ -46,8 +46,11 @@ const DISPATCH_CONFIDENCE_FLOOR: f64 = 0.5;
 /// 没有路由卡 —— "谁选的、为什么"沉到 audit / 日志,前台只见成员发言。
 #[derive(Debug, Clone)]
 pub enum FamilyDispatchOutcome {
-    /// 主精灵自答 —— 家族为空 / 没人入选 / judge 兜底。`reason` 仅用于日志和 audit。
+    /// 主精灵自答 —— 没人入选 / judge 兜底。`reason` 仅用于日志和 audit。
     SelfAnswer { reason: String },
+    /// 群已绑定但 0 成员 —— 不能无声让主精灵冒充群成员回答(信任级 bug)。
+    /// 调用方应给用户一条可见提示,引导去管理面板拉人。
+    EmptyGroup,
     /// 已派遣给 N 位家族成员(1 或多个),对应 ParallelAgents 协作正在后台并发执行。
     Dispatched {
         collaboration_id: i64,
@@ -84,6 +87,12 @@ pub async fn try_family_dispatch(
         });
     };
     let companions = db.list_group_members(gid);
+    // 空群:群存在但没成员。**不能**无声回落主精灵自答(用户在"群里"发言却被
+    // 一个不在成员列表的 YiYi 冒充回答 = 信任级 bug)。返回 EmptyGroup,由
+    // chat.rs 给一条可见系统提示。见 P0-2 修复 / 陪审团报告。
+    if companions.is_empty() {
+        return Ok(FamilyDispatchOutcome::EmptyGroup);
+    }
     let family_scope = crate::engine::agents::MemoryScope::FamilyGroup(gid);
     let family: Vec<CompanionProfile> = companions
         .into_iter()
@@ -173,6 +182,20 @@ pub async fn try_family_dispatch(
             p.memory_scope = family_scope;
         }
     }
+    // 防沉默兜底:L2 全员都没主动接,被强推上场的这位并不知道自己是"兜底",
+    // 容易答出"这事不归我"之类的尴尬开场。给 step prompt 注入语境,让它以
+    // 主理人姿态简短兜底,或坦诚说明再引导,而不是生硬推托。此时 step 只有
+    // 1 个 participant(兜底首位),改 step.input.prompt 只影响它。见 P2 修复。
+    if used_silence_fallback {
+        if let Some(step) = decision.plan.steps.first_mut() {
+            step.input.prompt = format!(
+                "{}\n\n[群里这条消息暂时没有成员主动接话,你是与话题最相关的一位。\
+请以群里主理人的姿态自然地接住它:能答就简短给出你的看法;若确实不太是你的\
+领域,就坦诚点一句并把话题轻轻递给更合适的方向,别生硬推托。]",
+                step.input.prompt
+            );
+        }
+    }
     // participants_snapshot 是过滤后的最终上场名单 —— 用于 audit / outcome /
     // placeholder。strategy 已按 confidence desc 排序,这里保序。
     let participants_snapshot: Vec<Participant> = decision
@@ -181,6 +204,25 @@ pub async fn try_family_dispatch(
         .first()
         .map(|s| s.participants.clone())
         .unwrap_or_default();
+
+    // 4.9. L3 chime-in 资格 + **提前订阅**:必须在 submit 之前订阅事件总线。
+    //      否则 step 1 若在订阅建立前就完成(快返回 / 命中缓存场景),其
+    //      StepCompleted 事件会被错过(broadcast 只送订阅之后发出的事件)→
+    //      chime-in 永久挂在 recv() + receiver 泄漏。silence_fallback 时跳过
+    //      L3:其余候选刚在 L2 明确拒绝,不该再追问补刀。见 P2 修复 / 陪审团报告。
+    let chime_candidates: Vec<CompanionProfile> = if used_silence_fallback {
+        Vec::new()
+    } else {
+        candidate_profiles
+            .into_iter()
+            .filter(|p| !claimed_ids.contains(&p.id))
+            .collect()
+    };
+    let chime_rx = if chime_candidates.is_empty() {
+        None
+    } else {
+        Some(crate::engine::collaboration::events::subscribe())
+    };
 
     // 5. 派遣：提交单 companion 协作，并以 parent_id 串到本 session 上一个协作
     //    （每轮独立可审计 —— 设计步骤 5 拍板用 parent_id 链）。
@@ -272,13 +314,9 @@ pub async fn try_family_dispatch(
         .collect();
 
     // 6. L3 chime-in 第 2 轮:第 1 轮没接的候选,可能看了别人说啥后想补一刀。
-    //    后台 tokio task 跑:订阅事件 → 等 step 1 完成 → chime-in claim → AddStep。
-    //    fire-and-forget:失败 / abort / 没人补刀都默默退出,不影响第 1 轮派遣结果。
-    let chime_candidates: Vec<CompanionProfile> = candidate_profiles
-        .into_iter()
-        .filter(|p| !claimed_ids.contains(&p.id))
-        .collect();
-    if !chime_candidates.is_empty() {
+    //    后台 tokio task 跑:用 submit 前就建好的 rx 等 step 1 完成 → chime-in
+    //    claim → AddStep。fire-and-forget:失败 / abort / 没人补刀都默默退出。
+    if let Some(rx) = chime_rx {
         let db_bg = db.clone();
         let cfg_bg = cfg.clone();
         let intent_bg = user_message.to_string();
@@ -287,6 +325,7 @@ pub async fn try_family_dispatch(
             run_chime_in_background(
                 db_bg,
                 cfg_bg,
+                rx,
                 collab_id,
                 intent_bg,
                 history_bg,
@@ -305,8 +344,12 @@ pub async fn try_family_dispatch(
 
 /// L3 chime-in 后台流程 —— fire-and-forget,失败不抛错(只打 log)。
 ///
+/// `rx` 由调用方在 `submit` **之前**就订阅好并 move 进来 —— 这是修复竞态的
+/// 关键:若在本函数内部 submit 之后才订阅,step 1 的 `StepCompleted` 可能已
+/// 在订阅建立前发出而被错过。
+///
 /// 流程:
-/// 1. 订阅 collaboration event,等本 collab_id 的 step 1 `StepCompleted` 事件
+/// 1. 用传入的 rx 等本 collab_id 的 step 1 `StepCompleted` 事件
 /// 2. 同时监听 terminal 事件(Aborted/Failed/Completed),提前退出
 /// 3. 拿 step 1 transcript → run_chime_in_round → 过滤 yes
 /// 4. 有 yes → 构造 ParallelAgents step 2 → orch.mutate(AddStep) 追加
@@ -315,6 +358,7 @@ pub async fn try_family_dispatch(
 async fn run_chime_in_background(
     db: Arc<Database>,
     cfg: LLMConfig,
+    mut rx: tokio::sync::broadcast::Receiver<CollaborationEvent>,
     collab_id: i64,
     intent: String,
     chat_history: Vec<ChatTurnSummary>,
@@ -323,7 +367,6 @@ async fn run_chime_in_background(
 ) {
     let executor = Arc::new(ConcreteExecutor::new(cfg.clone()));
     let orch = SqliteOrchestrator::new(db.clone(), executor);
-    let mut rx = orch.subscribe_all();
 
     // 等 step 1 完成。同时监听 terminal 事件提前退出。lagged / channel 关也退。
     loop {

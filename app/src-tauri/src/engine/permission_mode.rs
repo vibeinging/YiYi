@@ -103,6 +103,55 @@ fn tp(name: &str, mode: PermissionMode) -> ToolPermission {
     }
 }
 
+/// hosted(buddy 托管)模式下能否**免人工审批**自动执行某工具 —— 风险分级的
+/// 单一真相源,派生自 `tool_permission_requirements()`。
+///
+/// 规则:只有 ReadOnly/Standard 类可在托管下免审;**所有 Full 类**
+/// (execute_shell / run_python / run_python_script / claude_code / browser_use)
+/// 一律需人工确认。未知工具按最保守处理(需人工)。
+///
+/// 修复前 `core.rs` 用一份手写的 `["execute_shell","delete_file"]` 黑名单决定免审,
+/// 漏掉了 run_python/claude_code/browser_use → 托管模式静默执行任意代码/全权委派,
+/// 是真实安全洞。收敛到这里后,新增 Full 工具自动纳入保护。见防屎山修复 A。
+pub fn auto_approvable_in_hosted(tool_name: &str) -> bool {
+    matches!(
+        tool_permission_requirements()
+            .into_iter()
+            .find(|t| t.tool_name == tool_name)
+            .map(|t| t.required_mode),
+        Some(PermissionMode::ReadOnly) | Some(PermissionMode::Standard)
+    )
+}
+
+#[cfg(test)]
+mod hosted_tests {
+    use super::*;
+
+    #[test]
+    fn full_tools_never_auto_approved_in_hosted() {
+        // 不变量:任何 Full 类工具都不得在托管模式免审。遍历真相源锁死,
+        // 新增 Full 工具若漏配会让此测试失败。
+        for t in tool_permission_requirements() {
+            if t.required_mode == PermissionMode::Full {
+                assert!(
+                    !auto_approvable_in_hosted(&t.tool_name),
+                    "Full 类工具 {} 不应在 hosted 下免审",
+                    t.tool_name
+                );
+            }
+        }
+        // 点名几个危险工具,显式断言。
+        for danger in ["execute_shell", "run_python", "claude_code", "browser_use"] {
+            assert!(!auto_approvable_in_hosted(danger), "{danger} 必须需人工");
+        }
+        // Standard/ReadOnly 可免审。
+        assert!(auto_approvable_in_hosted("write_file"));
+        assert!(auto_approvable_in_hosted("read_file"));
+        // 未知工具保守。
+        assert!(!auto_approvable_in_hosted("some_unknown_tool"));
+    }
+}
+
 /// Permission policy that evaluates tool access based on mode + rules.
 pub struct PermissionPolicy {
     active_mode: PermissionMode,

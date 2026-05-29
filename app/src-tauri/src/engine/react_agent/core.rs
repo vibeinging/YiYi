@@ -345,7 +345,7 @@ where
         // reasoned about them, dragging the raw PNG along is dead weight.
         evict_old_screenshots(&mut messages, MAX_KEEP_SCREENSHOTS);
 
-        let response = match chat_completion_stream(config, &messages, &tools, {
+        let mut response = match chat_completion_stream(config, &messages, &tools, {
             let cb = on_event.clone();
             move |evt| {
                 match evt {
@@ -357,7 +357,7 @@ where
         }, cancelled).await {
             Ok(r) => r,
             Err(e) if is_context_overflow_error(&e) => {
-                log::warn!("Context overflow in stream, force-compacting and retrying: {}", &e[..e.len().min(200)]);
+                log::warn!("Context overflow in stream, force-compacting and retrying: {}", crate::engine::text_util::truncate_bytes(&e, 200));
                 on_event(AgentStreamEvent::ContextOverflowRetry);
                 force_compact_messages(&mut messages, config, working_dir).await;
                 let cb2 = on_event.clone();
@@ -371,6 +371,36 @@ where
             }
             Err(e) => return Err(e),
         };
+
+        // Scavenge:DeepSeek/R1 有时把工具调用写进 content/reasoning 文本而非结构化
+        // tool_calls 字段。结构化字段为空但文本里有可解析、且工具名已知的调用时,捞回
+        // 来填进 tool_calls —— 否则它会被当成最终答案吐给用户、工具不执行(缓存 P0-3)。
+        // 在 push 进历史**之前**做,让历史里的 assistant 消息也带上捞回的 tool_calls。
+        if response.message.tool_calls.as_ref().map_or(true, |t| t.is_empty()) {
+            let content_text = response
+                .message
+                .content
+                .as_ref()
+                .and_then(|c| c.as_text())
+                .unwrap_or("");
+            let reasoning_text = response.message.reasoning_content.as_deref().unwrap_or("");
+            if !content_text.trim().is_empty() || !reasoning_text.trim().is_empty() {
+                let known: Vec<String> =
+                    tools.iter().map(|t| t.function.name.clone()).collect();
+                let salvaged = crate::engine::tools::scavenge_tool_calls(
+                    content_text,
+                    reasoning_text,
+                    &known,
+                );
+                if !salvaged.is_empty() {
+                    log::info!(
+                        "Scavenged {} tool-call(s) from content/reasoning that the model didn't emit as structured tool_calls",
+                        salvaged.len()
+                    );
+                    response.message.tool_calls = Some(salvaged);
+                }
+            }
+        }
 
         messages.push(response.message.clone());
 
@@ -531,10 +561,12 @@ where
                 }
 
                 if let PermissionOutcome::NeedsConfirmation { reason } = &perm_outcome {
-                    // Buddy hosted mode: auto-approve non-destructive tools
-                    let high_risk = matches!(tool_name.as_str(),
-                        "execute_shell" | "delete_file");
-                    if crate::engine::buddy_delegate::is_hosted() && !high_risk {
+                    // Buddy hosted mode: 只免审 ≤Standard 类工具。风险分级收敛到
+                    // permission_mode 单一真相源 —— 所有 Full 类(execute_shell/
+                    // run_python/claude_code/browser_use 等)一律需人工,堵掉旧的
+                    // 手写黑名单漏配导致的静默批准任意代码执行洞(见防屎山修复 A)。
+                    let auto_ok = crate::engine::permission_mode::auto_approvable_in_hosted(tool_name);
+                    if crate::engine::buddy_delegate::is_hosted() && auto_ok {
                         let friendly = humanize_tool_action(tool_name, tool_input);
                         log::info!("Buddy auto-approved: {}", friendly);
                         // Proceed without asking user
@@ -772,6 +804,10 @@ where
                 // (DeepSeek V4) still see the textual summary; the
                 // artifact pipeline meanwhile shows the visual to the
                 // user regardless.
+                // 入 messages 前安全截断:多数工具内部已自截,但个别(读大文件 /
+                // 长 stdout / 失败重试堆叠)可能很大。不截会逐轮撑大上下文、污染
+                // prefix cache。head 80% / tail 20% 保留首尾。见缓存 P1-3。
+                let output = crate::engine::tools::truncate_output(&output, 16000);
                 let envelope = crate::engine::llm_client::MultimodalEnvelope
                     ::with_images(output, images);
                 let vision_capable = crate::engine::llm_client::model_has_vision(config);
@@ -818,11 +854,19 @@ where
                 let existing_names: std::collections::HashSet<String> = tools.iter()
                     .map(|t| t.function.name.clone())
                     .collect();
+                let mut injected = false;
                 for tool in new_tools {
                     if !existing_names.contains(&tool.function.name) {
                         log::info!("Dynamic tool injection: adding '{}' to active tools", tool.function.name);
                         tools.push(tool);
+                        injected = true;
                     }
+                }
+                // 注入后按名重排,让发给 DeepSeek 的 tools 数组保持确定排列(与 registry
+                // 出口同序)。否则 push 到末尾会让 tool_search 之后的前缀偏离基线、且多次
+                // search 的堆叠顺序不确定 → prefix cache 漂移。见缓存 P1-1。
+                if injected {
+                    tools.sort_by(|a, b| a.function.name.cmp(&b.function.name));
                 }
             }
 
@@ -903,6 +947,7 @@ fn emit_usage<F: Fn(AgentStreamEvent)>(
         input_tokens: cum.input_tokens,
         output_tokens: cum.output_tokens,
         cache_read_tokens: cum.prompt_cache_hit_tokens,
+        cache_creation_tokens: cum.prompt_cache_miss_tokens,
         estimated_cost_usd: cost,
     });
 }

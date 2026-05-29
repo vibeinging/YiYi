@@ -109,7 +109,11 @@ pub enum AgentStreamEvent {
     Usage {
         input_tokens: u32,
         output_tokens: u32,
+        /// prefix-cache 命中 token(便宜)。
         cache_read_tokens: u32,
+        /// prefix-cache 未命中 token(贵 ~120×)。过去事件没带这个,导致主路径
+        /// 写库 miss 恒为 0、命中率算不准 —— 现接通真实 miss(缓存 P0-4)。
+        cache_creation_tokens: u32,
         estimated_cost_usd: Option<f64>,
     },
     Complete,

@@ -206,5 +206,5 @@ pub async fn send_message(
 pub async fn test_connection(corp_id: &str, corp_secret: &str) -> Result<String, String> {
     let token = get_access_token(corp_id, corp_secret).await?;
     // Token obtained successfully — credentials are valid
-    Ok(format!("WeCom credentials verified (token: {}...)", &token[..token.len().min(8)]))
+    Ok(format!("WeCom credentials verified (token: {}...)", crate::engine::text_util::truncate_bytes(&token, 8)))
 }

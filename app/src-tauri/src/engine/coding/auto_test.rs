@@ -135,7 +135,7 @@ async fn run_command(cmd: &str, cwd: &Path) -> Option<AutoTestResult> {
             let truncated = if combined.len() > MAX_OUTPUT_BYTES {
                 format!(
                     "{}...\n[output truncated, {} bytes total]",
-                    &combined[..MAX_OUTPUT_BYTES],
+                    crate::engine::text_util::truncate_bytes(&combined, MAX_OUTPUT_BYTES),
                     combined.len()
                 )
             } else {

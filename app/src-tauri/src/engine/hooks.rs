@@ -325,6 +325,9 @@ struct ParsedOutput {
     permission_override: Option<PermissionOverride>,
     permission_reason: Option<String>,
     updated_input: Option<String>,
+    /// exit-0 但 JSON 里带了明确拒绝信号(continue:false / decision:"block" /
+    /// permissionDecision:"deny")。修复前这些信号被解析却丢弃 → 静默放行。
+    explicit_deny: bool,
 }
 
 fn run_single_command(
@@ -383,6 +386,8 @@ fn run_single_command(
     let parsed = parse_hook_output(&stdout);
 
     match output.status.code() {
+        // exit-0 但 JSON 带明确拒绝信号 → 当作拒绝(过去这里静默放行,是安全洞)。
+        Some(0) if parsed.explicit_deny => CommandOutcome::Deny { parsed },
         Some(0) => CommandOutcome::Allow { parsed },
         Some(2) => CommandOutcome::Deny { parsed },
         code => CommandOutcome::Failed {
@@ -404,6 +409,7 @@ fn parse_hook_output(stdout: &str) -> ParsedOutput {
     let mut permission_override = None;
     let mut permission_reason = None;
     let mut updated_input = None;
+    let mut explicit_deny = false;
 
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(stdout) {
         // Extract message
@@ -412,12 +418,13 @@ fn parse_hook_output(stdout: &str) -> ParsedOutput {
                 messages.push(msg.to_string());
             }
         }
-        // Check for explicit deny
+        // 明确拒绝信号 —— 这两个字段过去被解析却丢弃,导致 exit-0 + block 静默放行。
+        // 现在真正映射成拒绝(在 run_single_command 里把 exit-0+explicit_deny 当 Deny)。
         if json.get("continue").and_then(|v| v.as_bool()) == Some(false) {
-            // continue: false means deny
+            explicit_deny = true;
         }
         if json.get("decision").and_then(|v| v.as_str()) == Some("block") {
-            // decision: "block" means deny
+            explicit_deny = true;
         }
         // Extract hook-specific output
         if let Some(specific) = json.get("hookSpecificOutput") {
@@ -428,7 +435,10 @@ fn parse_hook_output(stdout: &str) -> ParsedOutput {
             }
             match specific.get("permissionDecision").and_then(|v| v.as_str()) {
                 Some("allow") => permission_override = Some(PermissionOverride::Allow),
-                Some("deny") => permission_override = Some(PermissionOverride::Deny),
+                Some("deny") => {
+                    permission_override = Some(PermissionOverride::Deny);
+                    explicit_deny = true; // deny 决定必须真正拦截执行
+                }
                 Some("ask") => permission_override = Some(PermissionOverride::Ask),
                 _ => {}
             }
@@ -448,6 +458,7 @@ fn parse_hook_output(stdout: &str) -> ParsedOutput {
         permission_override,
         permission_reason,
         updated_input,
+        explicit_deny,
     }
 }
 
@@ -519,6 +530,37 @@ mod tests {
         let r = HookRunResult::fail(vec!["bad".into()]);
         assert!(r.is_failed());
         assert!(r.is_blocked());
+    }
+
+    // 防屎山修复 B:exit-0 的 JSON 拒绝信号必须被解析为 explicit_deny,
+    // 否则 hook 写了 deny 却被静默放行(安全洞)。
+    #[test]
+    fn parse_hook_output_detects_continue_false_as_deny() {
+        let p = parse_hook_output(r#"{"continue": false, "reason": "no"}"#);
+        assert!(p.explicit_deny, "continue:false 应判为拒绝");
+    }
+
+    #[test]
+    fn parse_hook_output_detects_decision_block_as_deny() {
+        let p = parse_hook_output(r#"{"decision": "block"}"#);
+        assert!(p.explicit_deny, "decision:block 应判为拒绝");
+    }
+
+    #[test]
+    fn parse_hook_output_detects_permission_deny_as_deny() {
+        let p = parse_hook_output(
+            r#"{"hookSpecificOutput": {"permissionDecision": "deny"}}"#,
+        );
+        assert!(p.explicit_deny, "permissionDecision:deny 应判为拒绝");
+        assert_eq!(p.permission_override, Some(PermissionOverride::Deny));
+    }
+
+    #[test]
+    fn parse_hook_output_plain_message_is_not_deny() {
+        // 纯反馈消息、无拒绝信号 → 不拦截(不回归)。
+        let p = parse_hook_output(r#"{"reason": "just a note"}"#);
+        assert!(!p.explicit_deny);
+        assert_eq!(p.messages, vec!["just a note".to_string()]);
     }
 
     #[test]

@@ -11,10 +11,10 @@
  */
 
 import { useEffect, useState } from 'react'
-import { X, Trash2 } from 'lucide-react'
+import { X, Trash2, Loader2, UsersRound } from 'lucide-react'
 import {
   addCompanionToGroup,
-  createCompanionGroup,
+  createGroupWithMembers,
   deleteCompanionGroup,
   listGroupMembers,
   removeCompanionFromGroup,
@@ -25,6 +25,7 @@ import {
 import { listCompanions, type Companion } from '../../api/companions'
 import { useGroupsStore } from '../../stores/groupsStore'
 import { toast, confirm } from '../Toast'
+import { validateGroupForm } from '../../utils/group'
 
 type Mode =
   | { kind: 'create'; sessionId: string }
@@ -73,24 +74,24 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
 
   const handleSave = async () => {
     const trimmed = name.trim()
-    if (!trimmed) {
-      toast.error('群名不能为空')
-      return
-    }
-    if (isCreate && memberIds.size < 2) {
-      toast.error('群需要至少 2 位成员(单聊一位直接在输入框 @)')
+    const err = validateGroupForm(trimmed, memberIds, isCreate)
+    if (err) {
+      toast.error(err)
       return
     }
     setBusy(true)
     try {
       if (isCreate) {
-        const gid = await createCompanionGroup(trimmed, emoji.trim() || null, null)
-        for (const cid of memberIds) {
-          await addCompanionToGroup(gid, cid)
+        // 建群 + 加成员(中途失败自动回滚删组),再把当前 session 绑到新群 ——
+        // 单聊原地升级成群聊(IM 心智:对话不动,但从此 YiYi 让位给群成员)。
+        // 绑定失败也回滚删组:这是"原地升级"语义,绑不上等于升级没成功。
+        const gid = await createGroupWithMembers(trimmed, emoji.trim() || null, memberIds)
+        try {
+          await setSessionGroup(mode.sessionId, gid)
+        } catch (e) {
+          await deleteCompanionGroup(gid).catch(() => {})
+          throw e
         }
-        // 把当前 session 绑到新建的家族 —— 单聊原地升级成群聊(IM 心智:对话
-        // 不动,但从此 YiYi 让位给群成员)。
-        await setSessionGroup(mode.sessionId, gid)
         toast.info(`已建群「${trimmed}」(${memberIds.size} 人),对话已变成群聊`)
         void useGroupsStore.getState().load()
         // 清成员缓存:这是新组,membersByGroup 还没拉过,下次自动拉。
@@ -142,7 +143,7 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
   return (
     <div
       className="fixed inset-0 z-[80] flex items-center justify-center"
-      style={{ background: 'rgba(0,0,0,0.4)' }}
+      style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(4px)' }}
       onClick={onClose}
     >
       <div
@@ -173,7 +174,7 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
               }}
             >
               👪 这个对话将变成群聊 —— 拉伙伴进群后,以后 YiYi 不再单独回复你,
-              而是大家一起在群里说。想保留纯单聊请新建一个对话。
+              而是大家一起在群里说。<b>升级后不能退回单聊</b>,想保留纯单聊请改为新建一个对话。
             </div>
           )}
           <div className="flex items-center gap-2">
@@ -212,6 +213,7 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
                     checked={checked}
                     onChange={() => toggleMember(c.id)}
                     className="cursor-pointer"
+                    style={{ accentColor: 'var(--color-primary)' }}
                   />
                   <span className="text-[14px]">{c.avatar_emoji}</span>
                   <span className="flex-1 text-[12px] truncate" style={{ color: checked ? 'var(--color-text)' : 'var(--color-text-muted)' }}>
@@ -221,8 +223,10 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
               )
             })}
             {companions.length === 0 && (
-              <div className="py-3 text-center text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
-                还没养任何伙伴 —— 先去"我的伙伴"里收养
+              <div className="flex flex-col items-center gap-2 py-6 text-center" style={{ color: 'var(--color-text-muted)' }}>
+                <UsersRound size={26} style={{ opacity: 0.5 }} />
+                <div className="text-[12px]">还没养任何伙伴</div>
+                <div className="text-[11px]" style={{ opacity: 0.8 }}>先去"我的伙伴"里收养一个,再来建群</div>
               </div>
             )}
           </div>
@@ -254,9 +258,10 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
             <button
               onClick={handleSave}
               disabled={busy}
-              className="text-[12px] px-3 py-1.5 rounded font-medium disabled:opacity-50"
+              className="flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded font-medium transition-[filter] hover:brightness-110 active:brightness-95 disabled:opacity-50"
               style={{ background: 'var(--color-primary)', color: 'white' }}
             >
+              {busy && <Loader2 size={12} className="animate-spin" />}
               {isCreate ? '建群' : '保存'}
             </button>
           </div>

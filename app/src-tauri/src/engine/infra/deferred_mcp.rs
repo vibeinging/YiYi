@@ -135,6 +135,9 @@ pub fn stubs_for_active_deferrals() -> Vec<ToolDefinition> {
             ));
         }
     }
+    // 按名排序:registry 是 HashMap,keys() 迭代每进程随机。这些 stub 会经
+    // tool_search 注入进 tools 数组,无序会让 DeepSeek 的 tools 前缀漂移。见缓存 P1-1。
+    out.sort_by(|a, b| a.function.name.cmp(&b.function.name));
     out
 }
 

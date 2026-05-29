@@ -258,7 +258,21 @@ pub async fn chat_stream_start(
             Ok(FamilyDispatchOutcome::SelfAnswer { reason }) => {
                 // 主精灵自答 —— 不显示任何"亲自回"提示(用户决策:路由卡不要),
                 // 直接走主 agent 流程(下面 spawn 处)。reason 只走日志。
+                // 注:assistant 消息在前端恒以 YiYi 头像渲染,所以群里自答已正确
+                // 署名为 YiYi,不会被误当成群成员发言。
                 log::info!("family_dispatch → self-answer: {reason}");
+            }
+            Ok(FamilyDispatchOutcome::EmptyGroup) => {
+                // 空群:不能无声让主精灵冒充群成员。给一条可见系统提示并结束本轮,
+                // 引导用户去群管理拉人。见 P0-2 修复。
+                log::info!("family_dispatch → empty group, prompting user to add members");
+                let hint = "这个群还没有成员 —— 点群聊顶栏的「管理」拉几位伙伴进来,大家才能开聊。";
+                let _ = state.db.push_message(&sid, "assistant", hint);
+                app.emit("chat://complete", serde_json::json!({
+                    "text": hint,
+                    "session_id": sid,
+                })).ok();
+                return Ok(());
             }
             Err(e) => {
                 log::warn!("family_dispatch 失败,回落主精灵自答:{e}");
@@ -432,19 +446,21 @@ pub async fn chat_stream_start(
                         }
                     }
                 }
-                react_agent::AgentStreamEvent::Usage { input_tokens, output_tokens, cache_read_tokens, estimated_cost_usd } => {
+                react_agent::AgentStreamEvent::Usage { input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, estimated_cost_usd } => {
                     handle.emit("chat://usage", serde_json::json!({
                         "session_id": sid_for_event,
                         "input_tokens": input_tokens,
                         "output_tokens": output_tokens,
                         "cache_read_tokens": cache_read_tokens,
+                        "cache_creation_tokens": cache_creation_tokens,
                         "estimated_cost_usd": estimated_cost_usd,
                     })).ok();
-                    // Persist to DB for historical queries
+                    // Persist to DB for historical queries. miss 传真实值(过去硬编码 0,
+                    // 让命中率算不准)—— 缓存 P0-4。
                     if let Some(db) = crate::engine::tools::get_database() {
                         db.record_usage(
                             &sid_for_event, &model_for_event,
-                            *input_tokens, *output_tokens, *cache_read_tokens, 0,
+                            *input_tokens, *output_tokens, *cache_read_tokens, *cache_creation_tokens,
                             estimated_cost_usd.unwrap_or(0.0),
                         );
                     }

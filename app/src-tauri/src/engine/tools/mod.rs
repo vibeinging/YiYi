@@ -97,7 +97,7 @@ pub use internal::{
     build_mcp_skill_overrides, repair_json, spawn_task_execution, strip_stage_markers,
     write_progress_json,
 };
-pub(crate) use internal::{strip_frontmatter, truncate_output};
+pub(crate) use internal::{scavenge_tool_calls, strip_frontmatter, truncate_output};
 
 // ── Re-exports: catalog ────────────────────────────────────────────
 pub use catalog::{builtin_tools, core_tools, deferred_tools, resolve_deferred_tools};

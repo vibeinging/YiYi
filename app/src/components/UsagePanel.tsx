@@ -101,9 +101,12 @@ export function UsagePanel() {
   }
 
   const totalTokens = (summary?.total_input_tokens ?? 0) + (summary?.total_output_tokens ?? 0);
-  const cacheHitRate = totalTokens > 0
-    ? ((summary?.total_prompt_cache_hit_tokens ?? 0) / (summary?.total_input_tokens || 1) * 100)
-    : 0;
+  // 命中率按 DeepSeek 计费口径 hit / (hit + miss)。后端主路径已接通真实 miss
+  // (缓存 P0-4),分母用 hit+miss 比旧的 total_input 更准(也对得上账单)。
+  const cacheHit = summary?.total_prompt_cache_hit_tokens ?? 0;
+  const cacheMiss = summary?.total_prompt_cache_miss_tokens ?? 0;
+  const cacheBase = cacheHit + cacheMiss;
+  const cacheHitRate = cacheBase > 0 ? (cacheHit / cacheBase * 100) : 0;
   // Estimated savings from prefix-cache hits — assumes Pro promo pricing for
   // the headline number (Flash gap is 50× rather than 120×, so this slightly
   // overstates Flash savings — close enough for a "feel-good" number).

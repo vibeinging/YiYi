@@ -241,34 +241,47 @@ impl Executor for ConcreteExecutor {
                     });
                 }
                 let results: Vec<Result<StepOutput, String>> = join_all(futures).await;
-                // Aggregate: first failure aborts; otherwise concat summaries
-                // / full_outputs by participant index for the upstream
-                // HostSummarize step.
+                // 部分容错:收集成功者的 output,跳过失败者(只记日志),**仅当全员
+                // 失败才整步 Err**。群聊里一个分身答不出来不该让全群"未完成"——
+                // 其余成员的发言已通过 Token 事件流到前端,整步成功才能让这些
+                // 气泡保留为"说完"。见 P1 修复 / docs/review/2026-05-29_jury。
                 let mut combined_summary = String::new();
                 let mut combined_full = String::new();
                 let mut total_tokens = TokenUsage::default();
                 let mut max_duration_ms: u64 = 0;
+                let mut success_count = 0usize;
+                let mut failures: Vec<String> = Vec::new();
                 for (idx, r) in results.into_iter().enumerate() {
-                    let out = r.map_err(|e| {
-                        format!("participant {} ({}): {e}", idx, step.participants[idx].name)
-                    })?;
-                    if !combined_summary.is_empty() {
-                        combined_summary.push_str("\n\n");
-                        combined_full.push_str("\n\n");
+                    let name = &step.participants[idx].name;
+                    match r {
+                        Ok(out) => {
+                            if success_count > 0 {
+                                combined_summary.push_str("\n\n");
+                                combined_full.push_str("\n\n");
+                            }
+                            combined_summary.push_str(&format!("【{}】{}", name, out.summary));
+                            combined_full.push_str(&format!("【{}】{}", name, out.full_output));
+                            total_tokens.input += out.tokens_used.input;
+                            total_tokens.output += out.tokens_used.output;
+                            if out.duration_ms > max_duration_ms {
+                                max_duration_ms = out.duration_ms;
+                            }
+                            success_count += 1;
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "ParallelAgents 成员 {idx} ({name}) 没回上来,跳过: {e}"
+                            );
+                            failures.push(format!("{name}: {e}"));
+                        }
                     }
-                    combined_summary.push_str(&format!(
-                        "【{}】{}",
-                        step.participants[idx].name, out.summary
+                }
+                if success_count == 0 {
+                    return Err(format!(
+                        "所有 {} 位成员都没回上来: {}",
+                        step.participants.len(),
+                        failures.join("; ")
                     ));
-                    combined_full.push_str(&format!(
-                        "【{}】{}",
-                        step.participants[idx].name, out.full_output
-                    ));
-                    total_tokens.input += out.tokens_used.input;
-                    total_tokens.output += out.tokens_used.output;
-                    if out.duration_ms > max_duration_ms {
-                        max_duration_ms = out.duration_ms;
-                    }
                 }
                 Ok(StepOutput {
                     summary: combined_summary,

@@ -11,10 +11,8 @@
 import { useEffect, useState } from 'react'
 import { ChevronDown, ChevronUp, Plus, Pencil, Trash2, Check, X } from 'lucide-react'
 import {
-  createCompanionGroup,
-  listCompanionGroups,
+  createGroupWithMembers,
   deleteCompanionGroup,
-  listGroupMembers,
   addCompanionToGroup,
   removeCompanionFromGroup,
   updateCompanionGroup,
@@ -22,9 +20,10 @@ import {
   type CompanionGroup,
 } from '../../api/groups'
 import { listCompanions, type Companion } from '../../api/companions'
-import { toast } from '../Toast'
+import { toast, confirm } from '../Toast'
 import { useGroupsStore } from '../../stores/groupsStore'
 import { useSessionStore } from '../../stores/sessionStore'
+import { validateGroupForm } from '../../utils/group'
 
 type EditForm = {
   /** undefined = 新建模式;非空 = 编辑既有组。 */
@@ -40,28 +39,21 @@ function emptyForm(): EditForm {
 
 export function FamilyGroupsSection() {
   const [expanded, setExpanded] = useState(false)
-  const [groups, setGroups] = useState<CompanionGroup[]>([])
   const [companions, setCompanions] = useState<Companion[]>([])
   /** null = 不在编辑;非空 = 正在新建或编辑某组(顶部固定的表单)。 */
   const [form, setForm] = useState<EditForm | null>(null)
-  /** 缓存:gid → 已加入的 companion ids,展示"X 人"用,展开编辑时也用作初值。 */
-  const [memberCache, setMemberCache] = useState<Map<number, number[]>>(new Map())
+
+  // 单一数据源:groups 元数据 + 成员都读 groupsStore,不再维护本地副本
+  // (避免与 ChatHeader / AvatarGrid 那份缓存不同步 —— 修复 P1)。
+  const groups = useGroupsStore(s => s.groups)
+  const membersByGroup = useGroupsStore(s => s.membersByGroup)
+  const ensureMembers = useGroupsStore(s => s.ensureMembers)
 
   const refreshGroups = async () => {
-    try {
-      const gs = await listCompanionGroups()
-      setGroups(gs)
-      // 拉每组的成员 id(轻量,N+1 在 N<=20 的家族数量下可接受)。
-      const cache = new Map<number, number[]>()
-      for (const g of gs) {
-        try {
-          const members = await listGroupMembers(g.id)
-          cache.set(g.id, members.map(m => m.id))
-        } catch { /* 跳过,UI 会显示 0 人 */ }
-      }
-      setMemberCache(cache)
-    } catch (e) {
-      console.error('listCompanionGroups failed', e)
+    await useGroupsStore.getState().load()
+    // 预拉每组成员,展示"X 人"用(命中缓存秒回,共享 inflight Promise)。
+    for (const g of useGroupsStore.getState().groups) {
+      void ensureMembers(g.id)
     }
   }
 
@@ -74,7 +66,7 @@ export function FamilyGroupsSection() {
 
   const startCreate = () => setForm(emptyForm())
   const startEdit = (g: CompanionGroup) => {
-    const memberIds = new Set(memberCache.get(g.id) ?? [])
+    const memberIds = new Set((membersByGroup.get(g.id) ?? []).map(m => m.id))
     setForm({ id: g.id, name: g.name, emoji: g.emoji ?? '', memberIds })
   }
   const cancelEdit = () => setForm(null)
@@ -89,35 +81,39 @@ export function FamilyGroupsSection() {
 
   const handleSave = async () => {
     if (!form) return
-    const name = form.name.trim()
-    if (!name) {
-      toast.error('群名不能为空')
+    const err = validateGroupForm(form.name, form.memberIds, form.id == null)
+    if (err) {
+      toast.error(err)
       return
     }
+    const name = form.name.trim()
     try {
       if (form.id == null) {
-        // 新建:建组 + 加成员 + **自动开一个绑定本组的新对话进入**(IM 心智:
-        // 建群 = 立刻进入这个群聊,而不是建完留在管理面板)。
-        const gid = await createCompanionGroup(name, form.emoji || null, null)
-        for (const cid of form.memberIds) {
-          await addCompanionToGroup(gid, cid)
-        }
+        // 新建:建组 + 加成员(中途失败自动回滚删组,不留半成品群) +
+        // **自动开一个绑定本组的新对话进入**(IM 心智:建群 = 立刻进入这个群聊)。
+        const gid = await createGroupWithMembers(name, form.emoji || null, form.memberIds)
         const sid = await useSessionStore.getState().createNewChat()
         try {
           await setSessionGroup(sid, gid)
         } catch (e) {
-          // 绑定失败不致命,提示用户手工再做。
+          // 绑定失败:**不**进半成品会话(那会变成"看着像群、实际单聊")。
+          // 群已建好,提示用户去列表手动进入。
           console.error('setSessionGroup after createCompanionGroup failed', e)
-          toast.error(`已建群但绑定到对话失败: ${e}`)
+          toast.error(`已建群「${name}」,但进入对话失败,可在上方列表点它进入`)
+          setForm(null)
+          await refreshGroups()
+          useGroupsStore.getState().invalidateMembers(gid)
+          return
         }
         useSessionStore.getState().switchToSession(sid)
         // 切主区到 chat 页(App.tsx 监听 'navigate' 事件 setCurrentPage)。
         window.dispatchEvent(new CustomEvent('navigate', { detail: 'chat' }))
         toast.info(`已建群「${name}」并开新对话(${form.memberIds.size} 人)`)
+        useGroupsStore.getState().invalidateMembers(gid)
       } else {
-        // 编辑:diff 成员 → add/remove。
+        // 编辑:diff 成员 → add/remove。before 取自 store 的单一缓存。
         await updateCompanionGroup(form.id, name, form.emoji || null, null)
-        const before = new Set(memberCache.get(form.id) ?? [])
+        const before = new Set((membersByGroup.get(form.id) ?? []).map(m => m.id))
         const after = form.memberIds
         for (const cid of after) {
           if (!before.has(cid)) await addCompanionToGroup(form.id, cid)
@@ -126,25 +122,26 @@ export function FamilyGroupsSection() {
           if (!after.has(cid)) await removeCompanionFromGroup(form.id, cid)
         }
         toast.info(`已更新群「${name}」`)
+        useGroupsStore.getState().invalidateMembers(form.id)
       }
       setForm(null)
       await refreshGroups()
-      // 同步刷新全局 store —— 让 TaskSidebar 的 session 前缀、ChatInput 家族下拉、
-      // BuddyPanel 共享记忆 chips 等所有订阅方立即看到新组/改名。
-      void useGroupsStore.getState().load()
     } catch (e) {
       toast.error(`操作失败: ${e}`)
     }
   }
 
   const handleDelete = async (g: CompanionGroup) => {
-    if (!window.confirm(`确定删除群「${g.name}」?成员关系会一起清,这个群累积的共享记忆桶保留(可在"群共享记忆"里手动清)。`)) return
+    const ok = await confirm(
+      `确定删除群「${g.name}」?成员关系会一起清,这个群累积的共享记忆桶保留(可在"群共享记忆"里手动清)。`,
+    )
+    if (!ok) return
     try {
       await deleteCompanionGroup(g.id)
       toast.info(`已删除群「${g.name}」`)
       if (form?.id === g.id) setForm(null)
+      useGroupsStore.getState().invalidateMembers(g.id)
       await refreshGroups()
-      void useGroupsStore.getState().load()
     } catch (e) {
       toast.error(`删除失败: ${e}`)
     }
@@ -212,6 +209,7 @@ export function FamilyGroupsSection() {
                         checked={checked}
                         onChange={() => toggleMember(c.id)}
                         className="cursor-pointer"
+                        style={{ accentColor: 'var(--color-primary)' }}
                       />
                       <span>{c.avatar_emoji}</span>
                       <span className="truncate" style={{ color: checked ? 'var(--color-text)' : 'var(--color-text-muted)' }}>
@@ -254,7 +252,7 @@ export function FamilyGroupsSection() {
             </div>
           )}
           {groups.map(g => {
-            const memberCount = memberCache.get(g.id)?.length ?? 0
+            const memberCount = membersByGroup.get(g.id)?.length ?? 0
             const isEditing = form?.id === g.id
             return (
               <div

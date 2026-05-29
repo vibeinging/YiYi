@@ -29,7 +29,7 @@ pub use cronjobs::{ExecutionMode, CronJobRow, CronJobExecutionRow, HeartbeatRow}
 pub use workspace::{AuthorizedFolderRow, SensitivePathRow};
 pub use users::{UnifiedUserRow, UserIdentityRow};
 pub use tasks::TaskInfo;
-pub use growth::{MeditationSession, BuddyDecision, TrustStats, PersonalitySignal, PersonalitySignalRow, SparklingMemory, RecallCandidate, PERSONALITY_BASE_STAT, invalidate_personality_cache};
+pub use growth::{MeditationSession, BuddyDecision, TrustStats, PersonalitySignal, PersonalitySignalRow, PERSONALITY_BASE_STAT, invalidate_personality_cache};
 pub use inbox::{InboxItem, NewInboxItem};
 pub use traces::{AgentTrace, NewAgentTrace};
 pub use quick_actions::QuickActionRow;
@@ -248,23 +248,8 @@ impl Database {
                 created_at INTEGER NOT NULL
             );
 
-            -- Memory entries (structured knowledge store)
-            CREATE TABLE IF NOT EXISTS memories (
-                id TEXT PRIMARY KEY,
-                session_id TEXT,
-                content TEXT NOT NULL,
-                category TEXT NOT NULL DEFAULT 'fact',
-                tier TEXT NOT NULL DEFAULT 'warm',
-                confidence REAL NOT NULL DEFAULT 0.5,
-                source TEXT NOT NULL DEFAULT 'extraction',
-                reviewed_by_meditation INTEGER DEFAULT 0,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
-            CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id);
-            CREATE INDEX IF NOT EXISTS idx_memories_updated ON memories(updated_at);
-            -- tier/confidence indexes are created in migrate_tables() after ALTER TABLE
+            -- (memories 表已退役 —— 记忆现存于 MemMe/DuckDB。旧 SQLite memories
+            --  表 + FTS + 触发器由 migrate_tables() 里的一次性 DROP 迁移清理。)
 
             -- Personality signals: tracks Buddy personality evolution from interactions
             CREATE TABLE IF NOT EXISTS personality_signals (
@@ -301,40 +286,8 @@ impl Database {
         )
         .map_err(|e| format!("Failed to create tables: {}", e))?;
 
-        // Create FTS5 virtual table for full-text search on memories.
-        // Uses unicode61 tokenizer which handles CJK (Chinese/Japanese/Korean) and Latin text.
-        // We use a content-sync (external content) approach: the FTS index mirrors
-        // the `memories` table so we can do BM25 ranking while keeping a single
-        // source-of-truth in the regular table.
-        conn.execute_batch(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-                content,
-                category,
-                content='memories',
-                content_rowid='rowid',
-                tokenize='unicode61'
-            );"
-        )
-        .map_err(|e| format!("Failed to create FTS5 table: {}", e))?;
-
-        // Triggers to keep FTS index in sync with the memories table.
-        conn.execute_batch(
-            "CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-                INSERT INTO memories_fts(rowid, content, category)
-                VALUES (new.rowid, new.content, new.category);
-            END;
-            CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-                INSERT INTO memories_fts(memories_fts, rowid, content, category)
-                VALUES ('delete', old.rowid, old.content, old.category);
-            END;
-            CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-                INSERT INTO memories_fts(memories_fts, rowid, content, category)
-                VALUES ('delete', old.rowid, old.content, old.category);
-                INSERT INTO memories_fts(rowid, content, category)
-                VALUES (new.rowid, new.content, new.category);
-            END;"
-        )
-        .map_err(|e| format!("Failed to create FTS triggers: {}", e))?;
+        // (memories_fts 虚表 + 同步触发器已随 memories 表一起退役,见上方说明
+        //  与 migrate_tables() 的 DROP 迁移。)
 
         // Persistent agents tables
         conn.execute_batch(
@@ -922,35 +875,17 @@ impl Database {
             log::info!("Migrated tasks table: added workspace_path column");
         }
 
-        // Growth System: add access_count and last_accessed_at to memories table
-        let has_access_count: bool = conn
-            .prepare("SELECT access_count FROM memories LIMIT 0")
-            .is_ok();
-        if !has_access_count {
-            conn.execute_batch(
-                "ALTER TABLE memories ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0;
-                 ALTER TABLE memories ADD COLUMN last_accessed_at INTEGER DEFAULT NULL;"
-            ).map_err(|e| format!("Migration error (memories growth): {}", e))?;
-            log::info!("Migrated memories table: added access_count, last_accessed_at columns");
-        }
-
-        // Growth V2: add tier, confidence, source, reviewed_by_meditation to memories
-        let has_mem_tier: bool = conn
-            .prepare("SELECT tier FROM memories LIMIT 0")
-            .is_ok();
-        if !has_mem_tier {
-            conn.execute_batch(
-                "ALTER TABLE memories ADD COLUMN tier TEXT NOT NULL DEFAULT 'warm';
-                 ALTER TABLE memories ADD COLUMN confidence REAL NOT NULL DEFAULT 0.5;
-                 ALTER TABLE memories ADD COLUMN source TEXT NOT NULL DEFAULT 'extraction';
-                 ALTER TABLE memories ADD COLUMN reviewed_by_meditation INTEGER DEFAULT 0;"
-            ).map_err(|e| format!("Migration error (memories V2): {}", e))?;
-            conn.execute_batch(
-                "CREATE INDEX IF NOT EXISTS idx_memories_tier ON memories(tier);
-                 CREATE INDEX IF NOT EXISTS idx_memories_tier_confidence ON memories(tier, confidence DESC);"
-            ).map_err(|e| format!("Migration error (memories V2 indexes): {}", e))?;
-            log::info!("Migrated memories table: added tier, confidence, source, reviewed_by_meditation columns");
-        }
+        // 退役 memories 表(记忆已迁 MemMe/DuckDB)。一次性 DROP 清理旧 SQLite
+        // 残留:先 drop 同步触发器与 FTS 虚表,再 drop 主表与索引,全 IF EXISTS,
+        // 旧库新库都安全。表确认 0 写入,DROP 不丢任何用户数据。见防屎山修复 G。
+        // 历史上的 access_count / tier / is_sparkling 等 ALTER 迁移随表一并退役。
+        conn.execute_batch(
+            "DROP TRIGGER IF EXISTS memories_ai;
+             DROP TRIGGER IF EXISTS memories_ad;
+             DROP TRIGGER IF EXISTS memories_au;
+             DROP TABLE IF EXISTS memories_fts;
+             DROP TABLE IF EXISTS memories;"
+        ).map_err(|e| format!("Migration error (drop retired memories table): {}", e))?;
 
         // Growth V2: add confidence to corrections
         let has_corr_confidence: bool = conn
@@ -1000,16 +935,7 @@ impl Database {
             log::info!("Migrated bot_conversations table: added agent_config_json column");
         }
 
-        // Buddy: add is_sparkling (闪光记忆) to memories table
-        let has_sparkling: bool = conn
-            .prepare("SELECT is_sparkling FROM memories LIMIT 0")
-            .is_ok();
-        if !has_sparkling {
-            conn.execute_batch(
-                "ALTER TABLE memories ADD COLUMN is_sparkling INTEGER NOT NULL DEFAULT 0;"
-            ).map_err(|e| format!("Migration error (memories is_sparkling): {}", e))?;
-            log::info!("Migrated memories table: added is_sparkling column (闪光记忆)");
-        }
+        // (memories is_sparkling 迁移已随 memories 表退役删除 —— 闪光记忆现由 MemMe 承载。)
 
         // V4-only build: rename token_usage cache columns to DeepSeek semantics
         // (cache_read_tokens → prompt_cache_hit_tokens,

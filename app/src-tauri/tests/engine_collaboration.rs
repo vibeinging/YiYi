@@ -256,6 +256,41 @@ fn build_orchestrator(t: &TempDb) -> (SqliteOrchestrator, Arc<MockExecutor>) {
 
 // ── Tests: lifecycle ─────────────────────────────────────────────────
 
+/// 终态守卫回归(防屎山修复 D1):abort 把协作置 Aborted 后,一个在 abort 时仍
+/// 在跑、稍后才完成的 step,其晚到的 complete_step → finalize(Done) 必须被守卫
+/// 拦住 —— 协作维持 Aborted,不被翻回 Done,也不写出矛盾的"已完成"裁决。
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn abort_then_late_step_completion_keeps_aborted() {
+    let t = TempDb::new();
+    ensure_session(&t, "s");
+    // 带延迟的 executor:step 提交后会 running 一段时间才完成,给我们 abort 的窗口。
+    let executor = Arc::new(MockExecutor::with_delay(Duration::from_millis(200)));
+    let orch = SqliteOrchestrator::new(t.db(), executor.clone().handle());
+    let plan = CollaborationPlan {
+        steps: vec![step_single(1, "x", 7)],
+    };
+    let id = orch
+        .submit("s".into(), "x".into(), plan, CollaborationMode::Manual, None)
+        .await
+        .unwrap();
+
+    // 等 step 真正进入 running(executor 已被调用)再 abort。
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    orch.abort(id).await.expect("abort");
+    let c = orch.get(id).await.unwrap().unwrap();
+    assert!(matches!(c.status, CollaborationStatus::Aborted), "abort 后应为 Aborted");
+
+    // 等延迟 step 完成,其晚到的 complete_step 回调触发 finalize(Done)。
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let c = orch.get(id).await.unwrap().unwrap();
+    assert!(
+        matches!(c.status, CollaborationStatus::Aborted),
+        "晚到的完成回调不得把 Aborted 翻回 Done,实际 {:?}",
+        c.status
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
 async fn manual_single_agent_runs_to_done() {
@@ -306,7 +341,9 @@ async fn dispatched_single_agent_skips_confirmation() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn dispatched_with_parallel_agents_awaits_confirmation() {
+async fn dispatched_with_parallel_agents_runs_immediately() {
+    // 产品砍掉 jury 的"拍板确认"卡后:Dispatched + ParallelAgents plan 提交即跑,
+    // 不再卡 AwaitingConfirm(否则群聊永远卡死——见 P0-1 修复 / 陪审团报告)。
     let t = TempDb::new();
     let (orch, executor) = build_orchestrator(&t);
     let plan = CollaborationPlan {
@@ -318,7 +355,7 @@ async fn dispatched_with_parallel_agents_awaits_confirmation() {
     let id = orch
         .submit(
             "sess-1".into(),
-            "jury time".into(),
+            "group chat".into(),
             plan,
             CollaborationMode::Dispatched(99),
             None,
@@ -326,18 +363,11 @@ async fn dispatched_with_parallel_agents_awaits_confirmation() {
         .await
         .expect("submit");
 
-    // Sit in AwaitingConfirm — executor must not have been called.
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    let collab = orch.get(id).await.unwrap().unwrap();
-    assert!(matches!(collab.status, CollaborationStatus::AwaitingConfirm));
-    assert!(executor.invocations().is_empty());
-
-    // User confirms.
-    orch.confirm(id, None).await.expect("confirm");
+    // 无需 confirm —— 直接跑到终态。
     let final_status = wait_for_terminal(&orch, id).await;
     assert!(matches!(final_status, CollaborationStatus::Done));
 
-    // All 4 steps invoked: 3 jurors + 1 host.
+    // 两个 step 都被执行:ParallelAgents + HostSummarize。
     let mut invoked = executor.invocations();
     invoked.sort();
     assert_eq!(invoked, vec![1, 2]);
@@ -348,10 +378,17 @@ async fn dispatched_with_parallel_agents_awaits_confirmation() {
 async fn abort_in_awaiting_confirm_transitions_to_aborted() {
     let t = TempDb::new();
     let (orch, _executor) = build_orchestrator(&t);
+    // AwaitingConfirm 现在只由显式 UserConfirmation step 触发(产品砍掉 jury
+    // 拍板卡后,ParallelAgents 不再隐式触发确认)。首个 step 即确认门 → submit
+    // 立刻进 AwaitingConfirm。
     let plan = CollaborationPlan {
         steps: vec![
-            step_parallel(1, "x", &[1, 2]),
-            step_host_summary(2, vec![1]),
+            step_user_confirmation(1, vec![]),
+            {
+                let mut s = step_single(2, "after confirm", 1);
+                s.depends_on = vec![1];
+                s
+            },
         ],
     };
     let id = orch
@@ -364,6 +401,10 @@ async fn abort_in_awaiting_confirm_transitions_to_aborted() {
         )
         .await
         .unwrap();
+
+    // submit 即应处于 AwaitingConfirm(含 UserConfirmation step → 不跳过确认)。
+    let collab = orch.get(id).await.unwrap().unwrap();
+    assert!(matches!(collab.status, CollaborationStatus::AwaitingConfirm));
 
     orch.abort(id).await.expect("abort");
     let collab = orch.get(id).await.unwrap().unwrap();
@@ -712,10 +753,17 @@ async fn audit_log_records_full_lifecycle() {
 async fn audit_log_records_user_confirmation() {
     let t = TempDb::new();
     let (orch, _executor) = build_orchestrator(&t);
+    // AwaitingConfirm 现在只由显式 UserConfirmation step 触发(产品砍掉 jury 拍板
+    // 卡后,ParallelAgents 提交即跑)。首个 step 即确认门 → submit 即 AwaitingConfirm,
+    // 可被 confirm() 释放并记 Confirmed 审计。
     let plan = CollaborationPlan {
         steps: vec![
-            step_parallel(1, "x", &[1, 2]),
-            step_host_summary(2, vec![1]),
+            step_user_confirmation(1, vec![]),
+            {
+                let mut s = step_single(2, "after confirm", 7);
+                s.depends_on = vec![1];
+                s
+            },
         ],
     };
     let id = orch
@@ -728,7 +776,13 @@ async fn audit_log_records_user_confirmation() {
         )
         .await
         .unwrap();
+    // 处于 AwaitingConfirm → confirm() 记录 Confirmed 审计(Actor::User)。
     orch.confirm(id, None).await.unwrap();
+    // confirm 后 UserConfirmation step 仍会把状态再切回 AwaitingConfirm;
+    // skip 掉这道门让 DAG 走完到终态。
+    orch.mutate(id, Mutation::SkipStep { step_id: 1 })
+        .await
+        .unwrap();
     wait_for_terminal(&orch, id).await;
 
     let trail = AuditTrail::new(t.db());

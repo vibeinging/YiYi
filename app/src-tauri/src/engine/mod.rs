@@ -4,6 +4,7 @@
 pub mod react_agent;
 pub mod hooks;
 pub mod permission_mode;
+pub mod text_util;
 pub mod compact;
 pub mod usage;
 pub mod pricing;

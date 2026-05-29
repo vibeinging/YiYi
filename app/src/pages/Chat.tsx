@@ -16,8 +16,6 @@ import {
   ensureSession,
   getHistory,
   clearHistory,
-  setFamilyMode,
-  getFamilyMode,
   type ChatMessage,
   type Attachment,
 } from '../api/agent';
@@ -85,9 +83,8 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
 
   // --- 群聊状态:familyGroupId 决定一切(IM 心智)---
   // group_id = null  → 单聊主精灵。
-  // group_id = N     → 群聊家族 N,记忆桶 family_shared_<N>,主精灵让位给群成员。
-  // familyMode 字段为兼容历史保留(代码不再读它,以 group_id 为准)。
-  const [familyMode, setFamilyModeState] = useState(false);
+  // group_id = N     → 群聊群 N,记忆桶 family_shared_<N>,主精灵让位给群成员。
+  // 旧的 family_mode 字段已退役 —— 前后端一律只认 group_id,不再读写 family_mode。
   const [familyGroupId, setFamilyGroupId] = useState<number | null>(null);
 
   // --- AI name ---
@@ -217,7 +214,6 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     if (!activeSessionId) return;
     useChatStreamStore.getState().setSessionId(activeSessionId);
     loadMessages(activeSessionId);
-    getFamilyMode(activeSessionId).then(setFamilyModeState).catch(() => setFamilyModeState(false));
     getSessionGroup(activeSessionId).then(setFamilyGroupId).catch(() => setFamilyGroupId(null));
 
     invoke('chat_stream_state', { sessionId: activeSessionId })
@@ -236,29 +232,17 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     await useSessionStore.getState().createNewChat();
   };
 
-  // 家族会话切换:IM 心智下只有两态 —— group_id=null 单聊 / group_id=N 群聊。
-  // mode 字段保留兼容(派生自 groupId != null),后端的 set_session_family_mode
-  // 还会被调用以让 family_mode 列与 group_id 同步,但代码读取一律以 group_id 为准。
-  // 乐观更新 + 失败回滚。
-  const handleSetFamily = async (mode: boolean, groupId: number | null) => {
+  // 群聊会话切换:IM 心智下只有两态 —— group_id=null 单聊 / group_id=N 群聊。
+  // group_id 是唯一真相,旧的 family_mode 字段已退役不再写(修复 P3 双写脏列)。
+  // 乐观更新 group_id + 失败回滚。
+  const handleSetFamily = async (groupId: number | null) => {
     if (!activeSessionId) return;
-    const prevMode = familyMode;
     const prevGid = familyGroupId;
-    // mode=true 但 groupId=null 在 IM 心智下没意义(被废弃的"全员"态);
-    // 调用方在这种场景不应该出现,这里把它当成"未绑 group → 关"对齐。
-    const effectiveMode = mode && groupId != null;
-    setFamilyModeState(effectiveMode);
     setFamilyGroupId(groupId);
     try {
-      await setFamilyMode(activeSessionId, effectiveMode);
       await setSessionGroup(activeSessionId, groupId);
-      if (!effectiveMode) {
-        toast.info('已退回单聊');
-      } else {
-        toast.info('已切换到这个群');
-      }
+      toast.info(groupId != null ? '已切换到这个群' : '已退回单聊');
     } catch (e) {
-      setFamilyModeState(prevMode);
       setFamilyGroupId(prevGid);
       toast.error(`切换群聊失败: ${e}`);
     }

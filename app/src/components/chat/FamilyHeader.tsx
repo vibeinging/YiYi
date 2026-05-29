@@ -14,7 +14,6 @@
 import { useEffect, useState } from 'react'
 import { Plus, Settings } from 'lucide-react'
 import { type CompanionGroup } from '../../api/groups'
-import type { Companion } from '../../api/companions'
 import { useGroupsStore } from '../../stores/groupsStore'
 import { FamilyMembersModal } from './FamilyMembersModal'
 
@@ -26,31 +25,22 @@ type ModalMode =
 interface Props {
   sessionId: string
   familyGroupId: number | null
-  /** Chat.tsx 的 handleSetFamily —— 创建/删家族成功后同步前端状态(双写
-   *  family_mode + group_id)。 */
-  onSetFamily: (mode: boolean, groupId: number | null) => void
+  /** Chat.tsx 的 handleSetFamily —— 创建/删群成功后同步前端 group_id 状态
+   *  (family_mode 字段已退役,只写 group_id)。 */
+  onSetFamily: (groupId: number | null) => void
 }
 
 export function FamilyHeader({ sessionId, familyGroupId, onSetFamily }: Props) {
   const group = useGroupsStore(s => (familyGroupId != null ? s.byId.get(familyGroupId) : undefined))
   const ensureMembers = useGroupsStore(s => s.ensureMembers)
-  const cachedMembers = useGroupsStore(s => (familyGroupId != null ? s.membersByGroup.get(familyGroupId) : undefined))
-  const [members, setMembers] = useState<Companion[]>(cachedMembers ?? [])
+  // 单一数据源:直接订阅 store,不再 copy 进本地 state。invalidateMembers 后
+  // store 变化会触发 re-render,头像横排即时刷新(与 AvatarGrid / FamilyGroupsSection 一致)。
+  const members = useGroupsStore(s => (familyGroupId != null ? s.membersByGroup.get(familyGroupId) : undefined)) ?? []
   const [modal, setModal] = useState<ModalMode>(null)
 
-  // 懒查成员:familyGroupId 变了就重拉,命中缓存秒回。
+  // 懒查成员:familyGroupId 变了且没拉过就触发拉取(fire-and-forget,结果落 store)。
   useEffect(() => {
-    if (familyGroupId == null) {
-      setMembers([])
-      return
-    }
-    let cancelled = false
-    ensureMembers(familyGroupId).then(ms => {
-      if (!cancelled) setMembers(ms)
-    })
-    return () => {
-      cancelled = true
-    }
+    if (familyGroupId != null) void ensureMembers(familyGroupId)
   }, [familyGroupId, ensureMembers])
 
   if (!sessionId) return null
@@ -123,8 +113,8 @@ export function FamilyHeader({ sessionId, familyGroupId, onSetFamily }: Props) {
             mode={modal}
             onClose={() => setModal(null)}
             onDeleted={() => {
-              // 删了当前绑的家族 → 把 session 退回未绑(回落普通对话)。
-              onSetFamily(false, null)
+              // 删了当前绑的群 → 把 session 退回未绑(回落普通对话)。
+              onSetFamily(null)
             }}
           />
         )}
@@ -154,8 +144,8 @@ export function FamilyHeader({ sessionId, familyGroupId, onSetFamily }: Props) {
           mode={modal}
           onClose={() => setModal(null)}
           onCreated={(gid) => {
-            // 新建家族后:session 已在 modal 里绑好,这里同步前端状态(双写 family_mode + group_id)。
-            onSetFamily(true, gid)
+            // 新建群后:session 已在 modal 里绑好,这里同步前端 group_id 状态。
+            onSetFamily(gid)
           }}
         />
       )}

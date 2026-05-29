@@ -103,6 +103,50 @@ impl super::Database {
         Ok(messages)
     }
 
+    /// 加载"最近一次 context_reset 以来"的**全部**消息(无条数上限),按时序返回。
+    ///
+    /// 专给主聊天上下文构建用:不能用固定 LIMIT 的滑动窗口 —— 窗口起点随会话变长
+    /// 逐轮右移,会反复打破 DeepSeek 的 history prefix cache(且早于、独立于按 token
+    /// 的 compaction,与"晚压缩保缓存"设计相矛盾)。这里只保证**起点稳定**(锚到
+    /// context_reset),token 上限交给 run loop 的 compaction(800K 阈值)。见缓存 P0-2。
+    pub fn get_context_messages(&self, session_id: &str) -> Result<Vec<ChatMessage>, String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, session_id, role, content, timestamp, metadata,
+                        collaboration_id, step_id, companion_id FROM messages
+                 WHERE session_id = ?1 ORDER BY timestamp DESC",
+            )
+            .map_err(|e| format!("Query error: {}", e))?;
+        let rows: Vec<ChatMessage> = stmt
+            .query_map(params![session_id], |row| {
+                Ok(ChatMessage {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    role: row.get(2)?,
+                    content: row.get(3)?,
+                    timestamp: row.get(4)?,
+                    metadata: row.get(5)?,
+                    collaboration_id: row.get(6)?,
+                    step_id: row.get(7)?,
+                    companion_id: row.get(8)?,
+                })
+            })
+            .map_err(|e| format!("Query error: {}", e))?
+            .filter_map(|r| r.map_err(|e| log::warn!("Row parse error: {}", e)).ok())
+            .collect();
+
+        let mut messages: Vec<ChatMessage> = Vec::new();
+        for msg in rows {
+            if msg.role == "context_reset" {
+                break; // 锚点:不跨越上一次 /clear
+            }
+            messages.push(msg);
+        }
+        messages.reverse(); // chronological order
+        Ok(messages)
+    }
+
     pub fn push_message(
         &self,
         session_id: &str,

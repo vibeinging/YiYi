@@ -159,14 +159,8 @@ export async function deleteSession(sessionId: string): Promise<void> {
   await invoke('delete_session', { sessionId });
 }
 
-/** 家族会话：开启后主精灵会把消息路由给合适的家族成员处理。 */
-export async function setFamilyMode(sessionId: string, enabled: boolean): Promise<void> {
-  await invoke('set_family_mode', { sessionId, enabled });
-}
-
-export async function getFamilyMode(sessionId: string): Promise<boolean> {
-  return await invoke('get_family_mode', { sessionId });
-}
+// setFamilyMode / getFamilyMode 已删除 —— family_mode 字段退役,群聊以
+// session 的 group_id 为唯一真相(见 api/groups.ts setSessionGroup/getSessionGroup)。
 
 export async function chat(
   message: string,

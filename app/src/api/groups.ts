@@ -84,6 +84,26 @@ export async function listGroupsForCompanion(companionId: number): Promise<Compa
   return await invoke<CompanionGroup[]>('list_groups_for_companion', { companionId })
 }
 
+/** 建群 + 加成员的原子封装:加成员中途失败则回滚删组,不留半成品群。
+ *  返回新组 id。两个建群入口(BuddyPanel / 聊天里邀请)共用,避免回滚逻辑双份维护。
+ *  各入口的差异(绑当前会话 vs 开新会话)留在调用方处理。 */
+export async function createGroupWithMembers(
+  name: string,
+  emoji: string | null,
+  memberIds: Iterable<number>,
+): Promise<number> {
+  const gid = await createCompanionGroup(name, emoji, null)
+  try {
+    for (const cid of memberIds) {
+      await addCompanionToGroup(gid, cid)
+    }
+  } catch (e) {
+    await deleteCompanionGroup(gid).catch(() => {})
+    throw e
+  }
+  return gid
+}
+
 // ── session ↔ group binding ───────────────────────────────────────────
 
 /** 绑定会话到指定家族(null = 解绑变回单聊)。 */

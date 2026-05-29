@@ -137,7 +137,7 @@ pub(crate) fn parse_decision(raw: &str) -> Result<RawDecision, String> {
         .trim_end_matches("```")
         .trim();
     serde_json::from_str::<RawDecision>(cleaned)
-        .map_err(|e| format!("parse dispatch JSON: {e} (raw: {})", &cleaned[..cleaned.len().min(200)]))
+        .map_err(|e| format!("parse dispatch JSON: {e} (raw: {})", crate::engine::text_util::truncate_bytes(cleaned, 200)))
 }
 
 /// 空兜底决策 —— LLM 调用失败 / 没人入选 / 选错 id 时返回。caller 看

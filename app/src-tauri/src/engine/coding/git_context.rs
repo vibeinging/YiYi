@@ -1,6 +1,14 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+/// git context 的 TTL 缓存。`render_git_context` 进 system prompt 的动态块,若每轮
+/// 实时跑 git,dirty 标记/HEAD 一变就让 DeepSeek 在 cache_boundary 之后的前缀 miss
+/// (编码会话高频)。30s 缓存把"逐轮抖动"压成"最多每 30s 变一次"。见缓存 P1-2。
+static GIT_CTX_CACHE: OnceLock<Mutex<HashMap<String, (Option<String>, Instant)>>> = OnceLock::new();
+const GIT_CTX_TTL: Duration = Duration::from_secs(30);
 
 /// A single git commit entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,7 +117,26 @@ pub fn git_status_summary(path: &Path) -> String {
 
 /// Render a full git context block for system prompt injection.
 /// Returns `None` if the workspace is not a git repo.
+/// 渲染 git context,带 30s TTL 缓存(见 GIT_CTX_CACHE)。缓存命中则跳过所有 git
+/// 子进程调用,既省开销也让 system prompt 字节在 TTL 内稳定、利于 prefix cache。
 pub fn render_git_context(workspace: &Path) -> Option<String> {
+    let key = workspace.to_string_lossy().to_string();
+    let cache = GIT_CTX_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(map) = cache.lock() {
+        if let Some((val, at)) = map.get(&key) {
+            if at.elapsed() < GIT_CTX_TTL {
+                return val.clone();
+            }
+        }
+    }
+    let val = render_git_context_uncached(workspace);
+    if let Ok(mut map) = cache.lock() {
+        map.insert(key, (val.clone(), Instant::now()));
+    }
+    val
+}
+
+fn render_git_context_uncached(workspace: &Path) -> Option<String> {
     if !is_git_repo(workspace) {
         return None;
     }

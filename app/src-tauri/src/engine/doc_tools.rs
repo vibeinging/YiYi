@@ -18,7 +18,7 @@ pub fn read_pdf_text(path: &str) -> String {
             if text.len() > 15000 {
                 format!(
                     "{}...\n\n[Truncated — {} chars total]",
-                    &text[..15000],
+                    crate::engine::text_util::truncate_bytes(&text, 15000),
                     text.len()
                 )
             } else {
@@ -101,7 +101,7 @@ pub fn read_spreadsheet(path: &str, sheet: Option<&str>, max_rows: Option<usize>
     if output.len() > 15000 {
         format!(
             "{}...\n[Truncated — {} chars total]",
-            &output[..15000],
+            crate::engine::text_util::truncate_bytes(&output, 15000),
             output.len()
         )
     } else {
@@ -261,7 +261,7 @@ fn extract_text_from_docx_xml(xml: &str) -> String {
     if output.len() > 15000 {
         format!(
             "{}...\n\n[Truncated — {} chars total]",
-            &output[..15000],
+            crate::engine::text_util::truncate_bytes(&output, 15000),
             output.len()
         )
     } else {

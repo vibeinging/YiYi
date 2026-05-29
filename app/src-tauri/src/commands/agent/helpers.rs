@@ -421,8 +421,11 @@ pub(super) async fn prepare_chat_context(
         system_prompt.push_str(&context);
     }
 
-    // Build conversation history (exclude the message we just pushed)
-    let history_messages = state.db.get_recent_messages(sid, 50).unwrap_or_default();
+    // Build conversation history (exclude the message we just pushed).
+    // 用 get_context_messages(锚到 context_reset、无条数上限)而非固定最近 50 条
+    // 的滑动窗口 —— 后者随会话变长逐轮右移会打破 prefix cache。token 上限由
+    // run loop 的 compaction 处理。见缓存 P0-2。
+    let history_messages = state.db.get_context_messages(sid).unwrap_or_default();
     let llm_history: Vec<LLMMessage> = if history_messages.len() > 1 {
         db_messages_to_llm(&working_dir, &user_workspace, &history_messages[..history_messages.len() - 1])
     } else {
@@ -487,12 +490,13 @@ pub(super) async fn handle_command(
     }
 }
 
-/// Per-session output directory under `<workspace>/sessions/<title>_<sid6>/`.
-/// Falls back to `unnamed_<sid6>/` when the session has no friendly name yet
-/// (the auto-rename runs after the first model reply, so message #1 lands in
-/// the unnamed dir; message #2+ in the renamed one). Returns `None` for
-/// non-chat sessions (cron / task / bot) — those have their own dir
-/// conventions and shouldn't be remapped.
+/// Per-session output directory under `<workspace>/sessions/chat_<sid6>/`.
+///
+/// 用 **sid(稳定)** 而非会话标题命名 —— 标题在第一条消息后会 auto-rename,
+/// 若把标题放进路径,会带来两个问题:(1) system prompt 里的 output_dir 第 2 轮
+/// 就变,断掉 DeepSeek 动态块 prefix cache(缓存 P0-1);(2) 目录并不物理改名,
+/// 模型第 2 轮拿到的是新路径,会"丢失"第 1 轮写在旧路径下的文件。用 sid 命名
+/// 从第 1 轮起就稳定,两个问题一起解决。返回 `None` 给非 chat 会话(cron/task/bot)。
 pub(super) fn derive_session_output_dir(
     db: &db::Database,
     user_workspace: &Path,
@@ -501,48 +505,17 @@ pub(super) fn derive_session_output_dir(
     if sid.starts_with("cron:") || sid.starts_with("task:") || sid.starts_with("bot:") {
         return None;
     }
-    let session = db.get_session(sid).ok().flatten()?;
+    // 仍要求 session 存在(过滤无效 sid),但不再用其 name 入路径。
+    let _ = db.get_session(sid).ok().flatten()?;
     let sid_short: String = sid.chars().rev().take(6).collect::<String>().chars().rev().collect();
-    let raw_name = if session.name.is_empty() || session.name == sid {
-        "unnamed".to_string()
-    } else {
-        session.name
-    };
-    let folder = sanitize_folder_name(&raw_name, 30);
-    Some(user_workspace.join("sessions").join(format!("{}_{}", folder, sid_short)))
+    Some(user_workspace.join("sessions").join(format!("chat_{}", sid_short)))
 }
 
 /// Make a string safe to use as a single-segment folder name on macOS /
 /// Windows / Linux: drop separators, control chars, and OS-reserved
 /// punctuation; collapse runs of `_`; truncate to `max_chars`.
-fn sanitize_folder_name(raw: &str, max_chars: usize) -> String {
-    let mapped: String = raw
-        .chars()
-        .map(|c| {
-            if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
-                '_'
-            } else {
-                c
-            }
-        })
-        .collect();
-    let mut out = String::with_capacity(mapped.len());
-    let mut last_underscore = false;
-    for c in mapped.chars() {
-        if c == '_' {
-            if !last_underscore {
-                out.push(c);
-            }
-            last_underscore = true;
-        } else {
-            out.push(c);
-            last_underscore = false;
-        }
-    }
-    let trimmed: String = out.chars().take(max_chars).collect();
-    let trimmed = trimmed.trim_matches(|c: char| c == '_' || c.is_whitespace() || c == '.').to_string();
-    if trimmed.is_empty() { "unnamed".to_string() } else { trimmed }
-}
+// (sanitize_folder_name 已删除 —— session 目录改用稳定的 chat_<sid6> 命名,
+//  不再把会话标题塞进路径,故不需要文件名净化。见 derive_session_output_dir。)
 
 // --- Attachment helpers ---
 
@@ -727,50 +700,3 @@ fn attachment_ref_to_data_uri(internal_dir: &Path, workspace_dir: &Path, att: &A
     Some(format!("data:{};base64,{}", att.mime_type, b64))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sanitize_drops_path_separators() {
-        assert!(!sanitize_folder_name("a/b\\c", 30).contains('/'));
-        assert!(!sanitize_folder_name("a/b\\c", 30).contains('\\'));
-    }
-
-    #[test]
-    fn sanitize_drops_windows_reserved() {
-        for c in ":*?\"<>|".chars() {
-            let s = format!("name{}with{}reserved", c, c);
-            let cleaned = sanitize_folder_name(&s, 64);
-            assert!(!cleaned.contains(c), "char '{}' should be replaced: {}", c, cleaned);
-        }
-    }
-
-    #[test]
-    fn sanitize_collapses_underscore_runs() {
-        // "//" → "__" after replace, then collapsed → "_"
-        assert_eq!(sanitize_folder_name("a//b", 30), "a_b");
-        assert_eq!(sanitize_folder_name("a/\\:b", 30), "a_b");
-    }
-
-    #[test]
-    fn sanitize_truncates_to_max_chars() {
-        let long = "x".repeat(100);
-        let out = sanitize_folder_name(&long, 10);
-        assert_eq!(out.chars().count(), 10);
-    }
-
-    #[test]
-    fn sanitize_empty_after_strip_falls_back_to_unnamed() {
-        assert_eq!(sanitize_folder_name("///", 30), "unnamed");
-        assert_eq!(sanitize_folder_name("   ", 30), "unnamed");
-        assert_eq!(sanitize_folder_name("", 30), "unnamed");
-    }
-
-    #[test]
-    fn sanitize_strips_leading_dots() {
-        // Hidden-file convention on Unix; we don't want session dirs to
-        // be hidden by accident.
-        assert!(!sanitize_folder_name(".hidden", 30).starts_with('.'));
-    }
-}

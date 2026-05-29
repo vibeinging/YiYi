@@ -123,39 +123,6 @@ pub async fn delete_session(
     delete_session_impl(&*state, session_id).await
 }
 
-// --- 家族会话 (family mode) ---
-
-pub async fn get_family_mode_impl(
-    state: &AppState,
-    session_id: String,
-) -> Result<bool, String> {
-    Ok(state.db.get_session_family_mode(&session_id))
-}
-
-/// Read whether 家族会话 is enabled for a session (frontend hydrates the
-/// toggle on session load).
-#[tauri::command]
-pub async fn get_family_mode(
-    state: State<'_, AppState>,
-    session_id: String,
-) -> Result<bool, String> {
-    get_family_mode_impl(&*state, session_id).await
-}
-
-pub async fn set_family_mode_impl(
-    state: &AppState,
-    session_id: String,
-    enabled: bool,
-) -> Result<(), String> {
-    state.db.set_session_family_mode(&session_id, enabled)
-}
-
-/// Toggle 家族会话 (host-dispatched group chat) for a session.
-#[tauri::command]
-pub async fn set_family_mode(
-    state: State<'_, AppState>,
-    session_id: String,
-    enabled: bool,
-) -> Result<(), String> {
-    set_family_mode_impl(&*state, session_id, enabled).await
-}
+// family_mode 命令已退役 —— IM 心智下 group_id 是唯一真相,family_dispatch 读
+// get_session_group 判定群聊。旧的 get/set_family_mode 命令链(含前端 api wrapper)
+// 已无调用方,全部删除;DB family_mode 列保留为历史残留(不读不写,零风险)。

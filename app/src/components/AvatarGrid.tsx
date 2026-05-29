@@ -14,7 +14,7 @@
  * - 4 个及以上:2×2,4+ 取前 4 个
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { useGroupsStore } from '../stores/groupsStore'
 import type { Companion } from '../api/companions'
 import logoFaceRight from '../assets/yiyi-logo-face-right.png'
@@ -55,19 +55,16 @@ function GroupAvatarGrid({
   size: number
   radiusClass: string
 }) {
+  // 单一数据源:直接订阅 store 的 cached,不再 copy 进本地 state。
+  // 这样 invalidateMembers(gid) 把 cached 清成 undefined 后,本组件会 re-render,
+  // effect 重新触发 ensureMembers 重拉 —— 编辑成员后头像能正确刷新(修复 P1)。
   const ensureMembers = useGroupsStore(s => s.ensureMembers)
-  const cached = useGroupsStore(s => s.membersByGroup.get(groupId))
-  const [members, setMembers] = useState<Companion[] | undefined>(cached)
+  const members = useGroupsStore(s => s.membersByGroup.get(groupId))
 
   useEffect(() => {
-    if (members) return
-    let cancelled = false
-    ensureMembers(groupId).then(m => {
-      if (!cancelled) setMembers(m)
-    })
-    return () => {
-      cancelled = true
-    }
+    // undefined = 没拉过;[] = 拉过但空,不重拉。结果落进 store,selector 触发
+    // re-render,无需本地 setState;ensureMembers 自带并发去重,fire-and-forget 即可。
+    if (members === undefined) void ensureMembers(groupId)
   }, [groupId, members, ensureMembers])
 
   // 加载中 / 空成员:用一个占位框 + 群字样,而不是闪空白。
@@ -98,23 +95,26 @@ function GroupAvatarGrid({
         gridTemplateColumns: cells.length === 1 ? '1fr' : '1fr 1fr',
         gridTemplateRows:
           cells.length <= 2 ? '1fr' : cells.length === 3 ? '1fr 1fr' : '1fr 1fr',
-        background: 'var(--color-bg-subtle)',
-        gap: '1px',
+        // 缝隙用与格子有对比的亮色(而非同色 bg-subtle,那样等于无缝),
+        // 外面再加一圈 inset 描边勾出整块边界(贴同色 sidebar 也不糊)。
+        background: 'var(--color-bg-elevated)',
+        gap: '1.5px',
+        boxShadow: 'inset 0 0 0 1px var(--color-border)',
       }}
     >
       {cells.length === 3 ? (
         <>
           {/* 3 人布局:上方 1 大格 + 下方 2 小格(微信式) */}
           <AvatarCell c={cells[0]} fontSize={size * 0.4} style={{ gridColumn: 'span 2' }} />
-          <AvatarCell c={cells[1]} fontSize={size * 0.35} />
-          <AvatarCell c={cells[2]} fontSize={size * 0.35} />
+          <AvatarCell c={cells[1]} fontSize={size * 0.38} />
+          <AvatarCell c={cells[2]} fontSize={size * 0.38} />
         </>
       ) : (
         cells.map((c, i) => (
           <AvatarCell
             key={`${c.id}-${i}`}
             c={c}
-            fontSize={cells.length === 1 ? size * 0.5 : size * 0.35}
+            fontSize={cells.length === 1 ? size * 0.5 : size * 0.4}
           />
         ))
       )}

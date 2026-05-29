@@ -262,7 +262,7 @@ async fn execute_isolated(
                         "error": err_msg,
                     }));
                 }
-                let preview = if err_msg.len() > 100 { &err_msg[..100] } else { err_msg.as_str() };
+                let preview = crate::engine::text_util::truncate_bytes(&err_msg, 100);
                 send_notification_with_context(
                     &format!("{} - 失败", task_title),
                     preview,

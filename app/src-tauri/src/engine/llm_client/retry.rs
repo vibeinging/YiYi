@@ -464,7 +464,7 @@ fn sanitize_error_body(body: &str) -> String {
     }
     // Truncate long bodies
     if body.len() > 500 {
-        format!("{}...", &body[..500])
+        format!("{}...", crate::engine::text_util::truncate_bytes(body, 500))
     } else {
         body.to_string()
     }

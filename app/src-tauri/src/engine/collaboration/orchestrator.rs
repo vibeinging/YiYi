@@ -9,8 +9,8 @@
 //!                          submit()
 //!                              │
 //!     ┌────────────────────────┴────────────────┐
-//!     │ Manual or 全 SingleAgent → Running       │
-//!     │ Dispatched + 含 Parallel/Plan → AwaitingConfirm │
+//!     │ 默认 → Running(提交即跑)                 │
+//!     │ plan 含显式 UserConfirmation step → AwaitingConfirm │
 //!     └────────────────────────┬────────────────┘
 //!                              │
 //!                ┌─────────────┴──────────────┐
@@ -56,13 +56,19 @@ impl SqliteOrchestrator {
         Self { db, audit, executor }
     }
 
-    /// Whether a plan can transition Submit → Running directly. Only plans
-    /// where every step is `SingleAgent` skip the confirmation step. Any
-    /// parallel jury / DAG / user-confirmation node forces AwaitingConfirm
-    /// for explicit user approval — the "摩擦力梯度" rule from the design
-    /// doc.
+    /// Whether a plan can transition Submit → Running directly. 产品已砍掉
+    /// jury 的"拍板确认"卡 —— 群聊派遣(ParallelAgents)、单聊、HostSummarize
+    /// 都应提交即跑。**只有显式的 `UserConfirmation` step 才需要暂停等用户**
+    /// (该 step 在 `schedule_ready_steps` 里会把状态切回 AwaitingConfirm)。
+    ///
+    /// 历史:旧实现要求"全 SingleAgent 才跳过确认",但 Dispatched 群聊 plan
+    /// 恒为 ParallelAgents → 永远卡在 AwaitingConfirm 且无 confirm() 调用方 →
+    /// 群聊从根上无法执行。见 docs/review/2026-05-29_jury-群聊IM心智.md P0-1。
     fn plan_skips_confirmation(plan: &CollaborationPlan) -> bool {
-        plan.steps.iter().all(|s| matches!(s.kind, StepKind::SingleAgent))
+        !plan
+            .steps
+            .iter()
+            .any(|s| matches!(s.kind, StepKind::UserConfirmation))
     }
 
     fn status_label(status: &CollaborationStatus) -> &'static str {
@@ -368,13 +374,20 @@ impl SqliteOrchestrator {
             .map_err(|e| format!("serialize output: {e}"))?;
         {
             let conn = self.db.get_conn().ok_or_else(|| "db lock".to_string())?;
-            conn.execute(
-                "UPDATE collaboration_steps
-                    SET status = 'completed', output_json = ?1, finished_at = ?2
-                  WHERE collaboration_id = ?3 AND id = ?4",
-                params![output_json, finished_at, collab_id, step_id],
-            )
-            .map_err(|e| format!("mark step completed: {e}"))?;
+            // CAS:只在 step 仍 running 时写 completed。若被 abort/skip 抢占
+            // (affected==0),丢弃这条晚到结果,不再发审计/不再调度后续 ——
+            // 防止 abort 后晚到的完成回调把协作翻回 Done(见终态守卫修复)。
+            let affected = conn
+                .execute(
+                    "UPDATE collaboration_steps
+                        SET status = 'completed', output_json = ?1, finished_at = ?2
+                      WHERE collaboration_id = ?3 AND id = ?4 AND status = 'running'",
+                    params![output_json, finished_at, collab_id, step_id],
+                )
+                .map_err(|e| format!("mark step completed: {e}"))?;
+            if affected == 0 {
+                return Ok(());
+            }
         }
         self.audit.emit(
             collab_id,
@@ -405,13 +418,19 @@ impl SqliteOrchestrator {
         let finished_at = crate::engine::db::now_ts();
         {
             let conn = self.db.get_conn().ok_or_else(|| "db lock".to_string())?;
-            conn.execute(
-                "UPDATE collaboration_steps
-                    SET status = 'failed', error_reason = ?1, finished_at = ?2
-                  WHERE collaboration_id = ?3 AND id = ?4",
-                params![reason, finished_at, collab_id, step_id],
-            )
-            .map_err(|e| format!("mark step failed: {e}"))?;
+            // CAS:同 complete_step —— 被 abort/skip 抢占则丢弃晚到失败,
+            // 不再翻协作状态(防 abort 后被翻成 Failed)。
+            let affected = conn
+                .execute(
+                    "UPDATE collaboration_steps
+                        SET status = 'failed', error_reason = ?1, finished_at = ?2
+                      WHERE collaboration_id = ?3 AND id = ?4 AND status = 'running'",
+                    params![reason, finished_at, collab_id, step_id],
+                )
+                .map_err(|e| format!("mark step failed: {e}"))?;
+            if affected == 0 {
+                return Ok(());
+            }
         }
         self.audit.emit(
             collab_id,
@@ -474,14 +493,23 @@ impl SqliteOrchestrator {
             None
         };
         let now = crate::engine::db::now_ts();
-        conn.execute(
-            "UPDATE collaborations
-                SET status = ?1, status_reason = ?2, completed_at = ?3
-              WHERE id = ?4",
-            params![label, reason, now, collab_id],
-        )
-        .map_err(|e| format!("finalize collaboration: {e}"))?;
+        // 终态守卫:只能从**非终态**翻入终态。这是修复 abort 被晚到的
+        // complete_step/fail_step 翻回 Done/Failed 的关键 —— abort 先把协作置
+        // aborted,之后晚到的回调走到这里 affected==0,直接早返回,不覆盖状态、
+        // 不写矛盾的"已完成"裁决、不发重复审计。finalize 由此变幂等。
+        let affected = conn
+            .execute(
+                "UPDATE collaborations
+                    SET status = ?1, status_reason = ?2, completed_at = ?3
+                  WHERE id = ?4 AND status NOT IN ('done', 'aborted', 'failed')",
+                params![label, reason, now, collab_id],
+            )
+            .map_err(|e| format!("finalize collaboration: {e}"))?;
         drop(conn);
+        if affected == 0 {
+            // 已是终态(多半被 abort 抢先)。幂等 no-op。
+            return Ok(());
+        }
 
         // Persist a verdict message into the chat stream so the主精灵
         // sees it on the next turn and a refresh re-hydrates the inline
@@ -617,9 +645,9 @@ impl CollaborationOrchestrator for SqliteOrchestrator {
             return Err("plan must contain at least one step".into());
         }
 
-        // Initial status: AwaitingConfirm if plan has parallel/host/confirmation
-        // nodes, Running otherwise. Manual mode always defaults to Running —
-        // user already pre-confirmed by saying "@阿狸 ..." or `/jury ...`.
+        // Initial status: 默认 Running(提交即跑)。只有 plan 含显式
+        // UserConfirmation step 才进 AwaitingConfirm。Manual 模式恒 Running
+        // —— 用户已用 "@阿狸 ..." 预确认。
         let initial_status = match mode {
             CollaborationMode::Manual => CollaborationStatus::Running,
             CollaborationMode::Dispatched(_) => {
@@ -658,6 +686,11 @@ impl CollaborationOrchestrator for SqliteOrchestrator {
         Ok(collab_id)
     }
 
+    /// 释放一个 `AwaitingConfirm` 协作。注意:产品砍掉 jury 拍板卡后,`AwaitingConfirm`
+    /// 只由显式 `UserConfirmation` step 触发,而 `StepKind::UserConfirmation` 目前
+    /// **无任何生产构造点**(只在测试里用)。因此本方法及其 Tauri 命令
+    /// `confirm_collaboration` / 前端 `confirmCollaboration` 当前是预留机制,等
+    /// jury 拍板形态回归时复用 —— 暂不删,保留待用。见 P0-1 修复。
     async fn confirm(
         &self,
         id: CollaborationId,

@@ -109,10 +109,11 @@ impl LoopGuard {
 /// defensible, and aligned with how built-in tools format error strings.
 pub fn is_failure_content(content: &str) -> bool {
     let trimmed = content.trim_start();
-    if trimmed.len() < 6 {
-        return false;
-    }
-    trimmed[..6].eq_ignore_ascii_case("error:")
+    // .get(..6) 在 6 不是 char 边界时返回 None(首字符是多字节/emoji)→ 直接非
+    // "error:",不会 panic。避免对中文/emoji 开头的工具结果字节切片崩溃。
+    trimmed
+        .get(..6)
+        .is_some_and(|p| p.eq_ignore_ascii_case("error:"))
 }
 
 /// Stable canonical-JSON hash. Object keys are sorted before hashing so that

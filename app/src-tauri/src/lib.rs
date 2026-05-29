@@ -533,8 +533,6 @@ pub fn run() {
             commands::agent::session::ensure_session,
             commands::agent::session::rename_session,
             commands::agent::session::delete_session,
-            commands::agent::session::get_family_mode,
-            commands::agent::session::set_family_mode,
             // Skills
             commands::skills::list_skills,
             commands::skills::get_skill,

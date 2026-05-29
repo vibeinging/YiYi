@@ -106,22 +106,10 @@ pub struct PersonalitySignalRow {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct SparklingMemory {
-    pub id: String,
-    pub content: String,
-    pub category: String,
-    pub created_at: i64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct RecallCandidate {
-    pub id: String,
-    pub content: String,
-    pub category: String,
-    pub confidence: f64,
-    pub created_at: i64,
-}
+// SparklingMemory / RecallCandidate 结构 + 查 `memories` 表的同名 DB 函数已删除:
+// 闪光记忆 / recall 早已迁到 MemMe(见 commands/system.rs 的 pin_trace /
+// list_pinned_traces / recall_nostalgia),这些查 SQLite `memories` 死表的函数
+// 零调用方,是迁移遗留死代码。见防屎山修复 G。
 
 impl super::Database {
     // -----------------------------------------------------------------------
@@ -868,66 +856,5 @@ impl super::Database {
         .unwrap_or_default()
     }
 
-    // -----------------------------------------------------------------------
-    // 闪光记忆 (Sparkling Memories)
-    // -----------------------------------------------------------------------
-
-    pub fn toggle_sparkling_memory(&self, memory_id: &str, sparkling: bool) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.execute(
-            "UPDATE memories SET is_sparkling = ?1 WHERE id = ?2",
-            params![sparkling as i32, memory_id],
-        ).map_err(|e| format!("Failed to toggle sparkling: {}", e))?;
-        Ok(())
-    }
-
-    pub fn list_sparkling_memories(&self) -> Vec<SparklingMemory> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = match conn.prepare(
-            "SELECT id, content, category, created_at FROM memories WHERE is_sparkling = 1 ORDER BY created_at DESC"
-        ) {
-            Ok(s) => s,
-            Err(_) => return vec![],
-        };
-
-        stmt.query_map([], |row| {
-            Ok(SparklingMemory {
-                id: row.get(0)?,
-                content: row.get(1)?,
-                category: row.get(2)?,
-                created_at: row.get(3)?,
-            })
-        })
-        .ok()
-        .map(|rows| rows.flatten().collect())
-        .unwrap_or_default()
-    }
-
-    /// Get stale memories eligible for recall bubble ("还记得那天...").
-    /// Returns memories older than 7 days with importance >= 0.6.
-    pub fn get_recall_candidates(&self, limit: i64) -> Vec<RecallCandidate> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let seven_days_ago = chrono::Utc::now().timestamp() - (7 * 24 * 3600);
-        let mut stmt = match conn.prepare(
-            "SELECT id, content, category, confidence, created_at FROM memories
-             WHERE created_at < ?1 AND confidence >= 0.6
-             ORDER BY RANDOM() LIMIT ?2"
-        ) {
-            Ok(s) => s,
-            Err(_) => return vec![],
-        };
-
-        stmt.query_map(params![seven_days_ago, limit], |row| {
-            Ok(RecallCandidate {
-                id: row.get(0)?,
-                content: row.get(1)?,
-                category: row.get(2)?,
-                confidence: row.get(3)?,
-                created_at: row.get(4)?,
-            })
-        })
-        .ok()
-        .map(|rows| rows.flatten().collect())
-        .unwrap_or_default()
-    }
+    // 闪光记忆 / recall 的 DB 函数已删除 —— 现由 MemMe 承载(commands/system.rs)。
 }

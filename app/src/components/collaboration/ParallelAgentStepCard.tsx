@@ -99,7 +99,11 @@ function MemberMessageBubble({ collaborationId, stepId, stepStatus, participant 
         {(text || isWaiting) && (
           <div
             className="py-2 px-3 rounded-2xl rounded-tl-md text-[13px] leading-relaxed whitespace-pre-wrap break-words"
-            style={{ background: `${accent}12`, color: 'var(--color-text)' }}
+            style={{
+              background: `${accent}1a`,
+              border: `1px solid ${accent}29`,
+              color: 'var(--color-text)',
+            }}
           >
             {text || <span style={{ color: 'var(--color-text-muted)' }}>…</span>}
             {isStreaming && (

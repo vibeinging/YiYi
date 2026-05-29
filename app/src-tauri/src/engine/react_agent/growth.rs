@@ -202,7 +202,7 @@ JSON only:"#
     let parsed: ReflectionResult = match serde_json::from_str(json_str) {
         Ok(r) => r,
         Err(e) => {
-            log::debug!("Reflection parse error: {} (response: {})", e, &result[..result.len().min(200)]);
+            log::debug!("Reflection parse error: {} (response: {})", e, crate::engine::text_util::truncate_bytes(&result, 200));
             db.add_reflection(
                 task_id, session_id, outcome_hint,
                 &format!("Task {outcome_hint}"),
