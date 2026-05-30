@@ -189,3 +189,36 @@ where
 {
     openai::chat_completion_stream(config, messages, tools, &config.native_tools, on_event, cancelled).await
 }
+
+/// 流式 + usage 记账合体 —— 等于 `chat_completion_tracked` 的流式版本:按 source 路由
+/// 模型 + 调用方通过 `on_event` 拿到增量 token + 结束后记账到 usage_source。
+/// 给 collaboration executor 用,让群成员发言能真·流式(此前用非流式 tracked,整段
+/// 一次性出现)。
+pub async fn chat_completion_stream_tracked<F>(
+    source: crate::engine::usage::UsageSource,
+    config: &LLMConfig,
+    messages: &[LLMMessage],
+    tools: &[ToolDefinition],
+    on_event: F,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<LLMResponse, String>
+where
+    F: Fn(StreamEvent) + Send + 'static,
+{
+    let mut routed = config.clone();
+    apply_source(&mut routed, source);
+    let resp = openai::chat_completion_stream(
+        &routed,
+        messages,
+        tools,
+        &routed.native_tools,
+        on_event,
+        cancelled,
+    )
+    .await?;
+    if let Some(usage) = resp.usage {
+        crate::engine::usage::record_llm_usage(source, usage, &routed.model);
+        crate::engine::cost_status::report(&routed.model, &usage);
+    }
+    Ok(resp)
+}

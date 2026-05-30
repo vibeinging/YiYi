@@ -16,6 +16,7 @@ import { Plus, Settings } from 'lucide-react'
 import { type CompanionGroup } from '../../api/groups'
 import { useGroupsStore } from '../../stores/groupsStore'
 import { FamilyMembersModal } from './FamilyMembersModal'
+import logoFaceRight from '../../assets/yiyi-logo-face-right.png'
 
 type ModalMode =
   | { kind: 'create'; sessionId: string }
@@ -67,7 +68,15 @@ export function FamilyHeader({ sessionId, familyGroupId, onSetFamily }: Props) {
             className="flex items-center -space-x-1.5 ml-1 transition-opacity hover:opacity-80"
             title="点击管理群(改名 / 加人 / 踢人)"
           >
-            {members.slice(0, 5).map(m => (
+            {/* YiYi 群管家固定第一位(不可踢,不在成员管理列表里) */}
+            <div
+              className="w-6 h-6 rounded-full flex items-center justify-center shrink-0 overflow-hidden"
+              style={{ background: 'var(--color-bg-subtle)', border: '1.5px solid var(--color-bg)' }}
+              title="YiYi · 群管家"
+            >
+              <img src={logoFaceRight} alt="YiYi" style={{ width: '86%', height: '86%', objectFit: 'contain' }} />
+            </div>
+            {members.slice(0, 4).map(m => (
               <div
                 key={m.id}
                 className="w-6 h-6 rounded-full flex items-center justify-center text-[11px] shrink-0"
@@ -81,7 +90,7 @@ export function FamilyHeader({ sessionId, familyGroupId, onSetFamily }: Props) {
                 {m.avatar_emoji || '🤖'}
               </div>
             ))}
-            {members.length > 5 && (
+            {members.length > 4 && (
               <div
                 className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] shrink-0 font-medium"
                 style={{
@@ -90,11 +99,12 @@ export function FamilyHeader({ sessionId, familyGroupId, onSetFamily }: Props) {
                   color: 'var(--color-text-muted)',
                 }}
               >
-                +{members.length - 5}
+                +{members.length - 4}
               </div>
             )}
+            {/* "N 人" 含 YiYi —— 群里实际有几位在说话(管理列表里仍只列 companion) */}
             <span className="ml-2 text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
-              {members.length} 人
+              {members.length + 1} 人
             </span>
           </button>
           <div className="flex-1" />

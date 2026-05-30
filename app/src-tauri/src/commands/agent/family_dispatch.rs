@@ -18,16 +18,15 @@ use std::sync::Arc;
 use crate::engine::agents::MemoryScope;
 use crate::engine::collaboration::audit::AuditTrail;
 use crate::engine::collaboration::claim::{run_chime_in_round, run_claim_round};
-use crate::engine::collaboration::dispatch::llm_strategy::LLMDispatchStrategy;
-use crate::engine::collaboration::dispatch::DispatchStrategy;
 use crate::engine::collaboration::executor::ConcreteExecutor;
 use crate::engine::collaboration::learning::sqlite_sink::SqliteLearningSink;
 use crate::engine::collaboration::learning::LearningSink;
 use crate::engine::collaboration::orchestrator::SqliteOrchestrator;
+use crate::engine::collaboration::claim::ClaimDecision;
 use crate::engine::collaboration::{
     Actor, AuditKind, ChatTurnSummary, CollaborationEvent, CollaborationMode,
-    CollaborationOrchestrator, CompanionProfile, DispatchContext, Mutation, Participant, Step,
-    StepInput, StepKind, StepStatus,
+    CollaborationOrchestrator, CollaborationPlan, CompanionProfile, DispatchContext,
+    DispatchDecision, Mutation, Participant, Step, StepInput, StepKind, StepStatus,
 };
 use crate::engine::db::Database;
 use crate::engine::llm_client::LLMConfig;
@@ -37,8 +36,6 @@ use crate::engine::llm_client::LLMConfig;
 const DISPATCH_HISTORY_TURNS: usize = 6;
 /// 取多少条最近的用户改派/反馈信号给路由参考。
 const RECENT_CORRECTIONS: usize = 8;
-/// 低于此置信度主精灵自答。与 `DispatchDecision` 文档及 judge 的 fallback 一致。
-const DISPATCH_CONFIDENCE_FLOOR: f64 = 0.5;
 
 /// 一次家族路由的结果。调用方据此决定是否继续跑主精灵自答。
 ///
@@ -72,11 +69,14 @@ pub struct DispatchedMember {
 ///
 /// `cfg` 同时用于路由判断（judge）与被选成员的执行（ConcreteExecutor）。Phase A
 /// 复用 session 的 LLM 配置；未来可让 judge 走更便宜的小模型（Open Question 3）。
+/// `forced_ids`:用户在群里 @ 点名的成员 id。非空 = **点名必答**,跳过 L1 粗筛 +
+/// L2 认领的智能路由,强制这些成员(取与群成员的交集)上场。空 = 走智能路由。
 pub async fn try_family_dispatch(
     db: Arc<Database>,
     cfg: LLMConfig,
     session_id: &str,
     user_message: &str,
+    forced_ids: &[i64],
 ) -> Result<FamilyDispatchOutcome, String> {
     // 1. session 必须绑定具名 group(IM 心智:group = 群聊窗口,1:1)。
     //    未绑 → 直接当单聊,回退主精灵自答。caller 应已用 group_id 判断,
@@ -131,48 +131,117 @@ pub async fn try_family_dispatch(
         recent_corrections,
     };
 
-    // 3. L1 集中粗筛:strategy 一次 LLM 选出"该响应的所有成员"。
-    //    strategy 从不硬失败,任何错误都回落空 plan + confidence 0.0。
-    let mut decision = LLMDispatchStrategy::new(cfg.clone()).judge(&ctx).await?;
-
-    // 4. 门控:空 plan / 无成员 / 置信度不足 → 主精灵自答。
-    let Some(candidates_snapshot) = decision
-        .plan
-        .steps
-        .first()
-        .map(|s| s.participants.clone())
-        .filter(|ps| !ps.is_empty())
-    else {
-        return Ok(FamilyDispatchOutcome::SelfAnswer { reason: decision.reason });
-    };
-    if decision.confidence < DISPATCH_CONFIDENCE_FLOOR {
-        return Ok(FamilyDispatchOutcome::SelfAnswer { reason: decision.reason });
-    }
-
-    // 4.5. L2 个体精筛:每位候选自己看消息决定接不接(slock 风格 self-claim)。
-    //      claim_round 并发跑 N 次轻量 LLM,wall clock ≈ 1 次。每位返回
-    //      {claimed, reason}。失败默认不接(保守不抢话)。
-    //      候选 profiles 从 ctx.family 按 id 反查 —— Participant 没带回 description,
-    //      但 ctx.family 里有,直接复用。
-    let candidate_profiles: Vec<CompanionProfile> = candidates_snapshot
-        .iter()
-        .filter_map(|p| ctx.family.iter().find(|c| c.id == p.companion_id).cloned())
-        .collect();
-    let claims = run_claim_round(&cfg, user_message, &ctx.chat_history, &candidate_profiles).await;
-
-    // 选 claimed=true 的成员;若全 no but 候选非空 → 防沉默,挑 confidence 最高的
-    // 那位(strategy 已按 confidence desc 排序,候选[0] 即最高)。
-    let mut claimed_ids: Vec<i64> =
-        claims.iter().filter(|c| c.claimed).map(|c| c.companion_id).collect();
-    let used_silence_fallback = claimed_ids.is_empty();
-    if used_silence_fallback {
-        if let Some(first) = candidates_snapshot.first() {
-            claimed_ids.push(first.companion_id);
-        } else {
-            // 不应到这里(上面 filter 已确保非空),保险起见仍走自答。
-            return Ok(FamilyDispatchOutcome::SelfAnswer { reason: decision.reason });
+    // 3-4. 决定谁上场。两条路径,产出同一组下游变量(plan/candidates/claims/claimed):
+    //  (a) @点名必答:forced_ids 非空 → 强制被 @ 的成员(取群内交集)上场,跳过
+    //      L1 粗筛 + L2 认领的智能路由(用户已点名,无需再判断谁该回)。
+    //  (b) 智能路由:L1 judge 粗筛 → L2 claim 个体认领 → 防沉默兜底。
+    let (mut decision, candidates_snapshot, candidate_profiles, claims, claimed_ids, used_silence_fallback): (
+        DispatchDecision,
+        Vec<Participant>,
+        Vec<CompanionProfile>,
+        Vec<ClaimDecision>,
+        Vec<i64>,
+        bool,
+    ) = if !forced_ids.is_empty() {
+        // (a) 点名必答 —— 取 forced ∩ 群成员,保 forced 顺序。
+        let forced_present: Vec<CompanionProfile> = forced_ids
+            .iter()
+            .filter_map(|id| ctx.family.iter().find(|c| c.id == *id).cloned())
+            .collect();
+        if forced_present.is_empty() {
+            return Ok(FamilyDispatchOutcome::SelfAnswer {
+                reason: "被点名的成员不在这个群里".into(),
+            });
         }
-    }
+        let participants: Vec<Participant> = forced_present
+            .iter()
+            .map(|c| Participant {
+                companion_id: c.id,
+                name: c.name.clone(),
+                avatar_emoji: c.avatar_emoji.clone(),
+                color_hex: c.color_hex.clone(),
+                memory_scope: MemoryScope::Private, // 下游统一翻 family_scope
+            })
+            .collect();
+        let plan = CollaborationPlan {
+            steps: vec![Step {
+                id: 1,
+                kind: StepKind::ParallelAgents,
+                participants: participants.clone(),
+                depends_on: vec![],
+                input: StepInput {
+                    prompt: user_message.to_string(),
+                    metadata: serde_json::Value::Null,
+                },
+                output: None,
+                status: StepStatus::Pending,
+                started_at: None,
+                finished_at: None,
+            }],
+        };
+        let claimed_ids: Vec<i64> = forced_present.iter().map(|c| c.id).collect();
+        (
+            DispatchDecision { plan, reason: "用户点名必答".into(), confidence: 1.0 },
+            participants,
+            forced_present,
+            Vec::new(),
+            claimed_ids,
+            false,
+        )
+    } else {
+        // (b) 去中心化全员自判 —— 没有 YiYi 的集中预选(L1)。**所有群成员**并发各自
+        //     看消息 + 最近对话,自己决定接不接(slock 风格 self-claim,wall clock ≈
+        //     1 次)。成员真正自主。全员都不接 → YiYi 群管家兜底(SelfAnswer),比强推
+        //     一个不想接的人自然。见用户决策"全员自主判断"。
+        let all_members: Vec<CompanionProfile> = ctx.family.clone();
+        let claims =
+            run_claim_round(&cfg, user_message, &ctx.chat_history, &all_members).await;
+        let claimed_ids: Vec<i64> =
+            claims.iter().filter(|c| c.claimed).map(|c| c.companion_id).collect();
+        if claimed_ids.is_empty() {
+            return Ok(FamilyDispatchOutcome::SelfAnswer {
+                reason: "群里没人主动接话,YiYi 兜底".into(),
+            });
+        }
+        let to_participant = |c: &CompanionProfile| Participant {
+            companion_id: c.id,
+            name: c.name.clone(),
+            avatar_emoji: c.avatar_emoji.clone(),
+            color_hex: c.color_hex.clone(),
+            memory_scope: MemoryScope::Private, // 下游统一翻 family_scope
+        };
+        // candidates = 全员(audit 记录谁参与了判断);plan 只放 claimed(上场的)。
+        let candidates_snapshot: Vec<Participant> = all_members.iter().map(to_participant).collect();
+        let claimed_participants: Vec<Participant> = all_members
+            .iter()
+            .filter(|c| claimed_ids.contains(&c.id))
+            .map(to_participant)
+            .collect();
+        let plan = CollaborationPlan {
+            steps: vec![Step {
+                id: 1,
+                kind: StepKind::ParallelAgents,
+                participants: claimed_participants,
+                depends_on: vec![],
+                input: StepInput {
+                    prompt: user_message.to_string(),
+                    metadata: serde_json::Value::Null,
+                },
+                output: None,
+                status: StepStatus::Pending,
+                started_at: None,
+                finished_at: None,
+            }],
+        };
+        (
+            DispatchDecision { plan, reason: "群成员自主认领".into(), confidence: 1.0 },
+            candidates_snapshot,
+            all_members, // candidate_profiles —— 给 L3 chime:全员 - claimed = 没接的可补刀
+            claims,
+            claimed_ids,
+            false,
+        )
+    };
 
     // 用 claimed_ids 过滤 plan.participants(保序),同时翻成 family scope。
     // 这里 mutate plan 是为了 submit 的 plan 与 outcome / audit 对齐。
@@ -340,6 +409,171 @@ pub async fn try_family_dispatch(
         collaboration_id: collab_id,
         members: dispatched_members,
     })
+}
+
+/// 好友私聊:把这一轮消息派遣给单个 companion(private scope,它必答、流式)。
+/// 返回 collaboration_id;前端 chat://complete 后 loadMessages 拉到协作消息渲染。
+/// 与群聊不同:private scope(私有记忆,不进群桶)、单成员、无路由判断(它就是这个
+/// 会话的对象,必答)。
+pub async fn dispatch_to_companion(
+    db: Arc<Database>,
+    cfg: LLMConfig,
+    session_id: &str,
+    user_message: &str,
+    companion_id: i64,
+) -> Result<i64, String> {
+    let companion = db
+        .get_companion(companion_id)
+        .ok_or_else(|| format!("companion {companion_id} 不存在"))?;
+    let participant = Participant {
+        companion_id: companion.id,
+        name: companion.name.clone(),
+        avatar_emoji: companion.avatar_emoji.clone(),
+        color_hex: companion.color_hex.clone(),
+        memory_scope: MemoryScope::Private,
+    };
+    let plan = CollaborationPlan {
+        steps: vec![Step {
+            id: 1,
+            kind: StepKind::ParallelAgents, // 1 人也走 ParallelAgents(流式气泡渲染)
+            participants: vec![participant.clone()],
+            depends_on: vec![],
+            input: StepInput {
+                prompt: user_message.to_string(),
+                metadata: serde_json::Value::Null,
+            },
+            output: None,
+            status: StepStatus::Pending,
+            started_at: None,
+            finished_at: None,
+        }],
+    };
+    let executor = Arc::new(ConcreteExecutor::new(cfg));
+    let orch = SqliteOrchestrator::new(db.clone(), executor);
+    let parent_id = orch
+        .list_recent_by_session(session_id, 1)
+        .ok()
+        .and_then(|v| v.into_iter().next())
+        .map(|c| c.id);
+    let collab_id = orch
+        .submit(
+            session_id.to_string(),
+            user_message.to_string(),
+            plan,
+            CollaborationMode::Dispatched(0),
+            parent_id,
+        )
+        .await?;
+    let placeholder = format!("@{} {}", participant.name, user_message);
+    let _ = db.upsert_collaboration_message(session_id, collab_id, &placeholder);
+    Ok(collab_id)
+}
+
+/// 群讨论的成员发言轮数(YiYi 总结另算一步)。固定轮数 —— 真·动态收敛和当前静态
+/// DAG 编排器冲突(动态加轮会和自动 finalize 打架),留作后续。2 轮已能呈现"初始
+/// 观点 → 互相回应"的讨论形态。
+const DISCUSSION_MEMBER_ROUNDS: i64 = 2;
+
+/// 是否"群讨论"意图 —— 关键词触发(用户决策:关键词自动触发)。命中则走多轮讨论
+/// 模式,而非普通的去中心化各自应答。
+pub fn is_discussion_intent(msg: &str) -> bool {
+    const KW: &[&str] = &[
+        "讨论", "辩论", "争论", "你们聊", "你们说说", "你们都说说", "你们怎么看",
+        "各抒己见", "头脑风暴", "多轮", "给个结论", "给我一个结论", "给我个结论",
+        "你们觉得呢", "都来说说",
+    ];
+    KW.iter().any(|k| msg.contains(k))
+}
+
+/// 群讨论模式:预先编排「N 轮成员发言(每轮看得到前轮)+ YiYi 总结结论」为一个多
+/// step 协作。复用 orchestrator DAG:round1 → round2 → host_summarize。后轮通过
+/// upstream 看到前轮(见 executor::render_user_prompt),YiYi 看全程总结。
+/// 返回 collaboration_id。
+pub async fn dispatch_group_discussion(
+    db: Arc<Database>,
+    cfg: LLMConfig,
+    session_id: &str,
+    topic: &str,
+) -> Result<i64, String> {
+    let gid = db
+        .get_session_group(session_id)
+        .ok_or_else(|| "session 未绑群,无法讨论".to_string())?;
+    let companions = db.list_group_members(gid);
+    if companions.is_empty() {
+        return Err("空群无法讨论".into());
+    }
+    let family_scope = crate::engine::agents::MemoryScope::FamilyGroup(gid);
+    let parts: Vec<Participant> = companions
+        .iter()
+        .map(|c| Participant {
+            companion_id: c.id,
+            name: c.name.clone(),
+            avatar_emoji: c.avatar_emoji.clone(),
+            color_hex: c.color_hex.clone(),
+            memory_scope: family_scope,
+        })
+        .collect();
+
+    let mut steps: Vec<Step> = Vec::new();
+    for round in 1..=DISCUSSION_MEMBER_ROUNDS {
+        let prompt = if round == 1 {
+            format!("群里在讨论这个话题,说说你的看法:\n{topic}")
+        } else {
+            "看看上面其他成员说了什么,回应 / 补充 / 提不同意见,把讨论往前推一步(别重复已经说过的)。".to_string()
+        };
+        steps.push(Step {
+            id: round,
+            kind: StepKind::ParallelAgents,
+            participants: parts.clone(),
+            depends_on: if round == 1 { vec![] } else { vec![round - 1] },
+            input: StepInput { prompt, metadata: serde_json::Value::Null },
+            output: None,
+            status: StepStatus::Pending,
+            started_at: None,
+            finished_at: None,
+        });
+    }
+    // YiYi(群管家)总结结论 —— HostSummarize step,看全程发言。
+    let summary_id = DISCUSSION_MEMBER_ROUNDS + 1;
+    steps.push(Step {
+        id: summary_id,
+        kind: StepKind::HostSummarize,
+        participants: vec![Participant {
+            companion_id: 0, // 0 = YiYi 主持人(executor render_system_prompt 据此给主持人 prompt)
+            name: "YiYi".into(),
+            avatar_emoji: "🦊".into(),
+            color_hex: "#6366F1".into(),
+            memory_scope: family_scope,
+        }],
+        depends_on: vec![DISCUSSION_MEMBER_ROUNDS],
+        input: StepInput { prompt: topic.to_string(), metadata: serde_json::Value::Null },
+        output: None,
+        status: StepStatus::Pending,
+        started_at: None,
+        finished_at: None,
+    });
+
+    let plan = CollaborationPlan { steps };
+    let executor = Arc::new(ConcreteExecutor::new(cfg));
+    let orch = SqliteOrchestrator::new(db.clone(), executor);
+    let parent_id = orch
+        .list_recent_by_session(session_id, 1)
+        .ok()
+        .and_then(|v| v.into_iter().next())
+        .map(|c| c.id);
+    let collab_id = orch
+        .submit(
+            session_id.to_string(),
+            topic.to_string(),
+            plan,
+            CollaborationMode::Dispatched(0),
+            parent_id,
+        )
+        .await?;
+    let mention = parts.iter().map(|p| format!("@{}", p.name)).collect::<Vec<_>>().join(" ");
+    let placeholder = format!("[群讨论] {} {}", mention, topic);
+    let _ = db.upsert_collaboration_message(session_id, collab_id, &placeholder);
+    Ok(collab_id)
 }
 
 /// L3 chime-in 后台流程 —— fire-and-forget,失败不抛错(只打 log)。

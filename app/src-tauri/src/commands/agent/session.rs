@@ -126,3 +126,26 @@ pub async fn delete_session(
 // family_mode 命令已退役 —— IM 心智下 group_id 是唯一真相,family_dispatch 读
 // get_session_group 判定群聊。旧的 get/set_family_mode 命令链(含前端 api wrapper)
 // 已无调用方,全部删除;DB family_mode 列保留为历史残留(不读不写,零风险)。
+
+// --- 好友私聊:点好友进入与该 companion 的专属会话 ---
+
+pub async fn get_or_create_companion_session_impl(
+    state: &AppState,
+    companion_id: i64,
+) -> Result<String, String> {
+    let name = state
+        .db
+        .get_companion(companion_id)
+        .map(|c| c.name)
+        .ok_or_else(|| format!("companion {companion_id} 不存在"))?;
+    state.db.get_or_create_companion_session(companion_id, &name)
+}
+
+/// 找绑定到某 companion 的专属私聊会话,没有就建一个,返回 session id。
+#[tauri::command]
+pub async fn get_or_create_companion_session(
+    state: State<'_, AppState>,
+    companion_id: i64,
+) -> Result<String, String> {
+    get_or_create_companion_session_impl(&*state, companion_id).await
+}

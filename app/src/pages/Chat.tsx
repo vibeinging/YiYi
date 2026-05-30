@@ -276,7 +276,7 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   const spawnRunning = spawnAgents.some((a) => a.status === 'running');
   const loading = streamLoading || spawnRunning;
 
-  const runStreamingChat = async (text: string, sessionId: string, attachments?: Attachment[]): Promise<string> => {
+  const runStreamingChat = async (text: string, sessionId: string, attachments?: Attachment[], forcedCompanionIds?: number[]): Promise<string> => {
     let resolveComplete: (reply: string) => void;
     let rejectComplete: (err: Error) => void;
     const completePromise = new Promise<string>((resolve, reject) => {
@@ -286,7 +286,7 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     const unComplete = await onChatComplete((reply) => { resolveComplete(reply); });
     const unError = await onChatError((err) => { rejectComplete(new Error(err)); });
     try {
-      await chatStreamStart(text, sessionId, attachments);
+      await chatStreamStart(text, sessionId, attachments, forcedCompanionIds);
       const reply = await completePromise;
       return reply;
     } finally {
@@ -319,12 +319,17 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     // Bind @mentioned agents — prepend agent context for backend routing
     const agentMentions = mentions.filter(m => m.type === 'agent');
 
-    // Single @companion mention → route through the collaboration
-    // orchestrator. Multi-companion (陪审团) is deferred until the
-    // companion/growth stack is fully shipped; mixed agent + companion
-    // falls through to the legacy chat path.
     const companionMentions = agentMentions.filter(m => m.id.startsWith('companion:'));
-    if (companionMentions.length === 1 && agentMentions.length === 1) {
+
+    // 群会话里 @ 群成员 = 点名必答:收集 forced ids,走下面正常群派遣流(后端强制
+    // 这些成员上场,跳过智能路由)。可 @ 多位。不在这里 early-return。
+    let forcedCompanionIds: number[] | undefined;
+    if (familyGroupId != null && companionMentions.length >= 1) {
+      forcedCompanionIds = companionMentions
+        .map(m => parseInt(m.id.slice('companion:'.length), 10))
+        .filter(n => Number.isFinite(n));
+    } else if (companionMentions.length === 1 && agentMentions.length === 1) {
+      // 单聊里 @ 一位 companion → 单独召唤(走独立协作,不是群派遣)。
       const companionIdStr = companionMentions[0].id.slice('companion:'.length);
       const companionId = parseInt(companionIdStr, 10);
       if (Number.isFinite(companionId)) {
@@ -374,8 +379,11 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
       return;
     }
 
-    if (agentMentions.length > 0) {
-      const agentNames = agentMentions.map(m => m.name).join(', ');
+    // 只给非 companion 的 agent mention 加 [agent:] 前缀;群里 @ 的 companion 走
+    // forcedCompanionIds 结构化派遣,不污染消息文本。
+    const nonCompanionAgents = agentMentions.filter(m => !m.id.startsWith('companion:'));
+    if (nonCompanionAgents.length > 0) {
+      const agentNames = nonCompanionAgents.map(m => m.name).join(', ');
       userMessage = `[agent: ${agentNames}]\n${userMessage}`;
     }
 
@@ -403,7 +411,7 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     } catch {}
 
     try {
-      await runStreamingChat(userMessage, activeSessionId, userAttachments);
+      await runStreamingChat(userMessage, activeSessionId, userAttachments, forcedCompanionIds);
       await loadMessages(activeSessionId);
       // Refresh session list to pick up auto-generated title
       await useSessionStore.getState().refreshSessions();
@@ -592,13 +600,31 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
         )}
       </div>
 
-      {/* Family header — IM 心智:对话里看见/管理群,无群时给 + 邀请入口 */}
+      {/* 顶栏:私聊 = 显示"和 X 私聊"条;群/单聊 = FamilyHeader(管理群/邀请入口) */}
       {activeSessionId && !isTaskSession && !isCronSession && (
-        <FamilyHeader
-          sessionId={activeSessionId}
-          familyGroupId={familyGroupId}
-          onSetFamily={handleSetFamily}
-        />
+        (() => {
+          const sess = chatSessions.find(s => s.id === activeSessionId);
+          const companionId = sess?.companion_id ?? null;
+          if (companionId != null) {
+            return (
+              <div
+                className="shrink-0 flex items-center gap-2 px-3 py-2 text-[12px]"
+                style={{ background: 'var(--color-bg)', borderBottom: '1px solid var(--color-border)' }}
+              >
+                <span style={{ color: 'var(--color-text-muted)' }}>和</span>
+                <span className="font-medium" style={{ color: 'var(--color-text)' }}>{sess?.name}</span>
+                <span style={{ color: 'var(--color-text-muted)' }}>单独聊天</span>
+              </div>
+            );
+          }
+          return (
+            <FamilyHeader
+              sessionId={activeSessionId}
+              familyGroupId={familyGroupId}
+              onSetFamily={handleSetFamily}
+            />
+          );
+        })()
       )}
 
       {/* Messages or Welcome */}

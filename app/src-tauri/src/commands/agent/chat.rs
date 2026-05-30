@@ -185,6 +185,8 @@ pub async fn chat_stream_start(
     _auto_continue: Option<bool>,
     max_rounds: Option<usize>,
     token_budget: Option<u64>,
+    // 群里 @ 点名的成员 id —— 非空走"点名必答"(强制这些成员上场)。
+    mentioned_companion_ids: Option<Vec<i64>>,
 ) -> Result<(), String> {
     let sid = resolve_session_id(&session_id);
 
@@ -234,8 +236,28 @@ pub async fn chat_stream_start(
     // 命中成员 → ParallelAgents 同框;否则回落主精灵自答。
     // group_id == None 直接当单聊(family_mode 字段已退役,只读 group_id)。
     if state.db.get_session_group(&sid).is_some() {
-        use crate::commands::agent::family_dispatch::{try_family_dispatch, FamilyDispatchOutcome};
-        match try_family_dispatch(state.db.clone(), ctx.config.clone(), &sid, &message).await {
+        use crate::commands::agent::family_dispatch::{
+            dispatch_group_discussion, is_discussion_intent, try_family_dispatch,
+            FamilyDispatchOutcome,
+        };
+        // 群讨论模式:用户消息含"讨论/你们聊聊/给个结论"等意图 → 多轮讨论 + YiYi 总结,
+        // 而非普通的去中心化各自应答。失败回落普通群派遣。
+        if is_discussion_intent(&message) {
+            match dispatch_group_discussion(state.db.clone(), ctx.config.clone(), &sid, &message).await {
+                Ok(collab_id) => {
+                    log::info!("group discussion → collab {collab_id}");
+                    app.emit("chat://complete", serde_json::json!({
+                        "text": "",
+                        "session_id": sid,
+                        "collaboration_id": collab_id,
+                    })).ok();
+                    return Ok(());
+                }
+                Err(e) => log::warn!("group discussion 失败,回落普通群派遣:{e}"),
+            }
+        }
+        let forced = mentioned_companion_ids.clone().unwrap_or_default();
+        match try_family_dispatch(state.db.clone(), ctx.config.clone(), &sid, &message, &forced).await {
             Ok(FamilyDispatchOutcome::Dispatched {
                 collaboration_id,
                 members,
@@ -276,6 +298,24 @@ pub async fn chat_stream_start(
             }
             Err(e) => {
                 log::warn!("family_dispatch 失败,回落主精灵自答:{e}");
+            }
+        }
+    } else if let Some(cid) = state.db.get_session_companion(&sid) {
+        // 好友私聊:session 绑定了单个 companion → 这一轮直接派遣给它(它必答、流式,
+        // private scope)。失败则回落主精灵自答。
+        use crate::commands::agent::family_dispatch::dispatch_to_companion;
+        match dispatch_to_companion(state.db.clone(), ctx.config.clone(), &sid, &message, cid).await {
+            Ok(collab_id) => {
+                log::info!("private chat → companion {cid} collab {collab_id}");
+                app.emit("chat://complete", serde_json::json!({
+                    "text": "",
+                    "session_id": sid,
+                    "collaboration_id": collab_id,
+                })).ok();
+                return Ok(());
+            }
+            Err(e) => {
+                log::warn!("private companion dispatch 失败,回落主精灵自答:{e}");
             }
         }
     }

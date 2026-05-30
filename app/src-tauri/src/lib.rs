@@ -533,6 +533,7 @@ pub fn run() {
             commands::agent::session::ensure_session,
             commands::agent::session::rename_session,
             commands::agent::session::delete_session,
+            commands::agent::session::get_or_create_companion_session,
             // Skills
             commands::skills::list_skills,
             commands::skills::get_skill,

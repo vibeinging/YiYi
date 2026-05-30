@@ -26,7 +26,7 @@ use super::{
 };
 use crate::engine::agents::persona_loader;
 use crate::engine::llm_client::{
-    chat_completion_tracked, LLMConfig, LLMMessage, MessageContent,
+    chat_completion_stream_tracked, LLMConfig, LLMMessage, MessageContent, StreamEvent,
 };
 use crate::engine::usage::UsageSource;
 
@@ -72,15 +72,34 @@ fn render_user_prompt(step: &Step, upstream: &[(StepId, StepOutput)]) -> String 
     match step.kind {
         StepKind::HostSummarize => {
             let mut s = String::new();
-            s.push_str("以下是上游几位的发言（已概括）：\n\n");
+            s.push_str("以下是大家在群里的讨论(已概括):\n\n");
             for (id, out) in upstream {
-                s.push_str(&format!("【step {}】{}\n\n", id, out.summary));
+                s.push_str(&format!("【第 {} 轮】{}\n\n", id, out.full_output));
             }
-            s.push_str("\n请整合：共识 / 分歧 / 你的最终建议。\n用户原问题：");
+            s.push_str(
+                "\n这是讨论的**最后收尾**,不要再发起新一轮、不要问\"要不要继续\"。\
+请你作为群管家直接给用户一个明确的结论:先一句话给出核心结论,再简述大家的共识、\
+分歧(如有),最后给一条可落地的建议。\n用户原问题:",
+            );
             s.push_str(&step.input.prompt);
             s
         }
-        _ => step.input.prompt.clone(),
+        // 群讨论的后续轮:把前几轮的发言喂进来,让成员看得到彼此说了什么,
+        // 才能真"讨论"(回应 / 补充 / 反驳),而不是各说各的。第一轮 upstream 为空。
+        _ => {
+            if upstream.is_empty() {
+                step.input.prompt.clone()
+            } else {
+                let mut s = String::new();
+                s.push_str("群里目前的讨论:\n\n");
+                for (id, out) in upstream {
+                    s.push_str(&format!("【第 {} 轮】{}\n\n", id, out.full_output));
+                }
+                s.push_str("\n");
+                s.push_str(&step.input.prompt);
+                s
+            }
+        }
     }
 }
 
@@ -130,7 +149,33 @@ async fn run_one(
     ];
 
     let started = Instant::now();
-    let resp = chat_completion_tracked(usage_source, config, &messages, &[]).await?;
+    // 真·流式:每个 ContentDelta 立刻 emit 一个 Token 事件,前端 ParallelAgentStepCard
+    // 按 ${step_id}:${companion_id} 累积,群成员发言逐字蹦出(与 YiYi 单聊体验一致)。
+    // 此前用非流式 chat_completion_tracked + 结束后 emit 整段,导致群成员"loading 一下
+    // 才整段出字、不流式"。reasoning(thinking)增量不入气泡,只取 content。
+    let collab_id_c = collab_id;
+    let step_id_c = step.id;
+    let companion_id_c = p.companion_id;
+    let resp = chat_completion_stream_tracked(
+        usage_source,
+        config,
+        &messages,
+        &[],
+        move |evt| {
+            if let StreamEvent::ContentDelta(delta) = evt {
+                if !delta.is_empty() {
+                    events::emit(CollaborationEvent::Token {
+                        collaboration_id: collab_id_c,
+                        step_id: step_id_c,
+                        companion_id: companion_id_c,
+                        delta,
+                    });
+                }
+            }
+        },
+        None,
+    )
+    .await?;
     let duration_ms = started.elapsed().as_millis() as u64;
 
     let full_output = resp
@@ -138,17 +183,6 @@ async fn run_one(
         .content
         .map(|c| c.into_text())
         .unwrap_or_default();
-
-    // Emit the assembled response as a single Token event so the front-end
-    // can render it (Phase 2A is non-streaming; Phase 2B switches to the
-    // streaming variant). One event per participant keeps the contract
-    // testable.
-    events::emit(CollaborationEvent::Token {
-        collaboration_id: collab_id,
-        step_id: step.id,
-        companion_id: p.companion_id,
-        delta: full_output.clone(),
-    });
 
     let tokens_used = resp
         .usage

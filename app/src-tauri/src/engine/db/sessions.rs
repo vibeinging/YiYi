@@ -16,6 +16,10 @@ pub struct ChatSession {
     /// 渲染家族 emoji + 名前缀。
     #[serde(default)]
     pub group_id: Option<i64>,
+    /// 绑定到单个 companion 的私聊会话(好友列表点进去的专属对话)。None = 普通
+    /// 单聊(YiYi)或群聊。与 group_id 互斥:绑了 companion = 和该 agent 1:1 私聊。
+    #[serde(default)]
+    pub companion_id: Option<i64>,
 }
 
 fn default_source() -> String {
@@ -28,7 +32,7 @@ impl super::Database {
     pub fn list_sessions(&self) -> Result<Vec<ChatSession>, String> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
-            .prepare("SELECT id, name, created_at, updated_at, source, source_meta, group_id FROM sessions ORDER BY updated_at DESC")
+            .prepare("SELECT id, name, created_at, updated_at, source, source_meta, group_id, companion_id FROM sessions ORDER BY updated_at DESC")
             .map_err(|e| format!("Query error: {}", e))?;
 
         let sessions = stmt
@@ -41,6 +45,7 @@ impl super::Database {
                     source: row.get::<_, String>(4).unwrap_or_else(|_| "chat".into()),
                     source_meta: row.get(5)?,
                     group_id: row.get(6)?,
+                    companion_id: row.get(7)?,
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?
@@ -54,7 +59,7 @@ impl super::Database {
     pub fn list_sessions_by_source(&self, source: &str) -> Result<Vec<ChatSession>, String> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
-            .prepare("SELECT id, name, created_at, updated_at, source, source_meta, group_id FROM sessions WHERE source = ?1 ORDER BY updated_at DESC")
+            .prepare("SELECT id, name, created_at, updated_at, source, source_meta, group_id, companion_id FROM sessions WHERE source = ?1 ORDER BY updated_at DESC")
             .map_err(|e| format!("Query error: {}", e))?;
 
         let sessions = stmt
@@ -67,6 +72,7 @@ impl super::Database {
                     source: row.get::<_, String>(4).unwrap_or_else(|_| "chat".into()),
                     source_meta: row.get(5)?,
                     group_id: row.get(6)?,
+                    companion_id: row.get(7)?,
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?
@@ -86,7 +92,7 @@ impl super::Database {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, created_at, updated_at, source, source_meta, group_id \
+                "SELECT id, name, created_at, updated_at, source, source_meta, group_id, companion_id \
                  FROM sessions WHERE source = ?1 \
                  ORDER BY updated_at DESC LIMIT ?2 OFFSET ?3",
             )
@@ -102,6 +108,7 @@ impl super::Database {
                     source: row.get::<_, String>(4).unwrap_or_else(|_| "chat".into()),
                     source_meta: row.get(5)?,
                     group_id: row.get(6)?,
+                    companion_id: row.get(7)?,
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?
@@ -122,7 +129,7 @@ impl super::Database {
         let pattern = format!("%{}%", query);
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, created_at, updated_at, source, source_meta, group_id \
+                "SELECT id, name, created_at, updated_at, source, source_meta, group_id, companion_id \
                  FROM sessions WHERE source = ?1 AND name LIKE ?2 \
                  ORDER BY updated_at DESC LIMIT ?3",
             )
@@ -138,6 +145,7 @@ impl super::Database {
                     source: row.get::<_, String>(4).unwrap_or_else(|_| "chat".into()),
                     source_meta: row.get(5)?,
                     group_id: row.get(6)?,
+                    companion_id: row.get(7)?,
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?
@@ -174,6 +182,7 @@ impl super::Database {
             source: "chat".into(),
             source_meta: None,
             group_id: None,
+            companion_id: None,
         })
     }
 
@@ -201,6 +210,7 @@ impl super::Database {
             source: source.to_string(),
             source_meta: source_meta.map(|s| s.to_string()),
             group_id: None,
+            companion_id: None,
         })
     }
 
@@ -211,7 +221,7 @@ impl super::Database {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, created_at, updated_at, source, source_meta, group_id \
+                "SELECT id, name, created_at, updated_at, source, source_meta, group_id, companion_id \
                  FROM sessions WHERE id = ?1 LIMIT 1",
             )
             .map_err(|e| format!("Query error: {}", e))?;
@@ -227,10 +237,63 @@ impl super::Database {
                 source: row.get::<_, String>(4).unwrap_or_else(|_| "chat".into()),
                 source_meta: row.get(5).map_err(|e| e.to_string())?,
                 group_id: row.get(6).map_err(|e| e.to_string())?,
+                companion_id: row.get(7).map_err(|e| e.to_string())?,
             }))
         } else {
             Ok(None)
         }
+    }
+
+    // --- 好友私聊:session ↔ companion 绑定 ---
+
+    /// 把 session 绑定到单个 companion(好友私聊)。None = 解绑。
+    pub fn set_session_companion(&self, id: &str, companion_id: Option<i64>) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE sessions SET companion_id = ?1 WHERE id = ?2",
+            params![companion_id, id],
+        )
+        .map_err(|e| format!("Failed to set session companion: {}", e))?;
+        Ok(())
+    }
+
+    /// 读 session 绑定的 companion id(None = 不是私聊会话)。
+    pub fn get_session_companion(&self, id: &str) -> Option<i64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT companion_id FROM sessions WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, Option<i64>>(0),
+        )
+        .ok()
+        .flatten()
+    }
+
+    /// 找绑定到某 companion 的最近私聊会话;没有就新建一个(名用 companion 名)。
+    /// 好友列表点进去用 —— 每个好友一个固定专属会话(像微信)。
+    pub fn get_or_create_companion_session(
+        &self,
+        companion_id: i64,
+        companion_name: &str,
+    ) -> Result<String, String> {
+        {
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            let existing: Option<String> = conn
+                .query_row(
+                    "SELECT id FROM sessions WHERE companion_id = ?1 AND source = 'chat' \
+                     ORDER BY updated_at DESC LIMIT 1",
+                    params![companion_id],
+                    |row| row.get(0),
+                )
+                .ok();
+            if let Some(sid) = existing {
+                return Ok(sid);
+            }
+        }
+        // 没有 → 新建并绑定。
+        let session = self.create_session(companion_name)?;
+        self.set_session_companion(&session.id, Some(companion_id))?;
+        Ok(session.id)
     }
 
     pub fn rename_session(&self, id: &str, name: &str) -> Result<(), String> {

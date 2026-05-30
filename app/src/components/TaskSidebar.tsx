@@ -21,13 +21,84 @@ import { AvatarGrid } from './AvatarGrid';
 import { timeAgo } from '../utils/taskStatus';
 import type { Page } from '../App';
 import type { ChatSession } from '../api/agent';
+import { getOrCreateCompanionSession } from '../api/agent';
+import { listCompanions, type Companion } from '../api/companions';
 import { confirm } from './Toast';
+import logoFaceRight from '../assets/yiyi-logo-face-right.png';
 
 interface TaskSidebarProps {
   currentPage: Page;
   onPageChange: (page: Page) => void;
   onNavigateToSession: (sessionId: string) => void;
   onDragMouseDown: (e: React.MouseEvent) => void;
+}
+
+// --- 好友列表(横排头像:YiYi 置顶 + 各 companion,点击单独对话)---
+function FriendStrip({
+  companions,
+  activeCompanionId,
+  onOpenYiYi,
+  onOpenFriend,
+}: {
+  companions: Companion[];
+  /** 当前会话绑的 companion id(高亮用);null = 不在私聊。 */
+  activeCompanionId: number | null;
+  onOpenYiYi: () => void;
+  onOpenFriend: (companionId: number) => void;
+}) {
+  return (
+    <div className="shrink-0 px-2 pt-1 pb-1.5">
+      <div className="text-[10px] font-semibold tracking-[0.08em] uppercase px-1.5 pb-1" style={{ color: 'var(--sidebar-section)' }}>
+        好友
+      </div>
+      <div className="flex gap-1.5 overflow-x-auto pb-1" style={{ scrollbarWidth: 'none' }}>
+        {/* YiYi 置顶 —— 点它回到和主精灵的默认对话 */}
+        <button
+          onClick={onOpenYiYi}
+          className="shrink-0 flex flex-col items-center gap-0.5 w-12 group"
+          title="YiYi · 主精灵"
+        >
+          <div
+            className="w-9 h-9 rounded-full flex items-center justify-center overflow-hidden transition-all"
+            style={{
+              background: 'var(--sidebar-hover)',
+              outline: activeCompanionId === null ? '2px solid var(--color-primary)' : '2px solid transparent',
+              outlineOffset: '1px',
+            }}
+          >
+            <img src={logoFaceRight} alt="YiYi" style={{ width: '80%', height: '80%', objectFit: 'contain' }} />
+          </div>
+          <span className="text-[10px] truncate w-full text-center" style={{ color: 'var(--sidebar-text)' }}>YiYi</span>
+        </button>
+
+        {companions.map((c) => {
+          const active = activeCompanionId === c.id;
+          return (
+            <button
+              key={c.id}
+              onClick={() => onOpenFriend(c.id)}
+              className="shrink-0 flex flex-col items-center gap-0.5 w-12 group"
+              title={`和 ${c.name} 单独聊`}
+            >
+              <div
+                className="w-9 h-9 rounded-full flex items-center justify-center text-[18px] transition-all"
+                style={{
+                  background: c.color_hex ? `${c.color_hex}26` : 'var(--sidebar-hover)',
+                  outline: active ? '2px solid var(--color-primary)' : '2px solid transparent',
+                  outlineOffset: '1px',
+                }}
+              >
+                {c.avatar_emoji || '🤖'}
+              </div>
+              <span className="text-[10px] truncate w-full text-center" style={{ color: 'var(--sidebar-text)' }}>
+                {c.name}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 // --- Session context menu ---
@@ -103,10 +174,12 @@ function SessionContextMenu({ x, y, session, onClose, onStartRename }: {
 }
 
 // --- Session Card ---
-function SidebarSessionCard({ session, isActive, onPageChange }: {
+function SidebarSessionCard({ session, isActive, onPageChange, companion }: {
   session: ChatSession;
   isActive: boolean;
   onPageChange: (page: Page) => void;
+  /** 私聊会话绑的 companion(用于渲染它的头像)。 */
+  companion?: Companion;
 }) {
   const { switchToSession, renameSession } = useSessionStore();
   // 若 session 绑了具名家族,从 groupsStore 取 emoji+name(失败时 group 为 undefined,
@@ -144,8 +217,18 @@ function SidebarSessionCard({ session, isActive, onPageChange }: {
         onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = isActive ? 'var(--sidebar-active)' : 'transparent'; }}
       >
         <div className="flex items-center gap-2">
-          {/* IM 式头像:群 = 成员 emoji 拼图, 单聊 = YiYi logo。 */}
-          <AvatarGrid groupId={session.group_id ?? null} size={32} radius="md" />
+          {/* IM 式头像:私聊 = 该 companion emoji, 群 = 成员拼图, 单聊 = YiYi logo。 */}
+          {companion ? (
+            <div
+              className="shrink-0 w-8 h-8 rounded-md flex items-center justify-center text-[17px]"
+              style={{ background: companion.color_hex ? `${companion.color_hex}26` : 'var(--color-bg-subtle)' }}
+              title={companion.name}
+            >
+              {companion.avatar_emoji || '🤖'}
+            </div>
+          ) : (
+            <AvatarGrid groupId={session.group_id ?? null} size={32} radius="md" />
+          )}
           <div className="flex-1 min-w-0">
             {isRenaming ? (
               <input
@@ -293,15 +376,53 @@ export const TaskSidebar = memo(function TaskSidebar({
     void useGroupsStore.getState().load();
   }, []);
 
+  // companions(好友列表 + 私聊会话卡头像共用,拉一次)。
+  const [companions, setCompanions] = useState<Companion[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    listCompanions(false).then(list => { if (!cancelled) setCompanions(list); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+  const companionById = new Map(companions.map(c => [c.id, c]));
+
   // 点"+ 新对话"直接走老路径 —— 创建空白会话进 chat 页,不再走"和谁聊"picker。
   // 想拉家族成员的话,在对话里通过 ChatHeader 的邀请 / 管理入口操作。
   const createNewChat = useSessionStore(s => s.createNewChat);
+  const switchToSession = useSessionStore(s => s.switchToSession);
+  const refreshSessions = useSessionStore(s => s.refreshSessions);
   const handleNewChatClick = async () => {
     try {
       await createNewChat();
       onPageChange('chat');
     } catch (e) {
       console.error('createNewChat failed', e);
+    }
+  };
+
+  // 当前会话绑的 companion(好友列表高亮 + chat 路由用)。
+  const activeSession = chatSessions.find(s => s.id === activeSessionId);
+  const activeCompanionId = (activeSession?.companion_id ?? null) as number | null;
+
+  // 点好友 → 拿/建该 companion 的专属私聊会话,切过去。
+  const openFriend = async (companionId: number) => {
+    try {
+      const sid = await getOrCreateCompanionSession(companionId);
+      await refreshSessions(); // 新建的私聊会话同步进历史列表
+      switchToSession(sid);
+      onPageChange('chat');
+    } catch (e) {
+      console.error('openFriend failed', e);
+    }
+  };
+
+  // 点 YiYi → 回到和主精灵的默认对话(最近一个非私聊非群的会话,没有就新建)。
+  const openYiYi = () => {
+    const yiyiChat = chatSessions.find(s => !s.group_id && !s.companion_id);
+    if (yiyiChat) {
+      switchToSession(yiyiChat.id);
+      onPageChange('chat');
+    } else {
+      void handleNewChatClick();
     }
   };
 
@@ -427,7 +548,16 @@ export const TaskSidebar = memo(function TaskSidebar({
         </button>
       </div>
 
-      {/* ── Session List ── */}
+      {/* ── 好友列表(上部分:点头像和 agent 单独对话)── */}
+      <FriendStrip
+        companions={companions}
+        activeCompanionId={activeCompanionId}
+        onOpenYiYi={openYiYi}
+        onOpenFriend={openFriend}
+      />
+      <div className="shrink-0 mx-3 mb-0.5" style={{ borderTop: '1px solid var(--sidebar-border)' }} />
+
+      {/* ── Session List(下部分:聊天历史)── */}
       <div className="flex-1 overflow-y-auto py-0.5" style={{ scrollbarWidth: 'thin' }}>
         {(displaySessions.length > 0 || searchOpen || isSearching) && (
           <div className="mb-1">
@@ -478,6 +608,7 @@ export const TaskSidebar = memo(function TaskSidebar({
                 session={session}
                 isActive={activeSessionId === session.id && currentPage === 'chat'}
                 onPageChange={onPageChange}
+                companion={session.companion_id ? companionById.get(session.companion_id) : undefined}
               />
             ))}
             {!isSearching && hasMore && (

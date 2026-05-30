@@ -124,6 +124,13 @@ export interface ChatSession {
   source_meta: string | null;
   /** 当前会话绑定的家族 group id。null = 单聊(IM 心智);number = 群聊家族 N。 */
   group_id: number | null;
+  /** 好友私聊:绑定的单个 companion id。null = 非私聊;number = 和该 agent 1:1。 */
+  companion_id?: number | null;
+}
+
+/** 好友列表点进去:拿/建和该 companion 的专属私聊会话,返回 session id。 */
+export async function getOrCreateCompanionSession(companionId: number): Promise<string> {
+  return await invoke<string>('get_or_create_companion_session', { companionId });
 }
 
 export async function listSessions(): Promise<ChatSession[]> {
@@ -178,11 +185,14 @@ export async function chatStreamStart(
   message: string,
   sessionId?: string,
   attachments?: Attachment[],
+  /** 群里 @ 点名的成员 id —— 非空走"点名必答"(后端强制这些成员上场)。 */
+  mentionedCompanionIds?: number[],
 ): Promise<void> {
   await invoke('chat_stream_start', {
     message,
     sessionId,
     attachments: attachments?.length ? attachments : undefined,
+    mentionedCompanionIds: mentionedCompanionIds?.length ? mentionedCompanionIds : undefined,
   });
 }
 

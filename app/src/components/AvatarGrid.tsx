@@ -2,16 +2,18 @@
  * AvatarGrid — IM 式的"群头像 / 单聊头像"统一渲染。
  *
  * - `groupId == null` → 单聊,渲染 YiYi logo
- * - `groupId == N`    → 群聊,拉群成员 emoji,2×2 / 3×3 拼图(微信群头像)
+ * - `groupId == N`    → 群聊,拼图 = **YiYi(群管家,固定第一格)** + 群成员 emoji
+ *   (微信群头像式)。YiYi 是群的 dispatcher / 主理人,固定出镜,不进可增删的成员
+ *   管理列表(用户决策:作群管家固定出现)。
  *
  * 成员从 `groupsStore.ensureMembers(groupId)` 拉,自带懒加载 + 缓存,所以即使
  * session 列表里 N 个 item 同绑一个 group 也只拉一次。
  *
- * 布局:
- * - 1 个成员:满格
- * - 2 个:左右平分
- * - 3 个:上 1 大 + 下 2(微信式)
- * - 4 个及以上:2×2,4+ 取前 4 个
+ * 布局(cells = YiYi + members,取前 4):
+ * - 1 格:满格
+ * - 2 格:左右平分
+ * - 3 格:上 1 大 + 下 2(微信式)
+ * - 4 格及以上:2×2
  */
 
 import { useEffect } from 'react'
@@ -67,8 +69,8 @@ function GroupAvatarGrid({
     if (members === undefined) void ensureMembers(groupId)
   }, [groupId, members, ensureMembers])
 
-  // 加载中 / 空成员:用一个占位框 + 群字样,而不是闪空白。
-  if (!members || members.length === 0) {
+  // 加载中(还没拉过)用占位框,而不是闪空白。members===[] 也照常渲染(至少有 YiYi)。
+  if (members === undefined) {
     return (
       <div
         className={`shrink-0 ${radiusClass} flex items-center justify-center`}
@@ -85,7 +87,8 @@ function GroupAvatarGrid({
     )
   }
 
-  const cells = members.slice(0, 4)
+  // YiYi 固定第一格 + 群成员,取前 4。
+  const cells: GridCell[] = [YIYI_CELL, ...members].slice(0, 4)
   return (
     <div
       className={`shrink-0 ${radiusClass} overflow-hidden grid`}
@@ -104,7 +107,7 @@ function GroupAvatarGrid({
     >
       {cells.length === 3 ? (
         <>
-          {/* 3 人布局:上方 1 大格 + 下方 2 小格(微信式) */}
+          {/* 3 格布局:上方 1 大格(YiYi) + 下方 2 小格(微信式) */}
           <AvatarCell c={cells[0]} fontSize={size * 0.4} style={{ gridColumn: 'span 2' }} />
           <AvatarCell c={cells[1]} fontSize={size * 0.38} />
           <AvatarCell c={cells[2]} fontSize={size * 0.38} />
@@ -112,7 +115,7 @@ function GroupAvatarGrid({
       ) : (
         cells.map((c, i) => (
           <AvatarCell
-            key={`${c.id}-${i}`}
+            key={cellKey(c, i)}
             c={c}
             fontSize={cells.length === 1 ? size * 0.5 : size * 0.4}
           />
@@ -122,15 +125,36 @@ function GroupAvatarGrid({
   )
 }
 
+/** YiYi 群管家哨兵格(渲染 logo,区别于 companion emoji 格)。 */
+const YIYI_CELL = { yiyi: true } as const
+type GridCell = typeof YIYI_CELL | Companion
+function isYiYi(c: GridCell): c is typeof YIYI_CELL {
+  return (c as { yiyi?: boolean }).yiyi === true
+}
+function cellKey(c: GridCell, i: number): string {
+  return isYiYi(c) ? 'yiyi' : `${c.id}-${i}`
+}
+
 function AvatarCell({
   c,
   fontSize,
   style,
 }: {
-  c: Companion
+  c: GridCell
   fontSize: number
   style?: React.CSSProperties
 }) {
+  if (isYiYi(c)) {
+    // YiYi 群管家:渲染 logo,与单聊头像一致。
+    return (
+      <div
+        className="flex items-center justify-center overflow-hidden"
+        style={{ background: 'var(--color-bg-subtle)', ...style }}
+      >
+        <img src={logoFaceRight} alt="YiYi" style={{ width: '82%', height: '82%', objectFit: 'contain' }} />
+      </div>
+    )
+  }
   const bg = c.color_hex ? `${c.color_hex}22` : 'var(--color-bg-subtle)'
   return (
     <div

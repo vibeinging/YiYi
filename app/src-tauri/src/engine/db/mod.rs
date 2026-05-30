@@ -820,6 +820,19 @@ impl Database {
             log::info!("Migrated sessions table: added group_id column");
         }
 
+        // 好友私聊:session 绑定到单个 companion(好友列表点进去的专属 1:1 对话)。
+        // NULL = 普通单聊(YiYi)或群聊;非 NULL = 和该 agent 私聊。
+        let has_session_companion: bool = conn
+            .prepare("SELECT companion_id FROM sessions LIMIT 0")
+            .is_ok();
+        if !has_session_companion {
+            conn.execute_batch(
+                "ALTER TABLE sessions ADD COLUMN companion_id INTEGER DEFAULT NULL;",
+            )
+            .map_err(|e| format!("Migration error (sessions companion_id): {}", e))?;
+            log::info!("Migrated sessions table: added companion_id column");
+        }
+
         // Drop legacy session_bots table (replaced by bot_conversations)
         conn.execute_batch("DROP TABLE IF EXISTS session_bots;").ok();
 
