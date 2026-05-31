@@ -1,4 +1,4 @@
-//! Collaboration — first-class concept covering every form of family协作:
+//! Collaboration — first-class concept covering every form of 群协作:
 //! single-companion 召唤、jury (parallel agents)、dispatch、plan DAG.
 //!
 //! All协作 modes share the same data model (`Collaboration` + `Step` DAG)
@@ -12,8 +12,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod audit;
-pub mod claim;
-pub mod dispatch;
+pub mod conversation_driver;
 pub mod events;
 pub mod executor;
 pub mod learning;
@@ -70,7 +69,7 @@ pub struct Collaboration {
 /// Who initiated the协作.
 ///
 /// `Manual` — user explicitly requested (e.g. `@阿狸 ...`, `/jury ...`).
-/// `Dispatched` — a host (typically主小精灵 in family mode) chose to
+/// `Dispatched` — a host (typically主小精灵 in 群 mode) chose to
 /// delegate. Always carries the dispatcher's identity for audit.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "kind", content = "by")]
@@ -248,21 +247,7 @@ pub enum AuditKind {
     UserVerdictReaction,
 }
 
-// ── Dispatch ──────────────────────────────────────────────────────────
-
-/// Context passed to a `DispatchStrategy::judge` call.
-///
-/// Strategies see the current user intent plus the family roster plus
-/// recent corrections — but **not** any companion's MemMe content; the
-/// dispatch judgment is fast and uses only the structured signal, not
-/// the persistent memory layer.
-#[derive(Debug, Clone)]
-pub struct DispatchContext {
-    pub user_intent: String,
-    pub chat_history: Vec<ChatTurnSummary>,
-    pub family: Vec<CompanionProfile>,
-    pub recent_corrections: Vec<learning::LearningSignal>,
-}
+// ── 成员/对话快照类型(供 group_dispatch / conversation_driver 组装)──
 
 #[derive(Debug, Clone)]
 pub struct ChatTurnSummary {
@@ -281,16 +266,6 @@ pub struct CompanionProfile {
     /// One-line role description (e.g. "代码评审员 — 找硬伤、找漏洞").
     pub description: String,
     pub last_used_at: Option<i64>,
-}
-
-#[derive(Debug, Clone)]
-pub struct DispatchDecision {
-    pub plan: CollaborationPlan,
-    /// Human-readable explanation shown in the dispatch bubble.
-    pub reason: String,
-    /// 0.0–1.0. Strategy decides what threshold matters. Below 0.5 the
-    /// orchestrator falls back to `Self`-mode (主小精灵 directly answers).
-    pub confidence: f64,
 }
 
 // ── Mutations ─────────────────────────────────────────────────────────
@@ -324,11 +299,15 @@ pub enum CollaborationEvent {
     Audit { event: AuditEvent },
     /// Streaming token for a step's participant. High-frequency, must not
     /// pass through the audit table.
+    ///
+    /// `reasoning` 区分两路流:`false` = 正文(content),`true` = 思考(reasoning/
+    /// thinking)。前端据此把子 agent 的思考装进可折叠思考块,与主 agent 一致。
     Token {
         collaboration_id: CollaborationId,
         step_id: StepId,
         companion_id: CompanionId,
         delta: String,
+        reasoning: bool,
     },
 }
 
@@ -407,10 +386,10 @@ pub type ExecutorHandle = Arc<dyn Executor>;
 
 // ── Memory bucket resolution ──────────────────────────────────────────
 
-/// 单个具名家族的共享记忆桶名:每个 group 独占 `family_shared_{id}`。
+/// 单个具名群的共享记忆桶名:每个 group 独占 `group_shared_{id}`。
 /// 一个 group = 一个群聊 = 一个共享桶(IM 心智)。
-pub fn family_group_bucket(group_id: CompanionId) -> String {
-    format!("family_shared_{}", group_id)
+pub fn group_bucket(group_id: CompanionId) -> String {
+    format!("group_shared_{}", group_id)
 }
 
 /// Resolve which MemMe bucket a step's participant should use.
@@ -418,7 +397,7 @@ pub fn family_group_bucket(group_id: CompanionId) -> String {
 /// `Private` → companion's own isolated bucket.
 /// `Shared` → main user bucket (`DEFAULT_MEMME_USER_ID`). Used by the host
 /// in a jury (the host represents the user's perspective when summarising).
-/// `FamilyGroup(id)` → `family_shared_{id}`(具名家族独占桶)。
+/// `Group(id)` → `group_shared_{id}`(具名群独占桶)。
 pub fn resolve_memme_user_id(
     scope: crate::engine::agents::MemoryScope,
     companion_memory_user_id: &str,
@@ -427,7 +406,7 @@ pub fn resolve_memme_user_id(
     match scope {
         MemoryScope::Private => companion_memory_user_id.to_string(),
         MemoryScope::Shared => crate::engine::tools::DEFAULT_MEMME_USER_ID.to_string(),
-        MemoryScope::FamilyGroup(id) => family_group_bucket(id),
+        MemoryScope::Group(id) => group_bucket(id),
     }
 }
 
@@ -449,16 +428,16 @@ mod resolve_memme_tests {
     }
 
     #[test]
-    fn family_group_returns_group_specific_bucket() {
-        let result = resolve_memme_user_id(MemoryScope::FamilyGroup(7), "ignored");
-        assert_eq!(result, "family_shared_7");
+    fn group_scope_returns_group_specific_bucket() {
+        let result = resolve_memme_user_id(MemoryScope::Group(7), "ignored");
+        assert_eq!(result, "group_shared_7");
     }
 
     #[test]
-    fn family_group_bucket_naming_is_stable() {
+    fn group_bucket_naming_is_stable() {
         // Persisted MemMe data keyed by this string; never rename without a
         // migration.
-        assert_eq!(family_group_bucket(42), "family_shared_42");
+        assert_eq!(group_bucket(42), "group_shared_42");
     }
 }
 

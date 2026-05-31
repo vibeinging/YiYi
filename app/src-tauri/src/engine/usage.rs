@@ -46,7 +46,7 @@ pub enum UsageSource {
     /// Collaboration host summarizer (主小精灵 aggregating verdicts).
     /// Routes to Pro — needs long context + strong reasoning to合并 N juror outputs.
     CollabHost,
-    /// Collaboration dispatch judgment (家族模式: who handles this task).
+    /// Collaboration dispatch judgment (群模式: who handles this task).
     /// Routes to Flash — cheap classification, runs每个 turn in family mode.
     CollabDispatch,
     /// Anything else — caller didn't specify.

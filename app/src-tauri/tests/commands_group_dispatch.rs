@@ -1,20 +1,18 @@
-//! 家族会话「host 上游路由」的集成测试 —— `commands/agent/family_dispatch.rs`。
+//! 群会话路由的集成测试 —— `commands/agent/group_dispatch.rs`。
 //!
-//! IM 心智(本次重构):session 1:1 绑 group。未绑 group → 单聊主精灵自答。
-//! 绑了 group → L1 集中粗筛 + L2 个体精筛 + L3 chime-in。
+//! IM 心智:session 1:1 绑 group。未绑 group → 单聊主精灵自答;空群 → EmptyGroup。
 //!
-//! L1 + L2 形态:
-//! - L1 集中粗筛:strategy 返回 `members: [...]` 候选(N≥0)。
-//! - L2 个体精筛:每位候选并发跑 claim,yes 才进 ParallelAgents;
-//!   全 no 但候选非空 → 沉默兜底,挑 confidence 最高的 1 位上。
+//! 路由(对话循环引擎,见 docs/design/2026-05-31 §A):
+//! - **@点名必答**(forced_ids 非空):被点的人(取群内交集)直接进静态 ParallelAgents,
+//!   必答、无 `<pass>` 余地、无 YiYi 兜底位。
+//! - **非点名**(去中心化):全员进 ConversationDriver 的第 1 轮 step,"接不接"是发言
+//!   本身(fused reply-or-`<pass>`),不再前置 judge/claim 过滤。全员 `<pass>` → YiYi
+//!   兜底位接(Driver 运行时的异步下一步)。
 //!
-//! Mock 复用:wiremock 同 path 的固定 response 同时供 judge(读 members 字段)
-//! 和 claim(读 claim/reason 字段)用。serde 默认忽略未知字段,所以一个 JSON
-//! 可以同时表达"judge 选谁 + claim 接不接"。
-//!
-//! 覆盖:未绑 group 自答、空家族自答、单成员高置信派遣、多成员同框派遣、
-//! 低置信自答、L2 沉默兜底、多轮 parent_id 链、不同 group 桶隔离。
-//! 用 MockLlmServer 驱动 judge + claim,TempDb 隔离,#[serial]。
+//! 本文件验**同步契约**:try_group_dispatch 的返回(SelfAnswer / EmptyGroup /
+//! Dispatched)+ 协作落库形态(plan / mode / parent_id / 成员 scope)。Driver 的
+//! 运行时收口(谁发言 / 全让兜底)需内容感知 mock,留待集成测试。
+//! Mock 固定响应即可(同步路径不依赖 LLM 内容),TempDb 隔离,#[serial]。
 
 mod common;
 
@@ -23,16 +21,15 @@ use common::*;
 
 use std::sync::Arc;
 
-use app_lib::commands::agent::family_dispatch::{try_family_dispatch, FamilyDispatchOutcome};
+use app_lib::commands::agent::group_dispatch::{try_group_dispatch, GroupDispatchOutcome};
 use app_lib::commands::agent::resolve_llm_config;
 use app_lib::commands::companion_groups::{
     add_companion_to_group_impl, create_companion_group_impl, set_session_group_impl,
 };
 use app_lib::engine::agents::MemoryScope;
-use app_lib::engine::collaboration::audit::AuditTrail;
 use app_lib::engine::collaboration::executor::ConcreteExecutor;
 use app_lib::engine::collaboration::orchestrator::SqliteOrchestrator;
-use app_lib::engine::collaboration::{family_group_bucket, AuditKind, CollaborationMode};
+use app_lib::engine::collaboration::{group_bucket, CollaborationMode};
 use app_lib::engine::db::NewCompanion;
 use serial_test::serial;
 
@@ -78,9 +75,9 @@ fn decision_json(members: &[(i64, f64)]) -> String {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn try_family_dispatch_without_group_self_answers() {
-    // IM 心智:session 未绑 group_id → 这是单聊,family_dispatch 直接 SelfAnswer。
-    // 哪怕家族里有 N 个 active companion 也不该被拉过来(那是 Phase A 的"全员"
+async fn try_group_dispatch_without_group_self_answers() {
+    // IM 心智:session 未绑 group_id → 这是单聊,group_dispatch 直接 SelfAnswer。
+    // 哪怕群里有 N 个 active companion 也不该被拉过来(那是 Phase A 的"全员"
     // 路径,已废弃)。
     let t = build_test_app_state().await;
     let db = t.state().db.clone();
@@ -93,11 +90,11 @@ async fn try_family_dispatch_without_group_self_answers() {
     let sid = "solo-no-group";
     db.ensure_session(sid, "单聊", "chat", None).ok();
 
-    let outcome = try_family_dispatch(db, cfg, sid, "随便说几句", &[])
+    let outcome = try_group_dispatch(db, cfg, sid, "随便说几句", &[])
         .await
         .unwrap();
     assert!(
-        matches!(outcome, FamilyDispatchOutcome::SelfAnswer { .. }),
+        matches!(outcome, GroupDispatchOutcome::SelfAnswer { .. }),
         "未绑 group 的 session 应永远走单聊自答,got {outcome:?}"
     );
 }
@@ -106,7 +103,7 @@ async fn try_family_dispatch_without_group_self_answers() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn try_family_dispatch_with_empty_group_returns_empty_group() {
+async fn try_group_dispatch_with_empty_group_returns_empty_group() {
     let mock = MockLlmServer::start().await;
     let t = build_test_app_state().await;
     seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
@@ -120,12 +117,12 @@ async fn try_family_dispatch_with_empty_group_returns_empty_group() {
         .unwrap();
     set_session_group_impl(t.state(), sid.into(), Some(gid)).await.unwrap();
 
-    let outcome = try_family_dispatch(db, cfg, sid, "帮我写点东西", &[])
+    let outcome = try_group_dispatch(db, cfg, sid, "帮我写点东西", &[])
         .await
         .unwrap();
     // 空群不再无声让主精灵冒充群成员,而是返回 EmptyGroup,由 chat.rs 给可见提示。
     assert!(
-        matches!(outcome, FamilyDispatchOutcome::EmptyGroup),
+        matches!(outcome, GroupDispatchOutcome::EmptyGroup),
         "空 group 应返回 EmptyGroup,got {outcome:?}"
     );
 }
@@ -134,7 +131,7 @@ async fn try_family_dispatch_with_empty_group_returns_empty_group() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn try_family_dispatch_high_confidence_single_member_dispatches() {
+async fn try_group_dispatch_high_confidence_single_member_dispatches() {
     let t = build_test_app_state().await;
     let cid = t.state().db.adopt_companion(&new_companion("阿狸")).unwrap();
 
@@ -144,7 +141,7 @@ async fn try_family_dispatch_high_confidence_single_member_dispatches() {
     let cfg = resolve_llm_config(t.state()).await.unwrap();
     let db = t.state().db.clone();
     let sid = "fam-dispatch";
-    db.ensure_session(sid, "家族测试", "chat", None).ok();
+    db.ensure_session(sid, "群测试", "chat", None).ok();
     // IM 心智:派遣测试必须先把 session 绑到一个 group。
     let gid = create_companion_group_impl(t.state(), "小阿狸群".into(), Some("🦊".into()), None)
         .await
@@ -152,12 +149,12 @@ async fn try_family_dispatch_high_confidence_single_member_dispatches() {
     add_companion_to_group_impl(t.state(), gid, cid).await.unwrap();
     set_session_group_impl(t.state(), sid.into(), Some(gid)).await.unwrap();
 
-    let outcome = try_family_dispatch(db.clone(), cfg.clone(), sid, "帮我看看这段代码", &[])
+    let outcome = try_group_dispatch(db.clone(), cfg.clone(), sid, "帮我看看这段代码", &[])
         .await
         .unwrap();
 
     let collab_id = match outcome {
-        FamilyDispatchOutcome::Dispatched {
+        GroupDispatchOutcome::Dispatched {
             collaboration_id,
             members,
         } => {
@@ -179,29 +176,13 @@ async fn try_family_dispatch_high_confidence_single_member_dispatches() {
     assert_eq!(c.mode, CollaborationMode::Dispatched(0));
     assert_eq!(c.parent_id, None);
 
-    // 路由理由持久化:DispatchJudged audit 用 `members` 数组(L1 多成员),top-level
-    // 还有 reason / confidence。刷新/重放可读出。
-    let events = AuditTrail::new(db.clone()).list(collab_id).expect("audit list");
-    let judged = events
-        .iter()
-        .find(|e| e.kind == AuditKind::DispatchJudged)
-        .expect("应写入 DispatchJudged audit");
-    let members_arr = judged.payload["members"].as_array().expect("members 数组");
-    assert_eq!(members_arr.len(), 1, "audit payload 应含 1 个成员");
-    assert_eq!(
-        members_arr[0]["companion_id"].as_i64().expect("companion_id"),
-        cid,
-    );
-    assert_eq!(members_arr[0]["name"].as_str(), Some("阿狸"));
-    // 去中心化下 reason 固定为"群成员自主认领",confidence 固定 1.0(无 judge 评分)。
-    assert_eq!(judged.payload["reason"].as_str(), Some("群成员自主认领"));
-    assert!(
-        (judged.payload["confidence"].as_f64().expect("confidence") - 1.0).abs() < 0.01,
-    );
+    // 对话循环引擎:非 @点名路径不再前置 judge/claim,"谁该说话"是发言本身(fused
+    // reply-or-<pass>)。因此不再写 DispatchJudged audit —— Driver 用 Submitted
+    // (driven:true)记录。这里只验派遣 + 落库 + scope。
 
-    // 记忆 scope 升级 FamilyGroup(gid):family_dispatch 在 submit 前把
+    // 记忆 scope 升级 Group(gid):group_dispatch 在 submit 前把
     // participant.memory_scope 从 build_plan 默认的 Private 翻成本 group 的
-    // FamilyGroup,所有群内成员共享 family_shared_{gid} 桶。
+    // Group,所有群内成员共享 group_shared_{gid} 桶。
     let participant = c
         .plan
         .steps
@@ -210,8 +191,8 @@ async fn try_family_dispatch_high_confidence_single_member_dispatches() {
         .expect("step 应含 participant");
     assert_eq!(
         participant.memory_scope,
-        MemoryScope::FamilyGroup(gid),
-        "派遣成员 memory_scope 应升级到本 group 的 FamilyGroup,got {:?}",
+        MemoryScope::Group(gid),
+        "派遣成员 memory_scope 应升级到本 group 的 Group,got {:?}",
         participant.memory_scope,
     );
 }
@@ -220,7 +201,7 @@ async fn try_family_dispatch_high_confidence_single_member_dispatches() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn try_family_dispatch_forced_mention_dispatches_named_members() {
+async fn try_group_dispatch_forced_mention_dispatches_named_members() {
     let t = build_test_app_state().await;
     let cid_a = t.state().db.adopt_companion(&new_companion("阿狸")).unwrap();
     let cid_b = t.state().db.adopt_companion(&new_companion("小冰")).unwrap();
@@ -241,11 +222,11 @@ async fn try_family_dispatch_forced_mention_dispatches_named_members() {
     set_session_group_impl(t.state(), sid.into(), Some(gid)).await.unwrap();
 
     // 只点名阿狸(cid_a)→ 必答,跳过智能路由,只派该 1 位(不带出小冰)。
-    let outcome = try_family_dispatch(db, cfg, sid, "@阿狸 帮我看下", &[cid_a])
+    let outcome = try_group_dispatch(db, cfg, sid, "@阿狸 帮我看下", &[cid_a])
         .await
         .unwrap();
     match outcome {
-        FamilyDispatchOutcome::Dispatched { members, .. } => {
+        GroupDispatchOutcome::Dispatched { members, .. } => {
             assert_eq!(members.len(), 1, "点名 1 位应只派该 1 位");
             assert_eq!(members[0].companion_id, cid_a, "应派给被点名的成员");
             assert_eq!(members[0].name, "阿狸");
@@ -258,7 +239,7 @@ async fn try_family_dispatch_forced_mention_dispatches_named_members() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn try_family_dispatch_multi_member_dispatches_in_one_step() {
+async fn try_group_dispatch_multi_member_dispatches_in_one_step() {
     let t = build_test_app_state().await;
     let db = t.state().db.clone();
     let cid_a = db.adopt_companion(&new_companion("阿狸")).unwrap();
@@ -277,7 +258,7 @@ async fn try_family_dispatch_multi_member_dispatches_in_one_step() {
     let cfg = resolve_llm_config(t.state()).await.unwrap();
 
     let sid = "fam-multi";
-    db.ensure_session(sid, "家族测试", "chat", None).ok();
+    db.ensure_session(sid, "群测试", "chat", None).ok();
     // IM 心智:绑 group 才能走派遣路径。三人都加进 group。
     let gid = create_companion_group_impl(t.state(), "三人群".into(), Some("👨‍👩‍👧".into()), None)
         .await
@@ -287,11 +268,11 @@ async fn try_family_dispatch_multi_member_dispatches_in_one_step() {
     }
     set_session_group_impl(t.state(), sid.into(), Some(gid)).await.unwrap();
 
-    let outcome = try_family_dispatch(db.clone(), cfg.clone(), sid, "聊聊设计 + 写点文案", &[])
+    let outcome = try_group_dispatch(db.clone(), cfg.clone(), sid, "聊聊设计 + 写点文案", &[])
         .await
         .unwrap();
     let (collab_id, member_ids) = match outcome {
-        FamilyDispatchOutcome::Dispatched {
+        GroupDispatchOutcome::Dispatched {
             collaboration_id,
             members,
         } => {
@@ -320,45 +301,38 @@ async fn try_family_dispatch_multi_member_dispatches_in_one_step() {
     for p in &step.participants {
         assert_eq!(
             p.memory_scope,
-            MemoryScope::FamilyGroup(gid),
-            "多成员都该升级到本 group 的 FamilyGroup scope,got {:?}",
+            MemoryScope::Group(gid),
+            "多成员都该升级到本 group 的 Group scope,got {:?}",
             p.memory_scope,
         );
     }
-
-    // DispatchJudged audit 的 members 数组也应是 3 个。
-    let events = AuditTrail::new(db.clone()).list(collab_id).expect("audit list");
-    let judged = events
-        .iter()
-        .find(|e| e.kind == AuditKind::DispatchJudged)
-        .expect("应写入 DispatchJudged audit");
-    let members_arr = judged.payload["members"].as_array().expect("members 数组");
-    assert_eq!(members_arr.len(), 3, "audit payload 应含 3 个成员");
+    // 对话循环引擎:不再有 DispatchJudged(无前置 judge/claim)。全员入第 1 轮,
+    // 谁发言谁 <pass> 在运行时由 fused prompt 自决。
 }
 
-// === 去中心化:全员都不接 → YiYi 群管家兜底(SelfAnswer),不再强推不想接的人 ===
+// === 对话循环引擎:非 @点名 = 全员进第 1 轮(不再前置 claim 过滤 / 同步兜底)===
+// 旧行为(全员 claim=no → 同步 SelfAnswer)已退役:"接不接"现在是发言本身
+// (fused reply-or-`<pass>`)。全员 `<pass>` → YiYi 兜底是 Driver 运行时的下一步
+// (异步,需内容感知 mock 才能确定性验证,留待集成测试)。这里验同步契约:返回
+// Dispatched 且全员入轮。
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn try_family_dispatch_all_decline_falls_back_to_self_answer() {
+async fn try_group_dispatch_non_forced_puts_all_members_in_round() {
     let t = build_test_app_state().await;
     let db = t.state().db.clone();
     let cid_a = db.adopt_companion(&new_companion("阿狸")).unwrap();
     let cid_b = db.adopt_companion(&new_companion("小冰")).unwrap();
 
-    // 全员 claim=no(都说"话题别人更合适")→ 去中心化下没人上场 → YiYi 兜底自答。
     let mock = MockLlmServer::start().await;
-    mock.mock_chat_completion_response(&dispatch_and_claim_json(
-        &[(cid_a, 0.85), (cid_b, 0.7)],
-        false, // claim all decline
-    ))
-    .await;
+    mock.mock_chat_completion_response(&decision_json(&[(cid_a, 0.85), (cid_b, 0.7)]))
+        .await;
     seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
     let cfg = resolve_llm_config(t.state()).await.unwrap();
 
-    let sid = "fam-silence";
-    db.ensure_session(sid, "家族测试", "chat", None).ok();
-    let gid = create_companion_group_impl(t.state(), "兜底群".into(), Some("🛟".into()), None)
+    let sid = "fam-allin";
+    db.ensure_session(sid, "群测试", "chat", None).ok();
+    let gid = create_companion_group_impl(t.state(), "全员群".into(), Some("🛟".into()), None)
         .await
         .unwrap();
     for c in [cid_a, cid_b] {
@@ -366,20 +340,24 @@ async fn try_family_dispatch_all_decline_falls_back_to_self_answer() {
     }
     set_session_group_impl(t.state(), sid.into(), Some(gid)).await.unwrap();
 
-    let outcome = try_family_dispatch(db.clone(), cfg.clone(), sid, "随便聊聊", &[])
+    let outcome = try_group_dispatch(db.clone(), cfg.clone(), sid, "随便聊聊", &[])
         .await
         .unwrap();
-    assert!(
-        matches!(outcome, FamilyDispatchOutcome::SelfAnswer { .. }),
-        "全员不接应回落 YiYi 自答,不再强推,got {outcome:?}"
-    );
+    match outcome {
+        GroupDispatchOutcome::Dispatched { members, .. } => {
+            let ids: Vec<i64> = members.iter().map(|m| m.companion_id).collect();
+            assert_eq!(ids.len(), 2, "非点名应把全员放进第 1 轮,got {ids:?}");
+            assert!(ids.contains(&cid_a) && ids.contains(&cid_b));
+        }
+        other => panic!("非点名应派遣(全员入轮),got {other:?}"),
+    }
 }
 
 // === 去中心化:被点名成员不在群里 → 回落自答 ===
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn try_family_dispatch_forced_member_not_in_group_self_answers() {
+async fn try_group_dispatch_forced_member_not_in_group_self_answers() {
     let t = build_test_app_state().await;
     let cid = t.state().db.adopt_companion(&new_companion("小冰")).unwrap();
 
@@ -389,7 +367,7 @@ async fn try_family_dispatch_forced_member_not_in_group_self_answers() {
     let cfg = resolve_llm_config(t.state()).await.unwrap();
     let db = t.state().db.clone();
     let sid = "fam-forced-absent";
-    db.ensure_session(sid, "家族测试", "chat", None).ok();
+    db.ensure_session(sid, "群测试", "chat", None).ok();
     let gid = create_companion_group_impl(t.state(), "群".into(), Some("👪".into()), None)
         .await
         .unwrap();
@@ -397,11 +375,11 @@ async fn try_family_dispatch_forced_member_not_in_group_self_answers() {
     set_session_group_impl(t.state(), sid.into(), Some(gid)).await.unwrap();
 
     // 点名一个不在群里的 id(99999)→ forced ∩ 群成员为空 → 回落自答。
-    let outcome = try_family_dispatch(db, cfg, sid, "随便聊聊", &[99999])
+    let outcome = try_group_dispatch(db, cfg, sid, "随便聊聊", &[99999])
         .await
         .unwrap();
     assert!(
-        matches!(outcome, FamilyDispatchOutcome::SelfAnswer { .. }),
+        matches!(outcome, GroupDispatchOutcome::SelfAnswer { .. }),
         "被点名的成员不在群里应回落自答,got {outcome:?}"
     );
 }
@@ -410,7 +388,7 @@ async fn try_family_dispatch_forced_member_not_in_group_self_answers() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn try_family_dispatch_chains_parent_id_across_turns() {
+async fn try_group_dispatch_chains_parent_id_across_turns() {
     let t = build_test_app_state().await;
     let cid = t.state().db.adopt_companion(&new_companion("九尾")).unwrap();
 
@@ -420,19 +398,19 @@ async fn try_family_dispatch_chains_parent_id_across_turns() {
     let cfg = resolve_llm_config(t.state()).await.unwrap();
     let db = t.state().db.clone();
     let sid = "fam-chain";
-    db.ensure_session(sid, "家族测试", "chat", None).ok();
+    db.ensure_session(sid, "群测试", "chat", None).ok();
     let gid = create_companion_group_impl(t.state(), "九尾群".into(), Some("🦊".into()), None)
         .await
         .unwrap();
     add_companion_to_group_impl(t.state(), gid, cid).await.unwrap();
     set_session_group_impl(t.state(), sid.into(), Some(gid)).await.unwrap();
 
-    let first = match try_family_dispatch(db.clone(), cfg.clone(), sid, "第一轮", &[]).await.unwrap() {
-        FamilyDispatchOutcome::Dispatched { collaboration_id, .. } => collaboration_id,
+    let first = match try_group_dispatch(db.clone(), cfg.clone(), sid, "第一轮", &[]).await.unwrap() {
+        GroupDispatchOutcome::Dispatched { collaboration_id, .. } => collaboration_id,
         other => panic!("第一轮应派遣，got {other:?}"),
     };
-    let second = match try_family_dispatch(db.clone(), cfg.clone(), sid, "第二轮接着说", &[]).await.unwrap() {
-        FamilyDispatchOutcome::Dispatched { collaboration_id, .. } => collaboration_id,
+    let second = match try_group_dispatch(db.clone(), cfg.clone(), sid, "第二轮接着说", &[]).await.unwrap() {
+        GroupDispatchOutcome::Dispatched { collaboration_id, .. } => collaboration_id,
         other => panic!("第二轮应派遣，got {other:?}"),
     };
     assert_ne!(first, second, "两轮应是独立协作");
@@ -443,11 +421,11 @@ async fn try_family_dispatch_chains_parent_id_across_turns() {
     assert_eq!(c2.parent_id, Some(first), "第二轮应以 parent_id 串到第一轮");
 }
 
-// === 多 group 桶隔离:不同 group 写不同 family_shared_<id> 桶,组外成员不进 roster ===
+// === 多 group 桶隔离:不同 group 写不同 group_shared_<id> 桶,组外成员不进 roster ===
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn try_family_dispatch_uses_group_roster_and_isolates_buckets() {
+async fn try_group_dispatch_uses_group_roster_and_isolates_buckets() {
     let t = build_test_app_state().await;
     let db = t.state().db.clone();
 
@@ -463,7 +441,7 @@ async fn try_family_dispatch_uses_group_roster_and_isolates_buckets() {
     // cid_other 故意不加 —— 验证它**不会**出现在 dispatch 候选里。
 
     let sid = "fam-group-binding";
-    db.ensure_session(sid, "家族测试", "chat", None).unwrap();
+    db.ensure_session(sid, "群测试", "chat", None).unwrap();
     set_session_group_impl(t.state(), sid.into(), Some(gid)).await.unwrap();
 
     // mock claim:全员接(decision_json 默认 claim:true)。
@@ -472,11 +450,11 @@ async fn try_family_dispatch_uses_group_roster_and_isolates_buckets() {
     seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
     let cfg = resolve_llm_config(t.state()).await.unwrap();
 
-    let outcome = try_family_dispatch(db.clone(), cfg.clone(), sid, "帮我想个文案", &[])
+    let outcome = try_group_dispatch(db.clone(), cfg.clone(), sid, "帮我想个文案", &[])
         .await
         .unwrap();
     let (collab_id, member_ids) = match outcome {
-        FamilyDispatchOutcome::Dispatched { collaboration_id, members } => {
+        GroupDispatchOutcome::Dispatched { collaboration_id, members } => {
             let ids: Vec<i64> = members.iter().map(|m| m.companion_id).collect();
             (collaboration_id, ids)
         }
@@ -489,8 +467,8 @@ async fn try_family_dispatch_uses_group_roster_and_isolates_buckets() {
     assert!(member_ids.contains(&cid_in_b));
     assert!(!member_ids.contains(&cid_other), "组外成员不该被拉进来(roster 隔离)");
 
-    // 协作落库的 plan participant.memory_scope 是 FamilyGroup(gid) —— 桶名
-    // 是 family_shared_<gid>,与其他 group 的桶完全隔离。
+    // 协作落库的 plan participant.memory_scope 是 Group(gid) —— 桶名
+    // 是 group_shared_<gid>,与其他 group 的桶完全隔离。
     let orch = SqliteOrchestrator::new(db.clone(), Arc::new(ConcreteExecutor::new(cfg)));
     let collabs = orch.list_recent_by_session(sid, 5).unwrap();
     let c = collabs.iter().find(|c| c.id == collab_id).expect("协作已落库");
@@ -502,11 +480,11 @@ async fn try_family_dispatch_uses_group_roster_and_isolates_buckets() {
         .expect("step 应含 participant");
     assert_eq!(
         participant.memory_scope,
-        MemoryScope::FamilyGroup(gid),
-        "scope 应升级为该组的 FamilyGroup",
+        MemoryScope::Group(gid),
+        "scope 应升级为该组的 Group",
     );
-    // 桶命名约定:每个 group 独占 family_shared_<gid>。两个不同 group 的桶
+    // 桶命名约定:每个 group 独占 group_shared_<gid>。两个不同 group 的桶
     // 名一定不同 —— 桶隔离的核心保证。
-    assert_eq!(family_group_bucket(gid), format!("family_shared_{}", gid));
-    assert_ne!(family_group_bucket(gid), family_group_bucket(gid + 1));
+    assert_eq!(group_bucket(gid), format!("group_shared_{}", gid));
+    assert_ne!(group_bucket(gid), group_bucket(gid + 1));
 }

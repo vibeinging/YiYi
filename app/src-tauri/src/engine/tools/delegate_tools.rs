@@ -1,5 +1,5 @@
 //! `delegate_to_companion` — the main 精灵 hands a task off to a named
-//! family member (companion) instead of answering itself.
+//! a companion instead of answering itself.
 //!
 //! When the user says 「让闪闪写文案」or 「让阿狸来 review 这段代码」,
 //! the LLM should call this tool. The tool:
@@ -14,7 +14,7 @@
 //!      the orchestrator UPDATEs the same row to the verdict text.
 //!
 //! Design: `docs/design/2026-05-15_jury-collaboration-design.md` (the
-//! "dispatched" mode + Phase 3 family-mode dispatch); UI integration
+//! "dispatched" mode + Phase 3 群派遣); UI integration
 //! reuses the same path as the frontend @companion mention.
 
 use std::sync::Arc;
@@ -30,18 +30,18 @@ use crate::engine::db::Companion;
 pub fn definitions() -> Vec<ToolDefinition> {
     vec![tool_def(
         "delegate_to_companion",
-        "Hand a task off to a named family member (companion). Use this whenever the user \
+        "Hand a task off to a named companion (群成员). Use this whenever the user \
          names a companion (e.g. 「让闪闪写文案」「叫阿狸来 review」) OR when the task strongly \
          matches a companion's specialty (e.g. user asks for a small-red-book post and a 文案 \
          companion exists). The companion runs with their own persona and memory; the user \
          sees a collaboration card render inline. **Do NOT answer the task yourself when this \
-         tool is appropriate** — the whole point of the family is to let each member specialize.",
+         tool is appropriate** — the whole point is to let each companion specialize.",
         serde_json::json!({
             "type": "object",
             "properties": {
                 "companion_name": {
                     "type": "string",
-                    "description": "Companion's display name as shown in the family list. Case + whitespace tolerant."
+                    "description": "Companion's display name as shown in the group's member list. Case + whitespace tolerant."
                 },
                 "task": {
                     "type": "string",
@@ -80,7 +80,7 @@ pub async fn delegate_to_companion_tool(args: &serde_json::Value) -> String {
     let Some(companion) = find_by_name(&companions, companion_name) else {
         let known: Vec<&str> = companions.iter().map(|c| c.name.as_str()).collect();
         return format!(
-            "Error: 没找到名为「{companion_name}」的家族成员。当前家族：{known:?}。\
+            "Error: 没找到名为「{companion_name}」的群成员。当前群：{known:?}。\
              如果用户确实想要这位成员，先用 propose_companion 提议生成草稿。"
         );
     };
@@ -103,7 +103,7 @@ pub async fn delegate_to_companion_tool(args: &serde_json::Value) -> String {
         avatar_emoji: companion.avatar_emoji.clone(),
         color_hex: companion.color_hex.clone(),
         // Default to Private — each companion writes to their own bucket.
-        // Family-shared is a Phase 3 LLM-driven decision.
+        // 群共享记忆是 Phase 3 LLM-driven decision.
         memory_scope: crate::engine::agents::MemoryScope::Private,
     };
 

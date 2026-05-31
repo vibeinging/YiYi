@@ -104,7 +104,24 @@ impl Database {
         db.migrate_tables()?;
         db.migrate_from_json(working_dir)?;
         db.migrate_sandbox_to_authorized_folders();
+        db.migrate_group_scope_tag();
+        db.reap_stale_collaborations();
         Ok(db)
+    }
+
+    /// family → group 重命名遗留:旧协作的 `participants_json` 里 `MemoryScope`
+    /// 序列化成 `{"family_group":id}`,变体改名 `Group` 后新代码期望 `{"group":id}`。
+    /// 一次性把旧 tag 替换掉,免得老协作卡片反序列化失败。幂等(替换后无 family_group)。
+    /// 旧的 `family_shared_{id}` MemMe 记忆桶按"老数据可删"约定弃为孤儿,不迁。
+    fn migrate_group_scope_tag(&self) {
+        if let Some(conn) = self.get_conn() {
+            let _ = conn.execute(
+                "UPDATE collaboration_steps
+                    SET participants_json = REPLACE(participants_json, '\"family_group\"', '\"group\"')
+                  WHERE participants_json LIKE '%family_group%'",
+                [],
+            );
+        }
     }
 
     fn init_tables(&self) -> Result<(), String> {
@@ -551,14 +568,14 @@ impl Database {
             log::info!("Migrated companions table: added role_label column");
         }
 
-        // Companion groups (家族) —— 多 companion 共聊 + 共享记忆桶的载体。
+        // Companion groups (群) —— 多 companion 共聊 + 共享记忆桶的载体。
         // 多对多关系:companion 可同时在多个组(类比微信群)。每组对应一个
-        // family_shared_<id> 记忆桶,通过 MemoryScope::FamilyGroup(id) 路由。
-        // 详见 docs/design/2026-05-27_家族会话-host调度群聊.md Approach B。
+        // group_shared_<id> 记忆桶,通过 MemoryScope::Group(id) 路由。
+        // 详见 docs/design/2026-05-27_群会话-host调度群聊.md Approach B。
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS companion_groups (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,                   -- 用户起的家族名,例如 \"创作小队\"
+                name TEXT NOT NULL,                   -- 用户起的群名,例如 \"创作小队\"
                 emoji TEXT,                           -- 可选 emoji,UI 显示用
                 color_hex TEXT,                       -- 可选主色 \"#F97316\"
                 created_at INTEGER NOT NULL,
@@ -674,6 +691,23 @@ impl Database {
         .map_err(|e| format!("Failed to create collaboration tables: {}", e))?;
 
         Ok(())
+    }
+
+    /// 启动时清理"上次进程遗留的在途协作"。app 重启 / 崩溃会让正在跑的 collaboration
+    /// 的 detached 执行任务直接消失,留下 status='running' 的孤儿 —— 它永不恢复,
+    /// 前端却一直显示骨骼屏。开机把这些孤儿(及其 running step)标记为 aborted/failed,
+    /// 让前端清掉。只动非终态行,幂等。
+    fn reap_stale_collaborations(&self) {
+        let conn = match self.get_conn() {
+            Some(c) => c,
+            None => return,
+        };
+        let _ = conn.execute_batch(
+            "UPDATE collaboration_steps SET status='failed', error_reason='app 重启,执行中断' \
+                 WHERE status='running';
+             UPDATE collaborations SET status='aborted', status_reason='app 重启,执行中断' \
+                 WHERE status IN ('running','planning','awaiting_confirm');",
+        );
     }
 
     fn migrate_tables(&self) -> Result<(), String> {
@@ -793,7 +827,7 @@ impl Database {
             log::info!("Migrated sessions table: added source, source_meta columns");
         }
 
-        // Add family_mode to sessions table (家族会话: host 调度的群聊体验).
+        // Add family_mode to sessions table (群会话: host 调度的群聊体验).
         // 0 = off (普通单聊), 1 = on (主精灵按 family roster 路由给成员)。
         let has_family_mode: bool = conn
             .prepare("SELECT family_mode FROM sessions LIMIT 0")
@@ -806,9 +840,9 @@ impl Database {
             log::info!("Migrated sessions table: added family_mode column");
         }
 
-        // Add group_id to sessions (Approach B 家族会话绑定到具名家族)。
-        // NULL = 无具名家族 —— 与 family_mode=1 配合时回落 Phase A 的"全 active"
-        // 隐式家族 + 单一 family_shared 桶;非 NULL = 该 session 绑定到这个 group。
+        // Add group_id to sessions (Approach B 群会话绑定到具名群)。
+        // NULL = 无具名群 —— 与 family_mode=1 配合时回落 Phase A 的"全 active"
+        // 隐式群 + 单一 family_shared 桶;非 NULL = 该 session 绑定到这个 group。
         let has_group_id: bool = conn
             .prepare("SELECT group_id FROM sessions LIMIT 0")
             .is_ok();

@@ -11,9 +11,9 @@ pub struct ChatSession {
     pub source: String,
     #[serde(default)]
     pub source_meta: Option<String>,
-    /// 当前会话绑定的具名家族(Approach B)。None = 未绑(Phase A 回落:family_mode=1
-    /// 时全 active 隐式家族,family_mode=0 时普通单聊)。前端据此在 session 列表
-    /// 渲染家族 emoji + 名前缀。
+    /// 当前会话绑定的具名群(Approach B)。None = 未绑(Phase A 回落:family_mode=1
+    /// 时全 active 隐式群,family_mode=0 时普通单聊)。前端据此在 session 列表
+    /// 渲染群 emoji + 名前缀。
     #[serde(default)]
     pub group_id: Option<i64>,
     /// 绑定到单个 companion 的私聊会话(好友列表点进去的专属对话)。None = 普通
@@ -315,7 +315,7 @@ impl super::Database {
         Ok(())
     }
 
-    // --- 家族会话 (family mode) ---
+    // --- 群会话 (family mode) ---
     // 已退役:IM 心智下 group_id 是唯一真相(见 sessions.group_id / get_session_group)。
     // 旧的 get/set_session_family_mode 读写函数已删 —— set 是唯一往 family_mode 列
     // 写的路径,删后该列永不再变脏。DB 列本身保留(SQLite 删列需重表,WAL 下风险高,

@@ -687,7 +687,7 @@ pub fn run() {
             commands::inbox::approve_inbox_item,
             commands::inbox::reject_inbox_item,
             commands::inbox::withdraw_inbox_item,
-            // Companions (Buddy > 家族 子标签)
+            // Companions (Buddy > 群 子标签)
             commands::companions::adopt_companion,
             commands::companions::update_companion,
             commands::companions::update_companion_draft_state,
@@ -695,7 +695,7 @@ pub fn run() {
             commands::companions::list_companions,
             commands::companions::get_companion,
             commands::companions::preview_persona_tone,
-            // companion groups (家族) — Approach B
+            // companion groups (群) — Approach B
             commands::companion_groups::create_companion_group,
             commands::companion_groups::list_companion_groups,
             commands::companion_groups::get_companion_group,

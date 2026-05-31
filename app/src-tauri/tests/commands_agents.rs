@@ -29,7 +29,7 @@ async fn list_agents_hides_builtins_on_fresh_state() {
     let t = build_test_app_state().await;
     let agents = list_agents_impl(t.state()).await.unwrap();
     // All built-in agents (explore / desktop_operator) and companion role
-    // templates are marked `hidden` — users reach them via Buddy > 家族 > 收养,
+    // templates are marked `hidden` — users reach them via Buddy > 群 > 收养,
     // not the @-mention picker — so a fresh state (no custom agents) lists none.
     // Registry-level loading of the builtins is covered by unit tests in
     // engine/agents (agent_registry_loads_all_builtin_agents).

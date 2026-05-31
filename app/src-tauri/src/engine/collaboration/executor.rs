@@ -12,7 +12,7 @@
 //! Per Phase 2A.15: each step is wrapped in `with_memme_user_id` based
 //! on the participant's `memory_scope`, so a companion juror's
 //! `memory_add` lands in its own bucket, a host's lands in the shared
-//! bucket, and a family-scope agent's lands in `family_shared`.
+//! bucket, and a group-scope agent's lands in `group_shared_{id}`.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -47,28 +47,75 @@ impl ConcreteExecutor {
 /// `companions/<id>/persona.md` path; if absent, falls through to the
 /// AgentDefinition's instructions stored elsewhere. The host participant
 /// (companion_id = 0) gets a generic chair prompt.
+/// 成员选择"这一轮我不发言"的哨兵 —— fused reply-or-pass(见对话循环引擎)。
+/// trim 后等于它即视为"没接话":不进 verdict、前端不渲染气泡。
+pub const PASS_SENTINEL: &str = "<pass>";
+
+/// 读 step 的对话模式标记(Driver 写进 metadata)。
+/// `group_round` = 群聊一轮(全员 reply-or-pass);`yiyi_fallback` = 全让兜底位。
+fn step_mode(step: &Step) -> Option<&str> {
+    step.input.metadata.get("mode").and_then(|v| v.as_str())
+}
+
+/// 把 metadata 里的群历史渲染成 append-only 块。**缓存纪律**:历史在前(只增),
+/// 新消息(step.input.prompt)在最末 → 每位成员跨轮只有最后那句 miss,前缀全命中。
+fn history_block(step: &Step) -> String {
+    let Some(arr) = step.input.metadata.get("history").and_then(|v| v.as_array()) else {
+        return String::new();
+    };
+    if arr.is_empty() {
+        return String::new();
+    }
+    let mut s = String::from("【群里最近的对话】\n");
+    for t in arr {
+        let role = t.get("role").and_then(|v| v.as_str()).unwrap_or("");
+        let text = t.get("text").and_then(|v| v.as_str()).unwrap_or("");
+        s.push_str(&format!("{role}: {text}\n"));
+    }
+    s.push('\n');
+    s
+}
+
 fn render_system_prompt(step: &Step, participant_idx: usize) -> String {
     let p = &step.participants[participant_idx];
-    if p.companion_id == 0 {
-        return format!(
-            "你是家族协作的主持人 {}。负责整合上游的产出，提炼共识 / 标出分歧 / 给最终建议。\
-             你不投票、不消灭异议。",
+    match step_mode(step) {
+        // 群聊一轮:每位成员自决发言或 <pass>。人设 + 静态规则进 system(稳定前缀,可缓存)。
+        Some("group_round") => format!(
+            "你是 {} {}。这是用户的群聊,群里还有其他 AI 伙伴。\n\n\
+             【发言规则】\n\
+             - 这条消息和你的性格/特长相关,或你确实有话想说 → 就以你的性格自然回复。\n\
+             - 不相关、或别人更适合答 → 只输出 `{PASS_SENTINEL}`,不要解释、不要客套。\n\
+             接话的标准是\"我真能帮上 / 我想说\",不是\"凑个数\"。",
+            p.avatar_emoji, p.name
+        ),
+        // 全让兜底位:群里没人接,YiYi 群管家接住。
+        Some("yiyi_fallback") => format!(
+            "你是群管家 {}。群里这条消息暂时没有成员接话,由你接住它:简短自然地回答用户;\
+             若确实不是你擅长的领域,就坦诚点一句并把方向轻轻递出去,别生硬推托。",
             p.name
-        );
+        ),
+        _ => {
+            if p.companion_id == 0 {
+                return format!(
+                    "你是群协作的主持人 {}。负责整合上游的产出，提炼共识 / 标出分歧 / 给最终建议。\
+                     你不投票、不消灭异议。",
+                    p.name
+                );
+            }
+            // Phase 2B will look up the persona via AgentRegistry. For now we
+            // synthesize a minimal prompt from the participant snapshot.
+            format!("你是 {} {}。按你的性格和视角回应。", p.avatar_emoji, p.name)
+        }
     }
-    // Phase 2B will look up the persona via AgentRegistry. For now we
-    // synthesize a minimal prompt from the participant snapshot — enough
-    // for the executor to be testable end-to-end without a full
-    // companions wiring.
-    format!(
-        "你是 {} {}。按你的性格和视角回应。",
-        p.avatar_emoji, p.name
-    )
 }
 
 /// Render the user prompt fed to a single participant. Includes the
 /// step's input prompt plus, for HostSummarize, the upstream summaries.
 fn render_user_prompt(step: &Step, upstream: &[(StepId, StepOutput)]) -> String {
+    // 对话循环的轮 step:历史 append-only 在前,用户新消息在最末(缓存纪律)。
+    if matches!(step_mode(step), Some("group_round") | Some("yiyi_fallback")) {
+        return format!("{}【用户刚说】\n{}", history_block(step), step.input.prompt);
+    }
     match step.kind {
         StepKind::HostSummarize => {
             let mut s = String::new();
@@ -100,6 +147,37 @@ fn render_user_prompt(step: &Step, upstream: &[(StepId, StepOutput)]) -> String 
                 s
             }
         }
+    }
+}
+
+/// 单个成员执行的硬超时(秒)。LLM 流偶尔会挂起(连接半开 / DeepSeek 不收尾),
+/// 没有超时会让 run_one 永久 await → 永占并发信号量许可 → 几个挂起后许可耗尽,
+/// 新成员卡在 acquire 上(连 LLM 请求都发不出),前端永久骨骼屏。超时后该成员算
+/// 失败(ParallelAgents 部分容错会跳过它),future 返回 → 许可释放。
+const PARTICIPANT_TIMEOUT_SECS: u64 = 150;
+
+/// run_one 的超时包装 —— 见 PARTICIPANT_TIMEOUT_SECS。
+async fn run_one_guarded(
+    config: &LLMConfig,
+    step: &Step,
+    participant_idx: usize,
+    upstream: &[(StepId, StepOutput)],
+    collab_id: CollaborationId,
+    usage_source: UsageSource,
+) -> Result<StepOutput, String> {
+    let name = step
+        .participants
+        .get(participant_idx)
+        .map(|p| p.name.clone())
+        .unwrap_or_default();
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(PARTICIPANT_TIMEOUT_SECS),
+        run_one(config, step, participant_idx, upstream, collab_id, usage_source),
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => Err(format!("{name} 响应超时({PARTICIPANT_TIMEOUT_SECS}s)")),
     }
 }
 
@@ -149,10 +227,10 @@ async fn run_one(
     ];
 
     let started = Instant::now();
-    // 真·流式:每个 ContentDelta 立刻 emit 一个 Token 事件,前端 ParallelAgentStepCard
-    // 按 ${step_id}:${companion_id} 累积,群成员发言逐字蹦出(与 YiYi 单聊体验一致)。
-    // 此前用非流式 chat_completion_tracked + 结束后 emit 整段,导致群成员"loading 一下
-    // 才整段出字、不流式"。reasoning(thinking)增量不入气泡,只取 content。
+    // 真·流式:每个增量立刻 emit Token 事件,前端 ParallelAgentStepCard 按
+    // ${step_id}:${companion_id} 累积,群成员逐字蹦出(与 YiYi 单聊体验一致)。
+    // 正文(ContentDelta)与思考(ReasoningDelta)都放行,用 `reasoning` 标志分流 —— 子
+    // agent 因此和主 agent 一样有可见思考过程(只是气泡背景按成员色不同)。
     let collab_id_c = collab_id;
     let step_id_c = step.id;
     let companion_id_c = p.companion_id;
@@ -162,15 +240,19 @@ async fn run_one(
         &messages,
         &[],
         move |evt| {
-            if let StreamEvent::ContentDelta(delta) = evt {
-                if !delta.is_empty() {
-                    events::emit(CollaborationEvent::Token {
-                        collaboration_id: collab_id_c,
-                        step_id: step_id_c,
-                        companion_id: companion_id_c,
-                        delta,
-                    });
-                }
+            let (delta, reasoning) = match evt {
+                StreamEvent::ContentDelta(d) => (d, false),
+                StreamEvent::ReasoningDelta(d) => (d, true),
+                _ => return,
+            };
+            if !delta.is_empty() {
+                events::emit(CollaborationEvent::Token {
+                    collaboration_id: collab_id_c,
+                    step_id: step_id_c,
+                    companion_id: companion_id_c,
+                    delta,
+                    reasoning,
+                });
             }
         },
         None,
@@ -240,7 +322,7 @@ impl Executor for ConcreteExecutor {
                     .map_err(|e| format!("semaphore acquire: {e}"))?;
                 crate::engine::tools::with_memme_user_id(
                     bucket,
-                    run_one(&self.config, step, 0, upstream, collab_id, UsageSource::CollabWorker),
+                    run_one_guarded(&self.config, step, 0, upstream, collab_id, UsageSource::CollabWorker),
                 )
                 .await
             }
@@ -262,7 +344,7 @@ impl Executor for ConcreteExecutor {
                             .map_err(|e| format!("semaphore acquire: {e}"))?;
                         crate::engine::tools::with_memme_user_id(
                             bucket,
-                            run_one(
+                            run_one_guarded(
                                 &config,
                                 &step,
                                 idx,
@@ -289,18 +371,27 @@ impl Executor for ConcreteExecutor {
                     let name = &step.participants[idx].name;
                     match r {
                         Ok(out) => {
-                            if success_count > 0 {
-                                combined_summary.push_str("\n\n");
-                                combined_full.push_str("\n\n");
-                            }
-                            combined_summary.push_str(&format!("【{}】{}", name, out.summary));
-                            combined_full.push_str(&format!("【{}】{}", name, out.full_output));
+                            // 成功 = 这位成员"跑完了"(无论发言还是 <pass>)。但 <pass>
+                            // (选择不发言)不进 combined —— 它没贡献内容,不该出现在
+                            // verdict / 气泡聚合里。Driver 据 combined 是否为空判断
+                            // "全让"→ YiYi 兜底。见对话循环引擎 §A。
+                            success_count += 1;
                             total_tokens.input += out.tokens_used.input;
                             total_tokens.output += out.tokens_used.output;
                             if out.duration_ms > max_duration_ms {
                                 max_duration_ms = out.duration_ms;
                             }
-                            success_count += 1;
+                            if out.full_output.trim() == PASS_SENTINEL
+                                || out.full_output.trim().is_empty()
+                            {
+                                continue; // 这位选择不发言
+                            }
+                            if !combined_full.is_empty() {
+                                combined_summary.push_str("\n\n");
+                                combined_full.push_str("\n\n");
+                            }
+                            combined_summary.push_str(&format!("【{}】{}", name, out.summary));
+                            combined_full.push_str(&format!("【{}】{}", name, out.full_output));
                         }
                         Err(e) => {
                             log::warn!(
@@ -310,6 +401,8 @@ impl Executor for ConcreteExecutor {
                         }
                     }
                 }
+                // 仅当**全员报错**才整步失败。全员 <pass>(都选择不发言)是合法的
+                // "全让",返回空 combined,Driver 会接 YiYi 兜底,不算失败。
                 if success_count == 0 {
                     return Err(format!(
                         "所有 {} 位成员都没回上来: {}",
@@ -336,7 +429,7 @@ impl Executor for ConcreteExecutor {
                     .map_err(|e| format!("semaphore acquire: {e}"))?;
                 crate::engine::tools::with_memme_user_id(
                     bucket,
-                    run_one(&self.config, step, 0, upstream, collab_id, UsageSource::CollabHost),
+                    run_one_guarded(&self.config, step, 0, upstream, collab_id, UsageSource::CollabHost),
                 )
                 .await
             }

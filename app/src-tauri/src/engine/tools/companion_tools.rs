@@ -1,4 +1,4 @@
-//! `propose_companion` — the main 精灵 generates a draft new family member
+//! `propose_companion` — the main 精灵 generates a draft new companion
 //! from a user description. The draft lands as an `assistant` message with
 //! a `companion_draft` payload in its metadata; the frontend hydrates it
 //! into a `CompanionDraftCard` where the user adopts / edits / dismisses
@@ -24,9 +24,9 @@ const VALID_TEMPLATES: &[&str] = &[
 pub fn definitions() -> Vec<ToolDefinition> {
     vec![tool_def(
         "propose_companion",
-        "Generate a draft for a new family-member (companion) based on the user's description. \
+        "Generate a draft for a new companion (群成员) based on the user's description. \
          Use this when the user explicitly asks to add / create / generate a new companion \
-         (e.g. 「帮我生成一个能写小红书爆款的家族成员」). The tool produces a draft companion \
+         (e.g. 「帮我生成一个能写小红书爆款的群成员」). The tool produces a draft companion \
          spec (name / avatar / color / role / persona) and renders an interactive card in chat. \
          The user adopts, edits, or dismisses on the card — do NOT call adopt_companion yourself.",
         serde_json::json!({
@@ -154,9 +154,9 @@ pub async fn propose_companion_tool(args: &serde_json::Value) -> String {
 }
 
 fn build_system_prompt() -> String {
-    r##"你是 YiYi 的家族成员设计师。用户描述想要的新家族成员，你产出一份 JSON 草稿。
+    r##"你是 YiYi 的群成员设计师。用户描述想要的新群成员，你产出一份 JSON 草稿。
 
-家族成员叫"伙伴"——是一个有性格的电子精灵，不是工具人。命名要有人格、不要功能化（❌「文案助手」 ✅「小红」「阿溪」「绿绿」）。
+群成员叫"伙伴"——是一个有性格的电子精灵，不是工具人。命名要有人格、不要功能化（❌「文案助手」 ✅「小红」「阿溪」「绿绿」）。
 
 `agent_definition_name` 只决定**工具权限**（什么工具可调），跟 UI 显示无关：
 - code_reviewer（能用代码 / git / 文件 / shell 类工具）

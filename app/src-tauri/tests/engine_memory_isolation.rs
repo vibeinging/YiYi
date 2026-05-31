@@ -1,10 +1,10 @@
 //! Memory isolation contract: companion private buckets stay disjoint,
-//! each `FamilyGroup(id)` has its own `family_shared_{id}` bucket isolated
+//! each `Group(id)` has its own `group_shared_{id}` bucket isolated
 //! from other groups and from main, and the resolver returns stable
 //! user_ids per scope.
 //!
-//! IM 心智后(本次重构):没有"全员家族" Phase A 单桶,所有家族共享桶都按
-//! group_id 切片(`family_shared_<gid>`)。
+//! IM 心智后(本次重构):没有"全员群" Phase A 单桶,所有群共享桶都按
+//! group_id 切片(`group_shared_<gid>`)。
 //!
 //! Tests hit MemMe directly (via the `FakeEmbedder`-backed test app
 //! state) so the assertions are about the actual bucket semantics, not
@@ -15,7 +15,7 @@ mod common;
 #[allow(unused_imports)]
 use common::*;
 use app_lib::engine::agents::MemoryScope;
-use app_lib::engine::collaboration::{family_group_bucket, resolve_memme_user_id};
+use app_lib::engine::collaboration::{group_bucket, resolve_memme_user_id};
 use app_lib::test_support::build_test_app_state;
 use serial_test::serial;
 use std::collections::HashSet;
@@ -64,14 +64,14 @@ async fn private_buckets_are_disjoint_across_companions() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn family_group_buckets_are_isolated_across_groups_and_from_privates() {
-    // 每个 group 独占一个 `family_shared_<gid>` 桶。两个不同 group 写各自桶,
+async fn group_buckets_are_isolated_across_groups_and_from_privates() {
+    // 每个 group 独占一个 `group_shared_<gid>` 桶。两个不同 group 写各自桶,
     // 互不可见;companion 私桶也看不到 group 桶。
     let t = build_test_app_state().await;
     let store = &t.app_state.memme_store;
 
-    let group_a_bucket = family_group_bucket(1);
-    let group_b_bucket = family_group_bucket(2);
+    let group_a_bucket = group_bucket(1);
+    let group_b_bucket = group_bucket(2);
 
     let entry_a = add_memory(store, &group_a_bucket, "群 A 的项目共识");
     let entry_b = add_memory(store, &group_b_bucket, "群 B 的产品路线");
@@ -124,8 +124,8 @@ async fn resolver_returns_stable_user_ids_per_scope() {
         "yiyi_default_user"
     );
     assert_eq!(
-        resolve_memme_user_id(MemoryScope::FamilyGroup(7), "ignored"),
-        "family_shared_7"
+        resolve_memme_user_id(MemoryScope::Group(7), "ignored"),
+        "group_shared_7"
     );
 }
 
@@ -180,12 +180,12 @@ async fn many_companion_buckets_remain_isolated_under_concurrent_writes() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn family_group_bucket_lazy_creates_on_first_write() {
+async fn group_bucket_lazy_creates_on_first_write() {
     // No special setup — MemMe creates the bucket lazily on first add.
     // 任意 group id 的桶都是按需懒建。
     let t = build_test_app_state().await;
     let store = &t.app_state.memme_store;
-    let bucket = family_group_bucket(99);
+    let bucket = group_bucket(99);
 
     // Read before write returns empty (no panic / "user not found").
     let before = list_ids(store, &bucket);

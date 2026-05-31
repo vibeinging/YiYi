@@ -1,5 +1,5 @@
 pub mod chat;
-pub mod family_dispatch;
+pub mod group_dispatch;
 pub mod helpers;
 pub mod session;
 

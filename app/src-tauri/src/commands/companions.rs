@@ -1,4 +1,4 @@
-//! Tauri commands for the Companion system (Buddy > 家族).
+//! Tauri commands for the Companion system (Buddy > 群).
 //!
 //! Companions are user-adopted agent instances. See
 //! `docs/design/2026-05-15_companions-system.md`.

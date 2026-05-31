@@ -11,7 +11,7 @@ use super::{current_memme_user_id, DEFAULT_MEMME_USER_ID};
 ///
 /// - `Mine` (default) — current speaker's bucket. For a companion that's
 ///   their isolated `companion_<id>` MemMe user_id; **in a group chat the
-///   executor overrides it to `family_shared_<group_id>` so writes naturally
+///   executor overrides it to `group_shared_<group_id>` so writes naturally
 ///   land in the shared family bucket** without the agent specifying.
 /// - `Shared` — the main user bucket. Companions can opt-in to write here
 ///   when they're recording an objective fact about the user (rather than
@@ -20,7 +20,7 @@ use super::{current_memme_user_id, DEFAULT_MEMME_USER_ID};
 ///
 /// Note: `family` scope is deprecated — group sharing now happens
 /// automatically via the `with_memme_user_id` override when a companion
-/// runs inside a FamilyGroup-scoped step.
+/// runs inside a Group-scoped step.
 #[derive(Debug, Clone, Copy)]
 enum MemoryScopeArg {
     Mine,

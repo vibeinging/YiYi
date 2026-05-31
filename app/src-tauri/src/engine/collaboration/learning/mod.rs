@@ -1,6 +1,13 @@
 //! Learning signals — the unified pipeline for every user intervention
-//! against an AI decision. Feeds `DispatchStrategy` so the system gets
-//! progressively better at matching user expectations.
+//! against an AI decision(召回 / 改 plan / 否决结论 / 重试 / 中止),持久化到
+//! `learning_signals` 表。本意是"用户纠正 → 系统变好"的反馈回路。
+//!
+//! TODO(待重连成长回路):当前**孤儿** —— 旧消费方 `DispatchStrategy::judge` 已随
+//! dispatch/claim 模块退役,生产方 `recent_corrections` 也在群聊改对话引擎时移除,
+//! 故 `record()` / `recent()` 暂无 live 调用。**保留不删**:这是 CLAUDE.md Design
+//! Principle 3「白盒共建·双向训练:用户纠正 → corrections → 候选 lesson」的底层基建。
+//! 待重新接线:中止群聊→`PlanAborted`、重试成员→`StepRetried`、(将来)用户对群结论
+//! 说"不对"→`VerdictRejected` 喂进 Inbox 候选 lesson。见 docs/design/2026-05-31 §8。
 
 use serde::{Deserialize, Serialize};
 

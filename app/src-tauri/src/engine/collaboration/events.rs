@@ -48,6 +48,10 @@ pub fn subscribe() -> broadcast::Receiver<CollaborationEvent> {
 mod tests {
     use super::*;
     use crate::engine::collaboration::{AuditEvent, AuditKind, Actor};
+    use serial_test::serial;
+
+    // 事件总线是进程级单例(OnceLock broadcast)。这些测试各自 subscribe + emit,
+    // 并行跑会互相收到对方 emit 的事件导致 recv 到错的事件 → #[serial] 隔离。
 
     fn sample_audit(collab_id: i64) -> CollaborationEvent {
         CollaborationEvent::Audit {
@@ -62,6 +66,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn subscribe_receives_emitted_events() {
         let mut rx = subscribe();
         emit(sample_audit(1));
@@ -73,6 +78,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn emit_without_subscribers_is_silent() {
         // Just verify no panic when there are zero receivers.
         let count = emit(sample_audit(99));
@@ -82,6 +88,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn token_event_delivered() {
         let mut rx = subscribe();
         emit(CollaborationEvent::Token {
@@ -89,6 +96,7 @@ mod tests {
             step_id: 1,
             companion_id: 3,
             delta: "hi".into(),
+            reasoning: false,
         });
         let got = rx.recv().await.unwrap();
         match got {

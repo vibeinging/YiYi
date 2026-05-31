@@ -299,7 +299,7 @@ pub async fn list_recent_memories_impl(
     user_id: Option<String>,
 ) -> Result<Vec<MemoryEntry>, String> {
     // 默认主用户桶（与既有调用方一致）；前端 `user_id = "family_shared"` 即可
-    // 浏览家族共享记忆,满足白盒原则的"可见可删"。
+    // 浏览群共享记忆,满足白盒原则的"可见可删"。
     let bucket = user_id.unwrap_or_else(|| crate::engine::tools::MEMME_USER_ID.to_string());
     let rows = state
         .memme_store

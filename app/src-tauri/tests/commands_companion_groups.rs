@@ -1,4 +1,4 @@
-//! Companion groups (家族) 的集成测试 —— 覆盖 group CRUD、多对多成员管理、
+//! Companion groups (群) 的集成测试 —— 覆盖 group CRUD、多对多成员管理、
 //! session 绑组、级联删除、retired 成员过滤。所有用 TempDb 隔离 + #[serial]
 //! (SQLite WAL 不能并行共享)。
 
@@ -149,7 +149,7 @@ async fn delete_companion_group_clears_session_binding() {
     );
 
     delete_companion_group_impl(t.state(), gid).await.unwrap();
-    // Session 仍存在,但 group_id 被清空(回落 Phase A 隐式家族)。
+    // Session 仍存在,但 group_id 被清空(回落 Phase A 隐式群)。
     assert_eq!(
         get_session_group_impl(t.state(), "sid-x".into())
             .await

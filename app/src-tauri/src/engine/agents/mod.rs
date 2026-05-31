@@ -17,9 +17,8 @@ pub mod persona_loader;
 /// `Shared` — companion uses the main user's memory bucket; suitable for
 /// agents that need to inherit the user's profile (e.g. desktop_operator,
 /// or the host companion in a jury).
-/// `Family` — companion uses the singleton `family_shared` bucket, visible to
-/// all companions. Phase A 隐式家族(全 active companions)用这个桶。
-/// `FamilyGroup(id)` — companion 写入某具名家族独占的 `family_shared_{id}` 桶。
+/// `Shared` — 旧"全 active companions 单一共享桶"语义,IM 心智下基本不用,保留兼容。
+/// `Group(id)` — companion 写入某具名群独占的 `group_shared_{id}` 桶。
 /// 一个 group 一个桶,session 1:1 绑 group(IM 心智),群内成员共享记忆。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -27,8 +26,8 @@ pub enum MemoryScope {
     #[default]
     Private,
     Shared,
-    /// id = `companion_groups.id`。序列化为 `{"family_group": 42}`。
-    FamilyGroup(i64),
+    /// id = `companion_groups.id`。序列化为 `{"group": 42}`。
+    Group(i64),
 }
 
 /// Parsed agent definition from AGENT.md.
@@ -67,7 +66,7 @@ pub struct AgentDefinition {
     pub memory_scope: MemoryScope,
     /// Adoption timestamp (Unix seconds). Only set for user-adopted
     /// companions; builtin agents leave this `None`. Powers the "陪了你 N 天"
-    /// display in the Buddy 家族 tab.
+    /// display in the Buddy 群 tab.
     #[serde(default)]
     pub adopted_at: Option<i64>,
     /// Frontmatter metadata (color, category, hidden, …).
@@ -316,7 +315,7 @@ mod tests {
         // Internal helpers (explore / desktop_operator) and companion role
         // templates (code_reviewer / product_strategist / life_coach) all
         // hide from @-mention; users interact with them only via Buddy >
-        // 家族 > 收养, not by spawning them as raw agents.
+        // 群 > 收养, not by spawning them as raw agents.
         for name in [
             "explore",
             "desktop_operator",
@@ -356,7 +355,7 @@ memory_scope: shared
 
     #[test]
     fn memory_scope_parses_family_variant_deprecated_falls_back() {
-        // `memory_scope: family` 是 Phase A 全员家族遗留写法。IM 心智后
+        // `memory_scope: family` 是 Phase A 全员群遗留写法。IM 心智后
         // Family 变体已删,带这个字段的 agent.md 应当 parse 失败(返回 None);
         // 上层 loader 会跳过、记 warning,这是预期的"明显失败优于静默吃掉"。
         let family = r#"---

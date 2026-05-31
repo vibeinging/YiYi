@@ -722,7 +722,7 @@ pub async fn build_system_prompt(
         // off via `delegate_to_companion` instead of answering itself.
         let companions = db.list_active_companions();
         if !companions.is_empty() {
-            prompt.push_str("\n\n## 家族成员（你可以派遣他们做事）\n");
+            prompt.push_str("\n\n## 群成员（你可以派遣他们做事）\n");
             for c in &companions {
                 let role = c
                     .role_label
@@ -737,10 +737,10 @@ pub async fn build_system_prompt(
             }
             prompt.push_str(
                 "\n**规则**：\n\
-                 - 用户提到家族成员的名字（如「让闪闪写文案」「叫阿狸 review」）→ 调用 `delegate_to_companion` 工具，把任务派给该成员。\n\
+                 - 用户提到群成员的名字（如「让闪闪写文案」「叫阿狸 review」）→ 调用 `delegate_to_companion` 工具，把任务派给该成员。\n\
                  - 用户任务明显匹配某位成员的擅长（如要小红书爆款且有「文案」类型成员）→ 同样优先调 `delegate_to_companion`，而不是自己代答。\n\
                  - 用户明确说「**你**来做」「**亲自**」「不要让别人」→ 你自己回答。\n\
-                 - 派遣后只用一两句话收一收话题（如「好嘞，让 X 来」），**不要**自己再写一份答案 — 家族成员的回复会作为 CollaborationMessageCard 内嵌在聊天里。\n",
+                 - 派遣后只用一两句话收一收话题（如「好嘞，让 X 来」），**不要**自己再写一份答案 — 群成员的回复会作为 CollaborationMessageCard 内嵌在聊天里。\n",
             );
         }
     }

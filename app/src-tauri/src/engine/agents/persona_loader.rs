@@ -43,7 +43,7 @@ pub struct CompanionPersona {
     /// Persona Markdown body, with frontmatter stripped and length-capped.
     pub body: String,
     /// Prompt-injection-like patterns found in the body. Empty = clean.
-    /// Surfaced in the UI (Buddy 家族 卡片 警示标识) so the user can
+    /// Surfaced in the UI (Buddy 群 卡片 警示标识) so the user can
     /// review; we do NOT auto-redact, because legitimate persona text
     /// might mention these terms in benign ways.
     pub suspicious_terms: Vec<String>,

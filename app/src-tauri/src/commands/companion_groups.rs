@@ -1,8 +1,8 @@
-//! Tauri 命令面:companion groups(家族)CRUD + 成员管理 + session 绑组。
+//! Tauri 命令面:companion groups(群)CRUD + 成员管理 + session 绑组。
 //!
 //! 多对多关系 —— 一个 companion 可同时在多个组(类比微信群)。每组对应一个
-//! `family_shared_<id>` 记忆桶,通过 `MemoryScope::FamilyGroup(id)` 路由。
-//! Phase A 的"全 active 隐式家族 + 单一 family_shared 桶"作为回落保留
+//! `group_shared_<id>` 记忆桶,通过 `MemoryScope::Group(id)` 路由。
+//! Phase A 的"全 active 隐式群 + 单一 family_shared 桶"作为回落保留
 //! (session.group_id IS NULL 时生效)。
 
 use tauri::State;
@@ -170,7 +170,7 @@ pub async fn set_session_group_impl(
     state.db.set_session_group(&session_id, group_id)
 }
 
-/// 绑定会话到指定家族(None = 解绑,回落 Phase A 全员)。
+/// 绑定会话到指定群(None = 解绑,回落 Phase A 全员)。
 #[tauri::command]
 pub async fn set_session_group(
     state: State<'_, AppState>,

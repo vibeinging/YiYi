@@ -1,11 +1,11 @@
-//! Companion groups (家族) —— 持久化的"群聊式"分身分组。
+//! Companion groups (群) —— 持久化的"群聊式"分身分组。
 //!
 //! 多对多关系:一个 companion 可同时在多个组（类比微信群）。每组对应一个
-//! `family_shared_<id>` 记忆桶,通过 `MemoryScope::FamilyGroup(id)` 路由,与
-//! 别的组互不可见。Phase A 的"全 active 隐式家族 + 单一 family_shared 桶"作为
+//! `group_shared_<id>` 记忆桶,通过 `MemoryScope::Group(id)` 路由,与
+//! 别的组互不可见。Phase A 的"全 active 隐式群 + 单一 family_shared 桶"作为
 //! 回落保留（session.group_id IS NULL 时生效）。
 //!
-//! 详见 docs/design/2026-05-27_家族会话-host调度群聊.md Approach B。
+//! 详见 docs/design/2026-05-27_群会话-host调度群聊.md Approach B。
 
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
@@ -107,8 +107,8 @@ impl super::Database {
     }
 
     /// 删组 —— 成员关系通过 FK ON DELETE CASCADE 自动清。引用此组的 session
-    /// 同步把 group_id 置 NULL（回落 Phase A 隐式家族;sessions 表没建 FK 防
-    /// 用户改库,这里手工 UPDATE）。**不删** family_shared_<id> 记忆桶,留作
+    /// 同步把 group_id 置 NULL（回落 Phase A 隐式群;sessions 表没建 FK 防
+    /// 用户改库,这里手工 UPDATE）。**不删** group_shared_<id> 记忆桶,留作
     /// 孤儿桶等用户在 BuddyPanel 手动清——避免误删带来惊讶。
     pub fn delete_companion_group(&self, id: i64) -> Result<(), String> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
@@ -168,7 +168,7 @@ impl super::Database {
             .unwrap_or_default()
     }
 
-    /// 反查:某 companion 在哪些组里(UI 的"我所属家族"展示用)。
+    /// 反查:某 companion 在哪些组里(UI 的"我所属群"展示用)。
     pub fn list_groups_for_companion(&self, companion_id: i64) -> Vec<CompanionGroup> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let sql = format!(
@@ -192,7 +192,7 @@ impl super::Database {
 
     // ── session ↔ group binding ───────────────────────────────────────
 
-    /// 绑定一次家族会话到具体 group(None = 解绑 → 走 Phase A 全 active 回落)。
+    /// 绑定一次群会话到具体 group(None = 解绑 → 走 Phase A 全 active 回落)。
     pub fn set_session_group(
         &self,
         session_id: &str,

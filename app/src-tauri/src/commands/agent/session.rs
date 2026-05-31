@@ -123,7 +123,7 @@ pub async fn delete_session(
     delete_session_impl(&*state, session_id).await
 }
 
-// family_mode 命令已退役 —— IM 心智下 group_id 是唯一真相,family_dispatch 读
+// family_mode 命令已退役 —— IM 心智下 group_id 是唯一真相,group_dispatch 读
 // get_session_group 判定群聊。旧的 get/set_family_mode 命令链(含前端 api wrapper)
 // 已无调用方,全部删除;DB family_mode 列保留为历史残留(不读不写,零风险)。
 

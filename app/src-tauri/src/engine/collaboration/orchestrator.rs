@@ -446,6 +446,149 @@ impl SqliteOrchestrator {
         Ok(())
     }
 
+    // ================================================================
+    // ConversationDriver 支撑面（Phase 1a —— 群聊对话循环引擎）
+    // ================================================================
+    // 群聊不是静态 DAG,是开放轮次的对话循环(见 docs/design/2026-05-31 §A)。
+    // Driver 直接驱动执行器、**自己持有 finalize** —— 不走 submit→spawn_step→
+    // "all-terminal 即自动 finalize" 那套(那套是给静态 plan 的,会和动态续轮
+    // 打架,正是 chime-in 补丁 finalize 竞态的根)。下面是 Driver 用的最小面:
+    // 建会话 / 追加轮 / await 式跑一轮 / 收口。
+
+    /// 建一个"对话型"协作行(status=Running),持久化初始 plan 的 step 为 pending,
+    /// 但**不调度、不 spawn**。执行权归 ConversationDriver。
+    pub(crate) fn create_conversation(
+        &self,
+        chat_session_id: &str,
+        intent: &str,
+        plan: &CollaborationPlan,
+        mode: &CollaborationMode,
+        parent_id: Option<CollaborationId>,
+    ) -> Result<CollaborationId, String> {
+        if plan.steps.is_empty() {
+            return Err("conversation must start with at least one round step".into());
+        }
+        let collab_id = self.persist_new(
+            chat_session_id,
+            intent,
+            plan,
+            mode,
+            &CollaborationStatus::Running,
+            parent_id,
+        )?;
+        self.audit.emit(
+            collab_id,
+            Actor::System,
+            AuditKind::Submitted,
+            serde_json::json!({ "intent": intent, "mode": mode, "plan": plan, "driven": true }),
+        )?;
+        Ok(collab_id)
+    }
+
+    /// 追加一个新轮次的 step(pending),供 Driver 多轮(Phase 1b)/兜底位用。
+    pub(crate) fn add_pending_step(
+        &self,
+        collab_id: CollaborationId,
+        step: &Step,
+    ) -> Result<(), String> {
+        let conn = self.db.get_conn().ok_or_else(|| "db lock".to_string())?;
+        let position: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM collaboration_steps WHERE collaboration_id = ?1",
+                params![collab_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("count steps: {e}"))?;
+        self.persist_step(&conn, collab_id, position, step)
+    }
+
+    /// 同步跑一个已 pending 的 step 到完成(await 执行器,**不 spawn / 不 finalize /
+    /// 不调度后续**)。Driver 借此一轮一轮推进,自己决定下一步。
+    /// - 返回 `Some(output)`:正常完成。
+    /// - 返回 `None`:被 abort 抢占(CAS affected==0),Driver 应停止循环。
+    /// - 返回 `Err`:执行器报错,此 step 已标 failed,Driver 应 finalize(Failed)。
+    pub(crate) async fn run_round_step(
+        &self,
+        collab_id: CollaborationId,
+        step: &Step,
+        upstream: &[(StepId, StepOutput)],
+    ) -> Result<Option<StepOutput>, String> {
+        let started_at = crate::engine::db::now_ts();
+        let claimed = {
+            let conn = self.db.get_conn().ok_or_else(|| "db lock".to_string())?;
+            conn.execute(
+                "UPDATE collaboration_steps SET status = 'running', started_at = ?1
+                  WHERE collaboration_id = ?2 AND id = ?3 AND status = 'pending'",
+                params![started_at, collab_id, step.id],
+            )
+            .map_err(|e| format!("mark round running: {e}"))?
+        };
+        if claimed == 0 {
+            return Ok(None);
+        }
+        self.audit.emit(
+            collab_id,
+            Actor::System,
+            AuditKind::StepStarted,
+            serde_json::json!({ "step_id": step.id }),
+        )?;
+
+        let output = match self.executor.run_step(collab_id, step, upstream).await {
+            Ok(o) => o,
+            Err(e) => {
+                let finished_at = crate::engine::db::now_ts();
+                if let Some(conn) = self.db.get_conn() {
+                    let _ = conn.execute(
+                        "UPDATE collaboration_steps SET status = 'failed', error_reason = ?1, finished_at = ?2
+                          WHERE collaboration_id = ?3 AND id = ?4 AND status = 'running'",
+                        params![e, finished_at, collab_id, step.id],
+                    );
+                }
+                self.audit.emit(
+                    collab_id,
+                    Actor::System,
+                    AuditKind::StepFailed,
+                    serde_json::json!({ "step_id": step.id, "reason": e }),
+                )?;
+                return Err(e);
+            }
+        };
+
+        let finished_at = crate::engine::db::now_ts();
+        let output_json =
+            serde_json::to_string(&output).map_err(|e| format!("serialize output: {e}"))?;
+        let affected = {
+            let conn = self.db.get_conn().ok_or_else(|| "db lock".to_string())?;
+            conn.execute(
+                "UPDATE collaboration_steps SET status = 'completed', output_json = ?1, finished_at = ?2
+                  WHERE collaboration_id = ?3 AND id = ?4 AND status = 'running'",
+                params![output_json, finished_at, collab_id, step.id],
+            )
+            .map_err(|e| format!("mark round completed: {e}"))?
+        };
+        if affected == 0 {
+            // 被 abort 抢占(status 已非 running)。丢弃这条产出,Driver 停。
+            return Ok(None);
+        }
+        self.audit.emit(
+            collab_id,
+            Actor::System,
+            AuditKind::StepCompleted,
+            serde_json::json!({ "step_id": step.id, "duration_ms": output.duration_ms }),
+        )?;
+        Ok(Some(output))
+    }
+
+    /// Driver 收口 —— 写 verdict + 置终态。语义上由 Driver 拥有(对话循环退出时调)。
+    /// 复用 `finalize` 的终态守卫:若已被 abort 抢先则幂等 no-op。
+    pub(crate) fn finalize_conversation(
+        &self,
+        collab_id: CollaborationId,
+        status: CollaborationStatus,
+    ) -> Result<(), String> {
+        self.finalize(collab_id, status)
+    }
+
     fn all_steps_terminal(&self, collab_id: CollaborationId) -> Result<bool, String> {
         let conn = self.db.get_conn().ok_or_else(|| "db lock".to_string())?;
         let pending: i64 = conn
@@ -559,12 +702,12 @@ impl SqliteOrchestrator {
             CollaborationStatus::Done => Self::compose_done_verdict(&conn, collab_id)?,
             CollaborationStatus::Failed(reason) => {
                 if reason.trim().is_empty() {
-                    "（家族协作未完成）".to_string()
+                    "（群协作未完成）".to_string()
                 } else {
-                    format!("（家族协作未完成）{reason}")
+                    format!("（群协作未完成）{reason}")
                 }
             }
-            CollaborationStatus::Aborted => "（家族协作已中止）".to_string(),
+            CollaborationStatus::Aborted => "（群协作已中止）".to_string(),
             _ => return Ok(()),
         };
         drop(conn);
@@ -574,33 +717,50 @@ impl SqliteOrchestrator {
         Ok(())
     }
 
-    /// Read all `single_agent` steps in `position` order and stitch the
-    /// completed participants' outputs into a verdict block. Falls back
-    /// to `summary` if `full_output` is empty.
+    /// 把一个已完成协作的可见产出拼成 verdict 文本 —— 写回 chat stream,主精灵
+    /// 下一轮据此读到"群里刚刚聊了什么/给了什么结论"。
+    ///
+    /// 此前只读 `single_agent`,导致**群聊(parallel_agents)/群讨论(host_summarize)
+    /// 的产出全部丢失**,verdict 落成"没有可见产出"占位 —— 主精灵的跨轮上下文断裂。
+    /// 见陪审团 2026-05-30 P0。现在读全部 kind:
+    /// - 有 `host_summarize`(群讨论的 YiYi 结论) → **优先以它为 verdict 主体**
+    ///   (它本就是对全程的收口)。
+    /// - 否则 → 按 position 拼 `parallel_agents` / `single_agent` 的发言。
+    ///
+    /// `parallel_agents` 的 `full_output` 已是「【名字】内容」多成员拼接块,直接用;
+    /// `single_agent` 单成员,前缀其名。空 / 纯 `<pass>`(成员选择不发言)跳过。
     fn compose_done_verdict(
         conn: &rusqlite::Connection,
         collab_id: CollaborationId,
     ) -> Result<String, String> {
         let mut stmt = conn
             .prepare(
-                "SELECT participants_json, output_json, status FROM collaboration_steps
-                 WHERE collaboration_id = ?1 AND kind = 'single_agent'
+                "SELECT kind, participants_json, output_json, status FROM collaboration_steps
+                 WHERE collaboration_id = ?1
                  ORDER BY position ASC",
             )
             .map_err(|e| format!("prep verdict query: {e}"))?;
 
         let rows = stmt
             .query_map(params![collab_id], |row| {
-                let p: String = row.get(0)?;
-                let o: Option<String> = row.get(1)?;
-                let s: String = row.get(2)?;
-                Ok((p, o, s))
+                let k: String = row.get(0)?;
+                let p: String = row.get(1)?;
+                let o: Option<String> = row.get(2)?;
+                let s: String = row.get(3)?;
+                Ok((k, p, o, s))
             })
             .map_err(|e| format!("query verdict steps: {e}"))?;
 
-        let mut parts = Vec::new();
+        // 是否成员发言 = 空 / 纯 <pass> 视为"没发言",不进 verdict。
+        fn is_blank(body: &str) -> bool {
+            let t = body.trim();
+            t.is_empty() || t == "<pass>"
+        }
+
+        let mut host_conclusion: Option<String> = None;
+        let mut parts: Vec<String> = Vec::new();
         for r in rows {
-            let (p_json, o_json, status) = r.map_err(|e| format!("verdict row: {e}"))?;
+            let (kind, p_json, o_json, status) = r.map_err(|e| format!("verdict row: {e}"))?;
             if status != "completed" {
                 continue;
             }
@@ -609,22 +769,35 @@ impl SqliteOrchestrator {
             let Some(out_raw) = o_json else { continue };
             let output: StepOutput = serde_json::from_str(&out_raw)
                 .map_err(|e| format!("decode output: {e}"))?;
-            let Some(participant) = participants.first() else {
-                continue;
-            };
             let body = if output.full_output.trim().is_empty() {
                 output.summary.clone()
             } else {
                 output.full_output.clone()
             };
-            if body.trim().is_empty() {
+            if is_blank(&body) {
                 continue;
             }
-            parts.push(format!("[{}] {body}", participant.name));
+            match kind.as_str() {
+                // 群讨论结论 —— 优先作为 verdict 主体。
+                "host_summarize" => host_conclusion = Some(body),
+                // 多成员同框,full_output 已是「【名字】…」拼好的块,直接用。
+                "parallel_agents" => parts.push(body),
+                // 单成员(@召唤 / 私聊),前缀其名。
+                _ => {
+                    let name = participants
+                        .first()
+                        .map(|p| p.name.as_str())
+                        .unwrap_or("成员");
+                    parts.push(format!("[{name}] {body}"));
+                }
+            }
         }
 
+        if let Some(conclusion) = host_conclusion {
+            return Ok(conclusion);
+        }
         if parts.is_empty() {
-            Ok("（家族协作已完成，但没有可见产出）".to_string())
+            Ok("（群协作已完成，但没有可见产出）".to_string())
         } else {
             Ok(parts.join("\n\n"))
         }
