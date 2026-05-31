@@ -1,9 +1,9 @@
 /**
- * 家族(companion groups)API —— 持久化的"群聊式"分身分组(IM 心智)。
+ * 群(companion groups)API —— 持久化的"群聊式"分身分组(IM 心智)。
  *
  * 多对多关系:一个 companion 可同时在多个组(类比微信群)。每组对应一个
- * `family_shared_<id>` 记忆桶,通过 `MemoryScope::FamilyGroup(id)` 路由。
- * session 1:1 绑 group:group_id=null → 单聊主精灵;group_id=N → 群聊家族 N。
+ * `group_shared_<id>` 记忆桶,通过 `MemoryScope::Group(id)` 路由。
+ * session 1:1 绑 group:group_id=null → 单聊主精灵;group_id=N → 群聊群 N。
  *
  * 设计:docs/design/2026-05-28_im 心智对齐.md。
  */
@@ -57,7 +57,7 @@ export async function updateCompanionGroup(
 }
 
 /** 删组:成员关系通过 FK 级联清除;sessions.group_id 引用此组的会被置 NULL
- *  (那些 session 退化为单聊);**不删** family_shared_<id> 记忆桶(留作孤儿桶,
+ *  (那些 session 退化为单聊);**不删** group_shared_<id> 记忆桶(留作孤儿桶,
  *  在 BuddyPanel 里手动清,避免误删带来惊讶)。 */
 export async function deleteCompanionGroup(id: number): Promise<void> {
   await invoke('delete_companion_group', { id })
@@ -106,7 +106,7 @@ export async function createGroupWithMembers(
 
 // ── session ↔ group binding ───────────────────────────────────────────
 
-/** 绑定会话到指定家族(null = 解绑变回单聊)。 */
+/** 绑定会话到指定群(null = 解绑变回单聊)。 */
 export async function setSessionGroup(sessionId: string, groupId: number | null): Promise<void> {
   await invoke('set_session_group', { sessionId, groupId })
 }
@@ -115,8 +115,8 @@ export async function getSessionGroup(sessionId: string): Promise<number | null>
   return await invoke<number | null>('get_session_group', { sessionId })
 }
 
-/** 桶命名约定(与后端 `family_group_bucket` 同步):每个家族独占
- *  `family_shared_<group_id>` 桶。BuddyPanel 浏览各家族记忆时按这个算 user_id。 */
-export function familyGroupBucket(groupId: number): string {
-  return `family_shared_${groupId}`
+/** 桶命名约定(与后端 `group_bucket` 同步):每个群独占
+ *  `group_shared_<group_id>` 桶。BuddyPanel 浏览各群记忆时按这个算 user_id。 */
+export function groupBucket(groupId: number): string {
+  return `group_shared_${groupId}`
 }

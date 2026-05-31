@@ -13,7 +13,8 @@ import {
   type Step,
   type StepStatus,
 } from '../../api/collaboration'
-import { selectStream, useCollaborationStore } from '../../stores/collaborationStore'
+import { selectStream, selectReasoning, useCollaborationStore } from '../../stores/collaborationStore'
+import { ThinkingBlock, AgentMarkdown } from '../chat/markdownShared'
 
 interface Props {
   collaborationId: CollaborationId
@@ -30,6 +31,9 @@ export function SingleAgentStepCard({ collaborationId, step }: Props) {
   const stream = useCollaborationStore(
     selectStream(collaborationId, step.id, participant.companion_id),
   )
+  const reasoning = useCollaborationStore(
+    selectReasoning(collaborationId, step.id, participant.companion_id),
+  )
 
   // Prefer the live stream while the step is running; once Completed we
   // fall back to the durable output.summary / full_output.
@@ -39,6 +43,8 @@ export function SingleAgentStepCard({ collaborationId, step }: Props) {
       ? step.output?.full_output ?? step.output?.summary
       : undefined
   const displayText = liveText ?? finalText ?? ''
+  // 思考(reasoning)只在 live 期间有(StepOutput 不持久化思考)。与主 agent 同结构。
+  const thinking = step.status === 'running' ? reasoning ?? '' : ''
 
   return (
     <div
@@ -66,15 +72,16 @@ export function SingleAgentStepCard({ collaborationId, step }: Props) {
         <StatusIcon status={step.status} accent={accent} />
       </div>
 
+      {/* 思考过程 —— 与主 agent 同一个 ThinkingBlock。 */}
+      {thinking && <ThinkingBlock content={thinking} streaming={step.status === 'running' && !displayText} />}
+
+      {/* 正文 —— 与主 agent 同结构(markdown-body + 共享 markdown 渲染 + 流式光标)。 */}
       {displayText && (
         <div
-          className="text-[13px] leading-relaxed whitespace-pre-wrap"
+          className={`text-[13px] leading-relaxed markdown-body${step.status === 'running' ? ' yiyi-stream-cursor' : ''}`}
           style={{ color: 'var(--color-text-secondary)' }}
         >
-          {displayText}
-          {step.status === 'running' && (
-            <span className="ml-0.5 inline-block w-1 h-3 align-middle animate-pulse" style={{ background: accent }} />
-          )}
+          <AgentMarkdown>{displayText}</AgentMarkdown>
         </div>
       )}
 

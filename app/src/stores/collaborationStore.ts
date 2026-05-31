@@ -31,7 +31,10 @@ import {
 /** Concatenated token deltas for one (step, companion) pair. */
 export interface ParticipantStream {
   companion_id: number
+  /** 正文(content)累积。 */
   text: string
+  /** 思考(reasoning/thinking)累积 —— 子 agent 思考块用,与主 agent 一致。 */
+  reasoning: string
 }
 
 export interface CollaborationState {
@@ -170,9 +173,11 @@ export const useCollaborationStore = create<StoreState & StoreActions>((set, get
         const key = `${event.step_id}:${event.companion_id}`
         const newStreams = new Map(existing.streams)
         const cur = newStreams.get(key)
+        // reasoning 标志分流:思考增量进 reasoning,正文进 text。
         newStreams.set(key, {
           companion_id: event.companion_id,
-          text: (cur?.text ?? '') + event.delta,
+          text: (cur?.text ?? '') + (event.reasoning ? '' : event.delta),
+          reasoning: (cur?.reasoning ?? '') + (event.reasoning ? event.delta : ''),
         })
         next.set(id, { ...existing, streams: newStreams })
       } else {
@@ -232,5 +237,13 @@ export const selectStream =
   (state: StoreState): string | undefined => {
     const key = `${stepId}:${companionId}`
     return state.collaborations.get(id)?.streams.get(key)?.text
+  }
+
+/** 子 agent 的思考(reasoning)累积。与 selectStream 对称,供思考块渲染。 */
+export const selectReasoning =
+  (id: CollaborationId, stepId: StepId, companionId: number) =>
+  (state: StoreState): string | undefined => {
+    const key = `${stepId}:${companionId}`
+    return state.collaborations.get(id)?.streams.get(key)?.reasoning
   }
 

@@ -13,7 +13,6 @@ import {
   abortCollaboration,
   isTerminalStatus,
   type CollaborationId,
-  type CollaborationStatus,
 } from '../../api/collaboration'
 import { useCollaborationStore } from '../../stores/collaborationStore'
 import { confirm } from '../Toast'
@@ -57,9 +56,10 @@ export function CollaborationMessageCard({ collaborationId }: Props) {
     // 协作"卡"不再是卡 —— L1 多成员场景下,N 个家人气泡就是 N 条独立消息。
     // 外层只剩极淡的元 UI 行(状态 + 中止按钮),不再用 bg-elevated 包住气泡组。
     <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-2 px-1">
-        <StatusPill status={collaboration.status} />
-        {!terminal && (
+      {/* 不显示"已完成/进行中"状态标签 —— IM 里消息没有状态,流式气泡本身就表达了
+          进行中。只在还在跑时给一个低调的中止入口。 */}
+      {!terminal && (
+        <div className="flex items-center justify-end px-1">
           <button
             onClick={() => {
               void confirm('真的要中止这一轮群聊吗？').then(ok => {
@@ -73,8 +73,8 @@ export function CollaborationMessageCard({ collaborationId }: Props) {
             <XCircle size={12} className="inline mr-1" />
             中止
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
       <div className="flex flex-col gap-3">
         {steps.map(step => (
@@ -93,33 +93,4 @@ export function CollaborationMessageCard({ collaborationId }: Props) {
       )}
     </div>
   )
-}
-
-function StatusPill({ status }: { status: CollaborationStatus }) {
-  const { label, color } = pillStyle(status)
-  return (
-    <span
-      className="inline-block text-[11px] px-2 py-0.5 rounded-full"
-      style={{ background: `${color}1a`, color }}
-    >
-      {label}
-    </span>
-  )
-}
-
-function pillStyle(status: CollaborationStatus): { label: string; color: string } {
-  switch (status.state) {
-    case 'planning':
-      return { label: '规划中', color: '#94A3B8' }
-    case 'awaiting_confirm':
-      return { label: '等你拍板', color: '#F59E0B' }
-    case 'running':
-      return { label: '进行中…', color: '#3B82F6' }
-    case 'done':
-      return { label: '已完成', color: '#22C55E' }
-    case 'aborted':
-      return { label: '已中止', color: '#94A3B8' }
-    case 'failed':
-      return { label: '失败', color: '#EF4444' }
-  }
 }

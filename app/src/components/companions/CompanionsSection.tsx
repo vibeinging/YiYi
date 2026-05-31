@@ -1,5 +1,5 @@
 /**
- * CompanionsSection — Buddy 页中的"家族"section。
+ * CompanionsSection — Buddy 页中的"群"section。
  *
  * 列出在职伙伴 + 收养入口；空态引导用户养第一个。AdoptModal /
  * CompanionEditDrawer / "找他聊"路由是 Phase 1 后续任务挂在这里的钩子。

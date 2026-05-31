@@ -1,8 +1,8 @@
 /**
- * CompanionCard — 家族成员的卡片视图。
+ * CompanionCard — 群成员的卡片视图。
  *
  * 显示头像 + 名字 + 角色 + 陪伴天数 + 互动次数 + 操作按钮。
- * 用户视角的"伙伴"叙事——不是工具卡，是家族成员。
+ * 用户视角的"伙伴"叙事——不是工具卡，是群成员。
  */
 
 import { MessageCircle, Settings } from 'lucide-react'

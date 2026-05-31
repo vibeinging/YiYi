@@ -22,6 +22,7 @@ import {
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import { CollapsibleContent } from './CollapsibleContent';
+import { ThinkingBlock, markdownComponents } from './markdownShared';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { open } from '@tauri-apps/plugin-shell';
@@ -98,54 +99,6 @@ function UsageFooter({ usage }: { usage: LastUsage }) {
         >
           缓存命中 {hitPct}%
         </span>
-      )}
-    </div>
-  );
-}
-
-const THINKING_STICK_THRESHOLD_PX = 16;
-
-function ThinkingBlock({ content, streaming }: { content: string; streaming?: boolean }) {
-  const [collapsed, setCollapsed] = useState(!streaming);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const stickToBottomRef = useRef(true);
-
-  useEffect(() => {
-    if (!streaming || collapsed) return;
-    const el = scrollRef.current;
-    if (el && stickToBottomRef.current) el.scrollTop = el.scrollHeight;
-  }, [content, streaming, collapsed]);
-
-  const onScroll = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    stickToBottomRef.current =
-      el.scrollHeight - el.scrollTop - el.clientHeight < THINKING_STICK_THRESHOLD_PX;
-  };
-
-  return (
-    <div
-      className="rounded-xl text-[13px] overflow-hidden"
-      style={{ background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)' }}
-    >
-      <button
-        onClick={() => setCollapsed((v) => !v)}
-        className="flex items-center gap-1.5 w-full px-3 py-2 text-left"
-        style={{ color: 'var(--color-text-muted)' }}
-      >
-        {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-        <Brain size={14} />
-        <span>{streaming ? '思考中…' : '思考过程'}</span>
-      </button>
-      {!collapsed && (
-        <div
-          ref={scrollRef}
-          onScroll={onScroll}
-          className={`px-3 pb-2 whitespace-pre-wrap break-words leading-relaxed${streaming ? ' yiyi-stream-cursor' : ''}`}
-          style={{ color: 'var(--color-text-muted)', maxHeight: '200px', overflowY: 'auto' }}
-        >
-          {content}
-        </div>
       )}
     </div>
   );
@@ -322,70 +275,6 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
   const processedMessages = useMemo(() => processMessages(messages), [messages]);
 
   // Custom markdown components: open links in external browser
-  const markdownComponents = useMemo(() => {
-    const nodeText = (nodes: React.ReactNode): string => {
-      if (nodes == null || typeof nodes === 'boolean') return '';
-      if (typeof nodes === 'string' || typeof nodes === 'number') return String(nodes);
-      if (Array.isArray(nodes)) return nodes.map(nodeText).join('');
-      if (React.isValidElement(nodes)) return nodeText((nodes.props as { children?: React.ReactNode }).children);
-      return '';
-    };
-    // Fast-path for the common non-empty-row case: bail on first non-whitespace
-    // char instead of walking and joining the whole subtree.
-    const hasNonBlankText = (nodes: React.ReactNode): boolean => {
-      if (nodes == null || typeof nodes === 'boolean') return false;
-      if (typeof nodes === 'string') return /\S/.test(nodes);
-      if (typeof nodes === 'number') return true;
-      if (Array.isArray(nodes)) return nodes.some(hasNonBlankText);
-      if (React.isValidElement(nodes)) return hasNonBlankText((nodes.props as { children?: React.ReactNode }).children);
-      return false;
-    };
-    return {
-    a: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
-      <a
-        {...props}
-        href={href}
-        onClick={(e) => {
-          e.preventDefault();
-          if (href) open(href);
-        }}
-        style={{ cursor: 'pointer' }}
-      >
-        {children}
-      </a>
-    ),
-    tr: (props: React.HTMLAttributes<HTMLTableRowElement>) => {
-      // Drop tr whose every cell is blank — models sometimes emit a trailing
-      // "|  |  |" row that GFM renders as a visible empty striped row.
-      return hasNonBlankText(props.children) ? <tr {...props} /> : null;
-    },
-    pre: (props: React.HTMLAttributes<HTMLPreElement>) => {
-      const child = React.Children.toArray(props.children)[0] as React.ReactElement<any> | undefined;
-      const childClass = (child?.props?.className as string | undefined) ?? '';
-      const lang = childClass.match(/language-(\w+)/)?.[1];
-      const rawText = nodeText(child?.props?.children);
-      return (
-        <div className="code-block">
-          <div className="code-block-bar">
-            <span className="code-block-lang">{lang || 'text'}</span>
-            <button
-              className="code-block-copy"
-              onClick={() => {
-                navigator.clipboard?.writeText(rawText).catch(() => {});
-              }}
-              title="复制"
-              aria-label="复制代码块"
-            >
-              ⧉
-            </button>
-          </div>
-          <pre {...props} />
-        </div>
-      );
-    },
-    };
-  }, []);
-
   // Stream state from store
   const streamLoading = useChatStreamStore((s) => s.loading);
   const streamingContent = useChatStreamStore((s) => s.streamingContent);
@@ -861,10 +750,8 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                         background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)',
                         borderBottomLeftRadius: '6px', minWidth: '200px',
                       }}>
-                      <div className="yiyi-skeleton-label">
-                        <img src={logoFaceRight} alt="" width={18} height={18} />
-                        <span>{t('chat.thinking')}</span>
-                      </div>
+                      {/* 纯骨骼屏:不带"XX 正在思考"文字(私聊/群聊时对象不是 YiYi,
+                          带名字会显示错;骨骼动画本身已表达"在生成中")。 */}
                       <div className="yiyi-skeleton">
                         <div className="yiyi-skeleton-line" />
                         <div className="yiyi-skeleton-line" />

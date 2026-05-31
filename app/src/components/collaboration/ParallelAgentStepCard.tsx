@@ -18,7 +18,8 @@
 
 import { Loader2, AlertCircle } from 'lucide-react'
 import type { CollaborationId, Step, Participant, StepStatus } from '../../api/collaboration'
-import { selectStream, useCollaborationStore } from '../../stores/collaborationStore'
+import { selectStream, selectReasoning, useCollaborationStore } from '../../stores/collaborationStore'
+import { ThinkingBlock, AgentMarkdown } from '../chat/markdownShared'
 
 interface Props {
   collaborationId: CollaborationId
@@ -60,14 +61,25 @@ function MemberMessageBubble({ collaborationId, stepId, stepStatus, participant 
   const stream = useCollaborationStore(
     selectStream(collaborationId, stepId, participant.companion_id),
   )
+  const reasoning = useCollaborationStore(
+    selectReasoning(collaborationId, stepId, participant.companion_id),
+  )
   const accent = participant.color_hex || 'var(--color-text-muted)'
   const text = stream ?? ''
+  const thinking = reasoning ?? ''
+  // 成员选择"这一轮我不发言"(fused reply-or-`<pass>`,见对话循环引擎):不渲染气泡。
+  // 流式中是 `<pass>` 的前缀也先藏,避免哨兵字符闪现(真回复一旦偏离前缀就会显示)。
+  const trimmed = text.trim()
+  const PASS = '<pass>'
+  if (trimmed.length > 0 && PASS.startsWith(trimmed)) return null
   // ParallelAgents 不暴露 per-participant 状态(只有整步 step.status)。所以:
   // - step running + 我有 stream → 我正在说
   // - step running + 我没 stream → 等开口 / 别人在说
   // - step completed → 都说完了,显示累积内容
-  const isStreaming = stepStatus === 'running' && text.length > 0
-  const isWaiting = stepStatus === 'pending' || (stepStatus === 'running' && text.length === 0)
+  const isStreaming = stepStatus === 'running' && (text.length > 0 || thinking.length > 0)
+  const isWaiting = stepStatus === 'pending' || (stepStatus === 'running' && text.length === 0 && thinking.length === 0)
+  // 思考还在流、正文未起 → 思考块标记 streaming(自动展开 + 贴底)。
+  const thinkingStreaming = stepStatus === 'running' && text.length === 0
 
   return (
     <div className="flex items-start gap-2.5">
@@ -78,8 +90,8 @@ function MemberMessageBubble({ collaborationId, stepId, stepStatus, participant 
       >
         {participant.avatar_emoji}
       </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-1">
+      <div className="flex-1 min-w-0 flex flex-col gap-1.5">
+        <div className="flex items-center gap-2">
           <span className="text-[12px] font-medium" style={{ color: 'var(--color-text)' }}>
             {participant.name}
           </span>
@@ -96,22 +108,20 @@ function MemberMessageBubble({ collaborationId, stepId, stepStatus, participant 
             <span className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>说完</span>
           )}
         </div>
+        {/* 思考过程 —— 与主 agent 同一个 ThinkingBlock(可折叠)。 */}
+        {thinking && <ThinkingBlock content={thinking} streaming={thinkingStreaming} />}
+        {/* 正文气泡 —— 与主 agent 同结构(markdown-body + 共享 markdown 渲染 + 流式光标),
+            只是背景按成员主色。这是用户要的"消息框一样,只背景不同"。 */}
         {(text || isWaiting) && (
           <div
-            className="py-2 px-3 rounded-2xl rounded-tl-md text-[13px] leading-relaxed whitespace-pre-wrap break-words"
+            className={`py-2 px-3 rounded-2xl rounded-tl-md text-[13px] leading-relaxed break-words markdown-body${isStreaming && text ? ' yiyi-stream-cursor' : ''}`}
             style={{
               background: `${accent}1a`,
               border: `1px solid ${accent}29`,
               color: 'var(--color-text)',
             }}
           >
-            {text || <span style={{ color: 'var(--color-text-muted)' }}>…</span>}
-            {isStreaming && (
-              <span
-                className="ml-0.5 inline-block w-1 h-3 align-middle animate-pulse"
-                style={{ background: accent }}
-              />
-            )}
+            {text ? <AgentMarkdown>{text}</AgentMarkdown> : <span style={{ color: 'var(--color-text-muted)' }}>…</span>}
           </div>
         )}
       </div>

@@ -29,9 +29,9 @@ import { BuddySettingsDrawer } from './buddy/BuddySettingsDrawer'
 import { CompanionsSection } from './companions/CompanionsSection'
 import { AdoptModal } from './companions/AdoptModal'
 import { CompanionEditDrawer } from './companions/CompanionEditDrawer'
-import { FamilyGroupsSection } from './companions/FamilyGroupsSection'
+import { GroupsSection } from './companions/GroupsSection'
 import type { Companion } from '../api/companions'
-import { listCompanionGroups, familyGroupBucket, type CompanionGroup } from '../api/groups'
+import { listCompanionGroups, groupBucket, type CompanionGroup } from '../api/groups'
 import { toast } from './Toast'
 
 // Personality stat → emoji (used in the Hero stats bar).
@@ -99,13 +99,13 @@ export function BuddyPanel() {
   const [identityTraits, setIdentityTraits] = useState<{ trait_type: string; content: string; confidence: number }[]>([])
   const [memFilter, setMemFilter] = useState<string>('all')
   const [episodes, setEpisodes] = useState<EpisodeEntry[]>([])
-  // 家族会话 dispatched 成员的共享桶（user_id = "family_shared"）。展开时懒加载，
+  // 群会话 dispatched 成员的共享桶（user_id = "group_shared"）。展开时懒加载，
   // 支持删除——满足白盒原则"被动信息可见可删"。
-  const [familyMemories, setFamilyMemories] = useState<MemoryEntry[]>([])
-  const [familyExpanded, setFamilyExpanded] = useState(false)
-  /** 当前浏览的家族桶 group id。null = 还没选(此时下方提示让用户选一个 chip)。 */
-  const [familyBucketGroupId, setFamilyBucketGroupId] = useState<number | null>(null)
-  const [familyBucketGroups, setFamilyBucketGroups] = useState<CompanionGroup[]>([])
+  const [groupMemories, setGroupMemories] = useState<MemoryEntry[]>([])
+  const [groupExpanded, setGroupExpanded] = useState(false)
+  /** 当前浏览的群桶 group id。null = 还没选(此时下方提示让用户选一个 chip)。 */
+  const [groupBucketGroupId, setGroupBucketGroupId] = useState<number | null>(null)
+  const [groupBucketGroups, setGroupBucketGroups] = useState<CompanionGroup[]>([])
 
   useEffect(() => {
     getMemoryStats().then(setMemoryStats).catch(() => {})
@@ -610,24 +610,24 @@ export function BuddyPanel() {
             )}
 
             {/* 我的群 —— 持久化的 IM 群聊分组。 */}
-            <FamilyGroupsSection />
+            <GroupsSection />
 
-            {/* 群共享记忆 —— 每个群独占的 `family_shared_<id>` 桶。chips 切换浏览。 */}
+            {/* 群共享记忆 —— 每个群独占的 `group_shared_<id>` 桶。chips 切换浏览。 */}
             <div className="mt-4 pt-4" style={{ borderTop: '1px solid var(--color-bg-subtle)' }}>
               <button
                 onClick={() => {
-                  const next = !familyExpanded
-                  setFamilyExpanded(next)
+                  const next = !groupExpanded
+                  setGroupExpanded(next)
                   if (next) {
-                    // 拉所有具名家族用于 chips。默认不预选,等用户点 chip。
+                    // 拉所有具名群用于 chips。默认不预选,等用户点 chip。
                     listCompanionGroups()
                       .then(gs => {
-                        setFamilyBucketGroups(gs)
-                        // 自动选第一个家族(如果有),立刻看到内容。
-                        if (gs.length > 0 && familyBucketGroupId == null) {
-                          setFamilyBucketGroupId(gs[0].id)
-                          listRecentMemories(15, familyGroupBucket(gs[0].id))
-                            .then(setFamilyMemories)
+                        setGroupBucketGroups(gs)
+                        // 自动选第一个群(如果有),立刻看到内容。
+                        if (gs.length > 0 && groupBucketGroupId == null) {
+                          setGroupBucketGroupId(gs[0].id)
+                          listRecentMemories(15, groupBucket(gs[0].id))
+                            .then(setGroupMemories)
                             .catch(() => {})
                         }
                       })
@@ -637,28 +637,28 @@ export function BuddyPanel() {
                 className="flex items-center gap-1 text-[11px] mb-2 transition-colors hover:opacity-100"
                 style={{ color: 'var(--color-text-muted)' }}
               >
-                {familyExpanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-                群共享记忆({familyMemories.length})
+                {groupExpanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                群共享记忆({groupMemories.length})
               </button>
-              {familyExpanded && (
+              {groupExpanded && (
                 <>
                   {/* 桶切换 chips:每个群一颗 */}
-                  {familyBucketGroups.length === 0 ? (
+                  {groupBucketGroups.length === 0 ? (
                     <div className="py-3 text-center text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
                       还没建任何群 —— 在上方"我的群"建一个,群里聊几轮就有共享记忆了
                     </div>
                   ) : (
                   <div className="flex items-center gap-1.5 flex-wrap mb-2">
-                    {familyBucketGroups.map(g => {
-                      const selected = familyBucketGroupId === g.id
+                    {groupBucketGroups.map(g => {
+                      const selected = groupBucketGroupId === g.id
                       return (
                         <button
                           key={g.id}
                           onClick={() => {
-                            setFamilyBucketGroupId(g.id)
-                            listRecentMemories(15, familyGroupBucket(g.id))
-                              .then(setFamilyMemories)
-                              .catch(() => setFamilyMemories([]))
+                            setGroupBucketGroupId(g.id)
+                            listRecentMemories(15, groupBucket(g.id))
+                              .then(setGroupMemories)
+                              .catch(() => setGroupMemories([]))
                           }}
                           className="text-[11px] px-2 py-0.5 rounded-full transition-colors"
                           style={{
@@ -673,13 +673,13 @@ export function BuddyPanel() {
                   </div>
                   )}
 
-                  {familyBucketGroups.length > 0 && familyMemories.length === 0 ? (
+                  {groupBucketGroups.length > 0 && groupMemories.length === 0 ? (
                     <div className="py-3 text-center text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
                       这个群还没共享记忆 —— 在群里聊几轮就有了
                     </div>
-                  ) : familyBucketGroups.length === 0 ? null : (
+                  ) : groupBucketGroups.length === 0 ? null : (
                   <div className="space-y-1 max-h-[300px] overflow-y-auto">
-                    {familyMemories.map(m => (
+                    {groupMemories.map(m => (
                       <div key={m.id} className="group flex gap-3 py-2.5 px-3 -mx-3 rounded-lg hover:bg-[var(--color-bg-subtle)] transition-colors">
                         <div className="flex-1 min-w-0">
                           <div className="text-[12px] leading-relaxed" style={{ color: 'var(--color-text)' }}>
@@ -696,7 +696,7 @@ export function BuddyPanel() {
                           onClick={async () => {
                             try {
                               await deleteMemory(m.id)
-                              setFamilyMemories(p => p.filter(x => x.id !== m.id))
+                              setGroupMemories(p => p.filter(x => x.id !== m.id))
                               toast.success('记忆已删除')
                             } catch {
                               toast.error('删除失败')

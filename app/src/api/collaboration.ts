@@ -144,6 +144,8 @@ export type CollaborationEventWire =
       step_id: StepId
       companion_id: CompanionId
       delta: string
+      // 正文 vs 思考(reasoning/thinking)分流 —— 子 agent 思考块据此累积。
+      reasoning: boolean
     }
 
 // ── Mutations ────────────────────────────────────────────────────────

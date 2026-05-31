@@ -1,11 +1,11 @@
 /**
- * 家族(companion groups)管理区,挂在 BuddyPanel。
+ * 群(companion groups)管理区,挂在 BuddyPanel。
  *
  * 多对多关系 —— IM 群聊心智:用户能建多个有名字的组,一个 companion 可同时
- * 在多个组里。每组的成员在 ChatInput 的家族选择器里成为路由 roster,且共享
- * 一个 `family_shared_<id>` 记忆桶(在 BuddyPanel 的"家族共享记忆"区按组切换查看)。
+ * 在多个组里。每组的成员在 ChatInput 的群选择器里成为路由 roster,且共享
+ * 一个 `group_shared_<id>` 记忆桶(在 BuddyPanel 的"群共享记忆"区按组切换查看)。
  *
- * 设计:docs/design/2026-05-27_家族会话-host调度群聊.md Approach B。
+ * 设计:docs/design/2026-05-27_群会话-host调度群聊.md Approach B。
  */
 
 import { useEffect, useState } from 'react'
@@ -37,7 +37,7 @@ function emptyForm(): EditForm {
   return { name: '', emoji: '', memberIds: new Set() }
 }
 
-export function FamilyGroupsSection() {
+export function GroupsSection() {
   const [expanded, setExpanded] = useState(false)
   const [companions, setCompanions] = useState<Companion[]>([])
   /** null = 不在编辑;非空 = 正在新建或编辑某组(顶部固定的表单)。 */
