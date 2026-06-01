@@ -304,26 +304,13 @@ impl super::Database {
 
     /// 找绑定到某 companion 的最近私聊会话;没有就新建一个(名用 companion 名)。
     /// 好友列表点进去用 —— 每个好友一个固定专属会话(像微信)。
-    pub fn get_or_create_companion_session(
+    /// 点好友头像 = 每次都新开一段对话。新建一个会话并绑定到该 companion,
+    /// 返回 session id(不复用旧会话——产品需求:每次都是新的一段)。
+    pub fn create_companion_session(
         &self,
         companion_id: i64,
         companion_name: &str,
     ) -> Result<String, String> {
-        {
-            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-            let existing: Option<String> = conn
-                .query_row(
-                    "SELECT id FROM sessions WHERE companion_id = ?1 AND source = 'chat' \
-                     ORDER BY updated_at DESC LIMIT 1",
-                    params![companion_id],
-                    |row| row.get(0),
-                )
-                .ok();
-            if let Some(sid) = existing {
-                return Ok(sid);
-            }
-        }
-        // 没有 → 新建并绑定。
         let session = self.create_session(companion_name)?;
         self.set_session_companion(&session.id, Some(companion_id))?;
         Ok(session.id)

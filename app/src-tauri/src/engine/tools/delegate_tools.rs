@@ -195,6 +195,8 @@ mod tests {
             last_used_at: None,
             metadata_json: None,
             role_label: None,
+            meditation_enabled: false,
+            meditation_time: "03:00".into(),
         }
     }
 

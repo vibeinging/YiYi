@@ -19,6 +19,10 @@ export interface Companion {
   metadata_json: string | null
   /** UI 显示的「擅长」短句，自由文本。老数据可能为 null。 */
   role_label: string | null
+  /** 每天定时冥想开关(C 期)。 */
+  meditation_enabled: boolean
+  /** 定时冥想时间 "HH:MM"(本地)。 */
+  meditation_time: string
 }
 
 export interface AdoptCompanionInput {
@@ -74,6 +78,30 @@ export async function listCompanions(includeRetired = false): Promise<Companion[
 
 export async function getCompanion(id: number): Promise<Companion | null> {
   return await invoke<Companion | null>('get_companion', { id })
+}
+
+/** 读这个伙伴的人设/角色定义(persona.md 内容)。没写过则 null。 */
+export async function getCompanionPersona(companionId: number): Promise<string | null> {
+  return await invoke<string | null>('get_companion_persona', { companionId })
+}
+
+// ── 每天定时冥想配置(C 期)──
+
+export interface CompanionMeditationConfig {
+  enabled: boolean
+  start_time: string
+}
+
+export async function getCompanionMeditationConfig(companionId: number): Promise<CompanionMeditationConfig> {
+  return await invoke<CompanionMeditationConfig>('get_companion_meditation_config', { companionId })
+}
+
+export async function setCompanionMeditationConfig(
+  companionId: number,
+  enabled: boolean,
+  startTime: string,
+): Promise<void> {
+  await invoke('set_companion_meditation_config', { companionId, enabled, startTime })
 }
 
 export async function previewPersonaTone(input: PreviewPersonaToneInput): Promise<string> {

@@ -1,9 +1,9 @@
 /**
  * GroupsManagerModal — 会话侧的「群管理」弹窗。
  *
- * 从侧边栏触发。承载:建群 / 改名 / 加成员 / 删群(GroupsSection)+ 每群的
- * 共享记忆浏览(GroupSharedMemory)。原先这两块埋在 YiYi 的"她记得"记忆卡里——
- * 概念错位(群属于会话层,不是 YiYi 的记忆),现挪到会话侧。
+ * 从侧边栏 👥 菜单的「管理群」触发。承载:发起群聊 / 改名 / 加成员 / 删群
+ * (GroupsSection)。原先埋在 YiYi 的"她记得"记忆卡里——概念错位(群属于会话层,
+ * 不是 YiYi 的记忆),现挪到会话侧。
  *
  * 建群即开聊:GroupsSection 建群后会 dispatch 'navigate' 进 chat,本弹窗监听该
  * 事件自动关闭。
@@ -12,7 +12,6 @@
 import { useEffect } from 'react'
 import { X, Users } from 'lucide-react'
 import { GroupsSection } from './GroupsSection'
-import { GroupSharedMemory } from './GroupSharedMemory'
 
 export function GroupsManagerModal({ onClose }: { onClose: () => void }) {
   // 锁背景滚动 + 建群跳转 chat 时自动关闭。
@@ -43,8 +42,8 @@ export function GroupsManagerModal({ onClose }: { onClose: () => void }) {
               <Users size={18} style={{ color: 'var(--color-primary)' }} />
             </div>
             <div>
-              <h2 className="text-[15px] font-semibold" style={{ color: 'var(--color-text)' }}>群聊</h2>
-              <p className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>建群、管理成员、看共享记忆</p>
+              <h2 className="text-[15px] font-semibold" style={{ color: 'var(--color-text)' }}>管理群</h2>
+              <p className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>发起群聊、改名、管理成员</p>
             </div>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-[var(--color-bg-muted)] rounded-xl transition-all" title="关闭">
@@ -53,16 +52,8 @@ export function GroupsManagerModal({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
-          <section>
-            <h3 className="text-[12px] font-semibold mb-2" style={{ color: 'var(--color-text-secondary)' }}>我的群</h3>
-            <GroupsSection embedded />
-          </section>
-
-          <section className="pt-4" style={{ borderTop: '1px solid var(--color-bg-subtle)' }}>
-            <h3 className="text-[12px] font-semibold mb-2" style={{ color: 'var(--color-text-secondary)' }}>群共享记忆</h3>
-            <GroupSharedMemory />
-          </section>
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          <GroupsSection embedded />
         </div>
       </div>
     </div>

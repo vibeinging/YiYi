@@ -129,7 +129,7 @@ pub async fn delete_session(
 
 // --- 好友私聊:点好友进入与该 companion 的专属会话 ---
 
-pub async fn get_or_create_companion_session_impl(
+pub async fn create_companion_session_impl(
     state: &AppState,
     companion_id: i64,
 ) -> Result<String, String> {
@@ -138,14 +138,14 @@ pub async fn get_or_create_companion_session_impl(
         .get_companion(companion_id)
         .map(|c| c.name)
         .ok_or_else(|| format!("companion {companion_id} 不存在"))?;
-    state.db.get_or_create_companion_session(companion_id, &name)
+    state.db.create_companion_session(companion_id, &name)
 }
 
-/// 找绑定到某 companion 的专属私聊会话,没有就建一个,返回 session id。
+/// 点好友头像 → 每次都新开一段绑定该 companion 的私聊会话,返回 session id。
 #[tauri::command]
-pub async fn get_or_create_companion_session(
+pub async fn create_companion_session(
     state: State<'_, AppState>,
     companion_id: i64,
 ) -> Result<String, String> {
-    get_or_create_companion_session_impl(&*state, companion_id).await
+    create_companion_session_impl(&*state, companion_id).await
 }

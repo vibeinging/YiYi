@@ -335,3 +335,58 @@ fn upsert_collaboration_message_distinct_collab_ids_get_distinct_rows() {
         .collect();
     assert_eq!(collabs.len(), 2);
 }
+
+#[test]
+#[serial]
+fn companion_meditation_config_defaults_off_and_roundtrips() {
+    let t = TempDb::new();
+    let db = t.db();
+    let id = db.adopt_companion(&sample_new("禅师", "companion_med")).expect("adopt");
+
+    // 默认:关 + 03:00。
+    let c = db.get_companion(id).expect("found");
+    assert!(!c.meditation_enabled, "定时冥想默认应为关");
+    assert_eq!(c.meditation_time, "03:00");
+
+    // set → get 回来。
+    assert!(db.set_companion_meditation(id, true, "08:30").expect("set"));
+    let c2 = db.get_companion(id).expect("found");
+    assert!(c2.meditation_enabled);
+    assert_eq!(c2.meditation_time, "08:30");
+}
+
+#[test]
+#[serial]
+fn yiyi_latest_meditation_session_ignores_companion_sessions() {
+    let t = TempDb::new();
+    let db = t.db();
+    let id = db.adopt_companion(&sample_new("小坐", "companion_sess")).expect("adopt");
+
+    // 只有伙伴的冥想 session,YiYi(全局)一条都没有。
+    db.create_companion_meditation_session("comp-sess-1", id);
+
+    // YiYi 的"最近冥想"查询必须忽略伙伴 session(否则会误判 YiYi 今天冥想过)。
+    assert!(
+        db.get_latest_meditation_session().is_none(),
+        "YiYi 最近冥想不应被伙伴 session 污染"
+    );
+    // 而伙伴自己的查询能拿到。
+    assert!(db.get_latest_companion_meditation_session(id).is_some());
+}
+
+#[test]
+#[serial]
+fn create_companion_session_always_makes_a_new_one() {
+    let t = TempDb::new();
+    let db = t.db();
+    let id = db.adopt_companion(&sample_new("闪闪", "companion_x")).expect("adopt");
+    // 产品需求:点好友头像 = 每次都新开一段,不复用旧会话。
+    let s1 = db.create_companion_session(id, "闪闪").expect("first");
+    let s2 = db.create_companion_session(id, "闪闪").expect("second");
+    assert_ne!(s1, s2, "每次点好友头像都应新建一段对话");
+    // 两段都绑到同一个 companion。
+    let sess1 = db.get_session(&s1).expect("q1").expect("s1 exists");
+    let sess2 = db.get_session(&s2).expect("q2").expect("s2 exists");
+    assert_eq!(sess1.companion_id, Some(id));
+    assert_eq!(sess2.companion_id, Some(id));
+}

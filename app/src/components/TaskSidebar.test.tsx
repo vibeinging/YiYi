@@ -125,7 +125,8 @@ describe('TaskSidebar expanded mode', () => {
       sessions: [session({ name: 'MyChat' })],
     });
     expect(screen.getByText('MyChat')).toBeInTheDocument();
-    expect(screen.getByText('对话')).toBeInTheDocument();
+    // 会话按最近活跃分组,刚创建的 session 归入"今天"分组头。
+    expect(screen.getByText('今天')).toBeInTheDocument();
   });
 
   it('clicking a session switches and changes page to chat', () => {

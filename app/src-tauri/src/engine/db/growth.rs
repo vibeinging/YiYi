@@ -473,7 +473,7 @@ impl super::Database {
                 "SELECT id, started_at, finished_at, status, sessions_reviewed,
                         memories_updated, principles_changed, memories_archived, journal, error,
                         depth, phases_completed, tomorrow_intentions, growth_synthesis
-                 FROM meditation_sessions ORDER BY started_at DESC LIMIT 1",
+                 FROM meditation_sessions WHERE companion_id IS NULL ORDER BY started_at DESC LIMIT 1",
             )
             .ok()?;
         stmt.query_row([], |row| {
@@ -507,7 +507,7 @@ impl super::Database {
                 "SELECT id, started_at, finished_at, status, sessions_reviewed,
                         memories_updated, principles_changed, memories_archived, journal, error,
                         depth, phases_completed, tomorrow_intentions, growth_synthesis
-                 FROM meditation_sessions WHERE status != 'running' ORDER BY started_at DESC LIMIT 1",
+                 FROM meditation_sessions WHERE status != 'running' AND companion_id IS NULL ORDER BY started_at DESC LIMIT 1",
             )
             .ok()?;
         stmt.query_row([], |row| {
@@ -566,6 +566,20 @@ impl super::Database {
         stmt.query_map(params![companion_id, limit as i64], Self::map_meditation_row)
             .map(|rows| rows.filter_map(|r| r.ok()).collect())
             .unwrap_or_default()
+    }
+
+    /// 该伙伴最近一条冥想 session(含 running),用于"今天是否已冥想"判断。
+    pub fn get_latest_companion_meditation_session(&self, companion_id: i64) -> Option<MeditationSession> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, started_at, finished_at, status, sessions_reviewed,
+                        memories_updated, principles_changed, memories_archived, journal, error,
+                        depth, phases_completed, tomorrow_intentions, growth_synthesis
+                 FROM meditation_sessions WHERE companion_id = ?1 ORDER BY started_at DESC LIMIT 1",
+            )
+            .ok()?;
+        stmt.query_row(params![companion_id], Self::map_meditation_row).optional().ok()?
     }
 
     fn map_meditation_row(row: &rusqlite::Row) -> rusqlite::Result<MeditationSession> {

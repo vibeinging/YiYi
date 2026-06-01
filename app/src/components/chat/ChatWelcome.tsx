@@ -12,11 +12,21 @@ import { useTranslation } from 'react-i18next';
 import { Plus, Sprout } from 'lucide-react';
 import logoImg from '../../assets/yiyi-logo.png';
 import { getQuickActions } from './chatActions';
+import { AgentMarkdown } from './markdownShared';
 import { getMorningGreeting } from '../../api/system';
 
 interface ChatWelcomeProps {
   aiName: string;
   onSendPrompt: (prompt: string) => void;
+  /** 私聊某个伙伴时传入 —— hero 头像 + 介绍改成它的(否则默认 YiYi)。 */
+  companion?: {
+    name: string;
+    avatar_emoji: string;
+    color_hex: string;
+    role_label: string | null;
+    /** 它的角色定义 / 人设(persona.md 全文)。优先于 role_label 作介绍。 */
+    intro?: string | null;
+  } | null;
 }
 
 /**
@@ -27,7 +37,7 @@ interface ChatWelcomeProps {
  */
 const preventFocusSteal = (e: React.MouseEvent) => e.preventDefault();
 
-export function ChatWelcome({ aiName, onSendPrompt }: ChatWelcomeProps) {
+export function ChatWelcome({ aiName, onSendPrompt, companion }: ChatWelcomeProps) {
   const { t, i18n } = useTranslation();
   const [expandedAction, setExpandedAction] = useState<number | null>(null);
   const [morningGreeting, setMorningGreeting] = useState<string | null>(null);
@@ -35,27 +45,41 @@ export function ChatWelcome({ aiName, onSendPrompt }: ChatWelcomeProps) {
   const quickActions = getQuickActions(t);
   const expanded = expandedAction !== null ? quickActions[expandedAction] : null;
 
+  // 成长感悟是 YiYi(全局)的 —— 私聊伙伴时不拉、不显示。
   useEffect(() => {
+    if (companion) return;
     getMorningGreeting()
       .then(g => { if (g) setMorningGreeting(g); })
       .catch(() => {});
-  }, []);
+  }, [companion]);
 
   return (
     <div
       className="h-full flex flex-col items-center justify-center px-6"
       onClick={() => expandedAction !== null && setExpandedAction(null)}
     >
-      <div className="max-w-[520px] w-full">
+      <div className={`w-full ${companion ? 'max-w-[720px]' : 'max-w-[520px]'}`}>
         {/* Hero */}
         <div className="flex items-center gap-4 mb-8">
           <div className="relative shrink-0">
-            <img
-              src={logoImg}
-              alt="YiYi"
-              className="w-14 h-14 rounded-2xl"
-              style={{ boxShadow: '0 4px 20px rgba(255, 180, 80, 0.2)' }}
-            />
+            {companion ? (
+              <div
+                className="w-14 h-14 rounded-2xl flex items-center justify-center text-[30px]"
+                style={{
+                  background: `${companion.color_hex || 'var(--color-primary)'}26`,
+                  boxShadow: `0 4px 20px ${companion.color_hex || 'var(--color-primary)'}2e`,
+                }}
+              >
+                {companion.avatar_emoji || '🤖'}
+              </div>
+            ) : (
+              <img
+                src={logoImg}
+                alt="YiYi"
+                className="w-14 h-14 rounded-2xl"
+                style={{ boxShadow: '0 4px 20px rgba(255, 180, 80, 0.2)' }}
+              />
+            )}
             <div
               className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full flex items-center justify-center"
               style={{ background: 'var(--color-success)', boxShadow: '0 0 0 2.5px var(--color-bg)' }}
@@ -71,12 +95,15 @@ export function ChatWelcome({ aiName, onSendPrompt }: ChatWelcomeProps) {
               {(() => {
                 const h = new Date().getHours();
                 const greeting = h < 6 ? '夜深了' : h < 12 ? '早上好' : h < 18 ? '下午好' : '晚上好';
-                return `${greeting} 👋`;
+                // 私聊伙伴时点出它的名字,让人一眼知道在和谁聊。
+                return companion ? `${greeting},我是${companion.name} 👋` : `${greeting} 👋`;
               })()}
             </h1>
-            <p className="text-[13.5px] mt-0.5" style={{ color: 'var(--color-text-secondary)' }}>
-              {(t('chat.empty.description') as string).replace('YiYi', aiName).replace(/我是.*?。/, '')}
-            </p>
+            {!companion && (
+              <p className="text-[13.5px] mt-0.5" style={{ color: 'var(--color-text-secondary)' }}>
+                {(t('chat.empty.description') as string).replace('YiYi', aiName).replace(/我是.*?。/, '')}
+              </p>
+            )}
           </div>
         </div>
 
@@ -100,6 +127,31 @@ export function ChatWelcome({ aiName, onSendPrompt }: ChatWelcomeProps) {
           </div>
         )}
 
+        {companion ? (
+          /* 伙伴:不显示快捷卡片,改成它的角色定义/人设介绍(markdown 渲染)。 */
+          <div
+            className="rounded-2xl px-6 py-5 mb-3"
+            style={{ background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)' }}
+          >
+            {companion.role_label && (
+              <div className="text-[12.5px] font-semibold mb-3 pb-3" style={{ color: companion.color_hex || 'var(--color-primary)', borderBottom: '1px solid var(--color-bg-subtle)' }}>
+                擅长 · {companion.role_label}
+              </div>
+            )}
+            {companion.intro ? (
+              <div className="markdown-body text-[13.5px] leading-relaxed max-h-[46vh] overflow-y-auto pr-1" style={{ color: 'var(--color-text-secondary)' }}>
+                <AgentMarkdown>{companion.intro}</AgentMarkdown>
+              </div>
+            ) : (
+              <p className="text-[13.5px] leading-relaxed" style={{ color: 'var(--color-text-muted)' }}>
+                {companion.role_label
+                  ? '还没写它的角色定义 —— 在它的资料页 ⚙ 里补充人设。'
+                  : '我是你的 AI 伙伴,直接打字开始聊吧 ✨'}
+              </p>
+            )}
+          </div>
+        ) : (
+        <>
         {/* Quick action grid — always static, no reflow */}
         <div className="grid grid-cols-3 gap-2.5 mb-2">
           {quickActions.map((action, idx) => {
@@ -215,6 +267,8 @@ export function ChatWelcome({ aiName, onSendPrompt }: ChatWelcomeProps) {
             </div>
           </div>
         </div>
+        </>
+        )}
 
         <div
           className="text-[12px] text-center"

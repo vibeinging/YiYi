@@ -537,7 +537,7 @@ pub fn run() {
             commands::agent::session::ensure_session,
             commands::agent::session::rename_session,
             commands::agent::session::delete_session,
-            commands::agent::session::get_or_create_companion_session,
+            commands::agent::session::create_companion_session,
             // Skills
             commands::skills::list_skills,
             commands::skills::get_skill,
@@ -697,6 +697,9 @@ pub fn run() {
             commands::companions::update_companion_draft_state,
             commands::companions::retire_companion,
             commands::companions::list_companions,
+            commands::companions::get_companion_meditation_config,
+            commands::companions::set_companion_meditation_config,
+            commands::companions::get_companion_persona,
             commands::companions::get_companion,
             commands::companions::preview_persona_tone,
             // companion groups (群) — Approach B
@@ -750,6 +753,9 @@ fn start_meditation_timer(app_handle: tauri::AppHandle) {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
 
             let state = app_handle.state::<AppState>();
+
+            // Per-companion 定时冥想(C 期):独立于 YiYi 全局开关,各伙伴按自己的时间排期。
+            run_due_companion_meditations(&state).await;
 
             // 1. Check if meditation is enabled
             let config = state.config.read().await;
@@ -826,11 +832,6 @@ fn start_meditation_timer(app_handle: tauri::AppHandle) {
                         );
                     }
 
-                    // 顺带反思活跃伙伴(C 期·复用本次冥想触发,不另起 cron)。
-                    crate::engine::mem::companion_reflection::reflect_active_companions(
-                        &llm_config, &db,
-                    )
-                    .await;
                 }
                 Err(e) => {
                     log::error!("Meditation failed: {}", e);
@@ -889,6 +890,57 @@ fn should_catch_up(db: &std::sync::Arc<crate::engine::db::Database>) -> bool {
             }
         }
         None => false, // Never meditated — wait for scheduled time, don't auto-trigger
+    }
+}
+
+/// Per-companion 定时冥想(C 期):遍历开了定时的伙伴,到点且今天没冥想过的各跑一次。
+/// 限频:一个 tick 最多 4 个(下个 tick 跳过今天已完成的),避免同分钟齐发烧 token。
+async fn run_due_companion_meditations(state: &AppState) {
+    use crate::engine::mem::companion_reflection::run_companion_reflection;
+
+    let today_start = chrono::Local::now()
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp_millis();
+
+    let due: Vec<i64> = state
+        .db
+        .list_active_companions()
+        .into_iter()
+        .filter(|c| c.meditation_enabled && is_meditation_time(&c.meditation_time))
+        .filter(|c| match state.db.get_latest_companion_meditation_session(c.id) {
+            Some(s) => s.started_at < today_start, // 今天还没冥想过
+            None => true,
+        })
+        .map(|c| c.id)
+        .collect();
+
+    if due.is_empty() {
+        return;
+    }
+
+    let cfg = match crate::commands::agent::resolve_llm_config(state).await {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("Companion scheduled meditation: no LLM config: {}", e);
+            return;
+        }
+    };
+
+    const MAX_PER_TICK: usize = 4;
+    if due.len() > MAX_PER_TICK {
+        log::info!(
+            "Companion scheduled meditation: {} due, running {} this tick (rest next tick)",
+            due.len(),
+            MAX_PER_TICK
+        );
+    }
+    for id in due.into_iter().take(MAX_PER_TICK) {
+        if let Err(e) = run_companion_reflection(&cfg, &state.db, id).await {
+            log::warn!("Companion scheduled meditation failed for {}: {}", id, e);
+        }
     }
 }
 

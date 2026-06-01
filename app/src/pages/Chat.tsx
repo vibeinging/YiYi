@@ -47,7 +47,7 @@ import {
   submitCollaboration,
   type Participant,
 } from '../api/collaboration';
-import { getCompanion } from '../api/companions';
+import { getCompanion, getCompanionPersona, type Companion } from '../api/companions';
 
 import logoImg from '../assets/yiyi-logo.png';
 
@@ -88,6 +88,18 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   // group_id = N     → 群聊群 N,记忆桶 family_shared_<N>,主精灵让位给群成员。
   // 旧的 family_mode 字段已退役 —— 前后端一律只认 group_id,不再读写 family_mode。
   const [familyGroupId, setFamilyGroupId] = useState<number | null>(null);
+
+  // 私聊某个伙伴时(session 绑了 companion_id 且非群聊)的当前伙伴 —— 给 ChatWelcome 换头像+介绍。
+  const activeCompanionId = chatSessions.find(s => s.id === activeSessionId)?.companion_id ?? null;
+  const [activeCompanion, setActiveCompanion] = useState<Companion | null>(null);
+  const [companionPersona, setCompanionPersona] = useState<string | null>(null);
+  useEffect(() => {
+    if (activeCompanionId == null) { setActiveCompanion(null); setCompanionPersona(null); return; }
+    let cancelled = false;
+    getCompanion(activeCompanionId).then(c => { if (!cancelled) setActiveCompanion(c); }).catch(() => setActiveCompanion(null));
+    getCompanionPersona(activeCompanionId).then(p => { if (!cancelled) setCompanionPersona(p); }).catch(() => setCompanionPersona(null));
+    return () => { cancelled = true; };
+  }, [activeCompanionId]);
 
   // --- AI name ---
   const [aiName, setAiName] = useState('YiYi');
@@ -608,14 +620,26 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
           const sess = chatSessions.find(s => s.id === activeSessionId);
           const companionId = sess?.companion_id ?? null;
           if (companionId != null) {
+            const accent = activeCompanion?.color_hex || 'var(--color-primary)';
             return (
               <div
-                className="shrink-0 flex items-center gap-2 px-3 py-2 text-[12px]"
+                className="shrink-0 flex items-center gap-2.5 px-3 py-2"
                 style={{ background: 'var(--color-bg)', borderBottom: '1px solid var(--color-border)' }}
               >
-                <span style={{ color: 'var(--color-text-muted)' }}>和</span>
-                <span className="font-medium" style={{ color: 'var(--color-text)' }}>{sess?.name}</span>
-                <span style={{ color: 'var(--color-text-muted)' }}>单独聊天</span>
+                <div
+                  className="w-7 h-7 rounded-lg flex items-center justify-center text-[16px] shrink-0"
+                  style={{ background: `${accent}26` }}
+                >
+                  {activeCompanion?.avatar_emoji || '🤖'}
+                </div>
+                <div className="min-w-0">
+                  <div className="text-[13px] font-medium leading-tight truncate" style={{ color: 'var(--color-text)' }}>
+                    {activeCompanion?.name || sess?.name}
+                  </div>
+                  <div className="text-[11px] leading-tight truncate" style={{ color: 'var(--color-text-muted)' }}>
+                    {activeCompanion?.role_label || '和它单独聊天'}
+                  </div>
+                </div>
                 <div className="flex-1" />
                 <SessionThinkingControl sessionId={activeSessionId} lang={lang} />
               </div>
@@ -634,7 +658,17 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
       {/* Messages or Welcome */}
       {showWelcome ? (
         <div className="flex-1 overflow-y-auto" style={{ background: 'var(--color-bg)' }}>
-          <ChatWelcome aiName={aiName} onSendPrompt={fillQuickPrompt} />
+          <ChatWelcome
+            aiName={aiName}
+            onSendPrompt={fillQuickPrompt}
+            companion={familyGroupId || !activeCompanion ? null : {
+              name: activeCompanion.name,
+              avatar_emoji: activeCompanion.avatar_emoji,
+              color_hex: activeCompanion.color_hex,
+              role_label: activeCompanion.role_label,
+              intro: companionPersona,
+            }}
+          />
         </div>
       ) : (
         <ChatMessages

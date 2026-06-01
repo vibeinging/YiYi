@@ -10,6 +10,7 @@ import { X, ChevronDown, ChevronRight, Loader2, AlertTriangle } from 'lucide-rea
 import {
   retireCompanion,
   updateCompanion,
+  setCompanionMeditationConfig,
   type Companion,
 } from '../../api/companions'
 import { formatYmd } from '../../utils/companion'
@@ -33,6 +34,19 @@ export function CompanionEditDrawer({ companion, onClose, onChanged }: Props) {
   const [confirmRetire, setConfirmRetire] = useState(false)
   const [saving, setSaving] = useState(false)
   const [retiring, setRetiring] = useState(false)
+  // 每天定时冥想(C 期):即时保存(像 YiYi 的冥想开关),不并进主"保存"。
+  const [medEnabled, setMedEnabled] = useState(companion.meditation_enabled)
+  const [medTime, setMedTime] = useState(companion.meditation_time || '03:00')
+  const saveMed = async (enabled: boolean, time: string) => {
+    setMedEnabled(enabled)
+    setMedTime(time)
+    try {
+      await setCompanionMeditationConfig(companion.id, enabled, time)
+      onChanged()
+    } catch (e) {
+      toast.error(`保存失败：${e}`)
+    }
+  }
 
   useEffect(() => {
     const prev = document.body.style.overflow
@@ -156,6 +170,39 @@ export function CompanionEditDrawer({ companion, onClose, onChanged }: Props) {
           {companion.last_used_at && (
             <Stat label="最近一次" value={formatYmd(companion.last_used_at)} />
           )}
+
+          {/* ── 每天定时冥想(和 YiYi 一样)── */}
+          <div className="pt-1">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[13px] font-medium" style={{ color: 'var(--color-text)' }}>每天定时冥想</div>
+                <div className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+                  {medEnabled ? `每天 ${medTime}，它会自己回看、沉淀` : '开启后它每天自动冥想一次'}
+                </div>
+              </div>
+              <button
+                role="switch"
+                aria-checked={medEnabled}
+                onClick={() => saveMed(!medEnabled, medTime)}
+                className="relative w-10 h-6 rounded-full transition-colors shrink-0"
+                style={{ background: medEnabled ? accent : 'var(--color-bg-muted)' }}
+              >
+                <span
+                  className="absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all"
+                  style={{ left: medEnabled ? '18px' : '2px' }}
+                />
+              </button>
+            </div>
+            {medEnabled && (
+              <input
+                type="time"
+                value={medTime}
+                onChange={e => saveMed(true, e.target.value)}
+                className="mt-2 px-3 py-1.5 rounded-lg text-[13px] outline-none"
+                style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text)' }}
+              />
+            )}
+          </div>
 
           {/* ── 高级折叠 ────────────────────────────────────────── */}
           <button

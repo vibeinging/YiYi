@@ -2,7 +2,7 @@
  * CompanionDetail — 单个伙伴的详情页(微信式两栏的右栏,伙伴版)。
  *
  * 与 YiYi 的详情页(BuddyPanel)**同构**:同样的 hero(性格光团 + 身份 + ⚙)
- * + 属性条 + 反思/沉淀卡 + 记忆卡。差异仅在数据源(per-companion)与
+ * + 属性条 + 冥想卡 + 记忆卡。差异仅在数据源(per-companion)与
  * "⚙ 抽屉里多了个归隐"(YiYi 不能归隐)。性格/时间线渲染走共享组件。
  */
 
@@ -92,7 +92,7 @@ export function CompanionDetail({ companion, onChanged }: { companion: Companion
     try {
       const r = await triggerCompanionReflection(companion.id)
       if (r.journal) toast.success(`${companion.name}:「${r.journal}」`)
-      else if (r.signals_added > 0) toast.success(`沉淀完成 · 性格 +${r.signals_added}`)
+      else if (r.signals_added > 0) toast.success(`冥想完成 · 性格 +${r.signals_added}`)
       else toast.success('聊得还不多,暂时没有明显变化')
       loadPersonality()
     } catch (e) {
@@ -162,7 +162,7 @@ export function CompanionDetail({ companion, onChanged }: { companion: Companion
             </div>
           </Card>
 
-          {/* ═══ 沉淀(反思)— 对齐 YiYi 的冥想卡 ═══ */}
+          {/* ═══ 冥想(与 YiYi 同款)═══ */}
           <Card className="relative overflow-hidden">
             {reflecting && (
               <div className="absolute inset-0 pointer-events-none" style={{
@@ -175,7 +175,7 @@ export function CompanionDetail({ companion, onChanged }: { companion: Companion
               <div className="flex-1 min-w-0">
                 <div className="flex items-baseline gap-2 mb-1">
                   <h2 className="text-[14px] font-semibold" style={{ color: 'var(--color-text)' }}>
-                    {reflecting ? `${companion.name}正在沉淀中...` : '沉淀'}
+                    {reflecting ? `${companion.name}正在冥想中...` : "冥想"}
                   </h2>
                   {!reflecting && lastReflectDate && (
                     <span className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>上次 · {lastReflectDate}</span>
@@ -184,6 +184,14 @@ export function CompanionDetail({ companion, onChanged }: { companion: Companion
                 <p className="text-[12px] leading-relaxed mb-2" style={{ color: moodQuote ? 'var(--color-text-secondary)' : 'var(--color-text-muted)' }}>
                   {moodQuote ? <><span className="opacity-60">它想到：</span>{moodQuote}</> : '让它回看自己的发言、提炼记忆、感受性格的变化。'}
                 </p>
+                {companion.meditation_enabled && !reflecting && (
+                  <div className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+                    每天 {companion.meditation_time} 自动冥想 ·
+                    <button onClick={() => setEditOpen(true)} className="ml-1 underline-offset-2 hover:underline" style={{ color: 'var(--color-text-muted)' }}>
+                      改设置
+                    </button>
+                  </div>
+                )}
               </div>
               <button
                 onClick={reflect}
@@ -196,7 +204,7 @@ export function CompanionDetail({ companion, onChanged }: { companion: Companion
                 }}
               >
                 {reflecting ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
-                {reflecting ? '沉淀中' : '让它沉淀一下'}
+                {reflecting ? "冥想中" : "叫它冥想"}
               </button>
             </div>
 
@@ -216,12 +224,12 @@ export function CompanionDetail({ companion, onChanged }: { companion: Companion
             )}
           </Card>
 
-          {/* ═══ 它沉淀过的时刻 ═══ */}
+          {/* ═══ 它冥想过的时刻 ═══ */}
           {sessions.length > 0 && (
             <Card>
               <div className="flex items-center gap-2 mb-3">
                 <Brain size={16} style={{ color: from }} />
-                <h2 className="text-[15px] font-semibold" style={{ color: 'var(--color-text)' }}>它沉淀过的时刻</h2>
+                <h2 className="text-[15px] font-semibold" style={{ color: 'var(--color-text)' }}>它冥想过的时刻</h2>
               </div>
               <ul className="space-y-2.5">
                 {sessions.map(s => {

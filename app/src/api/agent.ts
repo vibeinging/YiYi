@@ -130,9 +130,9 @@ export interface ChatSession {
   last_message?: string | null;
 }
 
-/** 好友列表点进去:拿/建和该 companion 的专属私聊会话,返回 session id。 */
-export async function getOrCreateCompanionSession(companionId: number): Promise<string> {
-  return await invoke<string>('get_or_create_companion_session', { companionId });
+/** 点好友头像:每次都新开一段绑定该 companion 的私聊会话,返回 session id。 */
+export async function createCompanionSession(companionId: number): Promise<string> {
+  return await invoke<string>('create_companion_session', { companionId });
 }
 
 export async function listSessions(): Promise<ChatSession[]> {

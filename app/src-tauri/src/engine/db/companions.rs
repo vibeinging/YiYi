@@ -40,6 +40,16 @@ pub struct Companion {
     /// tool-permission template. Old rows may have `None`; the frontend
     /// falls back to a template-derived label in that case.
     pub role_label: Option<String>,
+    /// 每天定时冥想开关(C 期)。默认关。
+    #[serde(default)]
+    pub meditation_enabled: bool,
+    /// 定时冥想时间 "HH:MM"(本地时区)。默认 "03:00"。
+    #[serde(default = "default_meditation_time")]
+    pub meditation_time: String,
+}
+
+fn default_meditation_time() -> String {
+    "03:00".to_string()
 }
 
 /// New companion payload for `adopt_companion`. Fields not listed default
@@ -85,13 +95,16 @@ pub(super) fn map_row(row: &rusqlite::Row) -> rusqlite::Result<Companion> {
         last_used_at: row.get(11)?,
         metadata_json: row.get(12)?,
         role_label: row.get(13)?,
+        meditation_enabled: row.get(14)?,
+        meditation_time: row.get(15)?,
     })
 }
 
 pub(super) const SELECT_COLS: &str =
     "id, name, agent_definition_name, avatar_emoji, color_hex, persona_md_path, \
      memory_user_id, adopted_at, retired_at, personality_stats_json, \
-     invocation_count, last_used_at, metadata_json, role_label";
+     invocation_count, last_used_at, metadata_json, role_label, \
+     meditation_enabled, meditation_time";
 
 impl super::Database {
     /// Adopt a new companion. Returns the newly assigned id.
@@ -220,6 +233,18 @@ impl super::Database {
         let affected = conn
             .execute(&sql, rusqlite::params_from_iter(params_slice))
             .map_err(|e| format!("update_companion: {}", e))?;
+        Ok(affected > 0)
+    }
+
+    /// 设置该伙伴的定时冥想配置(C 期)。
+    pub fn set_companion_meditation(&self, id: i64, enabled: bool, time: &str) -> Result<bool, String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let affected = conn
+            .execute(
+                "UPDATE companions SET meditation_enabled = ?1, meditation_time = ?2 WHERE id = ?3",
+                params![enabled, time, id],
+            )
+            .map_err(|e| format!("set_companion_meditation: {}", e))?;
         Ok(affected > 0)
     }
 

@@ -903,6 +903,19 @@ impl Database {
             log::info!("Migrated meditation_sessions table: added companion_id column");
         }
 
+        // Per-companion 定时冥想配置(C 期):开关 + 时间("HH:MM",本地)。
+        let has_companion_meditation: bool = conn
+            .prepare("SELECT meditation_enabled FROM companions LIMIT 0")
+            .is_ok();
+        if !has_companion_meditation {
+            conn.execute_batch(
+                "ALTER TABLE companions ADD COLUMN meditation_enabled INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE companions ADD COLUMN meditation_time TEXT NOT NULL DEFAULT '03:00';",
+            )
+            .map_err(|e| format!("Migration error (companions meditation config): {}", e))?;
+            log::info!("Migrated companions table: added meditation_enabled / meditation_time columns");
+        }
+
         // Drop legacy session_bots table (replaced by bot_conversations)
         conn.execute_batch("DROP TABLE IF EXISTS session_bots;").ok();
 

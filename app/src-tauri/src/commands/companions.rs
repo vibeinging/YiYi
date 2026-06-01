@@ -148,6 +148,56 @@ pub async fn retire_companion(state: State<'_, AppState>, id: i64) -> Result<(),
     Ok(())
 }
 
+// ── Per-companion 定时冥想配置(C 期)──────────────────────────────────
+
+#[derive(serde::Serialize)]
+pub struct CompanionMeditationConfig {
+    pub enabled: bool,
+    pub start_time: String,
+}
+
+#[tauri::command]
+pub async fn get_companion_meditation_config(
+    state: State<'_, AppState>,
+    companion_id: i64,
+) -> Result<CompanionMeditationConfig, String> {
+    let c = state
+        .db
+        .get_companion(companion_id)
+        .ok_or_else(|| format!("Companion {} not found", companion_id))?;
+    Ok(CompanionMeditationConfig { enabled: c.meditation_enabled, start_time: c.meditation_time })
+}
+
+#[tauri::command]
+pub async fn set_companion_meditation_config(
+    state: State<'_, AppState>,
+    companion_id: i64,
+    enabled: bool,
+    start_time: String,
+) -> Result<(), String> {
+    state.db.set_companion_meditation(companion_id, enabled, &start_time)?;
+    Ok(())
+}
+
+/// 读这个伙伴的人设/角色定义(persona.md 内容)。没写过自定义人设则返回 None。
+#[tauri::command]
+pub async fn get_companion_persona(
+    state: State<'_, AppState>,
+    companion_id: i64,
+) -> Result<Option<String>, String> {
+    let c = state
+        .db
+        .get_companion(companion_id)
+        .ok_or_else(|| format!("companion {companion_id} 不存在"))?;
+    match c.persona_md_path {
+        Some(path) => Ok(std::fs::read_to_string(&path)
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())),
+        None => Ok(None),
+    }
+}
+
 // ── List ─────────────────────────────────────────────────────────────
 
 #[tauri::command]

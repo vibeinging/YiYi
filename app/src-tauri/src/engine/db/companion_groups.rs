@@ -36,12 +36,12 @@ fn map_group_row(row: &rusqlite::Row) -> rusqlite::Result<CompanionGroup> {
 const GROUP_COLS: &str = "id, name, emoji, color_hex, created_at, updated_at";
 
 /// JOIN 拉成员时用的 companions 列别名 —— 与 `super::companions::map_row` 的
-/// `row.get(0..13)` 顺序一一对应。改 companions 表 schema 时务必同步这里。
+/// `row.get(0..15)` 顺序一一对应。改 companions 表 schema 时务必同步这里。
 const COMPANION_COLS_C: &str =
     "c.id, c.name, c.agent_definition_name, c.avatar_emoji, c.color_hex, \
      c.persona_md_path, c.memory_user_id, c.adopted_at, c.retired_at, \
      c.personality_stats_json, c.invocation_count, c.last_used_at, \
-     c.metadata_json, c.role_label";
+     c.metadata_json, c.role_label, c.meditation_enabled, c.meditation_time";
 
 impl super::Database {
     // ── group CRUD ────────────────────────────────────────────────────

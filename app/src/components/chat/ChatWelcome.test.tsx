@@ -61,4 +61,29 @@ describe('ChatWelcome', () => {
     fireEvent.click(screen.getByText(ex0));
     expect(onSendPrompt).toHaveBeenCalledWith(ex0);
   });
+
+  it('private companion chat shows the companion name + role + persona intro (not YiYi)', () => {
+    render(
+      <ChatWelcome
+        aiName="YiYi"
+        onSendPrompt={() => {}}
+        companion={{
+          name: '闪闪',
+          avatar_emoji: '✨',
+          color_hex: '#F97316',
+          role_label: '找代码硬伤',
+          intro: '我说话毒舌但走心,只在关键处冒泡。',
+        }}
+      />,
+    );
+    // Hero greeting names the companion.
+    expect(screen.getByRole('heading').textContent).toContain('闪闪');
+    // Role label shows ("擅长 · 找代码硬伤").
+    expect(screen.getByText(/找代码硬伤/)).toBeInTheDocument();
+    // Persona / role definition shows as the intro.
+    expect(screen.getByText(/毒舌但走心/)).toBeInTheDocument();
+    // Quick-action cards are hidden for companions.
+    const actions = getQuickActions((k: string) => i18n.t(k));
+    expect(screen.queryByText(actions[0].label)).not.toBeInTheDocument();
+  });
 });
