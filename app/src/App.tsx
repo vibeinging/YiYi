@@ -26,7 +26,7 @@ import { useTaskEventBridge } from './hooks/useTaskEventBridge';
 import { useBotEventBridge } from './hooks/useBotEventBridge';
 import { usePermissionBridge } from './hooks/usePermissionBridge';
 import { useGrowthEventBridge } from './hooks/useGrowthEventBridge';
-import { TaskSidebar } from './components/TaskSidebar';
+import { TaskSidebar, NavRail } from './components/TaskSidebar';
 import { TaskDetailOverlay } from './components/TaskDetailOverlay';
 import { useTaskSidebarStore } from './stores/taskSidebarStore';
 import { useTaskStore } from './stores/taskStore';
@@ -212,20 +212,30 @@ function MainApp() {
   return (
     <ToastProvider>
     <div className={`h-screen flex ${appliedTheme}`} style={{ '--sidebar-width': `${sidebarWidth}px` } as React.CSSProperties}>
-      {/* Task Sidebar (replaces old navigation sidebar) */}
-      <TaskSidebar
+      {/* 微信式三栏第 1 栏:最左竖排导航 */}
+      <NavRail
         currentPage={currentPage}
-        onPageChange={(page) => {
-          setCurrentPage(page);
-        }}
-        onNavigateToSession={(sessionId) => {
-          useTaskSidebarStore.getState().navigateToSession(sessionId);
-          setCurrentPage('chat');
-        }}
+        onPageChange={(page) => setCurrentPage(page)}
+        onGoChat={() => { setCurrentPage('chat'); window.dispatchEvent(new CustomEvent('chat:go-main')); }}
+        onToggleSidebar={() => toggleSidebar()}
+        sidebarCollapsed={sidebarCollapsed}
         onDragMouseDown={drag.onMouseDown}
       />
 
-      {/* Main area */}
+      {/* 第 2 栏:会话列表(仅对话页显示,折叠时隐藏)。其它页内容占满第 2+3 栏。 */}
+      {currentPage === 'chat' && !sidebarCollapsed && (
+        <TaskSidebar
+          currentPage={currentPage}
+          onPageChange={(page) => setCurrentPage(page)}
+          onNavigateToSession={(sessionId) => {
+            useTaskSidebarStore.getState().navigateToSession(sessionId);
+            setCurrentPage('chat');
+          }}
+          onDragMouseDown={drag.onMouseDown}
+        />
+      )}
+
+      {/* 第 3 栏:Main area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Drag region for non-chat pages (Chat has its own ChatTabBar drag region) */}
         {currentPage !== 'chat' && (

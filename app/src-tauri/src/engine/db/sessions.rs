@@ -20,6 +20,9 @@ pub struct ChatSession {
     /// 单聊(YiYi)或群聊。与 group_id 互斥:绑了 companion = 和该 agent 1:1 私聊。
     #[serde(default)]
     pub companion_id: Option<i64>,
+    /// 会话列表预览:最后一条 user/assistant 消息(子查询带出,仅列表/搜索用)。
+    #[serde(default)]
+    pub last_message: Option<String>,
 }
 
 fn default_source() -> String {
@@ -32,7 +35,7 @@ impl super::Database {
     pub fn list_sessions(&self) -> Result<Vec<ChatSession>, String> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
-            .prepare("SELECT id, name, created_at, updated_at, source, source_meta, group_id, companion_id FROM sessions ORDER BY updated_at DESC")
+            .prepare("SELECT id, name, created_at, updated_at, source, source_meta, group_id, companion_id, (SELECT m.content FROM messages m WHERE m.session_id = sessions.id AND m.role IN ('user','assistant') ORDER BY m.timestamp DESC, m.id DESC LIMIT 1) AS last_message FROM sessions ORDER BY updated_at DESC")
             .map_err(|e| format!("Query error: {}", e))?;
 
         let sessions = stmt
@@ -46,6 +49,7 @@ impl super::Database {
                     source_meta: row.get(5)?,
                     group_id: row.get(6)?,
                     companion_id: row.get(7)?,
+                    last_message: row.get(8)?,
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?
@@ -59,7 +63,7 @@ impl super::Database {
     pub fn list_sessions_by_source(&self, source: &str) -> Result<Vec<ChatSession>, String> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
-            .prepare("SELECT id, name, created_at, updated_at, source, source_meta, group_id, companion_id FROM sessions WHERE source = ?1 ORDER BY updated_at DESC")
+            .prepare("SELECT id, name, created_at, updated_at, source, source_meta, group_id, companion_id, (SELECT m.content FROM messages m WHERE m.session_id = sessions.id AND m.role IN ('user','assistant') ORDER BY m.timestamp DESC, m.id DESC LIMIT 1) AS last_message FROM sessions WHERE source = ?1 ORDER BY updated_at DESC")
             .map_err(|e| format!("Query error: {}", e))?;
 
         let sessions = stmt
@@ -73,6 +77,7 @@ impl super::Database {
                     source_meta: row.get(5)?,
                     group_id: row.get(6)?,
                     companion_id: row.get(7)?,
+                    last_message: row.get(8)?,
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?
@@ -92,7 +97,7 @@ impl super::Database {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, created_at, updated_at, source, source_meta, group_id, companion_id \
+                "SELECT id, name, created_at, updated_at, source, source_meta, group_id, companion_id, (SELECT m.content FROM messages m WHERE m.session_id = sessions.id AND m.role IN ('user','assistant') ORDER BY m.timestamp DESC, m.id DESC LIMIT 1) AS last_message \
                  FROM sessions WHERE source = ?1 \
                  ORDER BY updated_at DESC LIMIT ?2 OFFSET ?3",
             )
@@ -109,6 +114,7 @@ impl super::Database {
                     source_meta: row.get(5)?,
                     group_id: row.get(6)?,
                     companion_id: row.get(7)?,
+                    last_message: row.get(8)?,
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?
@@ -129,7 +135,7 @@ impl super::Database {
         let pattern = format!("%{}%", query);
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, created_at, updated_at, source, source_meta, group_id, companion_id \
+                "SELECT id, name, created_at, updated_at, source, source_meta, group_id, companion_id, (SELECT m.content FROM messages m WHERE m.session_id = sessions.id AND m.role IN ('user','assistant') ORDER BY m.timestamp DESC, m.id DESC LIMIT 1) AS last_message \
                  FROM sessions WHERE source = ?1 AND name LIKE ?2 \
                  ORDER BY updated_at DESC LIMIT ?3",
             )
@@ -146,6 +152,7 @@ impl super::Database {
                     source_meta: row.get(5)?,
                     group_id: row.get(6)?,
                     companion_id: row.get(7)?,
+                    last_message: row.get(8)?,
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?
@@ -183,6 +190,7 @@ impl super::Database {
             source_meta: None,
             group_id: None,
             companion_id: None,
+            last_message: None,
         })
     }
 
@@ -211,6 +219,7 @@ impl super::Database {
             source_meta: source_meta.map(|s| s.to_string()),
             group_id: None,
             companion_id: None,
+            last_message: None,
         })
     }
 
@@ -221,7 +230,7 @@ impl super::Database {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, created_at, updated_at, source, source_meta, group_id, companion_id \
+                "SELECT id, name, created_at, updated_at, source, source_meta, group_id, companion_id, (SELECT m.content FROM messages m WHERE m.session_id = sessions.id AND m.role IN ('user','assistant') ORDER BY m.timestamp DESC, m.id DESC LIMIT 1) AS last_message \
                  FROM sessions WHERE id = ?1 LIMIT 1",
             )
             .map_err(|e| format!("Query error: {}", e))?;
@@ -238,6 +247,7 @@ impl super::Database {
                 source_meta: row.get(5).map_err(|e| e.to_string())?,
                 group_id: row.get(6).map_err(|e| e.to_string())?,
                 companion_id: row.get(7).map_err(|e| e.to_string())?,
+                last_message: row.get(8).map_err(|e| e.to_string())?,
             }))
         } else {
             Ok(None)
@@ -261,7 +271,7 @@ impl super::Database {
     pub fn get_session_companion(&self, id: &str) -> Option<i64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
-            "SELECT companion_id FROM sessions WHERE id = ?1",
+            "SELECT companion_id, (SELECT m.content FROM messages m WHERE m.session_id = sessions.id AND m.role IN ('user','assistant') ORDER BY m.timestamp DESC, m.id DESC LIMIT 1) AS last_message FROM sessions WHERE id = ?1",
             params![id],
             |row| row.get::<_, Option<i64>>(0),
         )

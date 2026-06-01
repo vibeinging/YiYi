@@ -206,73 +206,70 @@ function SidebarSessionCard({ session, isActive, onPageChange, companion }: {
     setIsRenaming(false);
   };
 
+  const title = group ? group.name : (session.name || 'New Chat');
+  // 第二行预览(微信式):优先最后一条消息(后端带出),压成单行;空(新会话)则
+  // 回落群话题。所有行固定 52px 高 + 垂直居中,1/2 行行高一致。
+  const lastMsg = (session.last_message ?? '').replace(/\s*\n\s*/g, ' ').trim();
+  const preview = lastMsg || (group && session.name && session.name !== group.name ? session.name : null);
+
   return (
     <>
       <div
         onClick={() => { if (!isRenaming) { switchToSession(session.id); onPageChange('chat'); } }}
         onContextMenu={(e) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY }); }}
-        className="group rounded-[10px] cursor-pointer transition-all duration-150 px-2 py-1.5 mx-1"
-        style={{ background: isActive ? 'var(--sidebar-active)' : 'transparent' }}
+        className="group flex items-center gap-2.5 cursor-pointer transition-colors duration-150 px-2.5 mx-1.5 rounded-xl"
+        style={{ minHeight: '52px', background: isActive ? 'var(--sidebar-active)' : 'transparent' }}
         onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
-        onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = isActive ? 'var(--sidebar-active)' : 'transparent'; }}
+        onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
       >
-        <div className="flex items-center gap-2">
-          {/* IM 式头像:私聊 = 该 companion emoji, 群 = 成员拼图, 单聊 = YiYi logo。 */}
-          {companion ? (
-            <div
-              className="shrink-0 w-8 h-8 rounded-md flex items-center justify-center text-[17px]"
-              style={{ background: companion.color_hex ? `${companion.color_hex}26` : 'var(--color-bg-subtle)' }}
-              title={companion.name}
-            >
-              {companion.avatar_emoji || '🤖'}
-            </div>
-          ) : (
-            <AvatarGrid groupId={session.group_id ?? null} size={32} radius="md" />
-          )}
-          <div className="flex-1 min-w-0">
-            {isRenaming ? (
-              <input
-                ref={renameInputRef}
-                value={renameValue}
-                onChange={(e) => setRenameValue(e.target.value)}
-                onBlur={commitRename}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') commitRename();
-                  if (e.key === 'Escape') setIsRenaming(false);
-                }}
-                onClick={(e) => e.stopPropagation()}
-                className="w-full text-[12.5px] font-medium bg-transparent border-none outline-none rounded px-0.5"
-                style={{
-                  color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)',
-                  boxShadow: '0 0 0 1px var(--color-border)',
-                }}
-                autoFocus
-              />
-            ) : (
-              <>
-                {/* 主标题:群聊 = 群名, 单聊 = session.name。 */}
-                <div
-                  className="truncate text-[12.5px] font-medium"
-                  style={{ color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)' }}
-                >
-                  {group ? group.name : (session.name || 'New Chat')}
-                </div>
-                {/* 副标题:群聊里, session.name 跟 group.name 不同时显示作子标题
-                   (用户自己起的 / 自动生成的对话主题)。单聊无副标题。 */}
-                {group && session.name && session.name !== group.name && (
-                  <div
-                    className="truncate text-[11px] mt-0.5 opacity-70"
-                    style={{ color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)' }}
-                  >
-                    {session.name}
-                  </div>
-                )}
-              </>
-            )}
+        {/* 头像:私聊 = companion emoji, 群 = 成员拼图, 单聊 = YiYi。统一 40px 圆角方块。 */}
+        {companion ? (
+          <div
+            className="shrink-0 w-10 h-10 rounded-xl flex items-center justify-center text-[20px]"
+            style={{ background: companion.color_hex ? `${companion.color_hex}26` : 'var(--color-bg-subtle)' }}
+            title={companion.name}
+          >
+            {companion.avatar_emoji || '🤖'}
           </div>
-          <span className="shrink-0 text-[10px] tabular-nums opacity-0 group-hover:opacity-100 transition-opacity" style={{ color: 'var(--sidebar-text)' }}>
-            {timeAgo(session.updated_at)}
-          </span>
+        ) : (
+          <AvatarGrid groupId={session.group_id ?? null} size={40} radius="md" />
+        )}
+
+        <div className="flex-1 min-w-0 flex flex-col justify-center gap-0.5 py-1">
+          {isRenaming ? (
+            <input
+              ref={renameInputRef}
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onBlur={commitRename}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commitRename();
+                if (e.key === 'Escape') setIsRenaming(false);
+              }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full text-[13px] font-medium bg-transparent border-none outline-none rounded px-0.5"
+              style={{ color: 'var(--sidebar-text-active)', boxShadow: '0 0 0 1px var(--color-border)' }}
+              autoFocus
+            />
+          ) : (
+            <>
+              {/* 第 1 行:标题(常亮高对比,不再 50% 发灰)+ 右上角常驻时间。 */}
+              <div className="flex items-center gap-2">
+                <span className="flex-1 truncate text-[13px] font-medium" style={{ color: 'var(--sidebar-text-active)' }}>
+                  {title}
+                </span>
+                <span className="shrink-0 text-[10px] tabular-nums" style={{ color: 'var(--sidebar-section)' }}>
+                  {timeAgo(session.updated_at)}
+                </span>
+              </div>
+              {/* 第 2 行:话题预览(群聊),灰色单行截断。 */}
+              {preview && (
+                <span className="truncate text-[11.5px] leading-snug" style={{ color: 'var(--sidebar-text)' }}>
+                  {preview}
+                </span>
+              )}
+            </>
+          )}
         </div>
       </div>
       {contextMenu && (
@@ -339,6 +336,118 @@ function MorePopover({ currentPage, onPageChange, onClose }: { currentPage: Page
         );
       })}
     </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+// NavRail —— 最左侧竖排导航(微信三栏的第 1 栏)
+// ═══════════════════════════════════════════
+export function NavRail({
+  currentPage,
+  onPageChange,
+  onGoChat,
+  onToggleSidebar,
+  sidebarCollapsed,
+  onDragMouseDown,
+}: {
+  currentPage: Page;
+  onPageChange: (p: Page) => void;
+  onGoChat: () => void;
+  onToggleSidebar: () => void;
+  sidebarCollapsed: boolean;
+  onDragMouseDown: (e: React.MouseEvent) => void;
+}) {
+  const { t } = useTranslation();
+  const chatActive = currentPage === 'chat';
+  const cell = (active: boolean) =>
+    `w-11 flex flex-col items-center gap-[3px] py-1.5 rounded-xl transition-all`;
+  return (
+    <aside
+      className="flex flex-col shrink-0 items-center relative z-50"
+      style={{ width: '60px', background: 'var(--sidebar-bg)', borderRight: '1px solid var(--sidebar-border)' }}
+    >
+      <div className="h-10 shrink-0 w-full app-drag-region" onMouseDown={onDragMouseDown} />
+
+      {/* YiYi 主页(= 对话栏) */}
+      <button
+        onClick={onGoChat}
+        title="YiYi · 对话"
+        className={cell(chatActive)}
+        style={{
+          color: chatActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)',
+          background: chatActive ? 'var(--sidebar-active)' : 'transparent',
+        }}
+        onMouseEnter={(e) => { if (!chatActive) e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
+        onMouseLeave={(e) => { if (!chatActive) e.currentTarget.style.background = 'transparent'; }}
+      >
+        <div className="w-7 h-7 rounded-lg overflow-hidden flex items-center justify-center">
+          <img src={logoFaceRight} alt="YiYi" style={{ width: '88%', height: '88%', objectFit: 'contain' }} />
+        </div>
+        <span className="text-[9px] font-medium leading-none">对话</span>
+      </button>
+
+      {/* 主导航(设置除外)—— 顶部 */}
+      <div className="mt-0.5 flex flex-col items-center gap-0.5">
+        {primaryNav.filter((i) => i.id !== 'settings').map((item) => {
+          const Icon = item.icon;
+          const isActive = currentPage === item.id;
+          return (
+            <button
+              key={item.id}
+              onClick={() => onPageChange(item.id)}
+              title={t(item.labelKey)}
+              className={cell(isActive)}
+              style={{
+                color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)',
+                background: isActive ? 'var(--sidebar-active)' : 'transparent',
+              }}
+              onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
+              onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
+            >
+              <Icon size={18} strokeWidth={isActive ? 2.2 : 1.8} />
+              <span className="text-[9px] font-medium leading-none">{t(item.labelKey)}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="flex-1" />
+
+      {/* 设置 —— 底部(微信式) */}
+      {(() => {
+        const settings = primaryNav.find((i) => i.id === 'settings');
+        if (!settings) return null;
+        const Icon = settings.icon;
+        const isActive = currentPage === 'settings';
+        return (
+          <button
+            onClick={() => onPageChange('settings')}
+            title={t(settings.labelKey)}
+            className={cell(isActive)}
+            style={{
+              color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)',
+              background: isActive ? 'var(--sidebar-active)' : 'transparent',
+            }}
+            onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
+            onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
+          >
+            <Icon size={18} strokeWidth={isActive ? 2.2 : 1.8} />
+            <span className="text-[9px] font-medium leading-none">{t(settings.labelKey)}</span>
+          </button>
+        );
+      })()}
+
+      <button
+        onClick={onToggleSidebar}
+        title={sidebarCollapsed ? '展开会话列表' : '折叠会话列表'}
+        className="mt-0.5 mb-2 w-9 h-9 flex items-center justify-center rounded-xl transition-colors"
+        style={{ color: 'var(--sidebar-text)' }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+      >
+        {sidebarCollapsed ? <PanelLeft size={15} /> : <PanelLeftClose size={15} />}
+      </button>
+    </aside>
   );
 }
 
@@ -643,65 +752,6 @@ export const TaskSidebar = memo(function TaskSidebar({
         )}
       </div>
 
-      {/* ── Bottom Nav ── */}
-      <div className="shrink-0 px-2 pt-1.5 pb-2 relative" style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
-        {moreOpen && (
-          <MorePopover currentPage={currentPage} onPageChange={onPageChange} onClose={() => setMoreOpen(false)} />
-        )}
-        <div className="flex items-center justify-between">
-          {primaryNav.map((item) => {
-            const Icon = item.icon;
-            const isActive = currentPage === item.id;
-            return (
-              <button
-                key={item.id}
-                onClick={() => {
-                  onPageChange(item.id);
-                  if (item.id === 'chat') window.dispatchEvent(new CustomEvent('chat:go-main'));
-                }}
-                className="flex-1 flex flex-col items-center gap-[3px] py-1.5 rounded-lg transition-all"
-                style={{
-                  color: isActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)',
-                  opacity: isActive ? 1 : 0.6,
-                }}
-                onMouseEnter={(e) => { if (!isActive) (e.currentTarget.style as any).opacity = '0.9'; }}
-                onMouseLeave={(e) => { if (!isActive) (e.currentTarget.style as any).opacity = '0.6'; }}
-              >
-                <Icon size={17} strokeWidth={isActive ? 2.2 : 1.8} />
-                <span className="text-[9px] font-medium leading-none">{t(item.labelKey)}</span>
-              </button>
-            );
-          })}
-          {/* More button (only shown when there are items) */}
-          {moreNavItems.length > 0 && (
-            <button
-              onClick={() => setMoreOpen(!moreOpen)}
-              className="flex-1 flex flex-col items-center gap-[3px] py-1.5 rounded-lg transition-all"
-              style={{
-                color: isMorePage ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)',
-                opacity: isMorePage || moreOpen ? 1 : 0.6,
-              }}
-              onMouseEnter={(e) => { (e.currentTarget.style as any).opacity = '0.9'; }}
-              onMouseLeave={(e) => { if (!isMorePage && !moreOpen) (e.currentTarget.style as any).opacity = '0.6'; }}
-            >
-              <Grid3X3 size={17} strokeWidth={isMorePage ? 2.2 : 1.8} />
-              <span className="text-[9px] font-medium leading-none">{t('nav.more', '更多')}</span>
-            </button>
-          )}
-        </div>
-
-        <button
-          onClick={() => toggleSidebar()}
-          className="absolute -right-3 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity z-50"
-          style={{
-            background: 'var(--color-bg-elevated)',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.2), 0 0 0 0.5px rgba(255,255,255,0.06)',
-            color: 'var(--color-text-secondary)',
-          }}
-        >
-          <PanelLeftClose size={12} />
-        </button>
-      </div>
     </aside>
     </>
   );

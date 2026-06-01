@@ -126,6 +126,8 @@ export interface ChatSession {
   group_id: number | null;
   /** 好友私聊:绑定的单个 companion id。null = 非私聊;number = 和该 agent 1:1。 */
   companion_id?: number | null;
+  /** 会话列表预览:最后一条 user/assistant 消息(后端子查询带出)。侧边栏第二行用。 */
+  last_message?: string | null;
 }
 
 /** 好友列表点进去:拿/建和该 companion 的专属私聊会话,返回 session id。 */
