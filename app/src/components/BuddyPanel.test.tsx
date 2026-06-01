@@ -185,11 +185,8 @@ describe("BuddyPanel", () => {
 
   it("renders the trust accuracy info when trust stats are present", async () => {
     renderPanel();
-    // Rewritten panel shows accuracy as a number + "%" with "信任" label.
-    await waitFor(() => {
-      expect(screen.getByText("信任")).toBeInTheDocument();
-    });
-    expect(screen.getByText("80")).toBeInTheDocument();
+    // 精简后:折叠的「她学到的规矩」头部展示采纳准确率 "做对 80%"。
+    expect(await screen.findByText(/做对\s*80%/)).toBeInTheDocument();
   });
 
   it("invokes search_memories with the typed query when the search button is clicked", async () => {
@@ -242,9 +239,10 @@ describe("BuddyPanel", () => {
         },
       ],
     });
+    // 精简后「她学到的规矩」默认折叠 —— 先点开再看规则行。
+    await userEvent.setup().click(await screen.findByText("她学到的规矩"));
     expect(await screen.findByText(/礼貌拒绝并说明原因/)).toBeInTheDocument();
     expect(await screen.findByText(/被问到敏感信息/)).toBeInTheDocument();
-    expect(await screen.findByText("学到的规矩")).toBeInTheDocument();
   });
 
   it("renders the empty memory placeholder when get_memory_stats returns total=0", async () => {

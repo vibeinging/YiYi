@@ -35,7 +35,6 @@ import { toast } from './Toast'
 
 const ORB_SIZE = 180
 
-const catLabel = (c: string) => ({ fact: '事实', preference: '偏好', experience: '经验', decision: '决策', principle: '原则', note: '备注' }[c] || c)
 
 // Section header — simple, no gimmicks
 const SectionTitle: React.FC<{ children: React.ReactNode; count?: number; right?: React.ReactNode }> = ({ children, count, right }) => (
@@ -66,6 +65,7 @@ export function BuddyPanel({ hideCompanions = false }: { hideCompanions?: boolea
   const [decisionsExpanded, setDecisionsExpanded] = useState(false)
   const [personalityExpanded, setPersonalityExpanded] = useState(false)
   const [episodesExpanded, setEpisodesExpanded] = useState(false)
+  const [rulesExpanded, setRulesExpanded] = useState(false)
   const [meditationEnabled, setMeditationEnabled] = useState(false)
   const [meditationStart, setMeditationStart] = useState('02:00')
   const [meditationNotify, setMeditationNotify] = useState(true)
@@ -87,7 +87,6 @@ export function BuddyPanel({ hideCompanions = false }: { hideCompanions?: boolea
   const [personalityTimeline, setPersonalityTimeline] = useState<PersonalitySignalRow[]>([])
   const [sparklingMemories, setSparklingMemories] = useState<{ id: string; content: string; category: string; created_at: number }[]>([])
   const [identityTraits, setIdentityTraits] = useState<{ trait_type: string; content: string; confidence: number }[]>([])
-  const [memFilter, setMemFilter] = useState<string>('all')
   const [episodes, setEpisodes] = useState<EpisodeEntry[]>([])
   useEffect(() => {
     getMemoryStats().then(setMemoryStats).catch(() => {})
@@ -405,11 +404,8 @@ export function BuddyPanel({ hideCompanions = false }: { hideCompanions?: boolea
       {/* ═══ 成长建议 — 她想跟你商量的事（仅在有候选时显示） ═══ */}
       <InboxPanel accent={from} buddyName={companion.name} />
 
-      {/* ═══ 两栏：她记得 / 行为准则 ═══ */}
-      <div className="grid gap-5" style={{ gridTemplateColumns: '1fr 1fr' }}>
-
-        {/* ── 第一栏: 她记得 ── */}
-        <div className="space-y-5">
+      {/* ═══ 记忆(单列主块)+ 她学到的规矩(折叠次要块)═══ */}
+      <div className="space-y-5">
 
           {/* Memory */}
           <Card>
@@ -460,32 +456,8 @@ export function BuddyPanel({ hideCompanions = false }: { hideCompanions?: boolea
                   )}
                 </div>
 
-                {/* Category filter */}
-                {!searchResults && (
-                  <div className="flex flex-wrap gap-1.5 mb-4">
-                    <button onClick={() => setMemFilter('all')}
-                      className="px-2.5 py-1 rounded-md text-[12px] transition-colors"
-                      style={{
-                        background: memFilter === 'all' ? from : 'var(--color-bg-subtle)',
-                        color: memFilter === 'all' ? '#fff' : 'var(--color-text-secondary)',
-                      }}>
-                      全部 <span className="tabular-nums ml-0.5 opacity-80">{memoryStats.total}</span>
-                    </button>
-                    {Object.entries(memoryStats.by_category).map(([cat, count]) => (
-                      <button key={cat} onClick={() => setMemFilter(cat)}
-                        className="px-2.5 py-1 rounded-md text-[12px] transition-colors"
-                        style={{
-                          background: memFilter === cat ? from : 'var(--color-bg-subtle)',
-                          color: memFilter === cat ? '#fff' : 'var(--color-text-secondary)',
-                        }}>
-                        {catLabel(cat)} <span className="tabular-nums ml-0.5 opacity-80">{count as number}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-
                 {/* Sparkling memories */}
-                {sparklingMemories.length > 0 && !searchResults && memFilter === 'all' && (
+                {sparklingMemories.length > 0 && !searchResults && (
                   <div className="mb-4 p-3 rounded-lg" style={{ background: 'color-mix(in srgb, #FBBF24 6%, transparent)' }}>
                     <div className="flex items-center gap-1.5 mb-2">
                       <Sparkles size={12} style={{ color: '#FBBF24' }} />
@@ -512,14 +484,11 @@ export function BuddyPanel({ hideCompanions = false }: { hideCompanions?: boolea
                 {/* Memory list */}
                 <div className="space-y-1 max-h-[400px] overflow-y-auto">
                   {(() => {
-                    const source = searchResults ?? recentMemories
-                    const filtered = !searchResults && memFilter !== 'all'
-                      ? source.filter(m => (m.categories[0] || 'note') === memFilter)
-                      : source
+                    const filtered = searchResults ?? recentMemories
                     if (filtered.length === 0) {
                       return (
                         <div className="py-6 text-center text-[13px]" style={{ color: 'var(--color-text-muted)' }}>
-                          {searchResults ? '没有匹配的记忆' : `暂无${catLabel(memFilter)}记忆`}
+                          {searchResults ? '没有匹配的记忆' : '还没有记忆'}
                         </div>
                       )
                     }
@@ -534,9 +503,6 @@ export function BuddyPanel({ hideCompanions = false }: { hideCompanions?: boolea
                             {m.content.length > 200 ? m.content.slice(0, 200) + '...' : m.content}
                           </div>
                           <div className="flex items-center gap-2 mt-1">
-                            <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-muted)' }}>
-                              {catLabel(m.categories[0] || 'note')}
-                            </span>
                             <span className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>{m.created_at.slice(0, 10)}</span>
                           </div>
                         </div>
@@ -592,27 +558,28 @@ export function BuddyPanel({ hideCompanions = false }: { hideCompanions?: boolea
               </div>
             )}
           </Card>
-        </div>
 
-        {/* ── 第二栏：行为准则 ── */}
-        <div className="space-y-5">
-
-          {/* 行为准则 — corrections (规则) + decisions (历史判例，折叠) */}
+          {/* 她学到的规矩 — corrections + decisions(默认折叠,作次要块)。 */}
           <Card>
-            <SectionTitle
-              count={corrections.length || undefined}
-              right={
-                trustStats && trustStats.total > 0 ? (
-                  <span className="text-[12px] font-semibold tabular-nums" style={{ color: from }}>
-                    信任 {Math.round(trustStats.accuracy * 100)}%
-                  </span>
-                ) : undefined
-              }
-            >
-              行为准则
-            </SectionTitle>
-            <div className="text-[11px] mb-3 -mt-2" style={{ color: 'var(--color-text-muted)' }}>
-              她必须遵守的规则，由你写下
+            <button onClick={() => setRulesExpanded(v => !v)} className="w-full flex items-center gap-2">
+              {rulesExpanded
+                ? <ChevronUp size={14} style={{ color: 'var(--color-text-muted)' }} />
+                : <ChevronDown size={14} style={{ color: 'var(--color-text-muted)' }} />}
+              <span className="text-[15px] font-semibold" style={{ color: 'var(--color-text)' }}>她学到的规矩</span>
+              {corrections.length > 0 && (
+                <span className="text-[12px]" style={{ color: 'var(--color-text-muted)' }}>{corrections.length}</span>
+              )}
+              {trustStats && trustStats.total > 0 && (
+                <span className="ml-auto text-[12px] font-semibold tabular-nums" style={{ color: from }}>
+                  做对 {Math.round(trustStats.accuracy * 100)}%
+                </span>
+              )}
+            </button>
+
+            {rulesExpanded && (
+            <div className="mt-3">
+            <div className="text-[11px] mb-3" style={{ color: 'var(--color-text-muted)' }}>
+              你纠正过她、她记下"以后该怎么做"的规矩
             </div>
 
             {/* 规则列表 */}
@@ -666,9 +633,9 @@ export function BuddyPanel({ hideCompanions = false }: { hideCompanions?: boolea
                 )}
               </div>
             )}
+            </div>
+            )}
           </Card>
-
-        </div>
       </div>
 
       {/* ═══ Settings drawer ═══ */}
