@@ -65,7 +65,7 @@ const Card: React.FC<{ children: React.ReactNode; className?: string }> = ({ chi
   </div>
 )
 
-export function BuddyPanel() {
+export function BuddyPanel({ hideCompanions = false }: { hideCompanions?: boolean } = {}) {
   const { t } = useTranslation()
   const { companion, bones, config, aiName } = useBuddyStore()
 
@@ -431,14 +431,16 @@ export function BuddyPanel() {
         )}
       </Card>
 
-      {/* ═══ 我的伙伴 — 用户养的小精灵 ═══ */}
-      <CompanionsSection
-        accent={from}
-        reloadToken={companionsReload}
-        onAdopt={() => setAdoptOpen(true)}
-        onChatWith={c => toast.info(`@${c.name} 即将打通到 Chat`)}
-        onEdit={c => setEditingCompanion(c)}
-      />
+      {/* ═══ 我的伙伴 — 用户养的小精灵(两栏布局下由左侧列表承担,这里隐藏) ═══ */}
+      {!hideCompanions && (
+        <CompanionsSection
+          accent={from}
+          reloadToken={companionsReload}
+          onAdopt={() => setAdoptOpen(true)}
+          onChatWith={c => toast.info(`@${c.name} 即将打通到 Chat`)}
+          onEdit={c => setEditingCompanion(c)}
+        />
+      )}
       {adoptOpen && (
         <AdoptModal
           onClose={() => setAdoptOpen(false)}
