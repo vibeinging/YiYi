@@ -54,6 +54,43 @@ impl super::Database {
         Ok(messages)
     }
 
+    /// Get a companion's own recent messages (它在群/私聊里发过的话),最新在前。
+    /// 用于 per-companion 反思:这是某个伙伴"活动"的来源(B 期)。
+    pub fn get_companion_recent_messages(
+        &self,
+        companion_id: i64,
+        limit: usize,
+    ) -> Result<Vec<ChatMessage>, String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, session_id, role, content, timestamp, metadata,
+                        collaboration_id, step_id, companion_id FROM messages
+                 WHERE companion_id = ?1 ORDER BY timestamp DESC, id DESC LIMIT ?2",
+            )
+            .map_err(|e| format!("Query error: {}", e))?;
+
+        let messages = stmt
+            .query_map(params![companion_id, limit as i64], |row| {
+                Ok(ChatMessage {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    role: row.get(2)?,
+                    content: row.get(3)?,
+                    timestamp: row.get(4)?,
+                    metadata: row.get(5)?,
+                    collaboration_id: row.get(6)?,
+                    step_id: row.get(7)?,
+                    companion_id: row.get(8)?,
+                })
+            })
+            .map_err(|e| format!("Query error: {}", e))?
+            .filter_map(|r| r.map_err(|e| log::warn!("Row parse error: {}", e)).ok())
+            .collect();
+
+        Ok(messages)
+    }
+
     /// Get recent N messages for LLM context.
     /// Stops at the most recent `context_reset` boundary so earlier messages
     /// are excluded from the conversation context sent to the LLM.

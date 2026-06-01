@@ -877,6 +877,32 @@ impl Database {
             log::info!("Migrated sessions table: added thinking_mode column");
         }
 
+        // Per-companion 性格:NULL = YiYi/全局,非 NULL = 该伙伴自己的性格演化(B 期)。
+        let has_psignal_companion: bool = conn
+            .prepare("SELECT companion_id FROM personality_signals LIMIT 0")
+            .is_ok();
+        if !has_psignal_companion {
+            conn.execute_batch(
+                "ALTER TABLE personality_signals ADD COLUMN companion_id INTEGER DEFAULT NULL;
+                 CREATE INDEX IF NOT EXISTS idx_psignals_companion ON personality_signals(companion_id);",
+            )
+            .map_err(|e| format!("Migration error (personality_signals companion_id): {}", e))?;
+            log::info!("Migrated personality_signals table: added companion_id column");
+        }
+
+        // Per-companion 冥想历史:NULL = YiYi/全局冥想,非 NULL = 该伙伴的反思(C 期)。
+        let has_med_companion: bool = conn
+            .prepare("SELECT companion_id FROM meditation_sessions LIMIT 0")
+            .is_ok();
+        if !has_med_companion {
+            conn.execute_batch(
+                "ALTER TABLE meditation_sessions ADD COLUMN companion_id INTEGER DEFAULT NULL;
+                 CREATE INDEX IF NOT EXISTS idx_meditation_companion ON meditation_sessions(companion_id);",
+            )
+            .map_err(|e| format!("Migration error (meditation_sessions companion_id): {}", e))?;
+            log::info!("Migrated meditation_sessions table: added companion_id column");
+        }
+
         // Drop legacy session_bots table (replaced by bot_conversations)
         conn.execute_batch("DROP TABLE IF EXISTS session_bots;").ok();
 

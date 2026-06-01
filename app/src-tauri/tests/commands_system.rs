@@ -864,7 +864,7 @@ async fn get_personality_stats_on_empty_db_returns_five_traits_at_base() {
     app_lib::engine::db::invalidate_personality_cache();
 
     let t = build_test_app_state().await;
-    let got = get_personality_stats_impl(t.state()).await.unwrap();
+    let got = get_personality_stats_impl(t.state(), None).await.unwrap();
     // The implementation always returns these five traits in order.
     let traits: Vec<&str> = got.iter().map(|v| v["trait"].as_str().unwrap()).collect();
     assert_eq!(traits, vec!["energy", "warmth", "mischief", "wit", "sass"]);
@@ -898,12 +898,12 @@ async fn get_personality_stats_reflects_seeded_signals() {
     ];
     t.state()
         .db
-        .add_personality_signals(&signals, None)
+        .add_personality_signals(&signals, None, None)
         .unwrap();
     // add_personality_signals invalidates the cache internally — no need to
     // re-invalidate before reading.
 
-    let got = get_personality_stats_impl(t.state()).await.unwrap();
+    let got = get_personality_stats_impl(t.state(), None).await.unwrap();
     let by_trait: std::collections::HashMap<&str, &serde_json::Value> = got
         .iter()
         .map(|v| (v["trait"].as_str().unwrap(), v))
@@ -926,13 +926,74 @@ async fn get_personality_stats_reflects_seeded_signals() {
     assert_eq!(by_trait["sass"]["value"].as_i64().unwrap(), 47);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn personality_signals_are_isolated_per_companion() {
+    app_lib::engine::db::invalidate_personality_cache();
+
+    let t = build_test_app_state().await;
+
+    // YiYi (global, companion_id = None) gets a warmth boost.
+    t.state()
+        .db
+        .add_personality_signals(
+            &[app_lib::engine::db::PersonalitySignal {
+                trait_name: "warmth".into(),
+                delta: 9.0,
+                evidence: "yiyi only".into(),
+                memory_id: None,
+            }],
+            None,
+            None,
+        )
+        .unwrap();
+
+    // A companion (id = 7) gets a sass boost — must not leak into YiYi.
+    t.state()
+        .db
+        .add_personality_signals(
+            &[app_lib::engine::db::PersonalitySignal {
+                trait_name: "sass".into(),
+                delta: 6.0,
+                evidence: "companion only".into(),
+                memory_id: None,
+            }],
+            None,
+            Some(7),
+        )
+        .unwrap();
+
+    // YiYi sees its warmth, but NOT the companion's sass.
+    let yiyi = get_personality_stats_impl(t.state(), None).await.unwrap();
+    let yiyi_map: std::collections::HashMap<&str, f64> = yiyi
+        .iter()
+        .map(|v| (v["trait"].as_str().unwrap(), v["delta"].as_f64().unwrap()))
+        .collect();
+    assert!((yiyi_map["warmth"] - 9.0).abs() < 0.1, "YiYi warmth should be ~9");
+    assert!(yiyi_map["sass"].abs() < 0.1, "YiYi must not see companion's sass");
+
+    // The companion sees its sass, but NOT YiYi's warmth.
+    let comp = get_personality_stats_impl(t.state(), Some(7)).await.unwrap();
+    let comp_map: std::collections::HashMap<&str, f64> = comp
+        .iter()
+        .map(|v| (v["trait"].as_str().unwrap(), v["delta"].as_f64().unwrap()))
+        .collect();
+    assert!((comp_map["sass"] - 6.0).abs() < 0.1, "companion sass should be ~6");
+    assert!(comp_map["warmth"].abs() < 0.1, "companion must not see YiYi's warmth");
+
+    // Timeline is likewise scoped.
+    let comp_tl = get_personality_timeline_impl(t.state(), Some(7), None).await.unwrap();
+    assert_eq!(comp_tl.len(), 1, "companion timeline holds only its own signal");
+    assert_eq!(comp_tl[0].trait_name, "sass");
+}
+
 // === get_personality_timeline =================================================
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
 async fn get_personality_timeline_on_empty_db_is_empty() {
     let t = build_test_app_state().await;
-    let got = get_personality_timeline_impl(t.state(), None).await.unwrap();
+    let got = get_personality_timeline_impl(t.state(), None, None).await.unwrap();
     assert!(got.is_empty());
 }
 
@@ -965,13 +1026,13 @@ async fn get_personality_timeline_applies_limit_and_orders_newest_first() {
     ];
     t.state()
         .db
-        .add_personality_signals(&signals, None)
+        .add_personality_signals(&signals, None, None)
         .unwrap();
 
-    let all = get_personality_timeline_impl(t.state(), None).await.unwrap();
+    let all = get_personality_timeline_impl(t.state(), None, None).await.unwrap();
     assert_eq!(all.len(), 3);
 
-    let limited = get_personality_timeline_impl(t.state(), Some(2)).await.unwrap();
+    let limited = get_personality_timeline_impl(t.state(), None, Some(2)).await.unwrap();
     assert_eq!(limited.len(), 2, "expected limit=2 to cap the timeline");
 }
 

@@ -446,6 +446,8 @@ pub fn run() {
             commands::system::get_meditation_config,
             commands::system::get_latest_meditation,
             commands::system::trigger_meditation,
+            commands::system::trigger_companion_reflection,
+            commands::system::list_companion_meditation_sessions,
             commands::system::get_meditation_status,
             commands::system::get_meditation_summary,
             commands::system::get_memme_config,
@@ -823,6 +825,12 @@ fn start_meditation_timer(app_handle: tauri::AppHandle) {
                             }),
                         );
                     }
+
+                    // 顺带反思活跃伙伴(C 期·复用本次冥想触发,不另起 cron)。
+                    crate::engine::mem::companion_reflection::reflect_active_companions(
+                        &llm_config, &db,
+                    )
+                    .await;
                 }
                 Err(e) => {
                     log::error!("Meditation failed: {}", e);

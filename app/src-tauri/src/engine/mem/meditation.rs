@@ -700,7 +700,7 @@ async fn phase_personality_evolution(
     }
 
     // Throttle to once per 7 days — personality should shift slowly, not after every meditation.
-    let recent = db.list_personality_signals(1);
+    let recent = db.list_personality_signals(None, 1);
     if let Some(latest) = recent.first() {
         if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&latest.created_at) {
             let age = chrono::Utc::now() - dt.with_timezone(&chrono::Utc);
@@ -797,7 +797,7 @@ async fn phase_personality_evolution(
     }
 
     info!("Phase C-bis: Extracted {} personality signals", signals.len());
-    db.add_personality_signals(&signals, None)?;
+    db.add_personality_signals(&signals, None, None)?;
     Ok(())
 }
 
@@ -940,7 +940,7 @@ async fn phase_proactive_care(
                 evidence: format!("主动关心用户：{}", reason),
                 memory_id: None,
             }
-        ], None);
+        ], None, None);
 
         // Emit Tauri event for frontend to handle (show bubble or send via bot)
         if let Some(app_handle) = crate::engine::tools::get_app_handle() {

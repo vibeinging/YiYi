@@ -905,6 +905,39 @@ pub async fn trigger_meditation(
     trigger_meditation_impl(&*state).await
 }
 
+/// 对单个伙伴跑一次轻量反思(B 期):读它的发言 → LLM → 产它自己的性格信号。
+/// 比全局冥想轻得多(单次 LLM 调用),直接 await 返回结果给前端展示 journal。
+pub async fn trigger_companion_reflection_impl(
+    state: &AppState,
+    companion_id: i64,
+) -> Result<crate::engine::mem::companion_reflection::CompanionReflectionResult, String> {
+    use crate::commands::agent::resolve_llm_config;
+    use crate::engine::mem::companion_reflection::run_companion_reflection;
+
+    let config = resolve_llm_config(state).await?;
+    run_companion_reflection(&config, &state.db, companion_id).await
+}
+
+#[tauri::command]
+pub async fn trigger_companion_reflection(
+    state: State<'_, AppState>,
+    companion_id: i64,
+) -> Result<crate::engine::mem::companion_reflection::CompanionReflectionResult, String> {
+    trigger_companion_reflection_impl(&*state, companion_id).await
+}
+
+/// 列出单个伙伴的反思历史(C 期)。
+#[tauri::command]
+pub async fn list_companion_meditation_sessions(
+    state: State<'_, AppState>,
+    companion_id: i64,
+    limit: Option<usize>,
+) -> Result<Vec<crate::engine::db::MeditationSession>, String> {
+    Ok(state
+        .db
+        .list_companion_meditation_sessions(companion_id, limit.unwrap_or(10)))
+}
+
 /// Get the current meditation status (for Chat page polling).
 /// Returns "running", "completed", or "idle".
 pub async fn get_meditation_status_impl(
@@ -1204,10 +1237,12 @@ pub async fn delete_quick_action(
 // -----------------------------------------------------------------------
 
 /// Get aggregated personality stats (time-decayed weighted sum + base 50).
+/// `companion_id`: None = YiYi/全局;Some(id) = 该伙伴(B 期)。
 pub async fn get_personality_stats_impl(
     state: &AppState,
+    companion_id: Option<i64>,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let aggregates = state.db.get_personality_aggregates();
+    let aggregates = state.db.get_personality_aggregates(companion_id);
     let result: Vec<serde_json::Value> = aggregates.iter().map(|(trait_name, delta)| {
         let value = (crate::engine::db::PERSONALITY_BASE_STAT + delta).clamp(0.0, 100.0);
         serde_json::json!({
@@ -1222,24 +1257,28 @@ pub async fn get_personality_stats_impl(
 #[tauri::command]
 pub async fn get_personality_stats(
     state: State<'_, AppState>,
+    companion_id: Option<i64>,
 ) -> Result<Vec<serde_json::Value>, String> {
-    get_personality_stats_impl(&*state).await
+    get_personality_stats_impl(&*state, companion_id).await
 }
 
 /// Get personality signal timeline for growth visualization.
+/// `companion_id`: None = YiYi/全局;Some(id) = 该伙伴(B 期)。
 pub async fn get_personality_timeline_impl(
     state: &AppState,
+    companion_id: Option<i64>,
     limit: Option<i64>,
 ) -> Result<Vec<crate::engine::db::PersonalitySignalRow>, String> {
-    Ok(state.db.list_personality_signals(limit.unwrap_or(50)))
+    Ok(state.db.list_personality_signals(companion_id, limit.unwrap_or(50)))
 }
 
 #[tauri::command]
 pub async fn get_personality_timeline(
     state: State<'_, AppState>,
+    companion_id: Option<i64>,
     limit: Option<i64>,
 ) -> Result<Vec<crate::engine::db::PersonalitySignalRow>, String> {
-    get_personality_timeline_impl(&*state, limit).await
+    get_personality_timeline_impl(&*state, companion_id, limit).await
 }
 
 /// Toggle sparkling (闪光记忆 / pinned) status on a memory via MemMe.

@@ -74,17 +74,19 @@ pub struct CodeRegistryEntry {
 /// Base stat value for all personality traits (before signals are applied).
 pub const PERSONALITY_BASE_STAT: f64 = 50.0;
 
-/// Cached personality aggregates. Invalidated when new signals are added.
-static PERSONALITY_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<(std::time::Instant, Vec<(String, f64)>)>>> = std::sync::OnceLock::new();
+/// Cached personality aggregates, keyed by companion_id (None = YiYi/全局).
+/// Invalidated when new signals are added.
+type PersonalityCacheMap = std::collections::HashMap<Option<i64>, (std::time::Instant, Vec<(String, f64)>)>;
+static PERSONALITY_CACHE: std::sync::OnceLock<std::sync::Mutex<PersonalityCacheMap>> = std::sync::OnceLock::new();
 
-fn get_personality_cache() -> &'static std::sync::Mutex<Option<(std::time::Instant, Vec<(String, f64)>)>> {
-    PERSONALITY_CACHE.get_or_init(|| std::sync::Mutex::new(None))
+fn get_personality_cache() -> &'static std::sync::Mutex<PersonalityCacheMap> {
+    PERSONALITY_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
 /// Invalidate personality cache (call after adding new signals).
 pub fn invalidate_personality_cache() {
     if let Ok(mut guard) = get_personality_cache().lock() {
-        *guard = None;
+        guard.clear();
     }
 }
 
@@ -424,6 +426,17 @@ impl super::Database {
         .ok();
     }
 
+    /// 为单个伙伴开一条反思会话(C 期)。companion_id 非 NULL 把它和 YiYi 全局冥想分流。
+    pub fn create_companion_meditation_session(&self, id: &str, companion_id: i64) {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let now = super::now_ts();
+        conn.execute(
+            "INSERT INTO meditation_sessions (id, started_at, status, companion_id) VALUES (?1, ?2, 'running', ?3)",
+            params![id, now, companion_id],
+        )
+        .ok();
+    }
+
     pub fn update_meditation_session(
         &self,
         id: &str,
@@ -519,39 +532,59 @@ impl super::Database {
         .ok()?
     }
 
-    /// List recent meditation sessions (completed or failed, not running).
+    /// List recent YiYi (全局) meditation sessions — companion 反思被 companion_id 滤掉。
     pub fn list_meditation_sessions(&self, limit: usize) -> Vec<MeditationSession> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = match conn.prepare(
             "SELECT id, started_at, finished_at, status, sessions_reviewed,
                     memories_updated, principles_changed, memories_archived, journal, error,
                     depth, phases_completed, tomorrow_intentions, growth_synthesis
-             FROM meditation_sessions WHERE status != 'running'
+             FROM meditation_sessions WHERE status != 'running' AND companion_id IS NULL
              ORDER BY started_at DESC LIMIT ?1",
         ) {
             Ok(s) => s,
             Err(_) => return vec![],
         };
-        stmt.query_map(params![limit as i64], |row| {
-            Ok(MeditationSession {
-                id: row.get(0)?,
-                started_at: row.get(1)?,
-                finished_at: row.get(2)?,
-                status: row.get(3)?,
-                sessions_reviewed: row.get(4)?,
-                memories_updated: row.get(5)?,
-                principles_changed: row.get(6)?,
-                memories_archived: row.get(7)?,
-                journal: row.get(8)?,
-                error: row.get(9)?,
-                depth: row.get(10).ok().flatten(),
-                phases_completed: row.get(11).ok().flatten(),
-                tomorrow_intentions: row.get(12).ok().flatten(),
-                growth_synthesis: row.get(13).ok().flatten(),
-            })
+        stmt.query_map(params![limit as i64], Self::map_meditation_row)
+            .map(|rows| rows.filter_map(|r| r.ok()).collect())
+            .unwrap_or_default()
+    }
+
+    /// List a single companion's reflection history (C 期)。
+    pub fn list_companion_meditation_sessions(&self, companion_id: i64, limit: usize) -> Vec<MeditationSession> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = match conn.prepare(
+            "SELECT id, started_at, finished_at, status, sessions_reviewed,
+                    memories_updated, principles_changed, memories_archived, journal, error,
+                    depth, phases_completed, tomorrow_intentions, growth_synthesis
+             FROM meditation_sessions WHERE status != 'running' AND companion_id = ?1
+             ORDER BY started_at DESC LIMIT ?2",
+        ) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+        stmt.query_map(params![companion_id, limit as i64], Self::map_meditation_row)
+            .map(|rows| rows.filter_map(|r| r.ok()).collect())
+            .unwrap_or_default()
+    }
+
+    fn map_meditation_row(row: &rusqlite::Row) -> rusqlite::Result<MeditationSession> {
+        Ok(MeditationSession {
+            id: row.get(0)?,
+            started_at: row.get(1)?,
+            finished_at: row.get(2)?,
+            status: row.get(3)?,
+            sessions_reviewed: row.get(4)?,
+            memories_updated: row.get(5)?,
+            principles_changed: row.get(6)?,
+            memories_archived: row.get(7)?,
+            journal: row.get(8)?,
+            error: row.get(9)?,
+            depth: row.get(10).ok().flatten(),
+            phases_completed: row.get(11).ok().flatten(),
+            tomorrow_intentions: row.get(12).ok().flatten(),
+            growth_synthesis: row.get(13).ok().flatten(),
         })
-        .map(|rows| rows.filter_map(|r| r.ok()).collect())
-        .unwrap_or_default()
     }
 
     /// Get today's chat messages for meditation review: (session_id, role, content)
@@ -749,10 +782,12 @@ impl super::Database {
     // Personality Signals (Buddy personality evolution)
     // -----------------------------------------------------------------------
 
+    /// `companion_id`: None = YiYi/全局性格演化;Some(id) = 该伙伴自己的性格(B 期)。
     pub fn add_personality_signals(
         &self,
         signals: &[PersonalitySignal],
         meditation_session_id: Option<&str>,
+        companion_id: Option<i64>,
     ) -> Result<(), String> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = chrono::Utc::now().to_rfc3339();
@@ -760,9 +795,9 @@ impl super::Database {
             .map_err(|e| format!("Failed to start transaction: {}", e))?;
         for sig in signals {
             tx.execute(
-                "INSERT INTO personality_signals (trait, delta, evidence, memory_id, meditation_session_id, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![sig.trait_name, sig.delta, sig.evidence, sig.memory_id, meditation_session_id, now],
+                "INSERT INTO personality_signals (trait, delta, evidence, memory_id, meditation_session_id, companion_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![sig.trait_name, sig.delta, sig.evidence, sig.memory_id, meditation_session_id, companion_id, now],
             ).map_err(|e| format!("Failed to insert personality_signal: {}", e))?;
         }
         tx.commit().map_err(|e| format!("Failed to commit signals: {}", e))?;
@@ -772,10 +807,11 @@ impl super::Database {
 
     /// Aggregate personality stats using time-decayed weighted sum (single query, cached).
     /// Cache expires after 60 seconds or when invalidated by `invalidate_personality_cache()`.
-    pub fn get_personality_aggregates(&self) -> Vec<(String, f64)> {
+    /// `companion_id`: None = YiYi/全局;Some(id) = 该伙伴(B 期)。
+    pub fn get_personality_aggregates(&self, companion_id: Option<i64>) -> Vec<(String, f64)> {
         // Check cache first (avoids DB query on every prompt build)
         if let Ok(guard) = get_personality_cache().lock() {
-            if let Some((ts, cached)) = guard.as_ref() {
+            if let Some((ts, cached)) = guard.get(&companion_id) {
                 if ts.elapsed().as_secs() < 60 {
                     return cached.clone();
                 }
@@ -785,9 +821,10 @@ impl super::Database {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = chrono::Utc::now();
 
-        // Single query for all traits
+        // Single query for all traits ('companion_id IS ?' 同时匹配 NULL 与具体 id)
         let mut stmt = match conn.prepare(
-            "SELECT trait, delta, created_at FROM personality_signals ORDER BY created_at ASC"
+            "SELECT trait, delta, created_at FROM personality_signals
+             WHERE companion_id IS ?1 ORDER BY created_at ASC"
         ) {
             Ok(s) => s,
             Err(_) => {
@@ -797,7 +834,7 @@ impl super::Database {
         };
 
         let rows: Vec<(String, f64, String)> = stmt
-            .query_map([], |row| {
+            .query_map(params![companion_id], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?, row.get::<_, String>(2)?))
             })
             .ok()
@@ -822,26 +859,27 @@ impl super::Database {
             .map(|t| (t.to_string(), sums.get(t).copied().unwrap_or(0.0).clamp(-50.0, 50.0)))
             .collect();
 
-        // Store in cache
+        // Store in cache (keyed by companion_id)
         if let Ok(mut guard) = get_personality_cache().lock() {
-            *guard = Some((std::time::Instant::now(), result.clone()));
+            guard.insert(companion_id, (std::time::Instant::now(), result.clone()));
         }
 
         result
     }
 
     /// Get recent personality signals for timeline display.
-    pub fn list_personality_signals(&self, limit: i64) -> Vec<PersonalitySignalRow> {
+    /// `companion_id`: None = YiYi/全局;Some(id) = 该伙伴(B 期)。
+    pub fn list_personality_signals(&self, companion_id: Option<i64>, limit: i64) -> Vec<PersonalitySignalRow> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = match conn.prepare(
             "SELECT id, trait, delta, evidence, memory_id, created_at
-             FROM personality_signals ORDER BY created_at DESC LIMIT ?1"
+             FROM personality_signals WHERE companion_id IS ?1 ORDER BY created_at DESC LIMIT ?2"
         ) {
             Ok(s) => s,
             Err(_) => return vec![],
         };
 
-        stmt.query_map(params![limit], |row| {
+        stmt.query_map(params![companion_id, limit], |row| {
             Ok(PersonalitySignalRow {
                 id: row.get(0)?,
                 trait_name: row.get(1)?,
