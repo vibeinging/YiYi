@@ -395,8 +395,16 @@ impl Executor for ConcreteExecutor {
                                 combined_summary.push_str("\n\n");
                                 combined_full.push_str("\n\n");
                             }
-                            combined_summary.push_str(&format!("【{}】{}", name, out.summary));
-                            combined_full.push_str(&format!("【{}】{}", name, out.full_output));
+                            // 成员输出偶尔自带「【名字】」前缀(模型模仿群历史格式)。合并时
+                            // 先剥掉,否则会出现「【名字】【名字】…」双标记 —— 重开 hydrate 时
+                            // 前端按「【名字】」切段会切出空串,气泡只剩头像没内容(实测 bug)。
+                            let self_marker = format!("【{}】", name);
+                            let strip = |s: &str| -> String {
+                                let t = s.trim_start();
+                                t.strip_prefix(&self_marker).unwrap_or(t).trim_start().to_string()
+                            };
+                            combined_summary.push_str(&format!("【{}】{}", name, strip(&out.summary)));
+                            combined_full.push_str(&format!("【{}】{}", name, strip(&out.full_output)));
                         }
                         Err(e) => {
                             log::warn!(

@@ -28,12 +28,15 @@ interface Props {
 
 /** 从合并的 full_output(「【名字】内容\n\n【名字2】…」)里抠出某成员的段落。
  *  单 participant(如 YiYi 结论,无前缀)→ 整段就是它的。找不到 → 空(该成员没发言)。 */
-function memberPersistedText(full: string, name: string, participantCount: number): string {
+export function memberPersistedText(full: string, name: string, participantCount: number): string {
   if (!full) return ''
   const marker = `【${name}】`
   const i = full.indexOf(marker)
   if (i >= 0) {
-    const rest = full.slice(i + marker.length)
+    let rest = full.slice(i + marker.length)
+    // 容旧数据:executor 早期会拼出「【名字】【名字】内容」双标记 —— 跳过紧跟的重复同名标记,
+    // 否则下面找"下一个标记"会立刻命中重复标记、切出空串(重开后气泡空白的根因)。
+    while (rest.startsWith(marker)) rest = rest.slice(marker.length)
     const next = rest.search(/【[^】]{1,24}】/)
     return (next >= 0 ? rest.slice(0, next) : rest).trim()
   }
@@ -91,6 +94,11 @@ function MemberMessageBubble({ collaborationId, stepId, stepStatus, participant,
   const trimmed = text.trim()
   const PASS = '<pass>'
   if (trimmed.length > 0 && PASS.startsWith(trimmed)) return null
+  // 重开 hydrate 后:这一步已结束(非进行中),而本成员既无正文也无思考 →
+  // 它这轮没发言(pass / 无产出),不渲染只剩头像的空气泡。
+  if ((stepStatus === 'completed' || stepStatus === 'failed') && !trimmed && !thinking.trim()) {
+    return null
+  }
   // ParallelAgents 不暴露 per-participant 状态(只有整步 step.status)。所以:
   // - step running + 我有 stream → 我正在说
   // - step running + 我没 stream → 等开口 / 别人在说
