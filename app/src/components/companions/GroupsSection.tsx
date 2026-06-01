@@ -37,8 +37,9 @@ function emptyForm(): EditForm {
   return { name: '', emoji: '', memberIds: new Set() }
 }
 
-export function GroupsSection() {
-  const [expanded, setExpanded] = useState(false)
+export function GroupsSection({ embedded = false }: { embedded?: boolean } = {}) {
+  // embedded(弹窗里):默认展开、不渲染折叠头、不要顶部分隔边框。
+  const [expanded, setExpanded] = useState(embedded)
   const [companions, setCompanions] = useState<Companion[]>([])
   /** null = 不在编辑;非空 = 正在新建或编辑某组(顶部固定的表单)。 */
   const [form, setForm] = useState<EditForm | null>(null)
@@ -148,15 +149,17 @@ export function GroupsSection() {
   }
 
   return (
-    <div className="mt-4 pt-4" style={{ borderTop: '1px solid var(--color-bg-subtle)' }}>
-      <button
-        onClick={() => setExpanded(v => !v)}
-        className="flex items-center gap-1 text-[11px] mb-2 transition-colors hover:opacity-100"
-        style={{ color: 'var(--color-text-muted)' }}
-      >
-        {expanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-        我的群({groups.length})
-      </button>
+    <div className={embedded ? '' : 'mt-4 pt-4'} style={embedded ? undefined : { borderTop: '1px solid var(--color-bg-subtle)' }}>
+      {!embedded && (
+        <button
+          onClick={() => setExpanded(v => !v)}
+          className="flex items-center gap-1 text-[11px] mb-2 transition-colors hover:opacity-100"
+          style={{ color: 'var(--color-text-muted)' }}
+        >
+          {expanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+          我的群({groups.length})
+        </button>
+      )}
 
       {expanded && (
         <div className="space-y-2">

@@ -11,7 +11,7 @@ import {
   Settings, Puzzle, Bot, Zap, FolderOpen, Sprout, Sparkles,
   Trash2, MessageCircle, Clock,
   PanelLeftClose, PanelLeft, Grid3X3,
-  Plus, Pencil, Search, X,
+  Plus, Pencil, Search, X, Users,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useTaskSidebarStore } from '../stores/taskSidebarStore';
@@ -23,6 +23,7 @@ import type { Page } from '../App';
 import type { ChatSession } from '../api/agent';
 import { getOrCreateCompanionSession } from '../api/agent';
 import { listCompanions, type Companion } from '../api/companions';
+import { GroupsManagerModal } from './companions/GroupsManagerModal';
 import { confirm } from './Toast';
 import logoFaceRight from '../assets/yiyi-logo-face-right.png';
 
@@ -465,6 +466,7 @@ export const TaskSidebar = memo(function TaskSidebar({
   const toggleSidebar = useTaskSidebarStore((s) => s.toggleSidebar);
 
   const [moreOpen, setMoreOpen] = useState(false);
+  const [groupsOpen, setGroupsOpen] = useState(false);
 
   const isMorePage = moreNavItems.some(n => n.id === currentPage);
 
@@ -560,6 +562,17 @@ export const TaskSidebar = memo(function TaskSidebar({
           <Plus size={16} />
         </button>
 
+        <button
+          onClick={() => setGroupsOpen(true)}
+          className="mt-0.5 w-9 h-9 flex items-center justify-center rounded-xl transition-colors"
+          style={{ color: 'var(--sidebar-text)' }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+          title="群聊"
+        >
+          <Users size={16} />
+        </button>
+
         <div className="flex-1" />
 
         <div className="flex flex-col items-center gap-0.5 mb-1">
@@ -598,6 +611,7 @@ export const TaskSidebar = memo(function TaskSidebar({
           <PanelLeft size={15} />
         </button>
       </aside>
+      {groupsOpen && <GroupsManagerModal onClose={() => setGroupsOpen(false)} />}
       </>
     );
   }
@@ -643,17 +657,27 @@ export const TaskSidebar = memo(function TaskSidebar({
       {/* ── Drag region ── */}
       <div className="h-10 shrink-0 app-drag-region" onMouseDown={onDragMouseDown} />
 
-      {/* ── New Chat ── */}
-      <div className="shrink-0 px-2 pb-1">
+      {/* ── New Chat + 群管理 ── */}
+      <div className="shrink-0 px-2 pb-1 flex items-center gap-1">
         <button
           onClick={handleNewChatClick}
-          className="w-full flex items-center gap-2 px-3 py-[7px] rounded-[10px] transition-colors text-[12.5px] font-medium"
+          className="flex-1 flex items-center gap-2 px-3 py-[7px] rounded-[10px] transition-colors text-[12.5px] font-medium"
           style={{ color: 'var(--sidebar-text-active)' }}
           onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
           onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
         >
           <Plus size={14} style={{ opacity: 0.7 }} />
           新对话
+        </button>
+        <button
+          onClick={() => setGroupsOpen(true)}
+          className="shrink-0 w-8 h-8 flex items-center justify-center rounded-[10px] transition-colors"
+          style={{ color: 'var(--sidebar-text-active)' }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+          title="群聊 — 建群 / 管理成员 / 共享记忆"
+        >
+          <Users size={15} style={{ opacity: 0.75 }} />
         </button>
       </div>
 
@@ -753,6 +777,7 @@ export const TaskSidebar = memo(function TaskSidebar({
       </div>
 
     </aside>
+    {groupsOpen && <GroupsManagerModal onClose={() => setGroupsOpen(false)} />}
     </>
   );
 });

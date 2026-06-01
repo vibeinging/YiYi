@@ -20,28 +20,18 @@ import {
   listCorrections, listMeditationSessions,
   listBuddyDecisions, setDecisionFeedback, getTrustStats,
   type MemoryEntry, type MemoryStats, type CorrectionEntry, type MeditationSession,
-  type BuddyDecision, type TrustStats, type EpisodeEntry,
+  type BuddyDecision, type TrustStats, type EpisodeEntry, type PersonalitySignalRow,
 } from '../api/buddy'
-import { getSpeciesLabel, STAT_LABELS, STAT_NAMES, type StatName } from '../utils/buddy'
+import { getSpeciesLabel, STAT_NAMES } from '../utils/buddy'
 import { PersonalityOrb } from './buddy/PersonalityOrb'
+import { PersonalityBars, PersonalityTimeline } from './buddy/shared/personality'
 import { InboxPanel } from './buddy/InboxPanel'
 import { BuddySettingsDrawer } from './buddy/BuddySettingsDrawer'
 import { CompanionsSection } from './companions/CompanionsSection'
 import { AdoptModal } from './companions/AdoptModal'
 import { CompanionEditDrawer } from './companions/CompanionEditDrawer'
-import { GroupsSection } from './companions/GroupsSection'
 import type { Companion } from '../api/companions'
-import { listCompanionGroups, groupBucket, type CompanionGroup } from '../api/groups'
 import { toast } from './Toast'
-
-// Personality stat → emoji (used in the Hero stats bar).
-const STAT_EMOJI: Record<StatName, string> = {
-  ENERGY: '⚡',
-  WARMTH: '🤗',
-  MISCHIEF: '😈',
-  WIT: '🧠',
-  SASS: '💋',
-}
 
 const ORB_SIZE = 180
 
@@ -94,19 +84,11 @@ export function BuddyPanel({ hideCompanions = false }: { hideCompanions?: boolea
   const [decisions, setDecisions] = useState<BuddyDecision[]>([])
   const [trustStats, setTrustStats] = useState<TrustStats | null>(null)
   const [personalityStats, setPersonalityStats] = useState<{ trait: string; value: number; delta: number }[]>([])
-  const [personalityTimeline, setPersonalityTimeline] = useState<{ id: number; trait_name: string; delta: number; evidence: string; created_at: string }[]>([])
+  const [personalityTimeline, setPersonalityTimeline] = useState<PersonalitySignalRow[]>([])
   const [sparklingMemories, setSparklingMemories] = useState<{ id: string; content: string; category: string; created_at: number }[]>([])
   const [identityTraits, setIdentityTraits] = useState<{ trait_type: string; content: string; confidence: number }[]>([])
   const [memFilter, setMemFilter] = useState<string>('all')
   const [episodes, setEpisodes] = useState<EpisodeEntry[]>([])
-  // 群会话 dispatched 成员的共享桶（user_id = "group_shared"）。展开时懒加载，
-  // 支持删除——满足白盒原则"被动信息可见可删"。
-  const [groupMemories, setGroupMemories] = useState<MemoryEntry[]>([])
-  const [groupExpanded, setGroupExpanded] = useState(false)
-  /** 当前浏览的群桶 group id。null = 还没选(此时下方提示让用户选一个 chip)。 */
-  const [groupBucketGroupId, setGroupBucketGroupId] = useState<number | null>(null)
-  const [groupBucketGroups, setGroupBucketGroups] = useState<CompanionGroup[]>([])
-
   useEffect(() => {
     getMemoryStats().then(setMemoryStats).catch(() => {})
     listRecentMemories(15).then(setRecentMemories).catch(() => {})
@@ -198,6 +180,17 @@ export function BuddyPanel({ hideCompanions = false }: { hideCompanions?: boolea
     personalityStats.forEach(p => { m[p.trait] = { value: p.value, delta: p.delta } })
     return m
   }, [personalityStats])
+
+  // 共享 PersonalityBars 用:小写 trait → {value, delta},缺失回退到 bones 数值。
+  const barStats = useMemo(() => {
+    const out: Record<string, { value: number; delta: number }> = {}
+    if (!companion) return out
+    STAT_NAMES.forEach(s => {
+      const key = s.toLowerCase()
+      out[key] = { value: pMap[key]?.value ?? companion.stats[s], delta: pMap[key]?.delta ?? 0 }
+    })
+    return out
+  }, [companion, pMap])
 
   const radarStats = useMemo(() => {
     if (!companion) return {} as Record<string, number>
@@ -293,34 +286,8 @@ export function BuddyPanel({ hideCompanions = false }: { hideCompanions?: boolea
             )}
           </div>
 
-          {/* Emoji stats — horizontal row, compact */}
-          <div className="grid grid-cols-5 gap-3">
-            {STAT_NAMES.map(stat => {
-              const key = stat.toLowerCase()
-              const val = pMap[key]?.value ?? companion.stats[stat]
-              const delta = pMap[key]?.delta ?? 0
-              const deltaColor = delta > 2 ? 'var(--color-success)' : delta < -2 ? 'var(--color-error)' : 'var(--color-text)'
-              return (
-                <div key={stat} className="flex flex-col items-center gap-1.5" title={STAT_LABELS[stat]}>
-                  <div className="text-[18px] leading-none">{STAT_EMOJI[stat]}</div>
-                  <div className="text-[13px] font-semibold tabular-nums" style={{ color: deltaColor }}>
-                    {val}
-                    {Math.abs(delta) > 2 && (
-                      <span className="text-[10px] ml-0.5">
-                        {delta > 0 ? '↑' : '↓'}
-                      </span>
-                    )}
-                  </div>
-                  <div className="w-full h-1 rounded-full overflow-hidden" style={{ background: 'var(--color-bg-subtle)' }}>
-                    <div className="h-full rounded-full transition-all duration-700" style={{
-                      width: `${val}%`,
-                      background: `linear-gradient(90deg, ${from}, ${companion.palette.to})`,
-                    }} />
-                  </div>
-                </div>
-              )
-            })}
-          </div>
+          {/* Emoji stats — horizontal row, compact (共享组件) */}
+          <PersonalityBars stats={barStats} from={from} to={companion.palette.to} />
         </div>
       </Card>
 
@@ -405,27 +372,7 @@ export function BuddyPanel({ hideCompanions = false }: { hideCompanions?: boolea
               她最近变了什么（{personalityTimeline.length} 处）
             </button>
             {personalityExpanded && (
-              <div className="relative pl-5 max-h-[260px] overflow-y-auto" style={{ borderLeft: `2px solid ${from}25` }}>
-                {personalityTimeline.slice(0, 20).map(sig => {
-                  const isPos = sig.delta > 0
-                  return (
-                    <div key={sig.id} className="relative pb-3 last:pb-0">
-                      <div className="absolute -left-[calc(1.25rem+4px)] top-1.5 w-2 h-2 rounded-full" style={{
-                        background: isPos ? from : 'var(--color-error)',
-                      }} />
-                      <div className="flex items-baseline gap-2 mb-0.5">
-                        <span className="text-[12px] font-medium" style={{ color: isPos ? from : 'var(--color-error)' }}>
-                          {STAT_LABELS[sig.trait_name.toUpperCase() as StatName] || sig.trait_name} {isPos ? '+' : ''}{sig.delta.toFixed(1)}
-                        </span>
-                        <span className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
-                          {new Date(sig.created_at).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}
-                        </span>
-                      </div>
-                      <div className="text-[11px] leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>{sig.evidence}</div>
-                    </div>
-                  )
-                })}
-              </div>
+              <PersonalityTimeline signals={personalityTimeline} accent={from} />
             )}
           </div>
         )}
@@ -611,110 +558,6 @@ export function BuddyPanel({ hideCompanions = false }: { hideCompanions?: boolea
               </>
             )}
 
-            {/* 我的群 —— 持久化的 IM 群聊分组。 */}
-            <GroupsSection />
-
-            {/* 群共享记忆 —— 每个群独占的 `group_shared_<id>` 桶。chips 切换浏览。 */}
-            <div className="mt-4 pt-4" style={{ borderTop: '1px solid var(--color-bg-subtle)' }}>
-              <button
-                onClick={() => {
-                  const next = !groupExpanded
-                  setGroupExpanded(next)
-                  if (next) {
-                    // 拉所有具名群用于 chips。默认不预选,等用户点 chip。
-                    listCompanionGroups()
-                      .then(gs => {
-                        setGroupBucketGroups(gs)
-                        // 自动选第一个群(如果有),立刻看到内容。
-                        if (gs.length > 0 && groupBucketGroupId == null) {
-                          setGroupBucketGroupId(gs[0].id)
-                          listRecentMemories(15, groupBucket(gs[0].id))
-                            .then(setGroupMemories)
-                            .catch(() => {})
-                        }
-                      })
-                      .catch(() => {})
-                  }
-                }}
-                className="flex items-center gap-1 text-[11px] mb-2 transition-colors hover:opacity-100"
-                style={{ color: 'var(--color-text-muted)' }}
-              >
-                {groupExpanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-                群共享记忆({groupMemories.length})
-              </button>
-              {groupExpanded && (
-                <>
-                  {/* 桶切换 chips:每个群一颗 */}
-                  {groupBucketGroups.length === 0 ? (
-                    <div className="py-3 text-center text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
-                      还没建任何群 —— 在上方"我的群"建一个,群里聊几轮就有共享记忆了
-                    </div>
-                  ) : (
-                  <div className="flex items-center gap-1.5 flex-wrap mb-2">
-                    {groupBucketGroups.map(g => {
-                      const selected = groupBucketGroupId === g.id
-                      return (
-                        <button
-                          key={g.id}
-                          onClick={() => {
-                            setGroupBucketGroupId(g.id)
-                            listRecentMemories(15, groupBucket(g.id))
-                              .then(setGroupMemories)
-                              .catch(() => setGroupMemories([]))
-                          }}
-                          className="text-[11px] px-2 py-0.5 rounded-full transition-colors"
-                          style={{
-                            background: selected ? (g.color_hex || 'var(--color-primary)') : 'var(--color-bg-subtle)',
-                            color: selected ? 'white' : 'var(--color-text-muted)',
-                          }}
-                        >
-                          {g.emoji || '👪'} {g.name}
-                        </button>
-                      )
-                    })}
-                  </div>
-                  )}
-
-                  {groupBucketGroups.length > 0 && groupMemories.length === 0 ? (
-                    <div className="py-3 text-center text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
-                      这个群还没共享记忆 —— 在群里聊几轮就有了
-                    </div>
-                  ) : groupBucketGroups.length === 0 ? null : (
-                  <div className="space-y-1 max-h-[300px] overflow-y-auto">
-                    {groupMemories.map(m => (
-                      <div key={m.id} className="group flex gap-3 py-2.5 px-3 -mx-3 rounded-lg hover:bg-[var(--color-bg-subtle)] transition-colors">
-                        <div className="flex-1 min-w-0">
-                          <div className="text-[12px] leading-relaxed" style={{ color: 'var(--color-text)' }}>
-                            {m.content.length > 200 ? m.content.slice(0, 200) + '...' : m.content}
-                          </div>
-                          <div className="flex items-center gap-2 mt-1">
-                            <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-muted)' }}>
-                              {catLabel(m.categories[0] || 'note')}
-                            </span>
-                            <span className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>{m.created_at.slice(0, 10)}</span>
-                          </div>
-                        </div>
-                        <button
-                          onClick={async () => {
-                            try {
-                              await deleteMemory(m.id)
-                              setGroupMemories(p => p.filter(x => x.id !== m.id))
-                              toast.success('记忆已删除')
-                            } catch {
-                              toast.error('删除失败')
-                            }
-                          }}
-                          className="p-1 rounded shrink-0 self-start opacity-0 group-hover:opacity-100 transition-opacity"
-                        >
-                          <Trash2 size={12} style={{ color: 'var(--color-error)' }} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                  )}
-                </>
-              )}
-            </div>
 
             {/* 最近的对话回忆 — 折叠在「她记得」卡底部 */}
             {episodes.length > 0 && (

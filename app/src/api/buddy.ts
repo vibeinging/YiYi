@@ -165,6 +165,60 @@ export async function listMeditationSessions(limit?: number): Promise<Meditation
   return await invoke<MeditationSession[]>('list_meditation_sessions', { limit })
 }
 
+/** 单个伙伴的反思历史(C 期)。 */
+export async function listCompanionMeditationSessions(
+  companionId: number,
+  limit?: number,
+): Promise<MeditationSession[]> {
+  return await invoke<MeditationSession[]>('list_companion_meditation_sessions', { companionId, limit })
+}
+
+// ── Personality (per-companion 性格演化) ──
+
+export interface PersonalityStat {
+  /** 小写 trait 名:energy / warmth / mischief / wit / sass */
+  trait: string
+  /** 0–100,base 50 + 时间衰减加权和。 */
+  value: number
+  /** 相对 base 的偏移(可正可负)。 */
+  delta: number
+}
+
+export interface PersonalitySignalRow {
+  id: number
+  trait_name: string
+  delta: number
+  evidence: string
+  memory_id: string | null
+  created_at: string
+}
+
+export interface CompanionReflectionResult {
+  companion_id: number
+  messages_reviewed: number
+  signals_added: number
+  journal: string
+}
+
+/** `companionId` 缺省 = YiYi/全局;传 id = 该伙伴自己的性格。 */
+export async function getPersonalityStats(companionId?: number): Promise<PersonalityStat[]> {
+  return await invoke<PersonalityStat[]>('get_personality_stats', { companionId })
+}
+
+export async function getPersonalityTimeline(
+  companionId?: number,
+  limit?: number,
+): Promise<PersonalitySignalRow[]> {
+  return await invoke<PersonalitySignalRow[]>('get_personality_timeline', { companionId, limit })
+}
+
+/** 对单个伙伴跑一次轻量反思:读它的发言 → 产它自己的性格信号。 */
+export async function triggerCompanionReflection(
+  companionId: number,
+): Promise<CompanionReflectionResult> {
+  return await invoke<CompanionReflectionResult>('trigger_companion_reflection', { companionId })
+}
+
 // ── Observe ──
 
 export async function buddyObserve(
