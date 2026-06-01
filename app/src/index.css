@@ -52,6 +52,20 @@
   --color-error: #FF453A;
   --color-info: #64D2FF;
 
+  /* RGB 三元组(供 rgba() 组合用,如 rgba(var(--color-primary-rgb), .25)) */
+  --color-primary-rgb: 99, 102, 241;
+  --color-error-rgb: 255, 69, 58;
+  --color-warning-rgb: 255, 159, 10;
+  /* 别名 / 派生 token —— 引用的变量随主题切换,这里自动跟随,无需在暗色块重声明 */
+  --color-card: var(--color-bg-elevated);
+  --color-danger: var(--color-error);
+  --color-text-primary: var(--color-text);
+  --color-hover: rgba(0, 0, 0, 0.04);
+  --color-error-bg: rgba(255, 69, 58, 0.10);
+  --color-error-subtle: rgba(255, 69, 58, 0.10);
+  --color-success-subtle: rgba(52, 199, 89, 0.12);
+  --color-warning-subtle: rgba(255, 159, 10, 0.12);
+
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.06);
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.08);
@@ -104,6 +118,12 @@
   --color-warning: #FBBF24;
   --color-error: #FB7185;
   --color-info: #67E8F9;
+
+  /* 暗色专属覆盖(primary 色值不同、hover 用浅色叠加) */
+  --color-primary-rgb: 129, 140, 248;
+  --color-error-rgb: 251, 113, 133;
+  --color-warning-rgb: 251, 191, 36;
+  --color-hover: rgba(255, 255, 255, 0.06);
 
   --shadow-xs: 0 1px 3px rgba(0, 0, 0, 0.6);
   --shadow-sm: 0 2px 10px rgba(0, 0, 0, 0.5);

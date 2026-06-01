@@ -8,12 +8,12 @@
  * 没有路由卡 —— 用户决策:"路由卡不要"。"谁选的、为什么"沉到 audit / 日志。
  *
  * 数据约定(对照 executor.rs):
- * - 每位 participant 通过 `events::emit(Token { step_id, companion_id, delta })`
- *   独立推流;collaborationStore 按 `${step_id}:${companion_id}` 累积。
- * - streams 不在终态清空(注释里说要清,实际从没清过),所以 step.status =
- *   completed 后,每位的最终文本就是其累积的 stream 本体。
- * - 执行器在 ParallelAgents 出第一个失败时整步 abort;UI 在 step.status =
- *   failed 时整体显示失败。
+ * - 实时:每位 participant 通过 `events::emit(Token{step_id,companion_id,delta})`
+ *   独立推流;collaborationStore 按 `${step_id}:${companion_id}` 累积(**内存态**)。
+ * - 重开/hydrate 后:内存流是空的,本成员的最终发言要从持久化的
+ *   `step.output.full_output`(executor 拼成的「【名字】内容」合并块)里解析回来。
+ *   否则重开对话群成员气泡会空(实测 bug)。
+ * - 执行器在 ParallelAgents 全员失败才整步 abort;UI 在 step.status=failed 显示失败。
  */
 
 import { Loader2, AlertCircle } from 'lucide-react'
@@ -26,8 +26,23 @@ interface Props {
   step: Step
 }
 
+/** 从合并的 full_output(「【名字】内容\n\n【名字2】…」)里抠出某成员的段落。
+ *  单 participant(如 YiYi 结论,无前缀)→ 整段就是它的。找不到 → 空(该成员没发言)。 */
+function memberPersistedText(full: string, name: string, participantCount: number): string {
+  if (!full) return ''
+  const marker = `【${name}】`
+  const i = full.indexOf(marker)
+  if (i >= 0) {
+    const rest = full.slice(i + marker.length)
+    const next = rest.search(/【[^】]{1,24}】/)
+    return (next >= 0 ? rest.slice(0, next) : rest).trim()
+  }
+  return participantCount === 1 ? full.trim() : ''
+}
+
 export function ParallelAgentStepCard({ collaborationId, step }: Props) {
   if (step.participants.length === 0) return null
+  const persistedFull = step.output?.full_output ?? ''
 
   return (
     <div className="flex flex-col gap-3">
@@ -38,6 +53,7 @@ export function ParallelAgentStepCard({ collaborationId, step }: Props) {
           stepId={step.id}
           stepStatus={step.status}
           participant={p}
+          persistedText={memberPersistedText(persistedFull, p.name, step.participants.length)}
         />
       ))}
       {step.status === 'failed' && (
@@ -55,9 +71,11 @@ interface BubbleProps {
   stepId: number
   stepStatus: StepStatus
   participant: Participant
+  /** 持久化回落:hydrate 后实时流为空时,从 step.output 解析出的本成员发言。 */
+  persistedText: string
 }
 
-function MemberMessageBubble({ collaborationId, stepId, stepStatus, participant }: BubbleProps) {
+function MemberMessageBubble({ collaborationId, stepId, stepStatus, participant, persistedText }: BubbleProps) {
   const stream = useCollaborationStore(
     selectStream(collaborationId, stepId, participant.companion_id),
   )
@@ -65,7 +83,8 @@ function MemberMessageBubble({ collaborationId, stepId, stepStatus, participant 
     selectReasoning(collaborationId, stepId, participant.companion_id),
   )
   const accent = participant.color_hex || 'var(--color-text-muted)'
-  const text = stream ?? ''
+  // 实时流优先;空(重开/hydrate 后)则回落持久化文本 → 重开对话也能看到发言。
+  const text = (stream && stream.length > 0) ? stream : persistedText
   const thinking = reasoning ?? ''
   // 成员选择"这一轮我不发言"(fused reply-or-`<pass>`,见对话循环引擎):不渲染气泡。
   // 流式中是 `<pass>` 的前缀也先藏,避免哨兵字符闪现(真回复一旦偏离前缀就会显示)。

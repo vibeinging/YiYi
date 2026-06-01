@@ -48,7 +48,7 @@ export function GrowthPage() {
             disabled={loading}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all"
             style={{
-              background: 'var(--color-bg-secondary)',
+              background: 'var(--color-bg-elevated)',
               color: 'var(--color-text-secondary)',
             }}
           >
@@ -84,7 +84,7 @@ export function GrowthPage() {
             <LessonsCard lessons={report.top_lessons} />
           )}
 
-          {/* Growth Timeline */}
+          {/* 成长时间线 */}
           {timeline.length > 0 && (
             <Timeline milestones={timeline} />
           )}
@@ -112,19 +112,19 @@ function EmptyState() {
 function StatsCards({ report }: { report: GrowthReport }) {
   const cards = [
     {
-      label: 'Tasks Completed',
+      label: '完成任务',
       value: report.total_tasks,
       icon: Target,
       color: 'var(--color-primary)',
     },
     {
-      label: 'Success Rate',
+      label: '成功率',
       value: `${Math.round(report.success_rate * 100)}%`,
       icon: TrendingUp,
-      color: report.success_rate >= 0.8 ? '#34C759' : report.success_rate >= 0.6 ? '#FF9500' : '#FF3B30',
+      color: report.success_rate >= 0.8 ? 'var(--color-success)' : report.success_rate >= 0.6 ? 'var(--color-warning)' : 'var(--color-error)',
     },
     {
-      label: 'Lessons Learned',
+      label: '学到的经验',
       value: report.top_lessons.length,
       icon: BookOpen,
       color: '#AF52DE',
@@ -138,7 +138,7 @@ function StatsCards({ report }: { report: GrowthReport }) {
           key={i}
           className="rounded-xl p-4 transition-all"
           style={{
-            background: 'var(--color-bg-secondary)',
+            background: 'var(--color-bg-elevated)',
             border: '1px solid var(--color-border)',
           }}
         >
@@ -162,12 +162,12 @@ function CapabilityProfile({ capabilities }: { capabilities: CapabilityDimension
     <div
       className="rounded-xl p-5"
       style={{
-        background: 'var(--color-bg-secondary)',
+        background: 'var(--color-bg-elevated)',
         border: '1px solid var(--color-border)',
       }}
     >
       <h3 className="text-[14px] font-semibold mb-4" style={{ color: 'var(--color-text)' }}>
-        Capability Profile
+        能力画像
       </h3>
       <div className="space-y-3">
         {capabilities.map((cap, i) => (
@@ -177,27 +177,27 @@ function CapabilityProfile({ capabilities }: { capabilities: CapabilityDimension
                 {cap.name}
               </span>
               <span className="text-[12px]" style={{ color: 'var(--color-text-tertiary)' }}>
-                {Math.round(cap.success_rate * 100)}% ({cap.sample_count} tasks)
+                {Math.round(cap.success_rate * 100)}% ({cap.sample_count} 次)
               </span>
             </div>
             <div
               className="h-2 rounded-full overflow-hidden"
-              style={{ background: 'var(--color-bg-tertiary)' }}
+              style={{ background: 'var(--color-bg-subtle)' }}
             >
               <div
                 className="h-full rounded-full transition-all duration-500"
                 style={{
                   width: `${Math.round(cap.success_rate * 100)}%`,
-                  background: cap.success_rate >= 0.8 ? '#34C759'
-                    : cap.success_rate >= 0.6 ? '#FF9500'
-                    : '#FF3B30',
+                  background: cap.success_rate >= 0.8 ? 'var(--color-success)'
+                    : cap.success_rate >= 0.6 ? 'var(--color-warning)'
+                    : 'var(--color-error)',
                   opacity: cap.confidence === 'low' ? 0.5 : cap.confidence === 'medium' ? 0.75 : 1,
                 }}
               />
             </div>
             {cap.confidence === 'low' && (
               <span className="text-[11px] italic" style={{ color: 'var(--color-text-tertiary)' }}>
-                Low confidence (few samples)
+                置信度低(样本较少)
               </span>
             )}
           </div>
@@ -212,13 +212,13 @@ function LessonsCard({ lessons }: { lessons: string[] }) {
     <div
       className="rounded-xl p-5"
       style={{
-        background: 'var(--color-bg-secondary)',
+        background: 'var(--color-bg-elevated)',
         border: '1px solid var(--color-border)',
       }}
     >
       <h3 className="text-[14px] font-semibold mb-3" style={{ color: 'var(--color-text)' }}>
         <BookOpen size={15} className="inline mr-2" style={{ color: '#AF52DE' }} />
-        Lessons Learned
+        学到的经验
       </h3>
       <ul className="space-y-2">
         {lessons.map((lesson, i) => (
@@ -248,7 +248,7 @@ function SkillSuggestion({ suggestion }: { suggestion: string }) {
       <Sprout size={18} style={{ color: '#AF52DE', flexShrink: 0, marginTop: 2 }} />
       <div>
         <p className="text-[13px] font-medium mb-1" style={{ color: 'var(--color-text)' }}>
-          Growth Opportunity
+          成长机会
         </p>
         <p className="text-[12px]" style={{ color: 'var(--color-text-secondary)' }}>
           {suggestion}
@@ -260,23 +260,23 @@ function SkillSuggestion({ suggestion }: { suggestion: string }) {
 
 function Timeline({ milestones }: { milestones: GrowthMilestone[] }) {
   const eventIcons: Record<string, { color: string; label: string }> = {
-    lesson_learned: { color: '#AF52DE', label: 'Lesson' },
-    correction: { color: '#FF9500', label: 'Adjusted' },
-    first_task: { color: '#34C759', label: 'First Task' },
-    skill_created: { color: '#007AFF', label: 'New Skill' },
-    capability_up: { color: '#34C759', label: 'Improved' },
+    lesson_learned: { color: '#AF52DE', label: '经验' },
+    correction: { color: 'var(--color-warning)', label: '调整' },
+    first_task: { color: 'var(--color-success)', label: '首个任务' },
+    skill_created: { color: '#007AFF', label: '新技能' },
+    capability_up: { color: 'var(--color-success)', label: '进步' },
   };
 
   return (
     <div
       className="rounded-xl p-5"
       style={{
-        background: 'var(--color-bg-secondary)',
+        background: 'var(--color-bg-elevated)',
         border: '1px solid var(--color-border)',
       }}
     >
       <h3 className="text-[14px] font-semibold mb-4" style={{ color: 'var(--color-text)' }}>
-        Growth Timeline
+        成长时间线
       </h3>
       <div className="space-y-0">
         {milestones.map((m, i) => {

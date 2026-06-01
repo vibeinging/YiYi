@@ -569,7 +569,7 @@ export function CronJobsPage({ consumeNotifContext }: CronJobsPageProps) {
                       onChange={() => setDialog({ ...dialog, scheduleType: 'cron' })}
                       className="accent-[var(--color-primary)]"
                     />
-                    <span className="text-[14px]">Recurring (Cron)</span>
+                    <span className="text-[14px]">周期重复(Cron)</span>
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
@@ -579,7 +579,7 @@ export function CronJobsPage({ consumeNotifContext }: CronJobsPageProps) {
                       onChange={() => setDialog({ ...dialog, scheduleType: 'delay' })}
                       className="accent-[var(--color-primary)]"
                     />
-                    <span className="text-[14px]">Delay (N min)</span>
+                    <span className="text-[14px]">延迟 N 分钟</span>
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
@@ -589,7 +589,7 @@ export function CronJobsPage({ consumeNotifContext }: CronJobsPageProps) {
                       onChange={() => setDialog({ ...dialog, scheduleType: 'once' })}
                       className="accent-[var(--color-primary)]"
                     />
-                    <span className="text-[14px]">At Specific Time</span>
+                    <span className="text-[14px]">指定时间</span>
                   </label>
                 </div>
               </div>
