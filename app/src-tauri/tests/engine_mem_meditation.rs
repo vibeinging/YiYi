@@ -36,6 +36,7 @@ fn make_llm_config(mock_uri: &str) -> LLMConfig {
         model: "mock-model".to_string(),
         provider_id: "openai".to_string(),
         native_tools: vec![],
+            ..Default::default()
     }
 }
 

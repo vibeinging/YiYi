@@ -369,7 +369,10 @@ pub(super) async fn prepare_chat_context(
     message: &str,
     attachments: &Option<Vec<Attachment>>,
 ) -> Result<ChatContext, String> {
-    let config = resolve_llm_config(state).await?;
+    let mut config = resolve_llm_config(state).await?;
+    // 每窗口思考覆盖(per-window):会话级 thinking_mode > 全局默认。None → 不动,
+    // build_body 回落全局。cfg 随后流入主 agent / group_dispatch / 私聊 / 子 agent。
+    config.apply_thinking_override(state.db.get_session_thinking(sid).as_deref());
     let working_dir = state.working_dir.clone();
     let user_workspace = state.user_workspace();
 

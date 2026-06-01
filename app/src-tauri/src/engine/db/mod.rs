@@ -867,6 +867,16 @@ impl Database {
             log::info!("Migrated sessions table: added companion_id column");
         }
 
+        // 每窗口思考覆盖:NULL = 跟随全局默认;"off"/"high"/"max" = 本会话覆盖。
+        let has_session_thinking: bool = conn
+            .prepare("SELECT thinking_mode FROM sessions LIMIT 0")
+            .is_ok();
+        if !has_session_thinking {
+            conn.execute_batch("ALTER TABLE sessions ADD COLUMN thinking_mode TEXT DEFAULT NULL;")
+                .map_err(|e| format!("Migration error (sessions thinking_mode): {}", e))?;
+            log::info!("Migrated sessions table: added thinking_mode column");
+        }
+
         // Drop legacy session_bots table (replaced by bot_conversations)
         conn.execute_batch("DROP TABLE IF EXISTS session_bots;").ok();
 

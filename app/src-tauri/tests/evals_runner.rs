@@ -516,6 +516,7 @@ fn make_llm_config(uri: &str) -> LLMConfig {
         model: "mock-model".to_string(),
         provider_id: "openai".to_string(),
         native_tools: vec![],
+            ..Default::default()
     }
 }
 
@@ -1060,6 +1061,7 @@ async fn live_cases() {
             model: model.clone(),
             provider_id: provider_id.clone(),
             native_tools: vec![],
+            ..Default::default()
         };
 
         eprintln!("  [live] {} — sending real LLM request…", case.id);

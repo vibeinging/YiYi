@@ -232,15 +232,15 @@ pub struct AgentsConfig {
     /// If None, defaults to ~/Documents/YiYi.
     #[serde(default)]
     pub workspace_dir: Option<String>,
-    /// DeepSeek V4 thinking-mode effort. One of "off" / "high" / "max".
-    /// Maps to the OpenAI-compatible `enable_thinking` request param:
-    ///   "off"        → enable_thinking = false
-    ///   "high"/"max" → enable_thinking = true
-    /// DeepSeek currently exposes only a boolean toggle for thinking; the
-    /// "high" vs "max" distinction is reserved for future API granularity.
-    /// Defaults to "high" (DeepSeek's recommended on-state).
+    /// DeepSeek 思考模式开关(全局默认)。`None` → 默认 `true`(DeepSeek 推荐开)。
+    /// 落到请求体 `thinking: {type: "enabled"/"disabled"}`(官方格式)。
     #[serde(default)]
-    pub thinking_effort: Option<String>,
+    pub enable_thinking: Option<bool>,
+    /// 思考程度(全局默认):`"high"` | `"max"`。`None` → 默认 `"high"`。
+    /// 落到顶层 `reasoning_effort`(DeepSeek:low/medium→high,xhigh→max)。
+    /// 仅 `enable_thinking` 为 true 时有效。
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

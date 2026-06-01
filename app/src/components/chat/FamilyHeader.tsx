@@ -16,6 +16,7 @@ import { Plus, Settings } from 'lucide-react'
 import { type CompanionGroup } from '../../api/groups'
 import { useGroupsStore } from '../../stores/groupsStore'
 import { FamilyMembersModal } from './FamilyMembersModal'
+import { SessionThinkingControl } from '../ThinkingModeControl'
 import logoFaceRight from '../../assets/yiyi-logo-face-right.png'
 
 type ModalMode =
@@ -108,6 +109,7 @@ export function FamilyHeader({ sessionId, familyGroupId, onSetFamily }: Props) {
             </span>
           </button>
           <div className="flex-1" />
+          <SessionThinkingControl sessionId={sessionId} />
           <button
             onClick={() => setModal({ kind: 'edit', group })}
             className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded transition-colors hover:bg-[var(--color-bg-subtle)]"
@@ -148,6 +150,8 @@ export function FamilyHeader({ sessionId, familyGroupId, onSetFamily }: Props) {
           <Plus size={11} />
           邀请伙伴进群
         </button>
+        <div className="flex-1" />
+        <SessionThinkingControl sessionId={sessionId} />
       </div>
       {modal && modal.kind === 'create' && (
         <FamilyMembersModal

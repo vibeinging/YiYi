@@ -55,7 +55,8 @@ async fn send_test_request(
         "stream": false,
     });
     if let Some(v) = enable_thinking {
-        body["enable_thinking"] = serde_json::json!(v);
+        // 官方格式:thinking:{type}(此前误用顶层 enable_thinking 布尔)。
+        body["thinking"] = serde_json::json!({ "type": if v { "enabled" } else { "disabled" } });
     }
 
     let mut req = client.post(url)

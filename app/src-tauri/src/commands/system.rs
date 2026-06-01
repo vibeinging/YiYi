@@ -1320,31 +1320,70 @@ pub async fn get_recall_candidates(
 
 // ── DeepSeek V4 thinking-mode effort ──────────────────────────────────────
 
-/// Get the current thinking-mode effort.
-/// Returns "off" / "high" / "max" (defaults to "high" if unset).
+/// Get the current thinking effort as a unified "off" / "high" / "max" string
+/// (UI representation). Internally derived from `enable_thinking` +
+/// `reasoning_effort`. Defaults to "high".
 #[tauri::command]
 pub async fn get_thinking_effort(state: State<'_, AppState>) -> Result<String, String> {
     let config = state.config.read().await;
-    Ok(config
-        .agents
-        .thinking_effort
-        .clone()
-        .unwrap_or_else(|| "high".to_string()))
+    if !config.agents.enable_thinking.unwrap_or(true) {
+        return Ok("off".to_string());
+    }
+    Ok(match config.agents.reasoning_effort.as_deref() {
+        Some("max") => "max",
+        _ => "high",
+    }
+    .to_string())
 }
 
-/// Set the thinking-mode effort. Accepts "off" | "high" | "max".
+/// Set thinking effort from a unified "off" | "high" | "max" string. Translates
+/// to the two underlying config fields(官方参数分两层:开关 + 程度):
+///   off  → enable_thinking=false
+///   high → enable_thinking=true, reasoning_effort="high"
+///   max  → enable_thinking=true, reasoning_effort="max"
 #[tauri::command]
 pub async fn set_thinking_effort(
     state: State<'_, AppState>,
     effort: String,
 ) -> Result<(), String> {
-    let normalized = match effort.as_str() {
-        "off" | "high" | "max" => effort,
-        _ => return Err(format!("Invalid thinking_effort: {}", effort)),
-    };
     let mut config = state.config.write().await;
-    config.agents.thinking_effort = Some(normalized);
+    match effort.as_str() {
+        "off" => config.agents.enable_thinking = Some(false),
+        "high" => {
+            config.agents.enable_thinking = Some(true);
+            config.agents.reasoning_effort = Some("high".to_string());
+        }
+        "max" => {
+            config.agents.enable_thinking = Some(true);
+            config.agents.reasoning_effort = Some("max".to_string());
+        }
+        _ => return Err(format!("Invalid thinking_effort: {}", effort)),
+    }
     config.save(&state.working_dir)
+}
+
+/// 读某会话的思考覆盖。返回 `None` = 跟随全局默认;`Some("off"/"high"/"max")` = 覆盖。
+#[tauri::command]
+pub async fn get_session_thinking(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<Option<String>, String> {
+    Ok(state.db.get_session_thinking(&session_id))
+}
+
+/// 设某会话的思考覆盖。`mode = None` = 清除覆盖、跟随全局;否则 "off"/"high"/"max"。
+#[tauri::command]
+pub async fn set_session_thinking(
+    state: State<'_, AppState>,
+    session_id: String,
+    mode: Option<String>,
+) -> Result<(), String> {
+    if let Some(m) = mode.as_deref() {
+        if !matches!(m, "off" | "high" | "max") {
+            return Err(format!("Invalid thinking mode: {}", m));
+        }
+    }
+    state.db.set_session_thinking(&session_id, mode)
 }
 
 /// Open a file or directory in the OS default handler. Bypasses the

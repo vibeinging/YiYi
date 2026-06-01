@@ -748,6 +748,7 @@ mod tests {
             model: "m".into(),
             provider_id: "openai".into(),
             native_tools: vec![],
+            ..Default::default()
         };
         // Far below the 500K AUTO_COMPACT_FLOOR and messages.len() < 6.
         compact_messages_if_needed(&mut msgs, &cfg, None).await;
@@ -822,6 +823,7 @@ mod tests {
             model: "m".into(),
             provider_id: "openai".into(),
             native_tools: vec![],
+            ..Default::default()
         };
         // Token count here is tiny (well below 500K floor). Auto gate would
         // reject this; manual path must NOT reject based on the floor.
@@ -847,6 +849,7 @@ mod tests {
             model: "m".into(),
             provider_id: "openai".into(),
             native_tools: vec![],
+            ..Default::default()
         };
         force_compact_messages(&mut msgs, &cfg, None).await;
         // Too few messages => no-op.

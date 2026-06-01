@@ -47,6 +47,7 @@ async fn resolve_llm(state: &AppState) -> Option<LLMConfig> {
         model: active.model.clone(),
         provider_id: active.provider_id.clone(),
         native_tools,
+        ..Default::default()
     })
 }
 

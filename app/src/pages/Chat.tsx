@@ -38,6 +38,7 @@ import { ChatWelcome } from '../components/chat/ChatWelcome';
 import { ChatMessages, type ChatMessagesHandle } from '../components/chat/ChatMessages';
 import { ChatInput, type ChatInputHandle } from '../components/chat/ChatInput';
 import { FamilyHeader } from '../components/chat/FamilyHeader';
+import { SessionThinkingControl } from '../components/ThinkingModeControl';
 import { PermissionCard } from '../components/chat/PermissionCard';
 import { VoiceOverlay } from '../components/voice/VoiceOverlay';
 import { useBuddyStore } from '../stores/buddyStore';
@@ -64,7 +65,8 @@ interface ChatPageProps {
 /* ------------------------------------------------------------------ */
 
 export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: ChatPageProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const lang: 'zh' | 'en' = i18n.language?.startsWith('zh') ? 'zh' : 'en';
   const drag = useDragRegion();
 
   // --- Session store ---
@@ -614,6 +616,8 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
                 <span style={{ color: 'var(--color-text-muted)' }}>和</span>
                 <span className="font-medium" style={{ color: 'var(--color-text)' }}>{sess?.name}</span>
                 <span style={{ color: 'var(--color-text-muted)' }}>单独聊天</span>
+                <div className="flex-1" />
+                <SessionThinkingControl sessionId={activeSessionId} lang={lang} />
               </div>
             );
           }

@@ -97,6 +97,7 @@ pub fn resolve_config_from_providers(
         model,
         provider_id,
         native_tools,
+        ..Default::default()
     })
 }
 

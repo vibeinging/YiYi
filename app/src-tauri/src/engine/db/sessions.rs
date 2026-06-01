@@ -269,6 +269,29 @@ impl super::Database {
         .flatten()
     }
 
+    /// 设本会话的思考覆盖。`None` = 跟随全局默认;`Some("off"/"high"/"max")` = 覆盖。
+    pub fn set_session_thinking(&self, id: &str, mode: Option<String>) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE sessions SET thinking_mode = ?1 WHERE id = ?2",
+            params![mode, id],
+        )
+        .map_err(|e| format!("Failed to set session thinking: {}", e))?;
+        Ok(())
+    }
+
+    /// 读本会话的思考覆盖(`None` = 跟随全局默认)。
+    pub fn get_session_thinking(&self, id: &str) -> Option<String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT thinking_mode FROM sessions WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
+    }
+
     /// 找绑定到某 companion 的最近私聊会话;没有就新建一个(名用 companion 名)。
     /// 好友列表点进去用 —— 每个好友一个固定专属会话(像微信)。
     pub fn get_or_create_companion_session(

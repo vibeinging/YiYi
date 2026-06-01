@@ -5,6 +5,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { GlobalThinkingControl } from '../components/ThinkingModeControl';
 import { useTranslation } from 'react-i18next';
 import {
   Loader2,
@@ -199,6 +200,9 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
               : (lang === 'zh' ? '尚未配置 API Key。请在下方填入。' : 'No API Key configured. Please enter one below.')}
           </div>
         </div>
+
+        {/* 深度思考(全局默认)—— 每个对话窗口可在顶栏单独覆盖。 */}
+        <GlobalThinkingControl lang={lang} />
 
         {/* Balance card — shown only when an API key is configured */}
         {configured && (() => {

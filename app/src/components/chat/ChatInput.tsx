@@ -5,7 +5,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  Send, X, Paperclip, FileText, Square, Loader2, Sparkles, FolderOpen, Brain,
+  Send, X, Paperclip, FileText, Square, Loader2, Sparkles, FolderOpen,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { QuickActionsOverlay } from './QuickActionsOverlay';
@@ -97,19 +97,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
   // Pickers
   const [showQuickActions, setShowQuickActions] = useState(false);
-
-  // DeepSeek V4 thinking-mode effort: "off" | "high" | "max"
-  const [thinkingEffort, setThinkingEffortState] = useState<'off' | 'high' | 'max'>('high');
-  useEffect(() => {
-    invoke<string>('get_thinking_effort').then((eff) => {
-      if (eff === 'off' || eff === 'high' || eff === 'max') setThinkingEffortState(eff);
-    }).catch(() => {});
-  }, []);
-  const cycleThinkingEffort = useCallback(() => {
-    const next = thinkingEffort === 'off' ? 'high' : thinkingEffort === 'high' ? 'max' : 'off';
-    setThinkingEffortState(next);
-    invoke('set_thinking_effort', { effort: next }).catch(() => {});
-  }, [thinkingEffort]);
 
   const [showCommandPicker, setShowCommandPicker] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
@@ -529,26 +516,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               <FolderOpen size={18} />
             </button>
 
-            <button
-              type="button"
-              aria-label={t('chat.thinkingEffort.label', '思考强度')}
-              onClick={cycleThinkingEffort}
-              onMouseDown={preventFocusSteal}
-              disabled={loading}
-              className="h-9 px-2 flex items-center gap-1 rounded-xl shrink-0 transition-all disabled:opacity-30 text-xs font-medium"
-              style={{
-                color: thinkingEffort === 'off' ? 'var(--color-text-muted)' : 'var(--color-primary)',
-                background: thinkingEffort === 'off' ? 'transparent' : 'var(--color-bg-muted)',
-              }}
-              title={t('chat.thinkingEffort.tooltip', '深度思考：开了之后回答更慢但更稳，关掉则快速回复')}
-            >
-              <Brain size={14} />
-              <span>
-                {thinkingEffort === 'off' ? t('chat.thinkingEffort.off', '不思考')
-                  : thinkingEffort === 'high' ? t('chat.thinkingEffort.high', '思考')
-                  : t('chat.thinkingEffort.max', '深思')}
-              </span>
-            </button>
+            {/* 思考模式控件已移走:全局默认在「模型设置页」,每窗口覆盖在「聊天 header」。 */}
 
             {/* Anchored to the wrapping div above; toggle button + popover share `data-family-anchor`. */}
 

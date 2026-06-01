@@ -423,6 +423,8 @@ pub fn run() {
             commands::system::save_agents_config,
             commands::system::get_thinking_effort,
             commands::system::set_thinking_effort,
+            commands::system::get_session_thinking,
+            commands::system::set_session_thinking,
             commands::system::open_path,
             commands::system::reveal_path,
             commands::system::get_user_workspace,

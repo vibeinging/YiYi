@@ -145,24 +145,37 @@ fn short_image_hint(url: &str) -> String {
     trimmed
 }
 
-/// Read the user's configured DeepSeek thinking effort.
-/// Returns one of "off" | "high" | "max"; defaults to "high".
-fn current_thinking_effort() -> String {
+/// 全局默认思考设置 `(enabled, effort)`,effort ∈ {"high","max"};默认 `(true,"high")`。
+fn global_thinking_default() -> (bool, String) {
+    let default = (true, "high".to_string());
     let handle = match crate::engine::tools::APP_HANDLE.get() {
         Some(h) => h,
-        None => return "high".to_string(),
+        None => return default,
     };
     use tauri::Manager;
     let app_state = handle.state::<crate::state::AppState>();
     let config = match app_state.config.try_read() {
         Ok(c) => c,
-        Err(_) => return "high".to_string(),
+        Err(_) => return default,
     };
-    config
-        .agents
-        .thinking_effort
-        .clone()
-        .unwrap_or_else(|| "high".to_string())
+    let enabled = config.agents.enable_thinking.unwrap_or(true);
+    let effort = match config.agents.reasoning_effort.as_deref() {
+        Some("max") => "max",
+        _ => "high",
+    };
+    (enabled, effort.to_string())
+}
+
+/// 解析本次请求的思考设置:**会话级覆盖(cfg 字段)> 全局默认**。
+/// effort 归一到 {"high","max"}。
+fn resolve_thinking_settings(config: &LLMConfig) -> (bool, String) {
+    let (g_enabled, g_effort) = global_thinking_default();
+    let enabled = config.enable_thinking.unwrap_or(g_enabled);
+    let effort = match config.reasoning_effort.as_deref().unwrap_or(&g_effort) {
+        "max" => "max",
+        _ => "high",
+    };
+    (enabled, effort.to_string())
 }
 
 /// Whether the current model is a DeepSeek model (the only provider that
@@ -193,15 +206,16 @@ fn build_body(config: &LLMConfig, messages_value: serde_json::Value, stream: boo
     // OpenAI defaults this to true, but DeepSeek-compatible endpoints have been
     // observed serializing tool_calls without it set explicitly.
     body["parallel_tool_calls"] = serde_json::json!(true);
-    // DeepSeek V4 thinking-mode toggle. Only sent for DeepSeek providers; other
-    // OpenAI-compatible providers would ignore it but we keep bodies clean.
-    // Mapping: "off" → false; "high"/"max" → true. DeepSeek currently exposes
-    // only a boolean — the "high" vs "max" distinction is wired through for
-    // future API expansion.
+    // DeepSeek 思考模式(官方格式)。仅对 DeepSeek 发;其它 OpenAI 兼容端会忽略。
+    //   开关: `thinking: {type: "enabled"/"disabled"}`
+    //   程度: 顶层 `reasoning_effort: "high"/"max"`(仅 enabled 时发)
+    // 注意:此前发的顶层 `enable_thinking` 布尔不是官方参数(关也关不掉),已纠正。
     if is_deepseek_model(config) {
-        let effort = current_thinking_effort();
-        let enabled = matches!(effort.as_str(), "high" | "max");
-        body["enable_thinking"] = serde_json::json!(enabled);
+        let (enabled, effort) = resolve_thinking_settings(config);
+        body["thinking"] = serde_json::json!({ "type": if enabled { "enabled" } else { "disabled" } });
+        if enabled {
+            body["reasoning_effort"] = serde_json::json!(effort);
+        }
     }
     body
 }
@@ -528,6 +542,7 @@ mod tests {
             model: "deepseek-v4-pro".into(),
             provider_id: "deepseek".into(),
             native_tools: vec![],
+            ..Default::default()
         }
     }
 
@@ -580,6 +595,7 @@ mod tests {
             model: "gpt-4o-mini".into(),
             provider_id: "openai".into(),
             native_tools: vec![],
+            ..Default::default()
         };
         let msg = LLMMessage {
             role: "tool".into(),

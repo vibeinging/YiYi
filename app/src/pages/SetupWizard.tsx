@@ -302,19 +302,11 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
             {currentStep === 'model' && (
               <StepModel
                 lang={lang}
-                selectedProvider={selectedProvider}
-                selectedModel={selectedModel}
-                customModelId={customModelId}
-                useCustomModel={useCustomModel}
                 apiKey={apiKey}
                 baseUrl={baseUrl}
                 showBaseUrl={showBaseUrl}
                 testing={testing}
                 testResult={testResult}
-                onSelectProvider={() => { /* locked to deepseek */ }}
-                onSelectModel={() => { /* locked to deepseek-v4-pro */ }}
-                onCustomModelIdChange={() => { /* not supported */ }}
-                onUseCustomModelChange={() => { /* not supported */ }}
                 onApiKeyChange={setApiKey}
                 onBaseUrlChange={setBaseUrl}
                 onShowBaseUrlChange={setShowBaseUrl}

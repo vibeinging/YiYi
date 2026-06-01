@@ -464,6 +464,7 @@ pub(crate) async fn resolve_llm_config_from_globals()
         model: active.model.clone(),
         provider_id: active.provider_id.clone(),
         native_tools,
+        ..Default::default()
     })
 }
 

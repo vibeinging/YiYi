@@ -60,6 +60,7 @@ pub async fn resolve_llm_config(
         model: active.model.clone(),
         provider_id: active.provider_id.clone(),
         native_tools,
+        ..Default::default()
     })
 }
 

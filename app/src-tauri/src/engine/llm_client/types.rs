@@ -205,13 +205,41 @@ pub struct LLMMessage {
     pub reasoning_content: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LLMConfig {
     pub base_url: String,
     pub api_key: String,
     pub model: String,
     pub provider_id: String,
     pub native_tools: Vec<NativeToolInjection>,
+    /// 会话级思考覆盖(per-window)。`None` → 用全局默认(`config.agents`)。
+    /// `Some(_)` = 该会话强制覆盖。由 chat 命令按 session 解析后写入,随 cfg 一路
+    /// 传到 build_body,且因 cfg 被克隆进 executor,子 agent 自动继承本窗口设置。
+    pub enable_thinking: Option<bool>,
+    /// 会话级 effort 覆盖:`"high"` | `"max"`。`None` → 全局默认。
+    pub reasoning_effort: Option<String>,
+}
+
+impl LLMConfig {
+    /// 应用会话级思考覆盖(per-window)。`mode`:`"off"`/`"high"`/`"max"`,其它(含
+    /// `None`、`"global"`)→ 不覆盖,保持 `None` 走全局默认。三档映射回两参数:
+    ///   off  → enable_thinking=false
+    ///   high → enable_thinking=true, reasoning_effort="high"
+    ///   max  → enable_thinking=true, reasoning_effort="max"
+    pub fn apply_thinking_override(&mut self, mode: Option<&str>) {
+        match mode {
+            Some("off") => self.enable_thinking = Some(false),
+            Some("high") => {
+                self.enable_thinking = Some(true);
+                self.reasoning_effort = Some("high".to_string());
+            }
+            Some("max") => {
+                self.enable_thinking = Some(true);
+                self.reasoning_effort = Some("max".to_string());
+            }
+            _ => {}
+        }
+    }
 }
 
 #[derive(Debug)]

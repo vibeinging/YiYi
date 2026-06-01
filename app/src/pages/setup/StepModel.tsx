@@ -7,22 +7,15 @@ import { Sparkles } from 'lucide-react';
 import type { TestConnectionResponse } from '../../api/models';
 import { QUICK_PROVIDERS, type Lang } from './setupWizardData';
 import { ModelConfig } from './StepModelParts';
+import { GlobalThinkingControl } from '../../components/ThinkingModeControl';
 
 export interface StepModelProps {
   lang: Lang;
-  selectedProvider: string | null;
-  selectedModel: string | null;
-  customModelId: string;
-  useCustomModel: boolean;
   apiKey: string;
   baseUrl: string;
   showBaseUrl: boolean;
   testing: boolean;
   testResult: TestConnectionResponse | null;
-  onSelectProvider: (id: string | null) => void;
-  onSelectModel: (id: string | null) => void;
-  onCustomModelIdChange: (id: string) => void;
-  onUseCustomModelChange: (use: boolean) => void;
   onApiKeyChange: (key: string) => void;
   onBaseUrlChange: (url: string) => void;
   onShowBaseUrlChange: (show: boolean) => void;
@@ -90,6 +83,11 @@ export function StepModel({
         onTestConnection={onTestConnection}
         onTestResultClear={onTestResultClear}
       />
+
+      {/* 深度思考(全局默认)—— 之后每个对话窗口可在顶栏单独覆盖。 */}
+      <div className="mt-4">
+        <GlobalThinkingControl lang={lang} />
+      </div>
     </div>
   );
 }
