@@ -7,9 +7,10 @@
 //! Design: `docs/design/2026-05-18_companion-draft-generator.md`.
 
 use serde::{Deserialize, Serialize};
+use tauri::Emitter;
 
 use super::{tool_def, ToolDefinition};
-use crate::engine::llm_client::{self, LLMMessage, MessageContent};
+use crate::engine::llm_client::{self, LLMMessage, MessageContent, StreamEvent};
 use crate::engine::usage::UsageSource;
 
 /// Templates a draft is allowed to inherit from. Mirrors the on-disk
@@ -68,10 +69,20 @@ pub async fn propose_companion_tool(args: &serde_json::Value) -> String {
         return "Error: description is required".into();
     }
 
-    let cfg = match super::resolve_llm_config_from_globals().await {
+    let mut cfg = match super::resolve_llm_config_from_globals().await {
         Some(c) => c,
         None => return "Error: 当前没有可用的 LLM provider，无法生成草稿。".into(),
     };
+    // 草稿生成是结构化 JSON 产出,不需要推理。强制关思考 —— 否则会回落全局默认
+    // (思考模式),让这个工具内调用先跑一大段 reasoning,既慢又不可见(加速 P2)。
+    cfg.enable_thinking = Some(false);
+
+    let session_id = super::TASK_SESSION_ID
+        .try_with(|s| s.clone())
+        .unwrap_or_default();
+    if session_id.is_empty() {
+        return "Error: 无 session 上下文，无法落卡片。".into();
+    }
 
     let messages = vec![
         LLMMessage {
@@ -90,9 +101,38 @@ pub async fn propose_companion_tool(args: &serde_json::Value) -> String {
         },
     ];
 
+    // 流式进度:把生成增量直接发到 `chat://thinking`。绕过 chat 命令的 on_event /
+    // thinking_buf,所以**只实时显示、不持久化**(刷新即消失),正好做临时"设计中"反馈。
+    // 这样工具内的二次 LLM 调用不再像卡死(流式可见 P1)。
+    let progress_handle = super::APP_HANDLE.get().cloned();
+    let progress_sid = session_id.clone();
+    if let Some(h) = &progress_handle {
+        let _ = h.emit(
+            "chat://thinking",
+            serde_json::json!({ "text": "🪄 正在为你设计伙伴…\n", "session_id": progress_sid }),
+        );
+    }
+    let on_event = move |evt: StreamEvent| {
+        if let StreamEvent::ContentDelta(text) = evt {
+            if let Some(h) = &progress_handle {
+                let _ = h.emit(
+                    "chat://thinking",
+                    serde_json::json!({ "text": text, "session_id": progress_sid }),
+                );
+            }
+        }
+    };
+
     let resp = match tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        llm_client::chat_completion_tracked(UsageSource::Other, &cfg, &messages, &[]),
+        llm_client::chat_completion_stream_tracked(
+            UsageSource::Other,
+            &cfg,
+            &messages,
+            &[],
+            on_event,
+            None,
+        ),
     )
     .await
     {
@@ -116,12 +156,6 @@ pub async fn propose_companion_tool(args: &serde_json::Value) -> String {
         return format!("Error: 草稿校验失败 — {e}");
     }
 
-    let session_id = super::TASK_SESSION_ID
-        .try_with(|s| s.clone())
-        .unwrap_or_default();
-    if session_id.is_empty() {
-        return "Error: 无 session 上下文，无法落卡片。".into();
-    }
     let db = match super::get_database() {
         Some(d) => d,
         None => return "Error: DB 未就绪。".into(),

@@ -48,6 +48,8 @@ export const TOOL_VERBS: Record<string, [string, string]> = {
   create_spreadsheet: ['Creating spreadsheet', 'Created spreadsheet'],
   claude_code: ['Claude Code working', 'Claude Code completed'],
   create_task: ['Creating task', 'Task created'],
+  // 创建伙伴是面向用户的创意动作 —— 用中文友好态,配合 chat://thinking 的实时设计进度。
+  propose_companion: ['🪄 正在为你设计伙伴', '伙伴草稿已生成'],
 };
 
 export function getToolLabel(name: string, status: 'running' | 'done'): string {
