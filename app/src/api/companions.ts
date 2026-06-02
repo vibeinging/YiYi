@@ -60,16 +60,27 @@ export interface PreviewPersonaToneInput {
   verbosity: number
 }
 
+/** 伙伴增删改后广播 —— 常驻组件(如侧边栏好友列表)监听此事件重新拉列表,
+ *  保证收养 / 改名 / 退休后 UI 即时同步,无需重启或重新挂载。 */
+export const COMPANIONS_CHANGED_EVENT = 'companions:changed'
+function notifyCompanionsChanged() {
+  window.dispatchEvent(new CustomEvent(COMPANIONS_CHANGED_EVENT))
+}
+
 export async function adoptCompanion(input: AdoptCompanionInput): Promise<number> {
-  return await invoke<number>('adopt_companion', { input })
+  const id = await invoke<number>('adopt_companion', { input })
+  notifyCompanionsChanged()
+  return id
 }
 
 export async function updateCompanion(id: number, input: UpdateCompanionInput): Promise<void> {
   await invoke('update_companion', { id, input })
+  notifyCompanionsChanged()
 }
 
 export async function retireCompanion(id: number): Promise<void> {
   await invoke('retire_companion', { id })
+  notifyCompanionsChanged()
 }
 
 export async function listCompanions(includeRetired = false): Promise<Companion[]> {

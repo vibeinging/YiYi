@@ -22,7 +22,7 @@ import { timeAgo } from '../utils/taskStatus';
 import type { Page } from '../App';
 import type { ChatSession } from '../api/agent';
 import { createCompanionSession } from '../api/agent';
-import { listCompanions, type Companion } from '../api/companions';
+import { listCompanions, COMPANIONS_CHANGED_EVENT, type Companion } from '../api/companions';
 import { GroupsManagerModal } from './companions/GroupsManagerModal';
 import { GroupCreateModal } from './companions/GroupCreateModal';
 import { confirm } from './Toast';
@@ -549,8 +549,13 @@ export const TaskSidebar = memo(function TaskSidebar({
   const [companions, setCompanions] = useState<Companion[]>([]);
   useEffect(() => {
     let cancelled = false;
-    listCompanions(false).then(list => { if (!cancelled) setCompanions(list); }).catch(() => {});
-    return () => { cancelled = true; };
+    const reload = () => {
+      listCompanions(false).then(list => { if (!cancelled) setCompanions(list); }).catch(() => {});
+    };
+    reload();
+    // 收养 / 改名 / 退休后(api/companions 广播)即时刷新好友列表,无需重启。
+    window.addEventListener(COMPANIONS_CHANGED_EVENT, reload);
+    return () => { cancelled = true; window.removeEventListener(COMPANIONS_CHANGED_EVENT, reload); };
   }, []);
   const companionById = new Map(companions.map(c => [c.id, c]));
 
