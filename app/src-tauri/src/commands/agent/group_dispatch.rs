@@ -113,6 +113,28 @@ pub async fn try_group_dispatch(
         })
         .collect();
 
+    // ── 放养模式(flag 开)── @ 与非 @ 统一进 v2 事件循环:被 @ 的成员 wave-1 立即回(delay=0)、
+    //    其余变速 5–30 秒,YiYi 也作为一员入群。不再前置区分点名 / 非点名。
+    if group_async_loop_enabled() {
+        let (collab_id, participants) = conversation_driver::dispatch_group_loop(
+            db.clone(), cfg, session_id, user_message, &members, &chat_history, group_scope, forced_ids,
+        )
+        .await?;
+        let members = participants
+            .into_iter()
+            .map(|p| DispatchedMember {
+                companion_id: p.companion_id,
+                name: p.name,
+                avatar_emoji: p.avatar_emoji,
+                color_hex: p.color_hex,
+            })
+            .collect();
+        return Ok(GroupDispatchOutcome::Dispatched {
+            collaboration_id: collab_id,
+            members,
+        });
+    }
+
     // ── (a) @点名必答 ── 被点的人(取群内交集)直接上场,跳过自决。静态 plan,
     //    executor 给默认人设 prompt(无 <pass> 余地 = 必答),无 YiYi 兜底位。
     if !forced_ids.is_empty() {
@@ -192,16 +214,10 @@ pub async fn try_group_dispatch(
         });
     }
 
-    // ── (b) 去中心化群聊 ── 全员进对话循环引擎,各自 reply-or-<pass>;全让 → YiYi
-    //    兜底。"谁该说话"不再前置判断,是发言本身的一部分(见对话循环引擎 §A)。
+    // ── (b) 去中心化群聊(非放养)── 全员进对话循环引擎,各自 reply-or-<pass>;全让 → YiYi
+    //    兜底。放养模式已在上面 return,这里只剩"flag 关 = 现有单轮模型"。
     let (collab_id, participants) = conversation_driver::dispatch_group_conversation(
-        db.clone(),
-        cfg,
-        session_id,
-        user_message,
-        &members,
-        &chat_history,
-        group_scope,
+        db.clone(), cfg, session_id, user_message, &members, &chat_history, group_scope,
     )
     .await?;
     let members = participants
@@ -278,6 +294,17 @@ pub async fn dispatch_to_companion(
 }
 
 
+/// 群聊 v2 异步事件循环开关(feature-flag,默认关)。环境变量 `YIYI_GROUP_ASYNC_LOOP=1/true`。
+/// 开后:非点名群回合走变速事件循环(成员互相接话);旧单轮 + 讨论模式让位。
+/// ⚠️ 启用前须补 P0(见 docs/design/2026-06-01_群聊-异步事件循环-v2.md):新消息 abort 旧
+/// collab、executor 流式中途取消、前端 typing。
+pub fn group_async_loop_enabled() -> bool {
+    matches!(
+        std::env::var("YIYI_GROUP_ASYNC_LOOP").ok().as_deref(),
+        Some("1") | Some("true") | Some("TRUE")
+    )
+}
+
 /// 是否"群讨论"意图 —— 关键词触发(用户决策:关键词自动触发)。命中则走多轮讨论
 /// 模式,而非普通的去中心化各自应答。
 pub fn is_discussion_intent(msg: &str) -> bool {
@@ -287,5 +314,26 @@ pub fn is_discussion_intent(msg: &str) -> bool {
         "你们觉得呢", "都来说说",
     ];
     KW.iter().any(|k| msg.contains(k))
+}
+
+/// 用户喊"停"——放养群聊里任何消息都会起新一轮,所以"停"得显式识别:命中则只取消当前循环、
+/// 不再起新的(否则"停"被当成新话题又点燃,用户根本喊不停)。见用户反馈 2026-06-02。
+pub fn is_stop_intent(msg: &str) -> bool {
+    let m = msg.trim();
+    // 极短的纯停止 —— 整条就是个"停"。
+    const EXACT: &[&str] = &[
+        "停", "停停", "停!", "停!", "停。", "别说了", "别聊了", "安静", "闭嘴", "够了", "打住",
+        "stop", "Stop", "STOP",
+    ];
+    if EXACT.iter().any(|k| m == *k) {
+        return true;
+    }
+    // 含明确停止短语。
+    const KW: &[&str] = &[
+        "别聊了", "别说了", "别说话", "都别说", "都别聊", "停下来", "停一下", "先停", "停止",
+        "安静点", "安静会", "别吵", "你们停", "你们别说", "给我停", "可以停了", "别再说",
+        "不要说了", "都停", "停一停",
+    ];
+    KW.iter().any(|k| m.contains(k))
 }
 

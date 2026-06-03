@@ -93,10 +93,30 @@ fn render_system_prompt(step: &Step, participant_idx: usize) -> String {
              宁可少说:被点到的人答就够了,群里清静比热闹重要。",
             p.avatar_emoji, p.name
         ),
+        // 群事件循环(v2,放养模式):像在群里熬夜热聊一样自然接茬,基调偏"积极往下聊",
+        // 但仍允许真没料时 pass(防尬聊/复读)。
+        Some("group_loop") => format!(
+            "你是 {} {}。这是用户的群聊,你能看到群里刚刚的对话。大家在热聊,你也在群里。\n\n\
+             【接话规则】\n\
+             - 默认积极接话:顺着刚才的话往下聊——追问、补个新角度/例子、调侃一句、@ 谁请教,\
+             像真人熬夜在群里唠嗑。一次只说一两句,口语、短。\n\
+             - 但**别为接而接**:只能复读 / 干附和 / 把用户最初的问题整段重答 → 只输出 \
+             `{PASS_SENTINEL}`,把话头让出去。\n\
+             - 直接说内容,**不要用「你的名字:」或「【名字】」开头**自报家门——群里都知道你是谁。\n\
+             - 想让话题继续,就抛个具体的小问题 / 新例子给某个人,别用空泛的「你觉得呢」收尾。",
+            p.avatar_emoji, p.name
+        ),
         // 全让兜底位:群里没人接,YiYi 群管家接住。
         Some("yiyi_fallback") => format!(
             "你是群管家 {}。群里这条消息暂时没有成员接话,由你接住它:简短自然地回答用户;\
              若确实不是你擅长的领域,就坦诚点一句并把方向轻轻递出去,别生硬推托。",
+            p.name
+        ),
+        // 要结论出口:群聊完一轮,用户明确要个结论 → YiYi 收口。
+        Some("yiyi_summary") => format!(
+            "你是群管家 {}。群里刚聊完一轮,用户想要一个结论。看完上面的对话,直接给出:\
+             先一句话核心结论,再简述大家的共识 / 分歧(如有),最后一条可落地建议。\
+             别复述每个人说了啥、别开新话题。",
             p.name
         ),
         _ => {
@@ -118,7 +138,10 @@ fn render_system_prompt(step: &Step, participant_idx: usize) -> String {
 /// step's input prompt plus, for HostSummarize, the upstream summaries.
 fn render_user_prompt(step: &Step, upstream: &[(StepId, StepOutput)]) -> String {
     // 对话循环的轮 step:历史 append-only 在前,用户新消息在最末(缓存纪律)。
-    if matches!(step_mode(step), Some("group_round") | Some("yiyi_fallback")) {
+    if matches!(
+        step_mode(step),
+        Some("group_round") | Some("yiyi_fallback") | Some("group_loop") | Some("yiyi_summary")
+    ) {
         return format!("{}【用户刚说】\n{}", history_block(step), step.input.prompt);
     }
     match step.kind {
@@ -160,6 +183,9 @@ fn render_user_prompt(step: &Step, upstream: &[(StepId, StepOutput)]) -> String 
 /// 新成员卡在 acquire 上(连 LLM 请求都发不出),前端永久骨骼屏。超时后该成员算
 /// 失败(ParallelAgents 部分容错会跳过它),future 返回 → 许可释放。
 const PARTICIPANT_TIMEOUT_SECS: u64 = 150;
+/// 群事件循环里,一句闲聊不需要 150s 长推理;砍到 30s,既兜住挂起流,又把"被抢占后
+/// 仍在跑的那条"的成本/占槽时长压到 ≤ 群墙钟量级(中途取消的实用兜底)。
+const GROUP_LOOP_TIMEOUT_SECS: u64 = 30;
 
 /// run_one 的超时包装 —— 见 PARTICIPANT_TIMEOUT_SECS。
 async fn run_one_guarded(
@@ -175,14 +201,19 @@ async fn run_one_guarded(
         .get(participant_idx)
         .map(|p| p.name.clone())
         .unwrap_or_default();
+    let secs = if step_mode(step) == Some("group_loop") {
+        GROUP_LOOP_TIMEOUT_SECS
+    } else {
+        PARTICIPANT_TIMEOUT_SECS
+    };
     match tokio::time::timeout(
-        std::time::Duration::from_secs(PARTICIPANT_TIMEOUT_SECS),
+        std::time::Duration::from_secs(secs),
         run_one(config, step, participant_idx, upstream, collab_id, usage_source),
     )
     .await
     {
         Ok(r) => r,
-        Err(_) => Err(format!("{name} 响应超时({PARTICIPANT_TIMEOUT_SECS}s)")),
+        Err(_) => Err(format!("{name} 响应超时({secs}s)")),
     }
 }
 
@@ -391,20 +422,37 @@ impl Executor for ConcreteExecutor {
                             {
                                 continue; // 这位选择不发言
                             }
+                            // 成员输出偶尔自带「【名字】」/「名字:」/「名字:」自报家门前缀(模型模仿
+                            // 群历史格式)。反复剥干净,否则:① 双标记「【名字】【名字】」② 重开 hydrate
+                            // 时前端按「【名字】」切段切出空串 → 只剩头像的空气泡(实测 bug)。
+                            let self_marker = format!("【{}】", name);
+                            let colon_en = format!("{}:", name);
+                            let colon_cn = format!("{}：", name);
+                            let strip = |s: &str| -> String {
+                                let mut t = s.trim_start();
+                                loop {
+                                    let before = t;
+                                    t = t.strip_prefix(&self_marker).unwrap_or(t).trim_start();
+                                    t = t.strip_prefix(&colon_en).unwrap_or(t).trim_start();
+                                    t = t.strip_prefix(&colon_cn).unwrap_or(t).trim_start();
+                                    if t.len() == before.len() {
+                                        break;
+                                    }
+                                }
+                                t.to_string()
+                            };
+                            let s_full = strip(&out.full_output);
+                            // 剥完只剩空 = 这条只有自报家门没实质内容 → 当 pass,不冒空气泡。
+                            if s_full.is_empty() {
+                                continue;
+                            }
+                            let s_sum = strip(&out.summary);
                             if !combined_full.is_empty() {
                                 combined_summary.push_str("\n\n");
                                 combined_full.push_str("\n\n");
                             }
-                            // 成员输出偶尔自带「【名字】」前缀(模型模仿群历史格式)。合并时
-                            // 先剥掉,否则会出现「【名字】【名字】…」双标记 —— 重开 hydrate 时
-                            // 前端按「【名字】」切段会切出空串,气泡只剩头像没内容(实测 bug)。
-                            let self_marker = format!("【{}】", name);
-                            let strip = |s: &str| -> String {
-                                let t = s.trim_start();
-                                t.strip_prefix(&self_marker).unwrap_or(t).trim_start().to_string()
-                            };
-                            combined_summary.push_str(&format!("【{}】{}", name, strip(&out.summary)));
-                            combined_full.push_str(&format!("【{}】{}", name, strip(&out.full_output)));
+                            combined_summary.push_str(&format!("【{}】{}", name, s_sum));
+                            combined_full.push_str(&format!("【{}】{}", name, s_full));
                         }
                         Err(e) => {
                             log::warn!(

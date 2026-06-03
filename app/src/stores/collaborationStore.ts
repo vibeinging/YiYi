@@ -92,6 +92,11 @@ interface StoreActions {
   _applyEvent: (event: CollaborationEventWire) => void
 }
 
+// 放养群聊一场会堆几十上百 step,每条发言(member_thinking)/每步完成都全量 hydrate 会
+// O(n²) 卡顿。高频事件合并节流;终态(完成 / 中止 / 失败)仍立即 hydrate 求最终状态准确。
+const HYDRATE_THROTTLE_MS = 500
+const pendingHydrate = new Map<CollaborationId, ReturnType<typeof setTimeout>>()
+
 export const useCollaborationStore = create<StoreState & StoreActions>((set, get) => ({
   collaborations: new Map(),
   unlisten: null,
@@ -160,7 +165,7 @@ export const useCollaborationStore = create<StoreState & StoreActions>((set, get
   },
 
   _applyEvent: (event: CollaborationEventWire) => {
-    const id = event.kind === 'token' ? event.collaboration_id : event.event.collaboration_id
+    const id = event.kind === 'audit' ? event.event.collaboration_id : event.collaboration_id
     set(prev => {
       const existing = prev.collaborations.get(id)
       if (!existing) {
@@ -170,6 +175,9 @@ export const useCollaborationStore = create<StoreState & StoreActions>((set, get
       }
       const next = new Map(prev.collaborations)
       if (event.kind === 'token') {
+        // 幽灵气泡守卫:协作已终态(被抢占/完成/失败)后晚到的 token 一律丢弃,
+        // 否则旧群循环被新消息打断后,在途流仍会把半截话蹦进已结束的对话。
+        if (isTerminalStatus(existing.collaboration.status)) return prev
         const key = `${event.step_id}:${event.companion_id}`
         const newStreams = new Map(existing.streams)
         const cur = newStreams.get(key)
@@ -180,7 +188,7 @@ export const useCollaborationStore = create<StoreState & StoreActions>((set, get
           reasoning: (cur?.reasoning ?? '') + (event.reasoning ? event.delta : ''),
         })
         next.set(id, { ...existing, streams: newStreams })
-      } else {
+      } else if (event.kind === 'audit') {
         const audit = event.event
         const newAudit = [
           ...existing.audit,
@@ -193,24 +201,41 @@ export const useCollaborationStore = create<StoreState & StoreActions>((set, get
         ]
         next.set(id, { ...existing, audit: newAudit })
       }
-      return { collaborations: next }
+      // member_thinking:不改同步态,靠下面 hydrate 让新 step 错时冒出。
+      return event.kind === 'audit' || event.kind === 'token' ? { collaborations: next } : prev
     })
 
-    // Out-of-band re-hydrate on state-changing audit events so the
-    // snapshot stays authoritative without bloating the synchronous
-    // handler.
+    // Out-of-band re-hydrate so the snapshot stays authoritative. 放养群聊会高频触发,
+    // 故:终态立即 hydrate(求准),中间的高频事件(发言 / 步完成)节流合并(防 O(n²) 卡顿)。
+    const scheduleHydrate = () => {
+      if (pendingHydrate.has(id)) return // 已有 pending → 合并,不重排
+      const t = setTimeout(() => {
+        pendingHydrate.delete(id)
+        void get().hydrate(id)
+      }, HYDRATE_THROTTLE_MS)
+      pendingHydrate.set(id, t)
+    }
     if (event.kind === 'audit') {
       const transition = event.event.kind
       if (
-        transition === 'step_completed' ||
-        transition === 'step_failed' ||
         transition === 'collaboration_completed' ||
         transition === 'aborted' ||
         transition === 'failed' ||
         transition === 'confirmed'
       ) {
+        // 终态:取消任何待执行的节流 hydrate,立即拉一次最终快照。
+        const t = pendingHydrate.get(id)
+        if (t) {
+          clearTimeout(t)
+          pendingHydrate.delete(id)
+        }
         void get().hydrate(id)
+      } else if (transition === 'step_completed' || transition === 'step_failed') {
+        scheduleHydrate()
       }
+    } else if (event.kind === 'member_thinking') {
+      // 群循环:某成员延迟到点开始发言 → 拉快照让气泡错时出现(变速参差)。高频,故节流。
+      scheduleHydrate()
     }
   },
 }))

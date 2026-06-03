@@ -1,14 +1,17 @@
 /**
  * StepRenderer — dispatches one step to the correct card component by `step.kind`.
  *
- * - `single_agent` → Phase 2B @召唤 路径(SingleAgentStepCard,卡片化单 bubble)
- * - `parallel_agents` → 群聊多成员并发(ParallelAgentStepCard,群聊式 N bubble)
- * - `host_summarize` → 群讨论的 YiYi 结论(单 participant=YiYi,复用气泡渲染)
+ * 所有成员发言统一走 ParallelAgentStepCard 的群聊气泡渲染(圆头像 + 气泡正文 +
+ * "说完"),不再区分单/多成员的视觉 —— 一位成员就是一条气泡,N 位就是 N 条,
+ * 看起来都是同一种微信群消息。
+ *
+ * - `single_agent` → @召唤单个成员(气泡组里就 1 条气泡)
+ * - `parallel_agents` → 群聊多成员并发(N 条气泡)
+ * - `host_summarize` → 群讨论的 YiYi 结论(单 participant=YiYi,同样气泡 + 结论分隔)
  * - `user_confirmation` → jury 模型遗留占位,产品里没用,不渲染
  */
 
 import type { CollaborationId, Step } from '../../api/collaboration'
-import { SingleAgentStepCard } from './SingleAgentStepCard'
 import { ParallelAgentStepCard } from './ParallelAgentStepCard'
 
 interface Props {
@@ -19,7 +22,6 @@ interface Props {
 export function StepRenderer({ collaborationId, step }: Props) {
   switch (step.kind) {
     case 'single_agent':
-      return <SingleAgentStepCard collaborationId={collaborationId} step={step} />
     case 'parallel_agents':
       return <ParallelAgentStepCard collaborationId={collaborationId} step={step} />
     case 'host_summarize':

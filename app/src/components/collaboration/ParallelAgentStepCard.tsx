@@ -16,7 +16,9 @@
  * - 执行器在 ParallelAgents 全员失败才整步 abort;UI 在 step.status=failed 显示失败。
  */
 
+import { memo } from 'react'
 import { Loader2, AlertCircle } from 'lucide-react'
+import { mutateCollaboration } from '../../api/collaboration'
 import type { CollaborationId, Step, Participant, StepStatus } from '../../api/collaboration'
 import { selectStream, selectReasoning, useCollaborationStore } from '../../stores/collaborationStore'
 import { ThinkingBlock, AgentMarkdown } from '../chat/markdownShared'
@@ -43,7 +45,10 @@ export function memberPersistedText(full: string, name: string, participantCount
   return participantCount === 1 ? full.trim() : ''
 }
 
-export function ParallelAgentStepCard({ collaborationId, step }: Props) {
+// memo:放养群聊一场几十上百条气泡,hydrate 时整列重渲染(含 markdown 重解析)会 O(n²) 卡。
+// 已完成的历史气泡内容不再变(status/output 固定)→ 按内容比较跳过重渲染,只新气泡 / 状态变化的
+// 重渲。流式 token 走 MemberMessageBubble 内部的 store 订阅,不受这层 memo 影响。
+export const ParallelAgentStepCard = memo(function ParallelAgentStepCard({ collaborationId, step }: Props) {
   if (step.participants.length === 0) return null
   const persistedFull = step.output?.full_output ?? ''
 
@@ -60,14 +65,28 @@ export function ParallelAgentStepCard({ collaborationId, step }: Props) {
         />
       ))}
       {step.status === 'failed' && (
-        <div className="flex items-center gap-1.5 text-[11px] px-1" style={{ color: 'var(--color-error, #c00)' }}>
-          <AlertCircle size={11} />
-          有成员没说完整,这一轮中止了
+        <div className="flex items-center gap-2 px-1">
+          <span className="flex items-center gap-1.5 text-[11px]" style={{ color: 'var(--color-error, #c00)' }}>
+            <AlertCircle size={11} />
+            有成员没说完整,这一轮中止了
+          </span>
+          <button
+            onClick={() => { void mutateCollaboration(collaborationId, { kind: 'retry_step', step_id: step.id }) }}
+            className="text-[11px] px-2 py-0.5 rounded transition-colors"
+            style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-secondary)' }}
+          >
+            重叫一次 ↺
+          </button>
         </div>
       )}
     </div>
   )
-}
+}, (a, b) =>
+  a.collaborationId === b.collaborationId &&
+  a.step.id === b.step.id &&
+  a.step.status === b.step.status &&
+  (a.step.output?.full_output ?? '') === (b.step.output?.full_output ?? '') &&
+  a.step.participants.length === b.step.participants.length)
 
 interface BubbleProps {
   collaborationId: CollaborationId

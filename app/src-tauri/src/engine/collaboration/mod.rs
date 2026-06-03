@@ -309,6 +309,13 @@ pub enum CollaborationEvent {
         delta: String,
         reasoning: bool,
     },
+    /// 群事件循环(v2):某成员"延迟到点、开始组织发言"——前端据此让它的气泡
+    /// 错时冒出(typing 占位 / 等开口),呈现变速参差。仅 group_loop 发,不进 audit 表。
+    MemberThinking {
+        collaboration_id: CollaborationId,
+        step_id: StepId,
+        companion_id: CompanionId,
+    },
 }
 
 // ── Orchestrator ──────────────────────────────────────────────────────

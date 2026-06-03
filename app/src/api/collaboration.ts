@@ -147,6 +147,13 @@ export type CollaborationEventWire =
       // 正文 vs 思考(reasoning/thinking)分流 —— 子 agent 思考块据此累积。
       reasoning: boolean
     }
+  // 群事件循环:某成员开始发言 → 让它的气泡错时冒出(变速参差)。
+  | {
+      kind: 'member_thinking'
+      collaboration_id: CollaborationId
+      step_id: StepId
+      companion_id: CompanionId
+    }
 
 // ── Mutations ────────────────────────────────────────────────────────
 

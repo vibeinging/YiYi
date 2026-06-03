@@ -49,8 +49,8 @@ export function CollaborationMessageCard({ collaborationId }: Props) {
   const steps = [...collaboration.plan.steps].sort((a, b) => a.id - b.id)
 
   // 路由卡已彻底去掉(用户决策)。"谁选的、为什么"沉到 audit 里,UI 只见成员发言。
-  // 多成员同框靠 ParallelAgentStepCard 渲染气泡组,SingleAgent 路径(Phase 2B @召唤)
-  // 走 SingleAgentStepCard。
+  // 单/多成员统一走 ParallelAgentStepCard 的群聊气泡渲染(一位 = 一条气泡),
+  // 视觉一致;详见 StepRenderer。
 
   return (
     // 协作"卡"不再是卡 —— L1 多成员场景下,N 个家人气泡就是 N 条独立消息。
