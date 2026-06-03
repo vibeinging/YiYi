@@ -745,18 +745,15 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                       </ReactMarkdown>
                     </div>
                   ) : !streamingThinking ? (
-                    <div className="py-3 px-4 rounded-2xl"
+                    <div className="py-2.5 px-4 rounded-2xl inline-flex items-center gap-2"
                       style={{
                         background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)',
-                        borderBottomLeftRadius: '6px', minWidth: '200px',
+                        borderBottomLeftRadius: '6px',
                       }}>
-                      {/* 纯骨骼屏:不带"XX 正在思考"文字(私聊/群聊时对象不是 YiYi,
-                          带名字会显示错;骨骼动画本身已表达"在生成中")。 */}
-                      <div className="yiyi-skeleton">
-                        <div className="yiyi-skeleton-line" />
-                        <div className="yiyi-skeleton-line" />
-                        <div className="yiyi-skeleton-line" />
-                      </div>
+                      {/* IM 风"正在输入…"打字指示 —— 配左侧 YiYi 头像就看得出是谁在回复,
+                          取代旧的匿名骨骼屏(用户反馈:看不出谁)。 */}
+                      <span className="yiyi-typing"><span /><span /><span /></span>
+                      <span className="text-[12px]" style={{ color: 'var(--color-text-muted)' }}>正在输入…</span>
                     </div>
                   ) : null}
 
@@ -866,15 +863,13 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                       {currentTaskStream.loading && <span className="yiyi-cursor" />}
                     </div>
                   ) : currentTaskStream.loading && currentTaskStream.activeTools.length === 0 ? (
-                    <div className="py-3 px-4 rounded-2xl"
+                    <div className="py-2.5 px-4 rounded-2xl inline-flex items-center gap-2"
                       style={{
                         background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)',
-                        borderBottomLeftRadius: '6px', minWidth: '160px',
+                        borderBottomLeftRadius: '6px',
                       }}>
-                      <div className="yiyi-skeleton">
-                        <div className="yiyi-skeleton-line" />
-                        <div className="yiyi-skeleton-line" />
-                      </div>
+                      <span className="yiyi-typing"><span /><span /><span /></span>
+                      <span className="text-[12px]" style={{ color: 'var(--color-text-muted)' }}>正在输入…</span>
                     </div>
                   ) : null}
                 </div>

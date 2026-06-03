@@ -180,6 +180,26 @@
   animation: gentle-pulse 2s ease-in-out infinite;
 }
 
+/* Phase 1b: Typing indicator — 三个点依次跳动("正在输入…"),IM 风,配头像明确"谁在回复" */
+.yiyi-typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.yiyi-typing span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+  animation: yiyi-typing-bounce 1.2s ease-in-out infinite;
+}
+.yiyi-typing span:nth-child(2) { animation-delay: 0.18s; }
+.yiyi-typing span:nth-child(3) { animation-delay: 0.36s; }
+@keyframes yiyi-typing-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+
 /* Phase 2: Streaming cursor — blinking bar at end of text */
 @keyframes cursor-blink {
   0%, 100% { opacity: 1; }
