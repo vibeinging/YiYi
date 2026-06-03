@@ -22,10 +22,11 @@ import { timeAgo } from '../utils/taskStatus';
 import type { Page } from '../App';
 import type { ChatSession } from '../api/agent';
 import { createCompanionSession } from '../api/agent';
-import { listCompanions, COMPANIONS_CHANGED_EVENT, type Companion } from '../api/companions';
+import { listCompanions, retireCompanion, COMPANIONS_CHANGED_EVENT, type Companion } from '../api/companions';
 import { GroupsManagerModal } from './companions/GroupsManagerModal';
 import { GroupCreateModal } from './companions/GroupCreateModal';
-import { confirm } from './Toast';
+import { CompanionEditDrawer } from './companions/CompanionEditDrawer';
+import { confirm, toast } from './Toast';
 import logoFaceRight from '../assets/yiyi-logo-face-right.png';
 
 interface TaskSidebarProps {
@@ -48,84 +49,26 @@ function sessionBucket(ts: number): string {
   return '更早';
 }
 
-// --- 好友列表(横排头像:YiYi 置顶 + 各 companion,点击单独对话)---
-function FriendStrip({
-  companions,
-  activeCompanionId,
-  onOpenYiYi,
-  onOpenFriend,
+// FriendStrip(横排好友头像)已并入 FriendGroupPanel —— 好友列表从横排左右滑改成弹出面板里的
+// 纵向列表(用户反馈:横排不便)。
+
+// --- 「好友 + 群」弹出面板 ——点 Users 按钮弹出:好友纵向列表(可上下滚,取代原横排左右滑)
+//     + 发起群聊 / 管理群。整合自原 FriendStrip + GroupQuickMenu(用户反馈:横排不便)。 ---
+function FriendGroupPanel({
+  x, y, companions, activeCompanionId, onOpenYiYi, onOpenFriend, onEditCompanion, onClose, onCreate, onManage,
 }: {
+  x: number; y: number;
   companions: Companion[];
-  /** 当前会话绑的 companion id(高亮用);null = 不在私聊。 */
   activeCompanionId: number | null;
   onOpenYiYi: () => void;
-  onOpenFriend: (companionId: number) => void;
-}) {
-  return (
-    <div className="shrink-0 px-2 pt-1">
-      <div className="text-[10px] font-semibold tracking-[0.08em] uppercase px-1.5" style={{ color: 'var(--sidebar-section)' }}>
-        好友
-      </div>
-      {/* pt/px 给选中态 outline 描边留空间 —— overflow-x-auto 会让 overflow-y 变成
-          auto 从而裁剪掉顶部描边,故内边距必须 ≥ 描边外扩(2px outline + 1px offset)。 */}
-      <div className="flex gap-1.5 overflow-x-auto pt-1 pb-1.5 px-0.5" style={{ scrollbarWidth: 'none' }}>
-        {/* YiYi 置顶 —— 点它回到和主精灵的默认对话 */}
-        <button
-          onClick={onOpenYiYi}
-          className="shrink-0 flex flex-col items-center gap-0.5 w-12 group"
-          title="YiYi · 主精灵"
-        >
-          <div
-            className="w-9 h-9 rounded-[13px] flex items-center justify-center overflow-hidden transition-all"
-            style={{
-              background: 'var(--sidebar-hover)',
-              outline: activeCompanionId === null ? '2px solid var(--color-primary)' : '2px solid transparent',
-              outlineOffset: '1px',
-            }}
-          >
-            <img src={logoFaceRight} alt="YiYi" style={{ width: '80%', height: '80%', objectFit: 'contain' }} />
-          </div>
-          <span className="text-[10px] truncate w-full text-center" style={{ color: 'var(--sidebar-text)' }}>YiYi</span>
-        </button>
-
-        {companions.map((c) => {
-          const active = activeCompanionId === c.id;
-          return (
-            <button
-              key={c.id}
-              onClick={() => onOpenFriend(c.id)}
-              className="shrink-0 flex flex-col items-center gap-0.5 w-12 group"
-              title={`和 ${c.name} 单独聊`}
-            >
-              <div
-                className="w-9 h-9 rounded-[13px] flex items-center justify-center text-[18px] transition-all"
-                style={{
-                  background: c.color_hex ? `${c.color_hex}26` : 'var(--sidebar-hover)',
-                  outline: active ? '2px solid var(--color-primary)' : '2px solid transparent',
-                  outlineOffset: '1px',
-                }}
-              >
-                {c.avatar_emoji || '🤖'}
-              </div>
-              <span className="text-[10px] truncate w-full text-center" style={{ color: 'var(--sidebar-text)' }}>
-                {c.name}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// --- 群快捷菜单(发起群聊 / 管理群)——微信"+"式入口 ---
-function GroupQuickMenu({ x, y, onClose, onCreate, onManage }: {
-  x: number; y: number;
+  onOpenFriend: (id: number) => void;
+  onEditCompanion: (c: Companion) => void;
   onClose: () => void;
   onCreate: () => void;
   onManage: () => void;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
+  const [ctx, setCtx] = useState<{ companion: Companion; x: number; y: number } | null>(null);
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) onClose();
@@ -134,14 +77,139 @@ function GroupQuickMenu({ x, y, onClose, onCreate, onManage }: {
     return () => document.removeEventListener('mousedown', handler);
   }, [onClose]);
 
+  // 右键「退休」—— 二次确认后退役(可去「小精灵」页恢复)。列表靠 COMPANIONS_CHANGED 自动刷新。
+  const retire = async (c: Companion) => {
+    setCtx(null);
+    const ok = await confirm(`让「${c.name}」退休?退休后不在好友 / 群里出现(可去「小精灵」页恢复)。`);
+    if (!ok) return;
+    try { await retireCompanion(c.id); toast.success(`「${c.name}」已退休`); }
+    catch (e) { toast.error(`退休失败:${e}`); }
+  };
+
+  const row = 'w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg transition-colors text-left';
+  return (
+    <>
+    <div
+      ref={menuRef}
+      onMouseDown={(e) => e.stopPropagation()}
+      className="fixed z-[100] w-[226px] rounded-2xl py-2 animate-scale-in flex flex-col"
+      style={{
+        left: x, top: y,
+        maxHeight: `calc(100vh - ${y + 16}px)`,
+        background: 'var(--color-bg-elevated)',
+        boxShadow: '0 8px 32px rgba(0,0,0,0.28), 0 0 0 0.5px rgba(255,255,255,0.08)',
+        backdropFilter: 'blur(40px)',
+      }}
+    >
+      {/* 好友纵向列表(占剩余高度、可滚) */}
+      <div className="text-[10px] font-semibold tracking-[0.08em] uppercase px-4 pb-1 shrink-0" style={{ color: 'var(--color-text-muted)' }}>
+        好友
+      </div>
+      <div className="flex-1 min-h-0 overflow-y-auto px-1.5" style={{ scrollbarWidth: 'thin' }}>
+        {(() => {
+          const bg = activeCompanionId === null ? 'var(--color-bg-muted)' : 'transparent';
+          return (
+            <button onClick={() => { onOpenYiYi(); onClose(); }} className={row} style={{ background: bg }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = bg; }}>
+              <div className="shrink-0 w-8 h-8 rounded-[10px] flex items-center justify-center overflow-hidden" style={{ background: 'var(--sidebar-hover)' }}>
+                <img src={logoFaceRight} alt="YiYi" style={{ width: '78%', height: '78%', objectFit: 'contain' }} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[13px] font-medium truncate" style={{ color: 'var(--color-text)' }}>YiYi</div>
+                <div className="text-[11px] truncate" style={{ color: 'var(--color-text-muted)' }}>主精灵</div>
+              </div>
+            </button>
+          );
+        })()}
+        {companions.map((c) => {
+          const active = activeCompanionId === c.id;
+          const accent = c.color_hex || 'var(--color-primary)';
+          const bg = active ? 'var(--color-bg-muted)' : 'transparent';
+          return (
+            <button key={c.id} onClick={() => { onOpenFriend(c.id); onClose(); }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                // 锚定到该好友项的右端(尾部),不跟鼠标落点 —— 菜单总是整齐贴在 item 尾部。
+                const r = e.currentTarget.getBoundingClientRect();
+                setCtx({ companion: c, x: r.right - 4, y: r.top });
+              }}
+              className={row} style={{ background: bg }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = bg; }}>
+              <div className="shrink-0 w-8 h-8 rounded-[10px] flex items-center justify-center text-[16px]" style={{ background: `${accent}26` }}>
+                {c.avatar_emoji || '🤖'}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[13px] font-medium truncate" style={{ color: 'var(--color-text)' }}>{c.name}</div>
+                {c.role_label && <div className="text-[11px] truncate" style={{ color: 'var(--color-text-muted)' }}>{c.role_label}</div>}
+              </div>
+            </button>
+          );
+        })}
+        {companions.length === 0 && (
+          <div className="text-[11.5px] px-2.5 py-2" style={{ color: 'var(--color-text-muted)' }}>
+            还没有伙伴 —— 去「小精灵」收养
+          </div>
+        )}
+      </div>
+
+      {/* 分隔 + 群操作(固定底部) */}
+      <div className="mx-3 my-1.5 shrink-0" style={{ borderTop: '1px solid var(--color-border)' }} />
+      <div className="px-1.5 shrink-0">
+        <button onClick={() => { onCreate(); onClose(); }} className={row}
+          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+          <div className="shrink-0 w-8 h-8 rounded-[10px] flex items-center justify-center" style={{ background: 'var(--color-primary)1a' }}>
+            <Users size={15} style={{ color: 'var(--color-primary)' }} />
+          </div>
+          <span className="text-[13px] font-medium" style={{ color: 'var(--color-text)' }}>发起群聊</span>
+        </button>
+        <button onClick={() => { onManage(); onClose(); }} className={row}
+          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+          <div className="shrink-0 w-8 h-8 rounded-[10px] flex items-center justify-center" style={{ background: 'var(--color-bg-subtle)' }}>
+            <Settings size={15} style={{ color: 'var(--color-text-muted)' }} />
+          </div>
+          <span className="text-[13px] font-medium" style={{ color: 'var(--color-text)' }}>管理群</span>
+        </button>
+      </div>
+    </div>
+    {/* 右键菜单放在 panel 外 —— panel 的 backdrop-filter 会成为内部 fixed 的定位基准,放里面会把
+        视口坐标当成相对 panel 的偏移而错位;它自带 onMouseDown stopPropagation,不会误关 panel。 */}
+    {ctx && (
+      <CompanionContextMenu
+        x={ctx.x}
+        y={ctx.y}
+        companion={ctx.companion}
+        onEdit={() => { onEditCompanion(ctx.companion); onClose(); }}
+        onChat={() => { onOpenFriend(ctx.companion.id); onClose(); }}
+        onRetire={() => retire(ctx.companion)}
+        onClose={() => setCtx(null)}
+      />
+    )}
+    </>
+  );
+}
+
+// --- 好友右键菜单 —— 编辑资料 / 单独聊 / 退休 ---
+function CompanionContextMenu({ x, y, companion, onEdit, onChat, onRetire, onClose }: {
+  x: number; y: number;
+  companion: Companion;
+  onEdit: () => void;
+  onChat: () => void;
+  onRetire: () => void;
+  onClose: () => void;
+}) {
   const items = [
-    { icon: Users, label: '发起群聊', action: onCreate },
-    { icon: Settings, label: '管理群', action: onManage },
+    { icon: Pencil, label: '编辑资料', danger: false, action: onEdit },
+    { icon: MessageCircle, label: '单独聊', danger: false, action: onChat },
+    { icon: Clock, label: '退休', danger: true, action: onRetire },
   ];
   return (
     <div
-      ref={menuRef}
-      className="fixed z-[100] min-w-[140px] rounded-xl py-1.5 animate-scale-in"
+      onMouseDown={(e) => e.stopPropagation()}
+      className="fixed z-[110] min-w-[150px] rounded-xl py-1.5 animate-scale-in"
       style={{
         left: x, top: y,
         background: 'var(--color-bg-elevated)',
@@ -149,19 +217,21 @@ function GroupQuickMenu({ x, y, onClose, onCreate, onManage }: {
         backdropFilter: 'blur(40px)',
       }}
     >
+      <div className="px-3.5 pt-0.5 pb-1.5 text-[11px] font-medium truncate" style={{ color: 'var(--color-text-muted)' }}>
+        {companion.name}
+      </div>
       {items.map((item, i) => {
         const Icon = item.icon;
         return (
           <button
             key={i}
-            onMouseDown={(e) => e.stopPropagation()}
             onClick={() => { item.action(); onClose(); }}
             className="w-full flex items-center gap-2.5 px-3.5 py-[7px] text-[12.5px] transition-colors text-left"
-            style={{ color: 'var(--color-text)' }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
+            style={{ color: item.danger ? 'var(--color-error)' : 'var(--color-text)' }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = item.danger ? 'rgba(255,69,58,0.08)' : 'var(--color-bg-muted)'; }}
             onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
           >
-            <Icon size={14} style={{ opacity: 0.7 }} />
+            <Icon size={14} style={{ opacity: 0.75 }} />
             {item.label}
           </button>
         );
@@ -523,6 +593,7 @@ export const TaskSidebar = memo(function TaskSidebar({
 
   const [moreOpen, setMoreOpen] = useState(false);
   const [groupMenu, setGroupMenu] = useState<{ x: number; y: number } | null>(null);
+  const [editingCompanion, setEditingCompanion] = useState<Companion | null>(null);
   const [groupCreateOpen, setGroupCreateOpen] = useState(false);
   const [groupsManagerOpen, setGroupsManagerOpen] = useState(false);
 
@@ -675,9 +746,14 @@ export const TaskSidebar = memo(function TaskSidebar({
         </button>
       </aside>
       {groupMenu && (
-      <GroupQuickMenu
+      <FriendGroupPanel
         x={groupMenu.x}
         y={groupMenu.y}
+        companions={companions}
+        activeCompanionId={activeCompanionId}
+        onOpenYiYi={openYiYi}
+        onOpenFriend={openFriend}
+        onEditCompanion={setEditingCompanion}
         onClose={() => setGroupMenu(null)}
         onCreate={() => setGroupCreateOpen(true)}
         onManage={() => setGroupsManagerOpen(true)}
@@ -685,6 +761,13 @@ export const TaskSidebar = memo(function TaskSidebar({
     )}
     {groupCreateOpen && <GroupCreateModal onClose={() => setGroupCreateOpen(false)} />}
     {groupsManagerOpen && <GroupsManagerModal onClose={() => setGroupsManagerOpen(false)} />}
+    {editingCompanion && (
+      <CompanionEditDrawer
+        companion={editingCompanion}
+        onClose={() => setEditingCompanion(null)}
+        onChanged={() => {}}
+      />
+    )}
       </>
     );
   }
@@ -792,14 +875,7 @@ export const TaskSidebar = memo(function TaskSidebar({
         )}
       </div>
 
-      {/* ── 好友列表(上部分:点头像和 agent 单独对话)── */}
-      <FriendStrip
-        companions={companions}
-        activeCompanionId={activeCompanionId}
-        onOpenYiYi={openYiYi}
-        onOpenFriend={openFriend}
-      />
-      <div className="shrink-0 mx-3 mb-0.5" style={{ borderTop: '1px solid var(--sidebar-border)' }} />
+      {/* 好友列表已移入「群聊」按钮的弹出面板(FriendGroupPanel)—— 横排改纵向,见用户反馈。 */}
 
       {/* ── Session List(下部分:聊天历史,按最近活跃分组)── */}
       <div className="flex-1 overflow-y-auto py-0.5" style={{ scrollbarWidth: 'thin' }}>
@@ -868,9 +944,14 @@ export const TaskSidebar = memo(function TaskSidebar({
 
     </aside>
     {groupMenu && (
-      <GroupQuickMenu
+      <FriendGroupPanel
         x={groupMenu.x}
         y={groupMenu.y}
+        companions={companions}
+        activeCompanionId={activeCompanionId}
+        onOpenYiYi={openYiYi}
+        onOpenFriend={openFriend}
+        onEditCompanion={setEditingCompanion}
         onClose={() => setGroupMenu(null)}
         onCreate={() => setGroupCreateOpen(true)}
         onManage={() => setGroupsManagerOpen(true)}
@@ -878,6 +959,13 @@ export const TaskSidebar = memo(function TaskSidebar({
     )}
     {groupCreateOpen && <GroupCreateModal onClose={() => setGroupCreateOpen(false)} />}
     {groupsManagerOpen && <GroupsManagerModal onClose={() => setGroupsManagerOpen(false)} />}
+    {editingCompanion && (
+      <CompanionEditDrawer
+        companion={editingCompanion}
+        onClose={() => setEditingCompanion(null)}
+        onChanged={() => {}}
+      />
+    )}
     </>
   );
 });
