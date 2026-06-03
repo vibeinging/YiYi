@@ -145,9 +145,10 @@ fn short_image_hint(url: &str) -> String {
     trimmed
 }
 
-/// 全局默认思考设置 `(enabled, effort)`,effort ∈ {"high","max"};默认 `(true,"high")`。
+/// 全局默认思考设置 `(enabled, effort)`,effort ∈ {"high","max"};默认 `(false,"high")`
+/// —— 思考默认关(用户决策:DeepSeek V4 不思考也够强,省时省钱;要深思在 UI/会话开关里开)。
 fn global_thinking_default() -> (bool, String) {
-    let default = (true, "high".to_string());
+    let default = (false, "high".to_string());
     let handle = match crate::engine::tools::APP_HANDLE.get() {
         Some(h) => h,
         None => return default,
@@ -158,7 +159,7 @@ fn global_thinking_default() -> (bool, String) {
         Ok(c) => c,
         Err(_) => return default,
     };
-    let enabled = config.agents.enable_thinking.unwrap_or(true);
+    let enabled = config.agents.enable_thinking.unwrap_or(false);
     let effort = match config.agents.reasoning_effort.as_deref() {
         Some("max") => "max",
         _ => "high",

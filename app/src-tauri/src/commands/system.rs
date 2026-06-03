@@ -1361,11 +1361,11 @@ pub async fn get_recall_candidates(
 
 /// Get the current thinking effort as a unified "off" / "high" / "max" string
 /// (UI representation). Internally derived from `enable_thinking` +
-/// `reasoning_effort`. Defaults to "high".
+/// `reasoning_effort`. Defaults to "off"(思考默认关)。
 #[tauri::command]
 pub async fn get_thinking_effort(state: State<'_, AppState>) -> Result<String, String> {
     let config = state.config.read().await;
-    if !config.agents.enable_thinking.unwrap_or(true) {
+    if !config.agents.enable_thinking.unwrap_or(false) {
         return Ok("off".to_string());
     }
     Ok(match config.agents.reasoning_effort.as_deref() {

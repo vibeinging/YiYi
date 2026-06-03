@@ -232,7 +232,8 @@ pub struct AgentsConfig {
     /// If None, defaults to ~/Documents/YiYi.
     #[serde(default)]
     pub workspace_dir: Option<String>,
-    /// DeepSeek 思考模式开关(全局默认)。`None` → 默认 `true`(DeepSeek 推荐开)。
+    /// DeepSeek 思考模式开关(全局默认)。`None` → 默认 `false`(思考默认关:V4 不思考也够强,
+    /// 省时省钱;要深思在 UI 思考开关或会话级 thinking_mode 里开)。
     /// 落到请求体 `thinking: {type: "enabled"/"disabled"}`(官方格式)。
     #[serde(default)]
     pub enable_thinking: Option<bool>,
