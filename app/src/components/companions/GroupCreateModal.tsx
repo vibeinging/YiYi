@@ -82,9 +82,13 @@ export function GroupCreateModal({
       const gid = await createGroupWithMembers(nm, emoji || null, selected)
       const sid = await useSessionStore.getState().createNewChat()
       await setSessionGroup(sid, gid)
-      useSessionStore.getState().switchToSession(sid)
+      // 先让 groups.byId 有这个新群(左侧标题/头像要用),再重拉会话列表 —— 这样列表里的新会话
+      // 带上后端刚绑的 group_id,立刻显示群名 + 群头像拼图(否则回落 "New Chat" + 空群,正是
+      // "列表没刷新 / 没群名"的现象)。最后切到它 = 右侧直接进群窗口。
       useGroupsStore.getState().invalidateMembers(gid)
       await useGroupsStore.getState().load()
+      await useSessionStore.getState().refreshSessions()
+      useSessionStore.getState().switchToSession(sid)
       window.dispatchEvent(new CustomEvent('navigate', { detail: 'chat' }))
       toast.success(`已建群「${nm}」(${selected.size} 人)`)
       onChanged?.()
