@@ -13,6 +13,7 @@ import { Select } from '../Select';
 import { BotSetupGuide, hasSetupGuide } from '../BotSetupGuide';
 import type { PlatformType } from '../../api/bots';
 import { PLATFORM_META } from './platformMeta';
+import { WeixinQrLogin } from './WeixinQrLogin';
 
 export interface BotDialog {
   open: boolean;
@@ -53,6 +54,7 @@ export function BotFormDialog({
 }: BotFormDialogProps) {
   const { t } = useTranslation();
   const showGuide = dialog.mode === 'create' && hasSetupGuide(dialog.platform);
+  const isWeixin = dialog.mode === 'create' && dialog.platform === 'weixin';
   const isZh = t('bots.title') !== 'Bots';
 
   return (
@@ -160,6 +162,12 @@ export function BotFormDialog({
               onComplete={onSave}
               lang={isZh ? 'zh' : 'en'}
             />
+          ) : isWeixin ? (
+            <WeixinQrLogin
+              onConfirmed={(botToken, baseUrl) =>
+                onDialogChange({ ...dialog, config: { bot_token: botToken, base_url: baseUrl } })
+              }
+            />
           ) : (
             <>
               {/* Platform doc link */}
@@ -248,7 +256,7 @@ export function BotFormDialog({
             </button>
             <button
               onClick={onSave}
-              disabled={saving || !dialog.name.trim()}
+              disabled={saving || !dialog.name.trim() || (isWeixin && !dialog.config.bot_token)}
               className="px-4 py-2.5 text-[13px] font-medium text-white rounded-xl disabled:opacity-50 transition-colors shadow-sm"
               style={{ background: 'var(--color-primary)' }}
             >

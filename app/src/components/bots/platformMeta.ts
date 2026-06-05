@@ -8,6 +8,8 @@ export interface PlatformMeta {
   docUrl: string;
   docLabel: string;
   configFields: { key: string; label: string; placeholder: string; secret?: boolean }[];
+  /** 走扫码登录(微信 iLink),不填表单 —— 由 WeixinQrLogin 处理。 */
+  qrLogin?: boolean;
 }
 
 export const PLATFORM_META: Record<string, PlatformMeta> = {
@@ -69,6 +71,14 @@ export const PLATFORM_META: Record<string, PlatformMeta> = {
       { key: 'corp_secret', label: 'Corp Secret', placeholder: 'xxxxx', secret: true },
       { key: 'agent_id', label: 'Agent ID', placeholder: '1000002' },
     ],
+  },
+  weixin: {
+    icon: '💬',
+    color: '#07C160',
+    docUrl: 'https://github.com/chenhg5/cc-connect/blob/main/docs/weixin.md',
+    docLabel: '微信 iLink 文档',
+    configFields: [],
+    qrLogin: true,
   },
   webhook: {
     icon: '🔗',

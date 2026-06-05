@@ -684,6 +684,63 @@ async fn start_one_bot_inner(
                 Ok(None)
             }
         }
+        "weixin" => {
+            // 微信个人号 iLink:扫码登录后存了 bot_token + base_url(见 weixin_poll_login)。
+            let bot_token = config["bot_token"].as_str().map(|s| s.to_string());
+            let base_url = config["base_url"].as_str().map(|s| s.to_string());
+
+            if let Some(token) = bot_token {
+                let wx = crate::engine::bots::weixin::WeixinBot::new(
+                    bot_id.clone(),
+                    token.clone(),
+                    base_url,
+                );
+                let ctx_tokens = wx.context_tokens();
+                let wx_base = wx.base_url();
+                let running_flag = wx.running_flag();
+                wx.start(tx.clone()).await;
+
+                // response handler:按 user_id 查 context_token(iLink 回复必带),静态 send_message 发。
+                let token_c = token.clone();
+                manager
+                    .register_handler(&bot_id, move |target, content| {
+                        let ctx = ctx_tokens.clone();
+                        let token = token_c.clone();
+                        let base = wx_base.clone();
+                        async move {
+                            let context_token = {
+                                let m = ctx.read().await;
+                                m.get(&target).cloned()
+                            };
+                            match context_token {
+                                Some(ct) => {
+                                    crate::engine::bots::weixin::send_message(
+                                        &base, &token, &target, &ct, &content.text,
+                                    )
+                                    .await
+                                }
+                                None => Err(format!(
+                                    "weixin: 没有 {target} 的 context_token(对方需先发一条消息,iLink 限制)"
+                                )),
+                            }
+                        }
+                    })
+                    .await;
+
+                manager
+                    .register_running_bot(crate::engine::bots::manager::RunningBot {
+                        bot_id: bot_id.clone(),
+                        running_flag,
+                    })
+                    .await;
+
+                log::info!("WeChat (iLink) bot started");
+                Ok(Some(bot_id))
+            } else {
+                log::info!("WeChat bot: 缺 bot_token(需先扫码登录)");
+                Ok(None)
+            }
+        }
         // Webhook-based platforms don't have long-running connections to track
         "wecom" | "webhook" => {
             Ok(None)
@@ -692,6 +749,33 @@ async fn start_one_bot_inner(
             log::warn!("Unknown platform type: {}", bot.platform);
             Ok(None)
         }
+    }
+}
+
+/// 微信 iLink 扫码登录①:取二维码。前端拿 `img` 显示、`qrcode` 用于轮询。
+#[tauri::command]
+pub async fn weixin_get_qrcode() -> Result<serde_json::Value, String> {
+    let (qrcode, img) =
+        crate::engine::bots::weixin::get_login_qrcode(crate::engine::bots::weixin::DEFAULT_BASE_URL)
+            .await?;
+    Ok(serde_json::json!({ "qrcode": qrcode, "img": img }))
+}
+
+/// 微信 iLink 扫码登录②:轮询状态。confirmed 时返回 `bot_token` + `base_url`,前端据此建 bot。
+#[tauri::command]
+pub async fn weixin_poll_login(qrcode: String) -> Result<serde_json::Value, String> {
+    match crate::engine::bots::weixin::poll_login_status(
+        crate::engine::bots::weixin::DEFAULT_BASE_URL,
+        &qrcode,
+    )
+    .await?
+    {
+        Some((token, baseurl)) => Ok(serde_json::json!({
+            "confirmed": true,
+            "bot_token": token,
+            "base_url": baseurl,
+        })),
+        None => Ok(serde_json::json!({ "confirmed": false })),
     }
 }
 

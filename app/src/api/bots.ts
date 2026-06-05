@@ -4,7 +4,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 
-export type PlatformType = 'discord' | 'telegram' | 'qq' | 'dingtalk' | 'feishu' | 'wecom' | 'webhook';
+export type PlatformType = 'discord' | 'telegram' | 'qq' | 'dingtalk' | 'feishu' | 'wecom' | 'weixin' | 'webhook';
 
 export interface BotInfo {
   id: string;
@@ -172,4 +172,19 @@ export interface BotStatusInfo {
 
 export async function getBotStatuses(): Promise<BotStatusInfo[]> {
   return await invoke<BotStatusInfo[]>('bots_get_status');
+}
+
+// === 微信 iLink 扫码登录 ===
+
+export interface WeixinQrcode { qrcode: string; img: string; }
+export interface WeixinLoginStatus { confirmed: boolean; bot_token?: string; base_url?: string; }
+
+/** 取微信登录二维码(get_bot_qrcode)。`img` 直接显示,`qrcode` 用于轮询。 */
+export async function weixinGetQrcode(): Promise<WeixinQrcode> {
+  return await invoke<WeixinQrcode>('weixin_get_qrcode');
+}
+
+/** 轮询扫码状态(get_qrcode_status)。confirmed 时带 `bot_token` + `base_url`。 */
+export async function weixinPollLogin(qrcode: string): Promise<WeixinLoginStatus> {
+  return await invoke<WeixinLoginStatus>('weixin_poll_login', { qrcode });
 }

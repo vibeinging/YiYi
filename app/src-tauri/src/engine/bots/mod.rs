@@ -8,6 +8,7 @@ pub mod qq;
 pub mod rate_limit;
 pub mod retry;
 pub mod telegram;
+pub mod weixin;
 pub mod wecom;
 pub mod webhook_server;
 
@@ -379,6 +380,7 @@ pub fn platform_types() -> Vec<(&'static str, &'static str)> {
         ("dingtalk", "DingTalk"),
         ("feishu", "Feishu"),
         ("wecom", "WeCom"),
+        ("weixin", "微信"),
         ("webhook", "Webhook"),
     ]
 }
