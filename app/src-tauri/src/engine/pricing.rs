@@ -126,8 +126,10 @@ mod tests {
             prompt_cache_hit_tokens: 800_000,
             prompt_cache_miss_tokens: 200_000,
         };
-        let inside = Utc.with_ymd_and_hms(2026, 4, 1, 0, 0, 0).unwrap();
-        let p = pricing_for_model_at("deepseek-v4-pro", inside).unwrap();
+        // Anchor `expected` to the SAME clock as calculate_turn_cost_from_usage
+        // (which prices at "now"). Pinning it inside the pro discount window made
+        // this a time bomb that started failing the day the window closed (2026-05-31).
+        let p = pricing_for_model("deepseek-v4-pro").unwrap();
         let expected = 0.8 * p.input_cache_hit_per_million + 0.2 * p.input_cache_miss_per_million;
         let got = calculate_turn_cost_from_usage("deepseek-v4-pro", &usage).unwrap();
         assert!((got - expected).abs() < 1e-9, "got {got} expected {expected}");
