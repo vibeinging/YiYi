@@ -377,20 +377,19 @@ pub async fn chat_stream_start(
         llm_history: ctx.llm_history,
         max_iter: ctx.max_iter,
         is_first_message: ctx.is_first_message,
+        session_id: sid_clone,
+        working_dir: Some(working_dir.clone()),
         shell: crate::engine::agent_runner::config::ShellOptions::primary(max_r, budget),
     };
+    let persist = Some(crate::engine::agent_runner::config::ChatPersistence {
+        db,
+        internal_dir: working_dir,
+        user_workspace,
+    });
 
     tokio::spawn(async move {
-        crate::engine::agent_runner::run::run_with_shell(
-            run_config,
-            db,
-            working_dir,
-            user_workspace,
-            sid_clone,
-            sink,
-            cancelled,
-        )
-        .await;
+        let _ = crate::engine::agent_runner::run::run_agent(run_config, persist, sink, cancelled)
+            .await;
     });
 
     Ok(())

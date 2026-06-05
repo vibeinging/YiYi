@@ -316,6 +316,24 @@ pub enum CollaborationEvent {
         step_id: StepId,
         companion_id: CompanionId,
     },
+    /// 伙伴执行工具:开始。前端据此在该成员气泡下渲染工具卡(running)。
+    /// 高频、过程态,不进 audit 表 —— 取代早期把 `🔧` 文本塞进思考块的降级。
+    ToolStart {
+        collaboration_id: CollaborationId,
+        step_id: StepId,
+        companion_id: CompanionId,
+        name: String,
+        args_preview: String,
+    },
+    /// 伙伴执行工具:结束。`is_error` 由 result preview 前缀推断(与主精灵一致)。
+    ToolEnd {
+        collaboration_id: CollaborationId,
+        step_id: StepId,
+        companion_id: CompanionId,
+        name: String,
+        result_preview: String,
+        is_error: bool,
+    },
 }
 
 // ── Orchestrator ──────────────────────────────────────────────────────

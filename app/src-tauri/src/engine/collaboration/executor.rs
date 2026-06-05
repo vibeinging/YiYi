@@ -218,16 +218,6 @@ async fn run_one_guarded(
     }
 }
 
-/// UTF-8 安全的预览截断:按 char 计数,超过 `n` 个 char 截断并补 `…`。
-fn truncate_preview(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
-        return s.to_string();
-    }
-    let mut out: String = s.chars().take(n).collect();
-    out.push('…');
-    out
-}
-
 async fn run_one(
     config: &LLMConfig,
     step: &Step,
@@ -362,61 +352,39 @@ async fn run_one_react(
 
     let started = Instant::now();
 
-    // 累加 token 用量(Usage 事件多次到达,跨工具迭代累计)。
+    // token 用量累加交给 CollabEventSink 的 on_usage;executor 收尾时读回。
     let in_tokens = Arc::new(AtomicU32::new(0));
     let out_tokens = Arc::new(AtomicU32::new(0));
 
-    let collab_id_c = collab_id;
-    let step_id_c = step.id;
-    let companion_id_c = p.companion_id;
-    let in_c = Arc::clone(&in_tokens);
-    let out_c = Arc::clone(&out_tokens);
-    let on_event = move |evt: crate::engine::react_agent::AgentStreamEvent| {
-        use crate::engine::react_agent::AgentStreamEvent as E;
-        let (delta, reasoning) = match evt {
-            E::Token(d) => (d, false),
-            E::Thinking(d) => (d, true),
-            // 工具的开始/结束摘要注入思考块,让用户看见伙伴"动手"的踪迹
-            // (与正文同流,靠 reasoning 标志渲染成思考气泡)。
-            E::ToolStart { name, args_preview } => (
-                format!("\n🔧 {name} {}\n", truncate_preview(&args_preview, 60)),
-                true,
-            ),
-            E::ToolEnd { name: _, result_preview } => {
-                (format!("↳ {}\n", truncate_preview(&result_preview, 80)), true)
-            }
-            E::Usage { input_tokens, output_tokens, .. } => {
-                in_c.fetch_add(input_tokens, Ordering::Relaxed);
-                out_c.fetch_add(output_tokens, Ordering::Relaxed);
-                return;
-            }
-            _ => return,
-        };
-        if !delta.is_empty() {
-            events::emit(CollaborationEvent::Token {
-                collaboration_id: collab_id_c,
-                step_id: step_id_c,
-                companion_id: companion_id_c,
-                delta,
-                reasoning,
-            });
-        }
-    };
+    // 伙伴的流事件统一经 AgentEventSink 翻译:正文 / 思考 → Token{reasoning},
+    // 工具开始 / 结束 → 结构化 ToolStart / ToolEnd(不再降级成 🔧 文本注入思考块)。
+    let sink: Arc<dyn crate::engine::agent_runner::AgentEventSink> =
+        Arc::new(crate::engine::agent_runner::collab_sink::CollabEventSink::new(
+            collab_id,
+            step.id,
+            p.companion_id,
+            Arc::clone(&in_tokens),
+            Arc::clone(&out_tokens),
+        ));
 
-    let working_dir = crate::engine::tools::WORKING_DIR.get().map(|p| p.as_path());
-    let reply = crate::engine::react_agent::run_react_with_options_stream(
-        config,
-        &system_prompt,
-        &user_message,
-        &[],
-        Some(6),
-        working_dir,
-        on_event,
-        None,
-        None,
-        None,
-    )
-    .await?;
+    // 走统一 run_agent:shell 全关(单轮 ReAct)+ working_dir=None(不注入 YiYi 的
+    // SOUL.md/AGENTS.md persona —— 伙伴自己的人设已在 system_prompt 里)+ persist=None
+    // (产出是协作 step output,由本函数收成 StepOutput,不入 chat 会话)。
+    let cfg = crate::engine::agent_runner::config::AgentRunConfig {
+        llm: config.clone(),
+        system_prompt,
+        agent_message: user_message.clone(),
+        augmented_message: user_message,
+        llm_history: vec![],
+        max_iter: Some(6),
+        is_first_message: false,
+        session_id: String::new(),
+        working_dir: None,
+        shell: crate::engine::agent_runner::config::ShellOptions::default(),
+    };
+    let dummy_cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reply =
+        crate::engine::agent_runner::run::run_agent(cfg, None, sink, dummy_cancel).await?;
 
     let duration_ms = started.elapsed().as_millis() as u64;
     let tokens_used = TokenUsage {

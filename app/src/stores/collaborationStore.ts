@@ -27,6 +27,7 @@ import {
   type Step,
   type StepId,
 } from '../api/collaboration'
+import type { ToolStatus } from './chatStreamStore'
 
 /** Concatenated token deltas for one (step, companion) pair. */
 export interface ParticipantStream {
@@ -35,6 +36,8 @@ export interface ParticipantStream {
   text: string
   /** 思考(reasoning/thinking)累积 —— 子 agent 思考块用,与主 agent 一致。 */
   reasoning: string
+  /** 工具调用流(实时)—— 该成员本轮动手痕迹,渲染成工具卡(与主精灵复用 ToolCallPanel)。 */
+  tools: ToolStatus[]
 }
 
 export interface CollaborationState {
@@ -186,7 +189,46 @@ export const useCollaborationStore = create<StoreState & StoreActions>((set, get
           companion_id: event.companion_id,
           text: (cur?.text ?? '') + (event.reasoning ? '' : event.delta),
           reasoning: (cur?.reasoning ?? '') + (event.reasoning ? event.delta : ''),
+          tools: cur?.tools ?? [],
         })
+        next.set(id, { ...existing, streams: newStreams })
+      } else if (event.kind === 'tool_start') {
+        // 工具开始:在该成员流里 push 一条 running 工具(与 token 同终态守卫)。
+        if (isTerminalStatus(existing.collaboration.status)) return prev
+        const key = `${event.step_id}:${event.companion_id}`
+        const newStreams = new Map(existing.streams)
+        const cur = newStreams.get(key)
+        const tools: ToolStatus[] = [
+          ...(cur?.tools ?? []),
+          {
+            id: cur?.tools.length ?? 0,
+            name: event.name,
+            status: 'running' as const,
+            preview: event.args_preview,
+          },
+        ]
+        newStreams.set(key, {
+          companion_id: event.companion_id,
+          text: cur?.text ?? '',
+          reasoning: cur?.reasoning ?? '',
+          tools,
+        })
+        next.set(id, { ...existing, streams: newStreams })
+      } else if (event.kind === 'tool_end') {
+        // 工具结束:把最近一条同名 running 标记 done + 存 resultPreview(error 由 panel 据前缀判)。
+        if (isTerminalStatus(existing.collaboration.status)) return prev
+        const key = `${event.step_id}:${event.companion_id}`
+        const newStreams = new Map(existing.streams)
+        const cur = newStreams.get(key)
+        if (!cur) return prev
+        const tools = [...cur.tools]
+        for (let i = tools.length - 1; i >= 0; i--) {
+          if (tools[i].name === event.name && tools[i].status === 'running') {
+            tools[i] = { ...tools[i], status: 'done' as const, resultPreview: event.result_preview }
+            break
+          }
+        }
+        newStreams.set(key, { ...cur, tools })
         next.set(id, { ...existing, streams: newStreams })
       } else if (event.kind === 'audit') {
         const audit = event.event
@@ -202,7 +244,8 @@ export const useCollaborationStore = create<StoreState & StoreActions>((set, get
         next.set(id, { ...existing, audit: newAudit })
       }
       // member_thinking:不改同步态,靠下面 hydrate 让新 step 错时冒出。
-      return event.kind === 'audit' || event.kind === 'token' ? { collaborations: next } : prev
+      // 其余(token / tool_start / tool_end / audit)都已更新 next。
+      return event.kind === 'member_thinking' ? prev : { collaborations: next }
     })
 
     // Out-of-band re-hydrate so the snapshot stays authoritative. 放养群聊会高频触发,
@@ -270,5 +313,13 @@ export const selectReasoning =
   (state: StoreState): string | undefined => {
     const key = `${stepId}:${companionId}`
     return state.collaborations.get(id)?.streams.get(key)?.reasoning
+  }
+
+/** 子 agent 的工具调用流。与 selectStream 对称,供工具卡渲染。 */
+export const selectTools =
+  (id: CollaborationId, stepId: StepId, companionId: number) =>
+  (state: StoreState): ToolStatus[] | undefined => {
+    const key = `${stepId}:${companionId}`
+    return state.collaborations.get(id)?.streams.get(key)?.tools
   }
 

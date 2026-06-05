@@ -107,4 +107,37 @@ mod tests {
             _ => panic!("expected token event"),
         }
     }
+
+    #[test]
+    fn tool_events_serialize_with_snake_case_kind() {
+        // 前后端契约:wire JSON 的 kind 必须是 snake_case("tool_start"/"tool_end"),
+        // 字段名与前端 CollaborationEventWire 对齐。
+        let start = CollaborationEvent::ToolStart {
+            collaboration_id: 1,
+            step_id: 2,
+            companion_id: 3,
+            name: "read_file".into(),
+            args_preview: "{}".into(),
+        };
+        let v = serde_json::to_value(&start).unwrap();
+        assert_eq!(v["kind"], "tool_start");
+        assert_eq!(v["name"], "read_file");
+        assert_eq!(v["companion_id"], 3);
+
+        let end = CollaborationEvent::ToolEnd {
+            collaboration_id: 1,
+            step_id: 2,
+            companion_id: 3,
+            name: "execute_shell".into(),
+            result_preview: "Error: boom".into(),
+            is_error: true,
+        };
+        let v = serde_json::to_value(&end).unwrap();
+        assert_eq!(v["kind"], "tool_end");
+        assert_eq!(v["is_error"], true);
+
+        // round-trip:反序列化回 enum,确认字段完整
+        let back: CollaborationEvent = serde_json::from_value(v).unwrap();
+        assert!(matches!(back, CollaborationEvent::ToolEnd { is_error: true, .. }));
+    }
 }

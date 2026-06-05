@@ -99,11 +99,7 @@ impl AgentEventSink for ChatEventSink {
 
     fn on_tool_end(&self, name: &str, result_preview: &str) {
         self.tool_count_for_event.fetch_add(1, Ordering::Relaxed);
-        if result_preview.starts_with("Error:")
-            || result_preview.starts_with("error:")
-            || result_preview.starts_with("Failed")
-            || result_preview.starts_with("failed")
-        {
+        if super::is_error_preview(result_preview) {
             self.tool_error_for_event.fetch_add(1, Ordering::Relaxed);
         }
         self.handle

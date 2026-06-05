@@ -154,6 +154,24 @@ export type CollaborationEventWire =
       step_id: StepId
       companion_id: CompanionId
     }
+  // 伙伴执行工具 —— 结构化事件(取代早期把 🔧 文本塞进思考块的降级)。
+  | {
+      kind: 'tool_start'
+      collaboration_id: CollaborationId
+      step_id: StepId
+      companion_id: CompanionId
+      name: string
+      args_preview: string
+    }
+  | {
+      kind: 'tool_end'
+      collaboration_id: CollaborationId
+      step_id: StepId
+      companion_id: CompanionId
+      name: string
+      result_preview: string
+      is_error: boolean
+    }
 
 // ── Mutations ────────────────────────────────────────────────────────
 

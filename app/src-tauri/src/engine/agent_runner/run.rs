@@ -1,12 +1,15 @@
-//! `run_with_shell` —— auto-continue 外壳。把原 `chat_stream_start` 的 spawn
-//! 闭包(多轮长任务循环 + verify / growth / feed_memme / progress)整段搬来,
-//! emit 全部走 `AgentEventSink`。
+//! `run_agent` —— YiYi 主精灵与伙伴共用的统一 agent 入口。
 //!
-//! YiYi(主精灵)= `shell.primary()` 全开,走完整外壳;伙伴 = `ShellOptions`
-//! 全关,`auto_continue=false` → 只跑一轮 ReAct(等价 `executor::run_one_react`)。
+//! 把原 `chat_stream_start` 的 spawn 闭包(多轮 auto-continue 循环 + verify /
+//! growth / feed_memme / progress)整段搬来,emit 全部走 `AgentEventSink`。
+//!
+//! - YiYi(主精灵)= `shell.primary()` 全开 + `persist=Some` → 完整外壳 + chat 持久化。
+//! - 伙伴 = `ShellOptions::default()` 全关 + `persist=None` + `working_dir=None`
+//!   → 单轮 ReAct,产出 reply 由 executor 收成协作 step output,不入 chat 会话。
+//!
+//! `persist: Option<ChatPersistence>` 是「是否持久化到 chat」的 gate;
 //! task-local 三层(continuation_flag / cancelled / session_id)在这里内聚包裹。
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -14,11 +17,10 @@ use crate::commands::agent::chat::feed_to_memme;
 use crate::commands::agent::helpers::{
     db_messages_to_llm, estimate_tokens_simple, extract_title_from_message, make_persist_fn,
 };
-use crate::engine::db::Database;
 use crate::engine::react_agent::{self, SignalType};
 use crate::engine::tools;
 
-use super::config::AgentRunConfig;
+use super::config::{AgentRunConfig, ChatPersistence};
 use super::{dispatch_agent_event, AgentEventSink, RoundEvent};
 
 /// 运行一次完整的 agent task。task-local 包
@@ -29,50 +31,36 @@ use super::{dispatch_agent_event, AgentEventSink, RoundEvent};
 ///   又作 `db_messages_to_llm` 锚点与 progress.json 落盘根。
 /// - `user_workspace`: 用户工作区(`db_messages_to_llm` 第二锚点)。
 /// - `cancelled`: 必须是 `state.chat_cancelled` 那个 Arc(供 `chat_stream_stop` 写)。
-pub async fn run_with_shell(
+pub async fn run_agent(
     cfg: AgentRunConfig,
-    db: Arc<Database>,
-    internal_dir: PathBuf,
-    user_workspace: PathBuf,
-    session_id: String,
+    persist: Option<ChatPersistence>,
     sink: Arc<dyn AgentEventSink>,
     cancelled: Arc<AtomicBool>,
-) {
+) -> Result<String, String> {
     let continuation_flag = Arc::new(AtomicBool::new(false));
-    let sid = session_id.clone();
+    let sid = cfg.session_id.clone();
     tools::with_continuation_flag(
         continuation_flag,
         tools::with_cancelled(
             cancelled.clone(),
-            tools::with_session_id(session_id, async move {
-                run_loop(
-                    &cfg,
-                    &db,
-                    &internal_dir,
-                    &user_workspace,
-                    &sid,
-                    &sink,
-                    &cancelled,
-                )
-                .await;
+            tools::with_session_id(sid.clone(), async move {
+                let result = run_loop(&cfg, persist.as_ref(), &sid, &sink, &cancelled).await;
                 // streaming snapshot 收尾(mark inactive + 延迟清理)。
                 sink.on_run_finished();
+                result
             }),
         ),
     )
-    .await;
+    .await
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run_loop(
     cfg: &AgentRunConfig,
-    db: &Arc<Database>,
-    internal_dir: &PathBuf,
-    user_workspace: &PathBuf,
+    persist: Option<&ChatPersistence>,
     sid: &str,
     sink: &Arc<dyn AgentEventSink>,
     cancelled: &Arc<AtomicBool>,
-) {
+) -> Result<String, String> {
     let on_event = {
         let sink = sink.clone();
         move |evt: react_agent::AgentStreamEvent| dispatch_agent_event(&*sink, evt)
@@ -83,23 +71,26 @@ async fn run_loop(
 
     let mut round: usize = 0;
     let mut total_tokens: u64 = 0;
-    let mut last_reply: String;
+    let mut last_reply = String::new();
     let task_started_at = chrono::Utc::now().timestamp();
 
     // Check if this session belongs to a task (for progress persistence).
-    let task_for_progress: Option<(String, std::path::PathBuf)> = if cfg.shell.task_progress {
-        let tasks = db.list_tasks(None, Some("running")).unwrap_or_default();
-        tasks
-            .into_iter()
-            .find(|t| t.session_id == sid)
-            .map(|t| {
-                let progress_dir = internal_dir.join("tasks").join(&t.id);
-                std::fs::create_dir_all(&progress_dir).ok();
-                (t.id.clone(), progress_dir)
-            })
-    } else {
-        None
-    };
+    // Requires chat persistence (db + internal_dir); companions pass persist=None.
+    let task_for_progress: Option<(String, std::path::PathBuf)> =
+        match (cfg.shell.task_progress, persist) {
+            (true, Some(p)) => {
+                let tasks = p.db.list_tasks(None, Some("running")).unwrap_or_default();
+                tasks
+                    .into_iter()
+                    .find(|t| t.session_id == sid)
+                    .map(|t| {
+                        let progress_dir = p.internal_dir.join("tasks").join(&t.id);
+                        std::fs::create_dir_all(&progress_dir).ok();
+                        (t.id.clone(), progress_dir)
+                    })
+            }
+            _ => None,
+        };
 
     loop {
         round += 1;
@@ -122,23 +113,28 @@ async fn run_loop(
         let (round_message, history) = if round == 1 {
             (cfg.agent_message.clone(), cfg.llm_history.clone())
         } else {
+            // round >= 2 only happens under auto_continue (YiYi), which always
+            // carries chat persistence.
+            let p = persist.expect("auto-continue round >= 2 requires chat persistence");
             // Push a "continue" user message into DB.
             let continue_msg = "请继续执行任务。".to_string();
-            db.push_message(sid, "user", &continue_msg).ok();
+            p.db.push_message(sid, "user", &continue_msg).ok();
 
             // Reload full conversation history from DB, excluding the last
             // message (the continue_msg we just pushed) since the stream call
             // includes user_message as the current turn.
-            let raw_msgs = db.get_recent_messages(sid, 50).unwrap_or_default();
+            let raw_msgs = p.db.get_recent_messages(sid, 50).unwrap_or_default();
             let hist = if raw_msgs.len() > 1 {
-                db_messages_to_llm(internal_dir, user_workspace, &raw_msgs[..raw_msgs.len() - 1])
+                db_messages_to_llm(&p.internal_dir, &p.user_workspace, &raw_msgs[..raw_msgs.len() - 1])
             } else {
                 vec![]
             };
             (continue_msg, hist)
         };
 
-        let persist_fn = Some(make_persist_fn(db.clone(), sid.to_string()));
+        // Tool-call persistence to the chat session: YiYi only. Companions
+        // pass persist=None → tools don't write tool messages into a chat.
+        let persist_fn = persist.map(|p| make_persist_fn(p.db.clone(), sid.to_string()));
 
         match react_agent::run_react_with_options_stream(
             &cfg.llm,
@@ -146,7 +142,9 @@ async fn run_loop(
             &round_message,
             &history,
             cfg.max_iter,
-            Some(internal_dir.as_path()),
+            // `Some` injects that dir's AGENTS.md/SOUL.md persona (YiYi); companions
+            // pass `None` so they don't inherit YiYi's persona — their own is in system_prompt.
+            cfg.working_dir.as_deref(),
             on_event.clone(),
             Some(cancelled),
             persist_fn,
@@ -155,29 +153,30 @@ async fn run_loop(
         .await
         {
             Ok(reply) => {
-                if !reply.is_empty() && reply != "(no response)" {
-                    // Always drain (= clear) the thinking buffer on any non-empty
-                    // reply — matches the original's unconditional `mem::take`.
-                    // Whether to persist is then a separate decision; gating the
-                    // *drain* on persist_thinking would leak round N's thinking
-                    // into round N+1 when persist_thinking=false.
-                    let thinking_text = sink.take_thinking();
-                    let clean_reply = tools::strip_stage_markers(&reply);
-                    if thinking_text.is_empty() || !cfg.shell.persist_thinking {
-                        db.push_message(sid, "assistant", &clean_reply).ok();
-                    } else {
-                        let meta = serde_json::json!({ "thinking": thinking_text }).to_string();
-                        db.push_message_with_metadata(sid, "assistant", &clean_reply, Some(&meta))
-                            .ok();
+                // Always drain (= clear) the thinking buffer on any reply —
+                // matches the original's unconditional `mem::take` (avoids round N's
+                // thinking leaking into round N+1).
+                let had_reply = !reply.is_empty() && reply != "(no response)";
+                let thinking_text = sink.take_thinking();
+                // Persist assistant message + first-sentence rename to the chat
+                // session: YiYi only. Companions return the reply to the executor
+                // as step output, so they pass persist=None and skip this.
+                if let Some(p) = persist {
+                    if had_reply {
+                        let clean_reply = tools::strip_stage_markers(&reply);
+                        if thinking_text.is_empty() || !cfg.shell.persist_thinking {
+                            p.db.push_message(sid, "assistant", &clean_reply).ok();
+                        } else {
+                            let meta = serde_json::json!({ "thinking": thinking_text }).to_string();
+                            p.db
+                                .push_message_with_metadata(sid, "assistant", &clean_reply, Some(&meta))
+                                .ok();
+                        }
                     }
-                } else {
-                    // Clear thinking buffer even if no reply (take = clear).
-                    let _ = sink.take_thinking();
-                }
-
-                if round == 1 && cfg.is_first_message {
-                    let title = extract_title_from_message(&cfg.augmented_message);
-                    db.rename_session(sid, &title).ok();
+                    if round == 1 && cfg.is_first_message {
+                        let title = extract_title_from_message(&cfg.augmented_message);
+                        p.db.rename_session(sid, &title).ok();
+                    }
                 }
 
                 total_tokens += estimate_tokens_simple(&reply);
@@ -253,7 +252,9 @@ async fn run_loop(
                         let verify_task_desc = cfg.augmented_message.clone();
                         let verify_output = last_reply.clone();
                         let verify_sid = sid.to_string();
-                        let verify_wd = internal_dir.clone();
+                        // YiYi's working_dir (= internal_dir). verify only runs under
+                        // verify_long_tasks (YiYi), where working_dir is always Some.
+                        let verify_wd = cfg.working_dir.clone();
                         let sink_v = sink.clone();
                         tokio::spawn(async move {
                             log::info!("Verification Agent starting for session {}", verify_sid);
@@ -269,7 +270,7 @@ async fn run_loop(
                                 &verify_config,
                                 &verify_task_desc,
                                 &verify_output,
-                                Some(verify_wd.as_path()),
+                                verify_wd.as_deref(),
                                 on_event,
                                 None,
                             )
@@ -371,10 +372,12 @@ async fn run_loop(
                         });
                     }
                 }
-                break;
+                return Err(e);
             }
         }
-    } // end auto-continue loop
+    } // end auto-continue loop — exits via `break` after `should_stop`
+
+    Ok(last_reply)
 }
 
 /// Growth System:在 run 收尾(should_stop)时检测纠正 / 表扬 / 静默反思。

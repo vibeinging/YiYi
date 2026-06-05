@@ -20,8 +20,9 @@ import { memo } from 'react'
 import { Loader2, AlertCircle } from 'lucide-react'
 import { mutateCollaboration } from '../../api/collaboration'
 import type { CollaborationId, Step, Participant, StepStatus } from '../../api/collaboration'
-import { selectStream, selectReasoning, useCollaborationStore } from '../../stores/collaborationStore'
+import { selectStream, selectReasoning, selectTools, useCollaborationStore } from '../../stores/collaborationStore'
 import { ThinkingBlock, AgentMarkdown } from '../chat/markdownShared'
+import { ToolCallPanel } from '../ToolCallPanel'
 
 interface Props {
   collaborationId: CollaborationId
@@ -104,6 +105,9 @@ function MemberMessageBubble({ collaborationId, stepId, stepStatus, participant,
   const reasoning = useCollaborationStore(
     selectReasoning(collaborationId, stepId, participant.companion_id),
   )
+  const tools = useCollaborationStore(
+    selectTools(collaborationId, stepId, participant.companion_id),
+  )
   const accent = participant.color_hex || 'var(--color-text-muted)'
   // 实时流优先;空(重开/hydrate 后)则回落持久化文本 → 重开对话也能看到发言。
   const text = (stream && stream.length > 0) ? stream : persistedText
@@ -111,11 +115,12 @@ function MemberMessageBubble({ collaborationId, stepId, stepStatus, participant,
   // 成员选择"这一轮我不发言"(fused reply-or-`<pass>`,见对话循环引擎):不渲染气泡。
   // 流式中是 `<pass>` 的前缀也先藏,避免哨兵字符闪现(真回复一旦偏离前缀就会显示)。
   const trimmed = text.trim()
+  const hasTools = (tools?.length ?? 0) > 0
   const PASS = '<pass>'
   if (trimmed.length > 0 && PASS.startsWith(trimmed)) return null
-  // 重开 hydrate 后:这一步已结束(非进行中),而本成员既无正文也无思考 →
-  // 它这轮没发言(pass / 无产出),不渲染只剩头像的空气泡。
-  if ((stepStatus === 'completed' || stepStatus === 'failed') && !trimmed && !thinking.trim()) {
+  // 重开 hydrate 后:这一步已结束(非进行中),且本成员既无正文、无思考、无工具痕迹 →
+  // 它这轮没发言(pass / 无产出),不渲染只剩头像的空气泡。(工具流是实时态,hydrate 后为空)
+  if ((stepStatus === 'completed' || stepStatus === 'failed') && !trimmed && !thinking.trim() && !hasTools) {
     return null
   }
   // ParallelAgents 不暴露 per-participant 状态(只有整步 step.status)。所以:
@@ -156,6 +161,9 @@ function MemberMessageBubble({ collaborationId, stepId, stepStatus, participant,
         </div>
         {/* 思考过程 —— 与主 agent 同一个 ThinkingBlock(可折叠)。 */}
         {thinking && <ThinkingBlock content={thinking} streaming={thinkingStreaming} />}
+        {/* 工具调用 —— 与主精灵复用同一个 ToolCallPanel(伙伴动手痕迹结构化展示,
+            取代早期 🔧 文本)。isHistory 避免读 chatStreamStore 的 YiYi 专属 claudeCode 态。 */}
+        {hasTools && <ToolCallPanel tools={tools!} isHistory />}
         {/* 正文气泡 —— 与主 agent 同结构(markdown-body + 共享 markdown 渲染 + 流式光标),
             只是背景按成员主色。这是用户要的"消息框一样,只背景不同"。 */}
         {(text || isWaiting) && (

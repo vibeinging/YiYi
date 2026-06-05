@@ -1,9 +1,19 @@
-//! `AgentRunConfig` + `ShellOptions` —— 参数化 agent runner 的配置。
+//! `AgentRunConfig` + `ShellOptions` + `ChatPersistence` —— 参数化 agent runner。
 //!
-//! Phase 1 只覆盖 YiYi(主精灵)主路径所需的字段;`persona_source` /
-//! `memory_scope` / `tool_filter` 留到 Phase 3(伙伴切入,有第二个调用方
-//! 验证抽象时)再加 —— 单调用方拍这些字段 = 拍脑袋。
+//! YiYi 主精灵与伙伴共用 `run_agent`,差异收敛成:
+//! - `shell`(外壳开关:auto-continue / verify / growth / feed_memme / progress / notify)
+//! - `working_dir`(Some=注入该目录 persona;None=不注入,伙伴用自己 system_prompt 人设)
+//! - `session_id`(工具 / 会话 scope;伙伴 "" 不绑定 chat 会话)
+//! - `persist`(独立参数:chat 持久化依赖;伙伴 None)
+//!
+//! Phase 1 设想的 `persona_source` / `memory_scope` / `tool_filter` 最终都不需要:
+//! persona 由 `working_dir` 决定,memory_scope 由调用方(executor)外层 `with_memme_user_id`
+//! 包好,tool_filter 默认全套。
 
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use crate::engine::db::Database;
 use crate::engine::llm_client::{LLMConfig, LLMMessage};
 
 /// YiYi 专属外壳的开关组。`primary()` 全开 = 主精灵现状;`Default` / 伙伴用
@@ -81,6 +91,22 @@ pub struct AgentRunConfig {
     pub max_iter: Option<usize>,
     /// 是否本会话第一条消息(决定首轮是否按用户首句命名会话)。
     pub is_first_message: bool,
+    /// 工具 / 会话 scope 的 session id。YiYi = 真实 sid;伙伴 = ""(不绑定 chat 会话)。
+    pub session_id: String,
+    /// ReAct 工作目录。`Some` 会注入该目录的 AGENTS.md/SOUL.md persona 前缀(YiYi 主精灵);
+    /// 伙伴用 `None` —— 它的人设在 system_prompt 里,不该被注入 YiYi 的 SOUL.md。
+    pub working_dir: Option<PathBuf>,
     /// 外壳开关组。
     pub shell: ShellOptions,
+}
+
+/// chat 会话持久化依赖。YiYi 主精灵传 `Some`(落 assistant 消息、按首句重命名会话、
+/// 写 progress.json、多轮 reload 历史);伙伴传 `None` —— 它的产出是协作 step output,
+/// 不入 chat 会话。`persist` 是否 `Some` 本身就是「是否持久化到 chat」的 gate。
+pub struct ChatPersistence {
+    pub db: Arc<Database>,
+    /// 内部数据目录(= state.working_dir):progress.json 落盘根 + 多轮 reload 锚点。
+    pub internal_dir: PathBuf,
+    /// 用户工作区:多轮 reload 第二锚点。
+    pub user_workspace: PathBuf,
 }

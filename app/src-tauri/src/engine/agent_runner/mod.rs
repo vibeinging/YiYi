@@ -1,4 +1,5 @@
 pub mod chat_sink;
+pub mod collab_sink;
 pub mod config;
 pub mod run;
 
@@ -123,4 +124,13 @@ pub fn dispatch_agent_event(sink: &dyn AgentEventSink, evt: AgentStreamEvent) {
         AgentStreamEvent::Complete => sink.on_complete(""),
         AgentStreamEvent::Error => sink.on_error(""),
     }
+}
+
+/// 工具结果 preview 是否表示错误 —— 按前缀判断。主精灵 `ChatEventSink` 与伙伴
+/// `CollabEventSink` 共用,保证两侧 is_error 判定一致。
+pub(crate) fn is_error_preview(preview: &str) -> bool {
+    preview.starts_with("Error:")
+        || preview.starts_with("error:")
+        || preview.starts_with("Failed")
+        || preview.starts_with("failed")
 }
