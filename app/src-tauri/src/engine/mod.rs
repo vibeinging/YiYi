@@ -49,5 +49,8 @@ pub mod tool_registry_global;
 // ── Voice control ──
 pub mod voice;
 
+// ── Agent runner: AgentEventSink trait + ChatEventSink implementation ──
+pub mod agent_runner;
+
 // ── Testability: abstract over Tauri's event emitter ──
 pub mod emitter;

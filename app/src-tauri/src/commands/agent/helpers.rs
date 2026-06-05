@@ -112,7 +112,7 @@ pub fn parse_skill_frontmatter(content: &str) -> (Option<String>, bool) {
 }
 
 /// Create a persist callback that saves tool calls to the database.
-pub(super) fn make_persist_fn(db: Arc<db::Database>, session_id: String) -> PersistToolFn {
+pub(crate) fn make_persist_fn(db: Arc<db::Database>, session_id: String) -> PersistToolFn {
     Arc::new(move |evt: ToolPersistEvent| {
         match evt {
             ToolPersistEvent::AssistantWithToolCalls { content, tool_calls_json } => {
@@ -138,7 +138,7 @@ pub(super) fn make_persist_fn(db: Arc<db::Database>, session_id: String) -> Pers
 /// Convert db messages to LLMMessages for conversation context.
 /// Reconstructs multimodal content for image attachments only (files are referenced via path hints in text).
 /// Also reconstructs tool_calls and tool_call_id from metadata.
-pub(super) fn db_messages_to_llm(internal_dir: &Path, workspace_dir: &Path, messages: &[db::ChatMessage]) -> Vec<LLMMessage> {
+pub(crate) fn db_messages_to_llm(internal_dir: &Path, workspace_dir: &Path, messages: &[db::ChatMessage]) -> Vec<LLMMessage> {
     messages
         .iter()
         .map(|m| {
@@ -220,7 +220,7 @@ pub(super) const DEFAULT_SESSION: &str = "default";
 
 /// Extract a short session title from the user's first message.
 /// Takes the first line (or first 30 chars) as title, no LLM call needed.
-pub(super) fn extract_title_from_message(message: &str) -> String {
+pub(crate) fn extract_title_from_message(message: &str) -> String {
     let trimmed = message.trim();
     // Take first line
     let first_line = trimmed.lines().next().unwrap_or(trimmed);
@@ -296,7 +296,7 @@ pub(super) fn recall_memories(_db: &db::Database, user_message: &str) -> Option<
 /// Simple token count estimation.
 /// English text averages ~4 chars/token, Chinese ~2 chars/token.
 /// Uses a rough 3/4 multiplier as a middle ground.
-pub(super) fn estimate_tokens_simple(text: &str) -> u64 {
+pub(crate) fn estimate_tokens_simple(text: &str) -> u64 {
     let chars = text.chars().count() as u64;
     (chars * 3) / 4
 }

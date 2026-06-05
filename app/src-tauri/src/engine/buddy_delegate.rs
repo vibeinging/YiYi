@@ -16,19 +16,23 @@ fn hosted_set() -> &'static Mutex<HashSet<String>> {
 }
 
 /// Enable buddy-hosted mode for a specific session.
-pub fn enable_session_hosted() {
-    let sid = crate::engine::tools::get_current_session_id();
-    if !sid.is_empty() {
-        hosted_set().lock().unwrap_or_else(|e| e.into_inner()).insert(sid.clone());
-        log::info!("Buddy hosted mode: enabled for session {}", sid);
+///
+/// Takes `session_id` explicitly rather than reading the task-local
+/// `get_current_session_id()` — callers (e.g. `chat_stream_start`) run this in
+/// the command body BEFORE any `with_session_id` scope is established, where the
+/// task-local would be empty and the flag would silently key on `""`.
+pub fn enable_session_hosted(session_id: &str) {
+    if !session_id.is_empty() {
+        hosted_set().lock().unwrap_or_else(|e| e.into_inner()).insert(session_id.to_string());
+        log::info!("Buddy hosted mode: enabled for session {}", session_id);
     }
 }
 
-/// Disable buddy-hosted mode for a specific session.
-pub fn disable_session_hosted() {
-    let sid = crate::engine::tools::get_current_session_id();
-    if !sid.is_empty() {
-        hosted_set().lock().unwrap_or_else(|e| e.into_inner()).remove(&sid);
+/// Disable buddy-hosted mode for a specific session. See `enable_session_hosted`
+/// for why `session_id` is passed explicitly instead of read from the task-local.
+pub fn disable_session_hosted(session_id: &str) {
+    if !session_id.is_empty() {
+        hosted_set().lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
     }
 }
 
