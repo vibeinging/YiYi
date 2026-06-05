@@ -6,8 +6,8 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { X, Loader2, Shuffle, ArrowRight, ArrowLeft } from 'lucide-react'
-import { adoptCompanion, previewPersonaTone } from '../../api/companions'
+import { X, Loader2, Shuffle, ArrowRight, ArrowLeft, Sparkles } from 'lucide-react'
+import { adoptCompanion, previewPersonaTone, generateCompanion } from '../../api/companions'
 import { toast } from '../Toast'
 
 interface Props {
@@ -105,6 +105,9 @@ export function AdoptModal({ onClose, onAdopted, initialDraft, initialStep }: Pr
   const [preview, setPreview] = useState<string>('')
   const [previewLoading, setPreviewLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  // 「YiYi 帮我想」:一句话描述 → 生成 → 回填向导。
+  const [genDesc, setGenDesc] = useState('')
+  const [generating, setGenerating] = useState(false)
 
   const emojis = useMemo(() => pickEmojis(seed), [seed])
   const accent = useMemo(() => colorFromVibe(harshness, formality), [harshness, formality])
@@ -164,6 +167,26 @@ export function AdoptModal({ onClose, onAdopted, initialDraft, initialStep }: Pr
     return true
   })()
 
+  async function handleGenerate() {
+    const desc = genDesc.trim()
+    if (!desc || generating) return
+    setGenerating(true)
+    try {
+      const g = await generateCompanion(desc)
+      setEmoji(g.avatar_emoji)
+      setName(g.name)
+      setCustomRole(g.role_label)
+      setHarshness(g.harshness)
+      setFormality(g.formality)
+      setVerbosity(g.verbosity)
+      setStep(4) // 每步都填好了 → 直接到最后看口吻 + 收养,要改可回退
+    } catch (e) {
+      toast.error(`生成失败：${e}`)
+    } finally {
+      setGenerating(false)
+    }
+  }
+
   async function submit() {
     if (submitting) return
     setSubmitting(true)
@@ -214,13 +237,22 @@ export function AdoptModal({ onClose, onAdopted, initialDraft, initialStep }: Pr
 
         <div className="px-6 py-5 min-h-[280px]">
           {step === 1 && (
-            <StepEmoji
-              emojis={emojis}
-              selected={emoji}
-              onSelect={setEmoji}
-              onShuffle={() => setSeed(s => s + 1)}
-              accent={accent}
-            />
+            <>
+              <GenerateBox
+                desc={genDesc}
+                onDesc={setGenDesc}
+                generating={generating}
+                onGenerate={handleGenerate}
+                accent={accent}
+              />
+              <StepEmoji
+                emojis={emojis}
+                selected={emoji}
+                onSelect={setEmoji}
+                onShuffle={() => setSeed(s => s + 1)}
+                accent={accent}
+              />
+            </>
           )}
           {step === 2 && <StepName name={name} onChange={setName} accent={accent} />}
           {step === 3 && (
@@ -281,6 +313,47 @@ export function AdoptModal({ onClose, onAdopted, initialDraft, initialStep }: Pr
             </button>
           )}
         </div>
+      </div>
+    </div>
+  )
+}
+
+function GenerateBox({
+  desc, onDesc, generating, onGenerate, accent,
+}: {
+  desc: string
+  onDesc: (s: string) => void
+  generating: boolean
+  onGenerate: () => void
+  accent: string
+}) {
+  return (
+    <div className="mb-5 p-3.5 rounded-2xl" style={{ background: `${accent}0c`, border: `1px solid ${accent}22` }}>
+      <div className="flex items-center gap-1.5 text-[12.5px] font-medium mb-2" style={{ color: accent }}>
+        <Sparkles size={13} /> 懒得一步步选？一句话让 YiYi 帮你想
+      </div>
+      <div className="flex gap-2">
+        <input
+          value={desc}
+          onChange={e => onDesc(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && desc.trim()) onGenerate() }}
+          placeholder="例：一个毒舌但靠谱的代码搭子"
+          maxLength={60}
+          className="flex-1 px-3 py-2 rounded-xl text-[13px] outline-none"
+          style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text)' }}
+        />
+        <button
+          onClick={onGenerate}
+          disabled={generating || !desc.trim()}
+          className="shrink-0 flex items-center gap-1.5 px-4 py-2 rounded-xl text-[13px] font-medium text-white disabled:opacity-40 transition-all"
+          style={{ background: accent }}
+        >
+          {generating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+          {generating ? '想中…' : '生成'}
+        </button>
+      </div>
+      <div className="text-[10.5px] mt-2" style={{ color: 'var(--color-text-muted)' }}>
+        生成后会填好下面每一步，你还能逐项微调。
       </div>
     </div>
   )

@@ -519,6 +519,8 @@ pub fn run() {
             commands::bots::bots_test_connection,
             commands::bots::bots_get_status,
             commands::bots::bot_conversation_set_agent,
+            commands::bots::weixin_get_qrcode,
+            commands::bots::weixin_poll_login,
             // Agent & Chat
             commands::agent::chat::chat,
             commands::agent::chat::chat_stream_start,
@@ -702,6 +704,7 @@ pub fn run() {
             commands::companions::get_companion_persona,
             commands::companions::get_companion,
             commands::companions::preview_persona_tone,
+            commands::companions::generate_companion,
             // companion groups (群) — Approach B
             commands::companion_groups::create_companion_group,
             commands::companion_groups::list_companion_groups,

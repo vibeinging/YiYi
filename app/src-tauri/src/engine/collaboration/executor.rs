@@ -14,6 +14,7 @@
 //! `memory_add` lands in its own bucket, a host's lands in the shared
 //! bucket, and a group-scope agent's lands in `group_shared_{id}`.
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -217,6 +218,16 @@ async fn run_one_guarded(
     }
 }
 
+/// UTF-8 安全的预览截断:按 char 计数,超过 `n` 个 char 截断并补 `…`。
+fn truncate_preview(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(n).collect();
+    out.push('…');
+    out
+}
+
 async fn run_one(
     config: &LLMConfig,
     step: &Step,
@@ -227,19 +238,12 @@ async fn run_one(
 ) -> Result<StepOutput, String> {
     let p = &step.participants[participant_idx];
 
-    // Pre-load companion persona override if present (best-effort; absence
-    // simply means we fall back to the synthesized prompt). Recorded for
-    // the cache, not directly inlined here — Phase 2B will weave it in.
+    // 两路分流:
+    //   - 伙伴(companion_id != 0) → 带工具的 ReAct(全套 60+ 工具),能读写文件、
+    //     执行命令、查资料等;只在人格/角色上区别于主精灵 YiYi。
+    //   - YiYi 收口 / 主持位(companion_id == 0) → 纯对话(无工具),保持原路径。
     if p.companion_id != 0 {
-        // Look up via task-local working_dir if available; persona_loader
-        // is fine with missing files.
-        if let Some(wd) = crate::engine::tools::WORKING_DIR.get() {
-            let path = wd
-                .join("companions")
-                .join(p.companion_id.to_string())
-                .join("persona.md");
-            let _ = persona_loader::load_companion_persona(&path);
-        }
+        return run_one_react(config, step, participant_idx, upstream, collab_id).await;
     }
 
     let system_prompt = render_system_prompt(step, participant_idx);
@@ -318,6 +322,111 @@ async fn run_one(
     Ok(StepOutput {
         summary,
         full_output,
+        tokens_used,
+        duration_ms,
+    })
+}
+
+/// 伙伴(companion_id != 0)的执行器:带工具的 ReAct 循环。和主精灵 YiYi 共用
+/// `run_react_with_options_stream`(tools_override = None → 全套工具),区别只在
+/// 拼进 system prompt 的 persona 前缀和"动手能力"提示。流事件转成
+/// `CollaborationEvent::Token` 喂前端;工具的开始/结束摘要注入思考块(reasoning=true)。
+async fn run_one_react(
+    config: &LLMConfig,
+    step: &Step,
+    participant_idx: usize,
+    upstream: &[(StepId, StepOutput)],
+    collab_id: CollaborationId,
+) -> Result<StepOutput, String> {
+    let p = &step.participants[participant_idx];
+
+    // system prompt = persona 前缀 + 群聊规则 + 动手能力说明(三段拼接)。
+    // persona 前缀:载 companions/<id>/persona.md;文件不存在 → 空串。
+    let persona_prefix = crate::engine::tools::WORKING_DIR
+        .get()
+        .map(|wd| {
+            wd.join("companions")
+                .join(p.companion_id.to_string())
+                .join("persona.md")
+        })
+        .and_then(|path| persona_loader::load_companion_persona(&path))
+        .map(|persona| persona.render_prefix())
+        .unwrap_or_default();
+
+    let group_rules = render_system_prompt(step, participant_idx);
+    let tools_note = "\n\n【动手能力】你能用工具(读写文件、执行命令、查资料、开浏览器等)。\
+        但这是群聊,以对话为主——只在用户的需求确实需要你动手查/做时才调工具;\
+        平时顺着聊就行,别为用而用。用完工具,用你自己的口吻把结果说出来,别贴原始输出。";
+    let system_prompt = format!("{persona_prefix}{group_rules}{tools_note}");
+    let user_message = render_user_prompt(step, upstream);
+
+    let started = Instant::now();
+
+    // 累加 token 用量(Usage 事件多次到达,跨工具迭代累计)。
+    let in_tokens = Arc::new(AtomicU32::new(0));
+    let out_tokens = Arc::new(AtomicU32::new(0));
+
+    let collab_id_c = collab_id;
+    let step_id_c = step.id;
+    let companion_id_c = p.companion_id;
+    let in_c = Arc::clone(&in_tokens);
+    let out_c = Arc::clone(&out_tokens);
+    let on_event = move |evt: crate::engine::react_agent::AgentStreamEvent| {
+        use crate::engine::react_agent::AgentStreamEvent as E;
+        let (delta, reasoning) = match evt {
+            E::Token(d) => (d, false),
+            E::Thinking(d) => (d, true),
+            // 工具的开始/结束摘要注入思考块,让用户看见伙伴"动手"的踪迹
+            // (与正文同流,靠 reasoning 标志渲染成思考气泡)。
+            E::ToolStart { name, args_preview } => (
+                format!("\n🔧 {name} {}\n", truncate_preview(&args_preview, 60)),
+                true,
+            ),
+            E::ToolEnd { name: _, result_preview } => {
+                (format!("↳ {}\n", truncate_preview(&result_preview, 80)), true)
+            }
+            E::Usage { input_tokens, output_tokens, .. } => {
+                in_c.fetch_add(input_tokens, Ordering::Relaxed);
+                out_c.fetch_add(output_tokens, Ordering::Relaxed);
+                return;
+            }
+            _ => return,
+        };
+        if !delta.is_empty() {
+            events::emit(CollaborationEvent::Token {
+                collaboration_id: collab_id_c,
+                step_id: step_id_c,
+                companion_id: companion_id_c,
+                delta,
+                reasoning,
+            });
+        }
+    };
+
+    let working_dir = crate::engine::tools::WORKING_DIR.get().map(|p| p.as_path());
+    let reply = crate::engine::react_agent::run_react_with_options_stream(
+        config,
+        &system_prompt,
+        &user_message,
+        &[],
+        Some(6),
+        working_dir,
+        on_event,
+        None,
+        None,
+        None,
+    )
+    .await?;
+
+    let duration_ms = started.elapsed().as_millis() as u64;
+    let tokens_used = TokenUsage {
+        input: in_tokens.load(Ordering::Relaxed),
+        output: out_tokens.load(Ordering::Relaxed),
+    };
+
+    Ok(StepOutput {
+        summary: summarize(&reply),
+        full_output: reply,
         tokens_used,
         duration_ms,
     })

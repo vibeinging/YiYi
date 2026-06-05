@@ -295,6 +295,83 @@ fn clamp(n: u8) -> u8 {
     n.min(10)
 }
 
+// ── Generate companion from one line (YiYi 辅助生成) ──────────────────
+
+/// LLM 据用户一句话描述生成的伙伴雏形,回填收养向导(用户仍可逐项改)。
+#[derive(Debug, Clone, Serialize)]
+pub struct GeneratedCompanion {
+    pub avatar_emoji: String,
+    pub name: String,
+    pub role_label: String,
+    pub harshness: u8,
+    pub formality: u8,
+    pub verbosity: u8,
+}
+
+/// 「YiYi 帮我想」:据一句话描述,让 LLM 生成 emoji / 名字 / 擅长 / 脾气,回填收养向导。
+/// 结构化产出(关思考)。解析对数字/字符串都容错,字段缺省给中性默认。
+#[tauri::command]
+pub async fn generate_companion(
+    state: State<'_, AppState>,
+    description: String,
+) -> Result<GeneratedCompanion, String> {
+    let desc = description.trim();
+    if desc.is_empty() {
+        return Err("先写一句描述吧".into());
+    }
+    let mut config = resolve_llm_config(&state).await?;
+    config.enable_thinking = Some(false);
+    let prompt = format!(
+        "用户想养一只 AI 伙伴,他的描述是:「{desc}」\n\n\
+         据此设计这只伙伴。**只输出一个 JSON 对象**,不要代码块、不要解释:\n\
+         {{\"avatar_emoji\": \"一个最贴切的 emoji\", \"name\": \"2-6 字中文名,顺口有个性\", \
+         \"role_label\": \"它擅长什么,6-12 字\", \"harshness\": 0到10的整数(0毒舌/5中性/10温和), \
+         \"formality\": 0到10的整数(0严谨/10随性), \"verbosity\": 0到10的整数(0话痨/10惜字)}}"
+    );
+    let messages = vec![LLMMessage {
+        role: "user".into(),
+        content: Some(MessageContent::text(prompt)),
+        tool_calls: None,
+        tool_call_id: None,
+        reasoning_content: None,
+    }];
+    let resp = chat_completion_tracked(UsageSource::Growth, &config, &messages, &[]).await?;
+    let text = resp.message.content.map(|c| c.into_text()).unwrap_or_default();
+    let json = extract_json_object(&text)
+        .ok_or_else(|| "YiYi 这次没说清,再试一次".to_string())?;
+    let v: serde_json::Value =
+        serde_json::from_str(&json).map_err(|e| format!("生成结果格式不对({e}),再试一次"))?;
+    let dial = |key: &str| -> u8 {
+        v.get(key)
+            .and_then(|x| x.as_u64().or_else(|| x.as_str().and_then(|s| s.trim().parse().ok())))
+            .unwrap_or(5)
+            .min(10) as u8
+    };
+    let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+    if name.is_empty() {
+        return Err("生成的名字是空的,再试一次".into());
+    }
+    let emoji = {
+        let e = v.get("avatar_emoji").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+        if e.is_empty() { "🦊".to_string() } else { e }
+    };
+    Ok(GeneratedCompanion {
+        avatar_emoji: emoji,
+        name,
+        role_label: v.get("role_label").and_then(|x| x.as_str()).unwrap_or("").trim().to_string(),
+        harshness: dial("harshness"),
+        formality: dial("formality"),
+        verbosity: dial("verbosity"),
+    })
+}
+
+/// 从可能裹着代码块/解释的文本里抽第一个完整 `{...}`。
+fn extract_json_object(text: &str) -> Option<String> {
+    let start = text.find('{')?;
+    let end = text.rfind('}')?;
+    (end > start).then(|| text[start..=end].to_string())
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────
 
 fn persona_path_for(working_dir: &std::path::Path, id: i64) -> std::path::PathBuf {

@@ -119,6 +119,21 @@ export async function previewPersonaTone(input: PreviewPersonaToneInput): Promis
   return await invoke<string>('preview_persona_tone', { input })
 }
 
+/** YiYi 据一句话描述生成的伙伴雏形 —— 回填收养向导,用户仍可逐项改。 */
+export interface GeneratedCompanion {
+  avatar_emoji: string
+  name: string
+  role_label: string
+  harshness: number
+  formality: number
+  verbosity: number
+}
+
+/** 「YiYi 帮我想」:一句话描述 → LLM 生成 emoji / 名字 / 擅长 / 脾气,回填收养向导。 */
+export async function generateCompanion(description: string): Promise<GeneratedCompanion> {
+  return await invoke<GeneratedCompanion>('generate_companion', { description })
+}
+
 export async function updateCompanionDraftState(
   messageId: number,
   newState: 'pending' | 'adopted' | 'dismissed',
