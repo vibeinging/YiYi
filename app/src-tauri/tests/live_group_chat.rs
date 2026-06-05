@@ -16,7 +16,6 @@ use std::time::Duration;
 use app_lib::commands::agent::group_dispatch::{
     dispatch_to_companion, try_group_dispatch, GroupDispatchOutcome,
 };
-use app_lib::engine::collaboration::conversation_driver::dispatch_group_discussion;
 use app_lib::engine::collaboration::executor::ConcreteExecutor;
 use app_lib::engine::collaboration::orchestrator::SqliteOrchestrator;
 use app_lib::engine::collaboration::{
@@ -298,100 +297,3 @@ async fn live_private_chat() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// 真实测试群讨论模式:多轮成员发言(后轮看到前轮)+ YiYi 总结结论。
-/// 运行:YIYI_LIVE_DISCUSS=1 cargo test --features test-support --test live_group_chat live_group_discussion -- --nocapture
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn live_group_discussion() {
-    if std::env::var("YIYI_LIVE_DISCUSS").is_err() {
-        eprintln!("SKIP live_group_discussion:设 YIYI_LIVE_DISCUSS=1 才跑(真实调用 DeepSeek)");
-        return;
-    }
-    let home = std::env::var("HOME").unwrap();
-    let real_db = format!("{home}/.yiyi/yiyi.db");
-    let tmp = std::env::temp_dir().join(format!("yiyi_disc_{}", std::process::id()));
-    std::fs::create_dir_all(&tmp).unwrap();
-    std::fs::copy(&real_db, tmp.join("yiyi.db")).expect("copy db");
-    for ext in ["-wal", "-shm"] {
-        let src = format!("{real_db}{ext}");
-        if std::path::Path::new(&src).exists() {
-            let _ = std::fs::copy(&src, tmp.join(format!("yiyi.db{ext}")));
-        }
-    }
-    let db = Arc::new(Database::open(&tmp).expect("open db"));
-    let providers = ProvidersState::load(db.clone());
-    let cfg = resolve_config_from_providers(&providers).expect("有 active provider");
-
-    let gid = [3i64, 2, 1]
-        .into_iter()
-        .find(|g| db.list_group_members(*g).len() >= 2)
-        .expect("需要 ≥2 成员的群");
-    let members = db.list_group_members(gid);
-    let id_to_name: HashMap<i64, String> = members.iter().map(|m| (m.id, m.name.clone())).collect();
-    eprintln!("\n========== LIVE 群讨论实测 ==========");
-    eprintln!("model = {}  群 {gid} 成员: {}", cfg.model,
-        members.iter().map(|m| m.name.clone()).collect::<Vec<_>>().join(", "));
-
-    let sid = format!("live-disc-{}", std::process::id());
-    db.ensure_session(&sid, "讨论测试", "chat", None).ok();
-    db.set_session_group(&sid, Some(gid)).expect("bind group");
-
-    let mut rx = events::subscribe();
-    let printer = tokio::spawn(async move {
-        let mut last: i64 = -999;
-        loop {
-            match tokio::time::timeout(Duration::from_secs(60), rx.recv()).await {
-                Ok(Ok(CollaborationEvent::Token { companion_id, delta, .. })) => {
-                    if companion_id != last {
-                        let who = if companion_id == 0 {
-                            "YiYi(结论)".to_string()
-                        } else {
-                            id_to_name.get(&companion_id).cloned().unwrap_or_else(|| format!("#{companion_id}"))
-                        };
-                        eprint!("\n🗣  {who}: ");
-                        last = companion_id;
-                    }
-                    eprint!("{delta}");
-                }
-                Ok(Ok(CollaborationEvent::Audit { event }))
-                    if matches!(event.kind, AuditKind::StepCompleted) =>
-                {
-                    eprint!("  [step {} 完成]", event.payload.get("step_id").and_then(|v| v.as_i64()).unwrap_or(-1));
-                }
-                Ok(Ok(CollaborationEvent::Audit { event }))
-                    if matches!(event.kind, AuditKind::CollaborationCompleted | AuditKind::Aborted | AuditKind::Failed) =>
-                {
-                    eprintln!("\n-- 终态: {:?} --", event.kind);
-                    break;
-                }
-                Ok(Ok(_)) => {}
-                _ => break,
-            }
-        }
-    });
-
-    let topic = "讨论一下:为什么 AI 能促进生产力?多聊几轮,最后给我一个结论。";
-    eprintln!("👤 我: {topic}");
-    let collab_id = dispatch_group_discussion(db.clone(), cfg, &sid, topic).await.expect("发起讨论");
-    eprintln!("✅ 群讨论已发起 collab {collab_id}(2 轮成员发言 + YiYi 总结)\n");
-
-    let _ = tokio::time::timeout(Duration::from_secs(180), printer).await;
-
-    // 校验:协作终态 Done,且最后一步(host_summarize)有非空结论。
-    let orch = SqliteOrchestrator::new(db.clone(), Arc::new(ConcreteExecutor::new(
-        resolve_config_from_providers(&ProvidersState::load(db.clone())).unwrap(),
-    )));
-    if let Ok(Some(c)) = orch.get(collab_id).await {
-        eprintln!("\n\n========== 完整对话回放 ==========");
-        eprintln!("协作 {} 步,终态 {:?}\n", c.plan.steps.len(), c.status);
-        let total = c.plan.steps.len();
-        for (i, step) in c.plan.steps.iter().enumerate() {
-            let label = if i + 1 == total { "【YiYi 结论】".to_string() } else { format!("【第 {} 轮】", i + 1) };
-            let text = step.output.as_ref().map(|o| o.full_output.clone()).unwrap_or_default();
-            eprintln!("{label}\n{}\n", text.trim());
-        }
-        let concl = c.plan.steps.last().and_then(|s| s.output.as_ref()).map(|o| o.full_output.clone()).unwrap_or_default();
-        assert!(!concl.trim().is_empty(), "YiYi 应给出非空结论");
-    }
-    eprintln!("========== 群讨论实测结束 ==========\n");
-    let _ = std::fs::remove_dir_all(&tmp);
-}

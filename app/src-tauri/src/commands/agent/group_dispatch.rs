@@ -1,14 +1,9 @@
 //! group_dispatch — 群会话的入口路由。
 //!
 //! 当一个 session 绑定了群（`db.get_session_group` 返回 Some），把消息交给对话循环
-//! 引擎（`conversation_driver`）而不是主精灵自答：
-//! - **@点名必答**(`forced_ids` 非空)→ 被点成员直接进静态 ParallelAgents 必答。
-//! - **非点名**(去中心化)→ 全员进 `dispatch_group_conversation` 第 1 轮,各自
-//!   reply-or-`<pass>`,全员不接则 YiYi 兜底位接。"谁该说话"不再前置 judge,是发言
-//!   本身的一部分(见 docs/design/2026-05-31 §A 对话循环引擎)。
-//!
-//! 历史:旧版的 `LLMDispatchStrategy::judge` 中心化预选 + L2 claim + L3 chime 已全
-//! 退役(`dispatch` / `claim` 模块删除)。
+//! 引擎（`conversation_driver`）而不是主精灵自答。所有消息统一走放养异步事件循环
+//! （`dispatch_group_loop`）：被 @ 点名的成员 wave-1 立即回（delay=0），其余变速；
+//! YiYi 也作为一员入群，冷场自然收口。
 //!
 //! 本函数刻意**不持有 `AppHandle`**：它只碰 db + LLM，返回一个
 //! [`GroupDispatchOutcome`]，由调用方（chat 命令）负责 emit Tauri 事件、决定
@@ -113,111 +108,10 @@ pub async fn try_group_dispatch(
         })
         .collect();
 
-    // ── 放养模式(flag 开)── @ 与非 @ 统一进 v2 事件循环:被 @ 的成员 wave-1 立即回(delay=0)、
-    //    其余变速 5–30 秒,YiYi 也作为一员入群。不再前置区分点名 / 非点名。
-    if group_async_loop_enabled() {
-        let (collab_id, participants) = conversation_driver::dispatch_group_loop(
-            db.clone(), cfg, session_id, user_message, &members, &chat_history, group_scope, forced_ids,
-        )
-        .await?;
-        let members = participants
-            .into_iter()
-            .map(|p| DispatchedMember {
-                companion_id: p.companion_id,
-                name: p.name,
-                avatar_emoji: p.avatar_emoji,
-                color_hex: p.color_hex,
-            })
-            .collect();
-        return Ok(GroupDispatchOutcome::Dispatched {
-            collaboration_id: collab_id,
-            members,
-        });
-    }
-
-    // ── (a) @点名必答 ── 被点的人(取群内交集)直接上场,跳过自决。静态 plan,
-    //    executor 给默认人设 prompt(无 <pass> 余地 = 必答),无 YiYi 兜底位。
-    if !forced_ids.is_empty() {
-        let forced_present: Vec<CompanionProfile> = forced_ids
-            .iter()
-            .filter_map(|id| members.iter().find(|c| c.id == *id).cloned())
-            .collect();
-        if forced_present.is_empty() {
-            return Ok(GroupDispatchOutcome::SelfAnswer {
-                reason: "被点名的成员不在这个群里".into(),
-            });
-        }
-        let participants: Vec<Participant> = forced_present
-            .iter()
-            .map(|c| Participant {
-                companion_id: c.id,
-                name: c.name.clone(),
-                avatar_emoji: c.avatar_emoji.clone(),
-                color_hex: c.color_hex.clone(),
-                memory_scope: group_scope,
-            })
-            .collect();
-        let plan = CollaborationPlan {
-            steps: vec![Step {
-                id: 1,
-                kind: StepKind::ParallelAgents,
-                participants: participants.clone(),
-                depends_on: vec![],
-                input: StepInput {
-                    prompt: user_message.to_string(),
-                    metadata: serde_json::Value::Null,
-                },
-                output: None,
-                status: StepStatus::Pending,
-                started_at: None,
-                finished_at: None,
-            }],
-        };
-        let executor = Arc::new(ConcreteExecutor::new(cfg));
-        let orch = SqliteOrchestrator::new(db.clone(), executor);
-        let parent_id = orch
-            .list_recent_by_session(session_id, 1)
-            .ok()
-            .and_then(|v| v.into_iter().next())
-            .map(|c| c.id);
-        let collab_id = orch
-            .submit(
-                session_id.to_string(),
-                user_message.to_string(),
-                plan,
-                CollaborationMode::Dispatched(0),
-                parent_id,
-            )
-            .await?;
-        let mention = participants
-            .iter()
-            .map(|p| format!("@{}", p.name))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let _ = db.upsert_collaboration_message(
-            session_id,
-            collab_id,
-            &format!("{mention} {user_message}"),
-        );
-        let members = participants
-            .into_iter()
-            .map(|p| DispatchedMember {
-                companion_id: p.companion_id,
-                name: p.name,
-                avatar_emoji: p.avatar_emoji,
-                color_hex: p.color_hex,
-            })
-            .collect();
-        return Ok(GroupDispatchOutcome::Dispatched {
-            collaboration_id: collab_id,
-            members,
-        });
-    }
-
-    // ── (b) 去中心化群聊(非放养)── 全员进对话循环引擎,各自 reply-or-<pass>;全让 → YiYi
-    //    兜底。放养模式已在上面 return,这里只剩"flag 关 = 现有单轮模型"。
-    let (collab_id, participants) = conversation_driver::dispatch_group_conversation(
-        db.clone(), cfg, session_id, user_message, &members, &chat_history, group_scope,
+    // 放养事件循环 —— @ 与非 @ 统一进 v2:被 @ 的成员 wave-1 立即回(delay=0)、其余变速 5–30 秒,
+    // YiYi 也作为一员入群,冷场自然收口。旧的单轮 / 讨论同步模型已退役删除。
+    let (collab_id, participants) = conversation_driver::dispatch_group_loop(
+        db.clone(), cfg, session_id, user_message, &members, &chat_history, group_scope, forced_ids,
     )
     .await?;
     let members = participants
@@ -293,28 +187,6 @@ pub async fn dispatch_to_companion(
     Ok(collab_id)
 }
 
-
-/// 群聊 v2 异步事件循环开关(feature-flag,默认关)。环境变量 `YIYI_GROUP_ASYNC_LOOP=1/true`。
-/// 开后:非点名群回合走变速事件循环(成员互相接话);旧单轮 + 讨论模式让位。
-/// ⚠️ 启用前须补 P0(见 docs/design/2026-06-01_群聊-异步事件循环-v2.md):新消息 abort 旧
-/// collab、executor 流式中途取消、前端 typing。
-pub fn group_async_loop_enabled() -> bool {
-    matches!(
-        std::env::var("YIYI_GROUP_ASYNC_LOOP").ok().as_deref(),
-        Some("1") | Some("true") | Some("TRUE")
-    )
-}
-
-/// 是否"群讨论"意图 —— 关键词触发(用户决策:关键词自动触发)。命中则走多轮讨论
-/// 模式,而非普通的去中心化各自应答。
-pub fn is_discussion_intent(msg: &str) -> bool {
-    const KW: &[&str] = &[
-        "讨论", "辩论", "争论", "你们聊", "你们说说", "你们都说说", "你们怎么看",
-        "各抒己见", "头脑风暴", "多轮", "给个结论", "给我一个结论", "给我个结论",
-        "你们觉得呢", "都来说说",
-    ];
-    KW.iter().any(|k| msg.contains(k))
-}
 
 /// 用户喊"停"——放养群聊里任何消息都会起新一轮,所以"停"得显式识别:命中则只取消当前循环、
 /// 不再起新的(否则"停"被当成新话题又点燃,用户根本喊不停)。见用户反馈 2026-06-02。

@@ -237,14 +237,11 @@ pub async fn chat_stream_start(
     // group_id == None 直接当单聊(family_mode 字段已退役,只读 group_id)。
     if state.db.get_session_group(&sid).is_some() {
         use crate::commands::agent::group_dispatch::{
-            group_async_loop_enabled, is_discussion_intent, is_stop_intent, try_group_dispatch,
-            GroupDispatchOutcome,
+            is_stop_intent, try_group_dispatch, GroupDispatchOutcome,
         };
-        // 多轮讨论走对话循环引擎(Driver 自持多轮 + judge 收敛),不再是静态 2 轮 plan。
-        use crate::engine::collaboration::conversation_driver::dispatch_group_discussion;
         // 用户喊停:放养群聊里任何消息都会起新一轮,所以"停"必须最先拦截 —— 只取消当前循环、
         // 不再 dispatch(否则"停"被当成新话题又点燃,用户根本喊不停)。见用户反馈 2026-06-02。
-        if group_async_loop_enabled() && is_stop_intent(&message) {
+        if is_stop_intent(&message) {
             let stopped =
                 crate::engine::collaboration::conversation_driver::stop_group_loop(&sid);
             log::info!("group stop intent → stop_group_loop({}) = {}", sid, stopped);
@@ -256,22 +253,6 @@ pub async fn chat_stream_start(
             )
             .ok();
             return Ok(());
-        }
-        // 群讨论模式:用户消息含"讨论/你们聊聊/给个结论"等意图 → 多轮讨论 + YiYi 总结。
-        // flag(v2 异步事件循环)开时:讨论也并入统一循环,跳过这套旧多轮 judge。
-        if !group_async_loop_enabled() && is_discussion_intent(&message) {
-            match dispatch_group_discussion(state.db.clone(), ctx.config.clone(), &sid, &message).await {
-                Ok(collab_id) => {
-                    log::info!("group discussion → collab {collab_id}");
-                    app.emit("chat://complete", serde_json::json!({
-                        "text": "",
-                        "session_id": sid,
-                        "collaboration_id": collab_id,
-                    })).ok();
-                    return Ok(());
-                }
-                Err(e) => log::warn!("group discussion 失败,回落普通群派遣:{e}"),
-            }
         }
         let forced = mentioned_companion_ids.clone().unwrap_or_default();
         match try_group_dispatch(state.db.clone(), ctx.config.clone(), &sid, &message, &forced).await {
