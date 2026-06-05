@@ -42,7 +42,7 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         MenuItemBuilder::with_id(MENU_TOGGLE_BOTS, "暂停所有 Bot").build(app)?;
 
     let nav_buddy_item = MenuItemBuilder::with_id(MENU_NAV_BUDDY, "跳转到精灵").build(app)?;
-    let nav_agents_item = MenuItemBuilder::with_id(MENU_NAV_AGENTS, "跳转到分身").build(app)?;
+    let nav_agents_item = MenuItemBuilder::with_id(MENU_NAV_AGENTS, "跳转到连接").build(app)?;
     let nav_settings_item =
         MenuItemBuilder::with_id(MENU_NAV_SETTINGS, "跳转到设置").build(app)?;
 

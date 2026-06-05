@@ -50,7 +50,7 @@ describe("SessionsPanel", () => {
     // Empty state uses sessions.noSessions + sessions.emptyDesc.
     expect(await screen.findByText("暂无会话记录")).toBeInTheDocument();
     expect(
-      screen.getByText(/当分身连接并有用户互动后/),
+      screen.getByText(/当连接接入并有用户互动后/),
     ).toBeInTheDocument();
   });
 
