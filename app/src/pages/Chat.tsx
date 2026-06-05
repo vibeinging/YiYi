@@ -16,6 +16,7 @@ import {
   ensureSession,
   getHistory,
   clearHistory,
+  createCompanionSession,
   type ChatMessage,
   type Attachment,
 } from '../api/agent';
@@ -82,6 +83,8 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   activeSessionIdRef.current = activeSessionId;
   const messagesRef = useRef<ChatMessagesHandle>(null);
   const inputRef = useRef<ChatInputHandle>(null);
+  // 草稿发首条消息切到新会话时,跳过一次 activeSessionId effect 的 loadMessages(防乐观消息被空历史覆盖)。
+  const skipLoadRef = useRef(false);
 
   // --- 群聊状态:familyGroupId 决定一切(IM 心智)---
   // group_id = null  → 单聊主精灵。
@@ -90,7 +93,10 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   const [familyGroupId, setFamilyGroupId] = useState<number | null>(null);
 
   // 私聊某个伙伴时(session 绑了 companion_id 且非群聊)的当前伙伴 —— 给 ChatWelcome 换头像+介绍。
-  const activeCompanionId = chatSessions.find(s => s.id === activeSessionId)?.companion_id ?? null;
+  // 草稿态(点好友落空会话、还没发消息)优先用草稿好友 —— 欢迎页/顶栏即时显示 ta;
+  // 会话自身 companion_id 要等发首条消息归属后才有(见 sessionStore.draftCompanionId)。
+  const draftCompanionId = useSessionStore((s) => s.draftCompanionId);
+  const activeCompanionId = draftCompanionId ?? (chatSessions.find(s => s.id === activeSessionId)?.companion_id ?? null);
   const [activeCompanion, setActiveCompanion] = useState<Companion | null>(null);
   const [companionPersona, setCompanionPersona] = useState<string | null>(null);
   useEffect(() => {
@@ -225,9 +231,14 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   };
 
   useEffect(() => {
-    if (!activeSessionId) return;
+    if (!activeSessionId) { setMessages([]); return; }  // 草稿/空态:清残留消息,让欢迎页出来
     useChatStreamStore.getState().setSessionId(activeSessionId);
-    loadMessages(activeSessionId);
+    if (skipLoadRef.current) {
+      // 草稿刚切到新私聊:乐观消息已在手,别用空历史覆盖。其余初始化照走。
+      skipLoadRef.current = false;
+    } else {
+      loadMessages(activeSessionId);
+    }
     getSessionGroup(activeSessionId).then(setFamilyGroupId).catch(() => setFamilyGroupId(null));
 
     invoke('chat_stream_state', { sessionId: activeSessionId })
@@ -312,6 +323,34 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   const handleSend = async (plainText: string, mentions: MentionTag[], attachments: Attachment[]) => {
     messagesRef.current?.scrollToBottom();
 
+    // 草稿态(点好友进来、零会话 activeSessionId='')发首条消息 → 这时才建一段全新私聊会话并切过去。
+    // skipLoadRef 让随之而来的 activeSessionId 变更 effect 跳过一次 loadMessages,避免空历史
+    // 覆盖下面的乐观插入(消息闪一下)。
+    let sid = activeSessionId;
+    const draftCid = useSessionStore.getState().draftCompanionId;
+    if (!sid) {
+      // 草稿态发首条消息才真正建会话:有草稿好友 → 建私聊;否则(YiYi 草稿)→ 建普通会话。
+      // skipLoadRef 让随之的 activeSessionId effect 跳过一次 loadMessages,防空历史覆盖乐观插入。
+      try {
+        sid = draftCid != null
+          ? await createCompanionSession(draftCid)
+          : await useSessionStore.getState().createNewChat();
+        // 新建会话立即用第一句话当标题(私聊也一样:头像已示意是谁,标题留给对话内容)。
+        // 私聊走 companion 路由、后端不 rename → 正好保留这里设的;YiYi 会话后端随后会用
+        // 首条消息再 rename 一次(同样第一句话),不冲突。
+        const snippet = plainText.trim().replace(/\s+/g, ' ').slice(0, 30);
+        if (snippet) await useSessionStore.getState().renameSession(sid, snippet);
+        skipLoadRef.current = true;
+        useSessionStore.getState().switchToSession(sid); // 切到新会话 + 清 draft
+        await useSessionStore.getState().refreshSessions();
+      } catch (e) {
+        console.error('create session on send failed', e);
+        toast.error(`建会话失败: ${e}`);
+        return;
+      }
+    }
+    if (!sid) return;
+
     let userMessage = plainText;
 
     // Load @-referenced file contents
@@ -362,7 +401,7 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
           };
           const plan = planSingleCompanion(participant, plainText);
           const id = await submitCollaboration(
-            activeSessionId,
+            sid,
             plainText,
             plan,
             { kind: 'manual' },
@@ -414,24 +453,14 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
       attachments: userAttachments,
     }]);
 
-    // Optimistic title from first user message: if session is still "New Chat", take first 30 chars of the prompt.
     try {
-      const { chatSessions, renameSession } = useSessionStore.getState();
-      const current = chatSessions.find(s => s.id === activeSessionId);
-      if (current && current.name === 'New Chat' && plainText.trim()) {
-        const snippet = plainText.trim().replace(/\s+/g, ' ').slice(0, 30);
-        renameSession(activeSessionId, snippet).catch(() => {});
-      }
-    } catch {}
-
-    try {
-      await runStreamingChat(userMessage, activeSessionId, userAttachments, forcedCompanionIds);
-      await loadMessages(activeSessionId);
+      await runStreamingChat(userMessage, sid, userAttachments, forcedCompanionIds);
+      await loadMessages(sid);
       // Refresh session list to pick up auto-generated title
       await useSessionStore.getState().refreshSessions();
       // Trigger buddy observer (non-blocking)
       // Use messagesRef or re-read state to avoid stale closure
-      const currentMessages = await getHistory(activeSessionId);
+      const currentMessages = await getHistory(sid);
       const recentMsgs = (currentMessages || []).slice(-5).map((m: any) => `${m.role}: ${(m.content || '').slice(0, 200)}`);
       recentMsgs.push(`user: ${userMessage.slice(0, 200)}`);
       useBuddyStore.getState().triggerObserve(recentMsgs).catch(() => {});
@@ -590,7 +619,10 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   );
   // Determine if current session is a chat session (not task/cron)
   const isChatSession = !isTaskSession && !isCronSession;
-  const showWelcome = isChatSession && messages.length === 0 && !loading;
+  // 群会话从创建起就是对话页面 —— 不走欢迎页(欢迎页只给私聊/YiYi 的草稿空态)。
+  // 用同步的 session.group_id 判断,不等异步的 familyGroupId,避免切群瞬间闪一下 YiYi 欢迎页。
+  const activeGroupId = chatSessions.find(s => s.id === activeSessionId)?.group_id ?? null;
+  const showWelcome = isChatSession && messages.length === 0 && !loading && activeGroupId == null;
 
   // --- Render ---
   return (
@@ -618,7 +650,7 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
       {activeSessionId && !isTaskSession && !isCronSession && (
         (() => {
           const sess = chatSessions.find(s => s.id === activeSessionId);
-          const companionId = sess?.companion_id ?? null;
+          const companionId = draftCompanionId ?? (sess?.companion_id ?? null);
           if (companionId != null) {
             const accent = activeCompanion?.color_hex || 'var(--color-primary)';
             return (

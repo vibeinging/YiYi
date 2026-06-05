@@ -21,6 +21,8 @@ const PAGE_SIZE = 30;
 interface SessionState {
   chatSessions: ChatSession[];
   activeSessionId: string;
+  /** 草稿私聊好友:点好友落到空会话「草稿台」时标记,发首条消息才落库归属。null = 无草稿。 */
+  draftCompanionId: number | null;
   initialized: boolean;
 
   // Pagination
@@ -38,6 +40,8 @@ interface SessionState {
   clearSearch: () => void;
   createNewChat: () => Promise<string>;
   switchToSession: (id: string) => void;
+  /** 进「纯草稿态」:无会话(activeSessionId='')+ 标记草稿好友。点好友未发消息时用。 */
+  enterDraftCompanion: (companionId: number) => void;
   deleteSession: (id: string) => Promise<void>;
   renameSession: (id: string, name: string) => Promise<void>;
   refreshSessions: () => Promise<void>;
@@ -50,6 +54,7 @@ interface SessionState {
 export const useSessionStore = create<SessionState>((set, get) => ({
   chatSessions: [],
   activeSessionId: '',
+  draftCompanionId: null,
   initialized: false,
   hasMore: true,
   loadingMore: false,
@@ -133,9 +138,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // Use most recent session
       set({ activeSessionId: chatSessions[0].id, initialized: true });
     } else {
-      // No sessions exist — create one
-      await get().createNewChat();
-      set({ initialized: true });
+      // 没有任何会话 → 停在空草稿态(activeSessionId=''=YiYi 欢迎页),不预建 New Chat。
+      // 发首条消息时(Chat.handleSend)才建会话 —— 列表只留真正聊过的。
+      set({ activeSessionId: '', initialized: true });
       return;
     }
 
@@ -152,7 +157,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const current = chatSessions.find(s => s.id === activeSessionId);
       if (current && current.name === 'New Chat') {
         // Persist on the reused path too so localStorage stays symmetric with
-        // the create-fresh branch below.
+        // the create-fresh branch below. 清草稿:复用空会话即"开始新对话"语义。
+        set({ draftCompanionId: null });
         get()._persistActive();
         return current.id;
       }
@@ -160,6 +166,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set({
         chatSessions: [session, ...get().chatSessions],
         activeSessionId: session.id,
+        draftCompanionId: null,
       });
       get()._persistActive();
       return session.id;
@@ -170,9 +177,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   switchToSession: (id: string) => {
-    set({ activeSessionId: id });
+    // 切到真会话 → 草稿作废(草稿好友只对空草稿台有效)。
+    set({ activeSessionId: id, draftCompanionId: null });
     get()._persistActive();
   },
+
+  enterDraftCompanion: (companionId: number) =>
+    set({ activeSessionId: '', draftCompanionId: companionId }),
 
   deleteSession: async (id: string) => {
     try {
@@ -185,10 +196,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           // Switch to most recent remaining session
           set({ chatSessions: newSessions, activeSessionId: newSessions[0].id });
         } else {
-          // No sessions left — create a new one
-          set({ chatSessions: [], activeSessionId: '' });
-          await get().createNewChat();
-          return;
+          // 删光了 → 落到空草稿态(不自动补 New Chat)。发消息才建,列表保持空。
+          set({ chatSessions: [], activeSessionId: '', draftCompanionId: null });
         }
       } else {
         set({ chatSessions: newSessions });

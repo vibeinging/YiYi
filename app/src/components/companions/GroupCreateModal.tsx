@@ -12,6 +12,7 @@ import {
   updateCompanionGroup, addCompanionToGroup, removeCompanionFromGroup,
 } from '../../api/groups'
 import { listCompanions, type Companion } from '../../api/companions'
+import { createSession } from '../../api/agent'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useGroupsStore } from '../../stores/groupsStore'
 import { validateGroupForm } from '../../utils/group'
@@ -80,7 +81,10 @@ export function GroupCreateModal({
       }
       // 新建 + 建群即开聊。
       const gid = await createGroupWithMembers(nm, emoji || null, selected)
-      const sid = await useSessionStore.getState().createNewChat()
+      // 直接建一段全新会话绑群 —— 不用 createNewChat:它会复用"当前那条 name=New Chat 的会话"
+      // (空会话,或正在看的群会话——群会话 session.name 也是 'New Chat'),把它覆盖成新群、
+      // switchToSession 切的还是当前会话 → 视觉上像"没跳转"。建群是明确动作,总是开新窗口。
+      const sid = (await createSession('New Chat')).id
       await setSessionGroup(sid, gid)
       // 先让 groups.byId 有这个新群(左侧标题/头像要用),再重拉会话列表 —— 这样列表里的新会话
       // 带上后端刚绑的 group_id,立刻显示群名 + 群头像拼图(否则回落 "New Chat" + 空群,正是

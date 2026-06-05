@@ -130,7 +130,8 @@ export interface ChatSession {
   last_message?: string | null;
 }
 
-/** 点好友头像:每次都新开一段绑定该 companion 的私聊会话,返回 session id。 */
+/** 点好友头像 → 建一段绑定该 companion 的新私聊会话,返回 session id。
+ *  纯草稿态:点好友先零会话进欢迎页,发首条消息才调它建会话(见 Chat.handleSend)。 */
 export async function createCompanionSession(companionId: number): Promise<string> {
   return await invoke<string>('create_companion_session', { companionId });
 }

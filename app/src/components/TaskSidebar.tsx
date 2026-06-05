@@ -21,7 +21,6 @@ import { AvatarGrid } from './AvatarGrid';
 import { timeAgo } from '../utils/taskStatus';
 import type { Page } from '../App';
 import type { ChatSession } from '../api/agent';
-import { createCompanionSession } from '../api/agent';
 import { listCompanions, retireCompanion, COMPANIONS_CHANGED_EVENT, type Companion } from '../api/companions';
 import { GroupsManagerModal } from './companions/GroupsManagerModal';
 import { GroupCreateModal } from './companions/GroupCreateModal';
@@ -630,30 +629,32 @@ export const TaskSidebar = memo(function TaskSidebar({
   }, []);
   const companionById = new Map(companions.map(c => [c.id, c]));
 
-  // 点"+ 新对话"直接走老路径 —— 创建空白会话进 chat 页,不再走"和谁聊"picker。
-  // 想拉家族成员的话,在对话里通过 ChatHeader 的邀请 / 管理入口操作。
-  const createNewChat = useSessionStore(s => s.createNewChat);
+  // 「+新对话」/ 点好友 都走 lazy 草稿:进 chat 页落到空草稿态(欢迎页),发首条消息才建会话。
   const switchToSession = useSessionStore(s => s.switchToSession);
-  const refreshSessions = useSessionStore(s => s.refreshSessions);
-  const handleNewChatClick = async () => {
-    try {
-      await createNewChat();
-      onPageChange('chat');
-    } catch (e) {
-      console.error('createNewChat failed', e);
-    }
+  const enterDraftCompanion = useSessionStore(s => s.enterDraftCompanion);
+  const handleNewChatClick = () => {
+    // 「+新对话」→ 进空草稿态(YiYi 欢迎页),不预建 New Chat;发消息才落库。
+    switchToSession('');
+    onPageChange('chat');
   };
 
   // 当前会话绑的 companion(好友列表高亮 + chat 路由用)。
   const activeSession = chatSessions.find(s => s.id === activeSessionId);
   const activeCompanionId = (activeSession?.companion_id ?? null) as number | null;
 
-  // 点好友头像 → 每次都新开一段和该 companion 的对话,落到欢迎页(显示它的头像+介绍)。
+  // 点好友头像 → 进和该 companion 的私聊(IM 心智)。
+  //  有历史 → 复用最近一段(chatSessions 已按 updated_at 倒序,find 即最近;群 companion_id 为 null 自排除)。
+  //  无历史 → 进纯草稿态(零会话 + 标记草稿好友):欢迎页/顶栏显示 ta,完全不碰 New Chat;
+  //           发首条消息时(Chat.handleSend)才建一段全新私聊会话,避免"只是看看"堆空会话。
   const openFriend = async (companionId: number) => {
     try {
-      const sid = await createCompanionSession(companionId);
-      await refreshSessions(); // 新会话同步进历史列表(带 companion_id)
-      switchToSession(sid);
+      const existing = chatSessions.find(s => s.companion_id === companionId && !s.group_id);
+      if (existing) {
+        switchToSession(existing.id);
+        onPageChange('chat');
+        return;
+      }
+      enterDraftCompanion(companionId);
       onPageChange('chat');
     } catch (e) {
       console.error('openFriend failed', e);
