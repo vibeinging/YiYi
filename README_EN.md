@@ -5,7 +5,7 @@
 # YiYi
 
 **A desktop AI companion that grows alongside you**
-DeepSeek V4–only, engineered deep · meditates nightly, learns from corrections, knows you better over time
+Adopt AI buddies with personalities, group them up for free-range chat · DeepSeek V4–only, engineered deep · learns from corrections, knows you better over time
 
 [![GitHub release](https://img.shields.io/github/v/release/vibeinging/YiYi?style=flat-square&color=orange&include_prereleases)](https://github.com/vibeinging/YiYi/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue?style=flat-square)](https://github.com/vibeinging/YiYi/releases)
@@ -48,6 +48,19 @@ DeepSeek V4–only, engineered deep · meditates nightly, learns from correction
 
 ---
 
+## 👥 Not just one AI — a crew of buddies, chatting as a group
+
+YiYi isn't a single-agent assistant. Adopt multiple **AI buddies with personalities** — each with its own avatar, character, role and private memory — then pull them into a **group** and let them chat free-range. Not "you ask, they answer in a queue," but like a real group chat:
+
+- **Staggered replies**: nobody races to answer — each member chimes in over a few seconds (jittered delay), slower ones speak after seeing fuller context
+- **Winds down on its own**: when no one picks up, YiYi (the group host) wraps it — no forced filler, no instant summary
+- **@ to summon**: @ someone and they're up right away
+- **1:1 too**: tap a buddy for a private chat, memories kept separate
+
+The main sprite YiYi lives on your desktop and grows; each buddy has a job (writing, drawing, brainstorming…); the group brings them together.
+
+---
+
 ## 📸 Screenshots
 
 <table>
@@ -57,7 +70,7 @@ DeepSeek V4–only, engineered deep · meditates nightly, learns from correction
   </tr>
   <tr>
     <td align="center"><b>Desktop Sprite</b><br/>Always there · with personality · talks to you</td>
-    <td align="center"><b>Skills Library</b><br/>25+ built-in · custom · MCP-connected</td>
+    <td align="center"><b>Skills Library</b><br/>built-in · custom · MCP-connected</td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/screenshots/04-tasks.png" alt="Long tasks" /></td>
@@ -86,9 +99,10 @@ DeepSeek V4–only, engineered deep · meditates nightly, learns from correction
 
 | Module | What it does |
 |---|---|
+| 👥 **Buddies · Group Chat** | Adopt AI buddies with personalities · group them for free-range chat (staggered replies / natural wind-down / @ to summon / 1:1) |
 | 🧠 **ReAct Agent** | think → act → observe loop · 60+ built-in tools · parallel sub-agents |
-| 🎯 **25+ Built-in Skills** | Office · browser · comms · creative · automation · dev |
-| 🤖 **Multi-platform Bot** | QQ · DingTalk · Feishu · WeCom · Discord · Telegram · Webhook |
+| 🎯 **Built-in Skills** | Office (docx/pdf/pptx/xlsx) · creative · frontend · MCP builder · theme factory… custom + marketplace |
+| 🤖 **Multi-platform Bot** | WeChat · QQ · DingTalk · Feishu · WeCom · Discord · Telegram · Webhook |
 | 🔌 **MCP Protocol** | Plug in external MCP servers, expose your own skills |
 | 🖱️ **Desktop Control** | Background macOS control via cua-driver MCP — doesn't steal cursor or Space |
 | 🌱 **Long-term Growth** | Nightly meditation · failure reflection · learn from corrections · capability profile |
@@ -161,7 +175,7 @@ YiYi doesn't charge a subscription. You pay for the compute it uses on your beha
 
 - Frontend: React 18, TypeScript, Tailwind, Vite, xterm.js
 - Backend: Rust, Tauri 2.x
-- Agent: ReAct + `spawn_agents` parallel sub-agents + `loop_guard`
+- Agent: ReAct main loop + `spawn_agents` parallel sub-agents + free-range async group-chat loop (staggered replies / natural wind-down) + `loop_guard`
 - LLM: DeepSeek V4 Pro/Flash dual-model, `UsageSource`-driven routing, prefix-cache hit tracking, streaming reasoning
 - Cost: `engine/pricing.rs` V4 price table; process-level cost side-channel aggregating background calls
 - Context: 800K triggers auto-compaction, below 500K compaction disabled to preserve prefix cache

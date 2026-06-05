@@ -5,7 +5,7 @@
 # YiYi
 
 **一个会陪你一起长大的桌面 AI 助手**
-只接 DeepSeek V4，接到工程深处 · 后台冥想、纠正即学习、越用越懂你
+养一窝有人格的伙伴、拉进群放养式一起聊 · 只接 DeepSeek V4 接到工程深处 · 纠正即学习、越用越懂你
 
 [![GitHub release](https://img.shields.io/github/v/release/vibeinging/YiYi?style=flat-square&color=orange&include_prereleases)](https://github.com/vibeinging/YiYi/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue?style=flat-square)](https://github.com/vibeinging/YiYi/releases)
@@ -48,6 +48,19 @@
 
 ---
 
+## 👥 不止一个 AI —— 养一窝伙伴，拉进群一起聊
+
+YiYi 不是单体助手。你可以收养多个**有人格的 AI 伙伴**，每个有自己的头像、性格、角色和私有记忆；想要时把它们拉进一个**群**，放养式聊起来 —— 不是"你问一句、它们排队答一句"，而是像真人群聊：
+
+- **变速发言**：群里没人抢答，成员各自隔几秒陆续接话（参差延迟），慢一点的看到更全上下文再开口
+- **冷场自然收口**：聊到没人接，YiYi 作为群管家收个尾，不硬凑、不秒总结
+- **@ 点名必答**：你 @ 谁，谁立刻上场
+- **单独聊也行**：点某个伙伴就是和 ta 的 1:1 私聊，各自记忆独立
+
+主精灵 YiYi 常驻、会成长；伙伴们各司其职（写作、画画、出主意…）；群聊把他们凑到一块儿。
+
+---
+
 ## 📸 截图
 
 <table>
@@ -57,7 +70,7 @@
   </tr>
   <tr>
     <td align="center"><b>桌面小精灵</b><br/>常驻、有人格、会跟你商量</td>
-    <td align="center"><b>技能库</b><br/>25+ 内置 · 自定义 · MCP 接入</td>
+    <td align="center"><b>技能库</b><br/>内置 · 自定义 · MCP 接入</td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/screenshots/04-tasks.png" alt="长任务" /></td>
@@ -86,9 +99,10 @@
 
 | 模块 | 一句话 |
 |---|---|
+| 👥 **伙伴 · 群聊** | 收养有人格的 AI 伙伴 · 拉进群放养式对话（变速发言 / 冷场收口 / @必答 / 单独聊） |
 | 🧠 **ReAct Agent** | think → act → observe 主循环 · 60+ 内置工具 · 子 agent 并行 |
-| 🎯 **25+ 内置技能** | 办公 · 浏览器 · 通讯 · 创作 · 自动化 · 开发 |
-| 🤖 **多平台 Bot** | QQ · 钉钉 · 飞书 · 企微 · Discord · Telegram · Webhook |
+| 🎯 **内置技能库** | 办公（docx/pdf/pptx/xlsx）· 创作 · 前端 · MCP 构建 · 主题工厂…可自定义 + 市场接入 |
+| 🤖 **多平台 Bot** | 微信 · QQ · 钉钉 · 飞书 · 企微 · Discord · Telegram · Webhook |
 | 🔌 **MCP 协议** | 接入外部 MCP server，也对外暴露自己的技能 |
 | 🖱️ **桌面操控** | 通过 cua-driver MCP 后台跑，不抢光标、不切 Space（macOS） |
 | 🌱 **长期成长** | 后台冥想 · 失败反思 · 纠正即学习 · 能力画像 |
@@ -161,7 +175,7 @@ YiYi 不收订阅费。你支付的是它代你跑事所用的算力——直接
 
 - 前端：React 18、TypeScript、Tailwind、Vite、xterm.js
 - 后端：Rust、Tauri 2.x
-- Agent：ReAct + spawn_agents 多 Agent 并行 + loop_guard 反鬼打墙
+- Agent：ReAct 主循环 + spawn_agents 多 Agent 并行 + 群聊放养式异步事件循环（变速发言 / 冷场收口）+ loop_guard 反鬼打墙
 - LLM：DeepSeek V4 Pro / Flash 双模型，`UsageSource` 驱动路由，prefix 缓存命中率追踪，思考流式渲染
 - 成本：`engine/pricing.rs` V4 价格表；进程级 cost side-channel 汇总后台调用
 - 上下文：800K 触发自动压缩，500K 以下禁用以保护 prefix cache
