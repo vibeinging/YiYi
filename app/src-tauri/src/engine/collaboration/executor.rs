@@ -139,6 +139,23 @@ fn render_system_prompt(step: &Step, participant_idx: usize) -> String {
 /// Render the user prompt fed to a single participant. Includes the
 /// step's input prompt plus, for HostSummarize, the upstream summaries.
 fn render_user_prompt(step: &Step, upstream: &[(StepId, StepOutput)]) -> String {
+    // S2④:项目派工 task —— 上游产出作为"交接"喂给下游(后端的接口契约给前端、
+    // 前后端的实现给测试…),而不是"群里的讨论"。让下游角色清楚这是在接力建造。
+    if step_mode(step) == Some("project_task") {
+        let mut s = String::new();
+        if !upstream.is_empty() {
+            s.push_str(
+                "【上游交付】队友已完成前置任务,产出如下。请在此基础上接着做 —— \
+                 别重复造,按上游给的接口 / 契约 / 设计来:\n\n",
+            );
+            for (id, out) in upstream {
+                s.push_str(&format!("—— 任务 #{} 的产出 ——\n{}\n\n", id, out.full_output));
+            }
+        }
+        s.push_str("【你这条任务】\n");
+        s.push_str(&step.input.prompt);
+        return s;
+    }
     // 对话循环的轮 step:历史 append-only 在前,用户新消息在最末(缓存纪律)。
     if matches!(
         step_mode(step),
@@ -188,6 +205,9 @@ const PARTICIPANT_TIMEOUT_SECS: u64 = 150;
 /// 群事件循环里,一句闲聊不需要 150s 长推理;砍到 30s,既兜住挂起流,又把"被抢占后
 /// 仍在跑的那条"的成本/占槽时长压到 ≤ 群墙钟量级(中途取消的实用兜底)。
 const GROUP_LOOP_TIMEOUT_SECS: u64 = 30;
+/// 项目派工的写码任务(S2③ project_task)需要更长 —— 一个角色要写多个文件、跑构建/
+/// 测试,150s 不够。给到 10 分钟(仍是挂起流的兜底,不是常态时长)。
+const PROJECT_TASK_TIMEOUT_SECS: u64 = 600;
 
 /// run_one 的超时包装 —— 见 PARTICIPANT_TIMEOUT_SECS。
 async fn run_one_guarded(
@@ -203,10 +223,10 @@ async fn run_one_guarded(
         .get(participant_idx)
         .map(|p| p.name.clone())
         .unwrap_or_default();
-    let secs = if step_mode(step) == Some("group_loop") {
-        GROUP_LOOP_TIMEOUT_SECS
-    } else {
-        PARTICIPANT_TIMEOUT_SECS
+    let secs = match step_mode(step) {
+        Some("group_loop") => GROUP_LOOP_TIMEOUT_SECS,
+        Some("project_task") => PROJECT_TASK_TIMEOUT_SECS,
+        _ => PARTICIPANT_TIMEOUT_SECS,
     };
     match tokio::time::timeout(
         std::time::Duration::from_secs(secs),
@@ -726,5 +746,45 @@ mod role_tests {
         assert!(names_after_readonly.contains(&"grep_search".to_string()));
         assert!(!names_after_readonly.contains(&"write_file".to_string()));
         assert!(!names_after_readonly.contains(&"execute_shell".to_string()));
+    }
+
+    // S2④:项目 task 的上游产出按"交接"语义注入,而非"群里的讨论"。
+    #[test]
+    fn project_task_prompt_frames_upstream_as_handoff() {
+        use super::super::{StepInput, StepStatus};
+        let step = Step {
+            id: 2,
+            kind: StepKind::ParallelAgents,
+            participants: vec![],
+            depends_on: vec![1],
+            input: StepInput {
+                prompt: "写前端界面".into(),
+                metadata: serde_json::json!({ "mode": "project_task" }),
+            },
+            output: None,
+            status: StepStatus::Pending,
+            started_at: None,
+            finished_at: None,
+        };
+        let upstream = vec![(
+            1i64,
+            StepOutput {
+                summary: "后端 API".into(),
+                full_output: "GET /todos 返回 [{id,title,done}]".into(),
+                tokens_used: TokenUsage::default(),
+                duration_ms: 0,
+            },
+        )];
+        let prompt = render_user_prompt(&step, &upstream);
+        assert!(prompt.contains("上游交付"), "应是交接语义: {prompt}");
+        assert!(prompt.contains("GET /todos"), "应注入上游产出");
+        assert!(prompt.contains("写前端界面"), "应含本任务");
+        assert!(!prompt.contains("群里目前的讨论"), "不该是讨论语义");
+
+        // 无上游(第一棒)→ 只有任务,无交接块。
+        let first = Step { depends_on: vec![], ..step.clone() };
+        let p0 = render_user_prompt(&first, &[]);
+        assert!(!p0.contains("上游交付"));
+        assert!(p0.contains("写前端界面"));
     }
 }

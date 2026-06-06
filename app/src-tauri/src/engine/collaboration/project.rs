@@ -80,7 +80,9 @@ pub fn build_project_collaboration_plan(
             depends_on,
             input: StepInput {
                 prompt: task.objective.clone(),
-                metadata: serde_json::Value::Null,
+                // S2④:标 project_task,让 render_user_prompt 把上游产出按"交接"语义喂下游
+                // (后端的接口给前端…),而非"群里的讨论"。
+                metadata: serde_json::json!({ "mode": "project_task" }),
             },
             output: None,
             status: StepStatus::Pending,
