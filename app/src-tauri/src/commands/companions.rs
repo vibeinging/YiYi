@@ -69,6 +69,113 @@ pub async fn adopt_companion(
     Ok(id)
 }
 
+// ── S1:一键组建软件公司团队 ─────────────────────────────────────────────
+
+/// 软件公司角色清单。顺序 = 群成员展示顺序。
+/// (agent_definition slug, 中文名, emoji, 颜色, 「擅长」label)。slug 对应
+/// `BUILTIN_AGENTS` 里的角色定义;persona 取该定义的 instructions(AGENT.md body)。
+/// 工具权限/步数由 F2 经 `agent_definition_name` 在群聊执行器里真生效。
+const SW_COMPANY_ROLES: &[(&str, &str, &str, &str, &str)] = &[
+    ("pm", "产品经理", "🧭", "#3B82F6", "需求澄清与项目协调"),
+    ("ui_designer", "UI 设计师", "🎨", "#EC4899", "界面与交互设计"),
+    ("frontend_dev", "前端工程师", "💻", "#10B981", "前端开发"),
+    ("backend_dev", "后端工程师", "⚙️", "#F59E0B", "后端开发"),
+    ("qa_engineer", "测试工程师", "🔍", "#8B5CF6", "测试与质量把关"),
+];
+
+/// 找一个不与现有伙伴冲突的名字(companions.name 全局唯一)。重复成团时
+/// 自动加序号("产品经理 2"),避免硬失败。
+fn unique_companion_name(db: &crate::engine::db::Database, base: &str) -> String {
+    if db.get_companion_by_name(base).is_none() {
+        return base.to_string();
+    }
+    for i in 2..1000 {
+        let candidate = format!("{base} {i}");
+        if db.get_companion_by_name(&candidate).is_none() {
+            return candidate;
+        }
+    }
+    format!("{base} {}", chrono::Utc::now().timestamp_millis())
+}
+
+/// 一键收养"软件公司"团队:批量收养 5 个角色(PM / UI / 前端 / 后端 / 测试),
+/// 建一个"软件公司"群并把他们拉进去。返回新群的 group_id(前端据此进群聊)。
+///
+/// 每个角色的 persona 取其 AGENT.md instructions 写进 companions/<id>/persona.md
+/// (run_one_react 据此注入人设);工具权限/步数随 agent_definition,经 F2 真生效。
+#[tauri::command]
+pub async fn adopt_software_company_team(state: State<'_, AppState>) -> Result<i64, String> {
+    adopt_software_company_team_impl(&state).await
+}
+
+pub async fn adopt_software_company_team_impl(state: &AppState) -> Result<i64, String> {
+    let registry = state.agent_registry.read().await;
+    let mut member_ids: Vec<i64> = Vec::with_capacity(SW_COMPANY_ROLES.len());
+
+    for (slug, base_name, emoji, color, label) in SW_COMPANY_ROLES {
+        // 角色定义必须在 registry(否则 F2 解析不到权限,等于裸 agent)。
+        let def = registry
+            .get(slug)
+            .ok_or_else(|| format!("角色定义 '{slug}' 未注册"))?;
+        let persona = def.instructions.clone();
+
+        let name = unique_companion_name(&state.db, base_name);
+        let now = chrono::Utc::now().timestamp_millis();
+        // memory_user_id 必须全局唯一。批量收养在同一毫秒内、且纯 CJK 名 slugify 会折叠
+        // (如"产品经理 2"→"_2"),不能靠 now+slug 兜底 —— 用 UUID 保证唯一。
+        let memory_user_id = format!("companion_{}_{}", now, uuid::Uuid::new_v4().simple());
+
+        let id = state.db.adopt_companion(&NewCompanion {
+            name,
+            agent_definition_name: slug.to_string(),
+            avatar_emoji: emoji.to_string(),
+            color_hex: color.to_string(),
+            persona_md_path: None,
+            memory_user_id,
+            metadata_json: None,
+            role_label: Some(label.to_string()),
+        })?;
+
+        // 把角色 persona 落到 companions/<id>/persona.md,群聊执行器据此注入人设。
+        if let Some(path) =
+            persist_persona(state.working_dir.as_path(), id, Some(persona.as_str()))?
+        {
+            state.db.update_companion(
+                id,
+                &CompanionUpdate {
+                    persona_md_path: Some(Some(path)),
+                    ..Default::default()
+                },
+            )?;
+        }
+        member_ids.push(id);
+    }
+    drop(registry);
+
+    // 建"软件公司"群 + 拉成员入群。
+    let group_id = state
+        .db
+        .create_companion_group("软件公司", Some("🏢"), Some("#6366F1"))?;
+    for cid in member_ids {
+        state.db.add_group_member(group_id, cid)?;
+    }
+
+    // S2 步骤①:给团队分配一个隔离的、用户可见的项目工作区。成员的文件/shell 工具
+    // 落在这里(run_one_react 据 group_workspace_for_collaboration 解析并 scope),
+    // 不污染用户默认工作区,产出可直接打开/拿走。
+    let user_ws = {
+        let g = state.user_workspace.read().unwrap_or_else(|e| e.into_inner());
+        g.clone()
+    };
+    let workspace = user_ws.join("projects").join(format!("软件公司-{group_id}"));
+    std::fs::create_dir_all(&workspace).map_err(|e| format!("建项目工作区失败: {e}"))?;
+    state
+        .db
+        .set_group_workspace(group_id, &workspace.to_string_lossy())?;
+
+    Ok(group_id)
+}
+
 /// Persists the user's adopt / dismiss action on a CompanionDraftCard
 /// back into the source message's `metadata.draft_state`. Refreshing the
 /// session afterwards keeps the card in its terminal state.

@@ -605,7 +605,8 @@ impl Database {
                 emoji TEXT,                           -- 可选 emoji,UI 显示用
                 color_hex TEXT,                       -- 可选主色 \"#F97316\"
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
+                updated_at INTEGER NOT NULL,
+                workspace_path TEXT                   -- S2:项目群的隔离工作区绝对路径;NULL=普通群
             );
             CREATE TABLE IF NOT EXISTS companion_group_members (
                 group_id INTEGER NOT NULL,
@@ -619,6 +620,18 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_group_members_group ON companion_group_members(group_id);",
         )
         .map_err(|e| format!("Failed to create companion_groups tables: {}", e))?;
+
+        // Idempotent: 给老库的 companion_groups 补 workspace_path 列(S2 项目工作区)。
+        if conn
+            .prepare("SELECT workspace_path FROM companion_groups LIMIT 0")
+            .is_err()
+        {
+            conn.execute_batch(
+                "ALTER TABLE companion_groups ADD COLUMN workspace_path TEXT;",
+            )
+            .map_err(|e| format!("Failed to add workspace_path column: {}", e))?;
+            log::info!("Migrated companion_groups table: added workspace_path column");
+        }
 
         // Agent traces: turn-level ShareGPT-format trace for offline fine-tune
         // data path. OPT-IN — gated by `config.tracing.enabled`.

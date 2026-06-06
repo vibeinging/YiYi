@@ -73,6 +73,14 @@ export async function adoptCompanion(input: AdoptCompanionInput): Promise<number
   return id
 }
 
+/** 一键组建软件公司团队:批量收养 PM/UI/前端/后端/测试 5 个角色 + 建"软件公司"群,
+ *  返回新群 group_id。收养后广播 companions:changed 让好友列表刷新。 */
+export async function adoptSoftwareCompanyTeam(): Promise<number> {
+  const groupId = await invoke<number>('adopt_software_company_team')
+  notifyCompanionsChanged()
+  return groupId
+}
+
 export async function updateCompanion(id: number, input: UpdateCompanionInput): Promise<void> {
   await invoke('update_companion', { id, input })
   notifyCompanionsChanged()

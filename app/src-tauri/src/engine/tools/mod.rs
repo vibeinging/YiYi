@@ -74,7 +74,7 @@ pub use state::{
     set_mcp_runtime, set_memme_store, set_providers, set_pty_manager, set_scheduler,
     set_streaming_state, set_tracing_enabled, set_user_workspace, set_working_dir,
     with_bot_context, with_cancelled, with_continuation_flag, with_session_id,
-    with_tool_filter,
+    with_task_working_dir, with_tool_filter,
 };
 // pub(crate) globals + atomic statics + consts that siblings reach for directly.
 pub(crate) use state::{

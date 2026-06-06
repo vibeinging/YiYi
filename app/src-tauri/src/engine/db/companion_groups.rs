@@ -20,6 +20,10 @@ pub struct CompanionGroup {
     pub color_hex: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// S2:该群的隔离项目工作区绝对路径。`Some` = 这是个"项目群"(如软件公司团队),
+    /// 成员的文件/shell 工具落在这个目录;`None` = 普通群,回落用户默认工作区。
+    #[serde(default)]
+    pub workspace_path: Option<String>,
 }
 
 fn map_group_row(row: &rusqlite::Row) -> rusqlite::Result<CompanionGroup> {
@@ -30,10 +34,11 @@ fn map_group_row(row: &rusqlite::Row) -> rusqlite::Result<CompanionGroup> {
         color_hex: row.get(3)?,
         created_at: row.get(4)?,
         updated_at: row.get(5)?,
+        workspace_path: row.get(6)?,
     })
 }
 
-const GROUP_COLS: &str = "id, name, emoji, color_hex, created_at, updated_at";
+const GROUP_COLS: &str = "id, name, emoji, color_hex, created_at, updated_at, workspace_path";
 
 /// JOIN 拉成员时用的 companions 列别名 —— 与 `super::companions::map_row` 的
 /// `row.get(0..15)` 顺序一一对应。改 companions 表 schema 时务必同步这里。
@@ -63,6 +68,35 @@ impl super::Database {
         )
         .map_err(|e| format!("create_companion_group: {}", e))?;
         Ok(conn.last_insert_rowid())
+    }
+
+    /// 设置/更新群的项目工作区路径(S2 步骤①:成团后建好隔离目录再回填)。
+    pub fn set_group_workspace(&self, group_id: i64, workspace_path: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let now = super::now_ts();
+        conn.execute(
+            "UPDATE companion_groups SET workspace_path = ?1, updated_at = ?2 WHERE id = ?3",
+            params![workspace_path, now, group_id],
+        )
+        .map_err(|e| format!("set_group_workspace: {}", e))?;
+        Ok(())
+    }
+
+    /// 解析某次协作所属群的项目工作区:collab → chat_session → group → workspace_path。
+    /// 链路任一环缺失(普通群 / 单聊 / 无工作区)→ None。run_one_react 据此决定是否
+    /// 把成员的文件 / shell 工具 scope 到隔离项目目录。
+    pub fn group_workspace_for_collaboration(&self, collab_id: i64) -> Option<String> {
+        let session_id: String = {
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            conn.query_row(
+                "SELECT chat_session_id FROM collaborations WHERE id = ?1",
+                params![collab_id],
+                |row| row.get(0),
+            )
+            .ok()?
+        };
+        let group_id = self.get_session_group(&session_id)?;
+        self.get_companion_group(group_id)?.workspace_path
     }
 
     pub fn list_companion_groups(&self) -> Vec<CompanionGroup> {
@@ -217,5 +251,71 @@ impl super::Database {
         )
         .ok()
         .flatten()
+    }
+}
+
+#[cfg(all(test, feature = "test-support"))]
+mod tests {
+    use crate::test_support::TempDb;
+    use serial_test::serial;
+
+    /// 插一行最小 collaboration 指向某会话,返回 collab_id。
+    fn insert_collab(db: &crate::engine::db::Database, session_id: &str) -> i64 {
+        let conn = db.get_conn().unwrap();
+        conn.execute(
+            "INSERT INTO collaborations \
+             (chat_session_id, intent, mode_json, status, plan_json, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![session_id, "做个 app", "{}", "running", "{}", 1_700_000_000_000i64],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
+    #[test]
+    #[serial]
+    fn workspace_path_round_trips_through_set_and_get() {
+        let t = TempDb::new();
+        let db = t.db();
+        let gid = db.create_companion_group("软件公司", Some("🏢"), Some("#fff")).unwrap();
+        // 新建群默认无工作区。
+        assert_eq!(db.get_companion_group(gid).unwrap().workspace_path, None);
+        // 设置后读得回。
+        db.set_group_workspace(gid, "/tmp/yiyi-proj").unwrap();
+        assert_eq!(
+            db.get_companion_group(gid).unwrap().workspace_path,
+            Some("/tmp/yiyi-proj".to_string())
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn resolver_walks_collab_to_session_to_group_workspace() {
+        let t = TempDb::new();
+        let db = t.db();
+
+        // 项目群:有工作区,会话绑它,一行 collab 指向该会话。
+        db.push_message("sess-proj", "user", "做个 app").unwrap();
+        let gid = db.create_companion_group("软件公司", Some("🏢"), Some("#fff")).unwrap();
+        db.set_group_workspace(gid, "/tmp/yiyi-proj-ws").unwrap();
+        db.set_session_group("sess-proj", Some(gid)).unwrap();
+        let collab = insert_collab(&db, "sess-proj");
+        assert_eq!(
+            db.group_workspace_for_collaboration(collab),
+            Some("/tmp/yiyi-proj-ws".to_string()),
+            "项目群的协作应解析到隔离工作区"
+        );
+
+        // 普通群:无工作区 → None(闲聊群不被 scope)。
+        db.push_message("sess-casual", "user", "聊聊").unwrap();
+        let g2 = db.create_companion_group("创作小队", None, None).unwrap();
+        db.set_session_group("sess-casual", Some(g2)).unwrap();
+        let c2 = insert_collab(&db, "sess-casual");
+        assert_eq!(db.group_workspace_for_collaboration(c2), None, "普通群不应有工作区");
+
+        // 单聊(会话没绑群)→ None。
+        db.push_message("sess-solo", "user", "你好").unwrap();
+        let c3 = insert_collab(&db, "sess-solo");
+        assert_eq!(db.group_workspace_for_collaboration(c3), None, "单聊不应有工作区");
     }
 }

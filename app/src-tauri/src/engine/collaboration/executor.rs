@@ -429,18 +429,29 @@ async fn run_one_react(
         shell: crate::engine::agent_runner::config::ShellOptions::default(),
     };
     let dummy_cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    // S2 步骤①:若这次协作属于一个有隔离项目工作区的群(软件公司团队),把成员的
+    // 文件 / shell 工具 scope 到该工作区;普通群 / 单聊 / headless(registry 不可达)
+    // → None,不 scope,落回用户默认工作区(不影响闲聊群)。与 persona 注入门解耦。
+    let group_workspace = crate::engine::tools::get_database()
+        .and_then(|db| db.group_workspace_for_collaboration(collab_id))
+        .map(std::path::PathBuf::from);
+
     // 两层 task-local 包裹(都不依赖 working_dir,与 persona 注入门解耦):
     //  ① with_tool_filter:角色权限真生效——ReAct core 据此裁剪给 LLM 的工具集(F2)。
     //  ② with_ask_asker:分身调 ask_user 时提问气泡显示它自己的角色名/头像(F1)。
-    let reply = crate::engine::tools::with_tool_filter(
+    let run = crate::engine::tools::with_tool_filter(
         role_filter,
         crate::engine::tools::ask_user::with_ask_asker(
             p.companion_id,
             p.name.clone(),
             crate::engine::agent_runner::run::run_agent(cfg, None, sink, dummy_cancel),
         ),
-    )
-    .await?;
+    );
+    let reply = match group_workspace {
+        Some(ws) => crate::engine::tools::with_task_working_dir(ws, run).await?,
+        None => run.await?,
+    };
 
     let duration_ms = started.elapsed().as_millis() as u64;
     let tokens_used = TokenUsage {

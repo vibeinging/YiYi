@@ -252,6 +252,17 @@ pub fn get_current_session_id() -> String {
     TASK_SESSION_ID.try_with(|s| s.clone()).unwrap_or_default()
 }
 
+/// Scope a future to a specific working directory. File / shell tools inside
+/// resolve `get_effective_workspace()` to this dir instead of `USER_WORKSPACE`
+/// (TASK_WORKING_DIR > USER_WORKSPACE)。S2:协作执行器据此把项目群成员的文件/
+/// shell 工具落到该群的隔离项目工作区,与 persona 注入门(working_dir=None)解耦。
+pub async fn with_task_working_dir<F, R>(dir: std::path::PathBuf, fut: F) -> R
+where
+    F: std::future::Future<Output = R>,
+{
+    TASK_WORKING_DIR.scope(dir, fut).await
+}
+
 /// Run a future with bot context (bot_id, conversation_id) bound to the current task.
 /// Tools within this future can access the originating bot info for smart dispatch inference.
 pub async fn with_bot_context<F, R>(bot_id: String, conversation_id: String, fut: F) -> R

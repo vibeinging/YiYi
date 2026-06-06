@@ -273,6 +273,14 @@ const BUILTIN_AGENTS: &[(&str, &str)] = &[
     ("code_reviewer", include_str!("../../../agents/code_reviewer/AGENT.md")),
     ("product_strategist", include_str!("../../../agents/product_strategist/AGENT.md")),
     ("life_coach", include_str!("../../../agents/life_coach/AGENT.md")),
+    // S1 软件公司角色包 —— 一键成团收养这五个,组成"软件公司"群。工具白名单
+    // 经 F2 在群聊执行器里真生效(PM 不写代码、QA 只读+跑测试…)。同样 hidden,
+    // 用户经"组建软件公司团队"批量收养,不在 @-mention picker 里裸露。
+    ("pm", include_str!("../../../agents/pm/AGENT.md")),
+    ("ui_designer", include_str!("../../../agents/ui_designer/AGENT.md")),
+    ("frontend_dev", include_str!("../../../agents/frontend_dev/AGENT.md")),
+    ("backend_dev", include_str!("../../../agents/backend_dev/AGENT.md")),
+    ("qa_engineer", include_str!("../../../agents/qa_engineer/AGENT.md")),
 ];
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -327,6 +335,43 @@ mod tests {
             assert!(a.is_hidden(), "{name} should be hidden from @-mention picker");
             assert!(matches!(a.tool_filter(), ToolFilter::Allow(_)));
         }
+    }
+
+    #[test]
+    fn sw_company_roles_load_with_distinct_permissions() {
+        // S1:五个软件公司角色都能加载、都用工具白名单(经 F2 在群聊里真生效)。
+        let tmp = TempDir::new().unwrap();
+        let registry = AgentRegistry::load(tmp.path(), None);
+        for name in ["pm", "ui_designer", "frontend_dev", "backend_dev", "qa_engineer"] {
+            let a = registry.get(name).unwrap_or_else(|| panic!("{name} 应在 registry"));
+            assert!(a.is_hidden(), "{name} 应对 @-mention 隐藏(经成团收养)");
+            assert!(matches!(a.tool_filter(), ToolFilter::Allow(_)), "{name} 应用白名单");
+        }
+
+        // 权限真分明 —— 这是 F2+S1 的核心:角色各司其职。
+        let pm = registry.get("pm").unwrap().tool_filter();
+        assert!(pm.is_allowed("ask_user"), "PM 能问用户");
+        assert!(!pm.is_allowed("write_file"), "PM 不写代码");
+        assert!(!pm.is_allowed("execute_shell"), "PM 不跑命令");
+
+        let ui = registry.get("ui_designer").unwrap().tool_filter();
+        assert!(ui.is_allowed("ask_user"), "UI 能和用户确认设计");
+        assert!(ui.is_allowed("write_file"), "UI 能写设计稿");
+        assert!(!ui.is_allowed("execute_shell"), "UI 不跑命令");
+
+        let fe = registry.get("frontend_dev").unwrap().tool_filter();
+        assert!(fe.is_allowed("write_file") && fe.is_allowed("execute_shell"), "前端能写能跑");
+        assert!(!fe.is_allowed("ask_user"), "前端不直接打扰用户(回 PM)");
+
+        let be = registry.get("backend_dev").unwrap().tool_filter();
+        assert!(be.is_allowed("execute_shell") && be.is_allowed("run_python"), "后端能跑服务/脚本");
+        assert!(!be.is_allowed("ask_user"), "后端不直接打扰用户");
+
+        let qa = registry.get("qa_engineer").unwrap().tool_filter();
+        assert!(qa.is_allowed("execute_shell"), "QA 能跑测试");
+        assert!(!qa.is_allowed("ask_user"), "QA 不直接打扰用户");
+        // QA 的步数上限取它自己的(14),比闲聊默认 6 高。
+        assert_eq!(registry.get("qa_engineer").unwrap().max_iterations, Some(14));
     }
 
     #[test]
