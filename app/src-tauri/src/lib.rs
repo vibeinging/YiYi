@@ -527,6 +527,7 @@ pub fn run() {
             commands::agent::chat::chat,
             commands::agent::chat::chat_stream_start,
             commands::agent::chat::chat_stream_stop,
+            commands::agent::project::commit_project_plan,
             commands::agent::chat::chat_stream_state,
             commands::agent::chat::get_history,
             commands::agent::chat::read_artifact_data_uri,
