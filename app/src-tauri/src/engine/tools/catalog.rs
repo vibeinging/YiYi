@@ -16,8 +16,8 @@
 use super::types::{tool_def, ToolDefinition};
 use super::{
     ask_user, bot_tools, canvas_tools, cheap_browser, companion_tools, cron_tools, delegate_tools,
-    file_tools, flash_tools, git_tools, lsp_tools, memory_tools, skill_tools, snapshot_tools,
-    spawn_tools, system_tools, task_tools, web_tools,
+    file_tools, flash_tools, git_tools, lsp_tools, memory_tools, project_tools, skill_tools,
+    snapshot_tools, spawn_tools, system_tools, task_tools, web_tools,
 };
 
 /// Tools whose only purpose is to feed image data BACK INTO the model.
@@ -58,6 +58,8 @@ pub fn core_tools() -> Vec<ToolDefinition> {
                 "spawn_agents",
                 // Human-in-the-loop — ask the user an open question and wait
                 "ask_user",
+                // Project mode — PM proposes a work plan for user approval (S2③)
+                "propose_project_plan",
             ];
 
             let mut all = Vec::new();
@@ -72,6 +74,7 @@ pub fn core_tools() -> Vec<ToolDefinition> {
             all.extend(skill_tools::definitions());
             all.extend(spawn_tools::definitions());
             all.extend(ask_user::definitions());
+            all.extend(project_tools::definitions());
 
             all.into_iter()
                 .filter(|t| core_names.contains(&t.function.name.as_str()))

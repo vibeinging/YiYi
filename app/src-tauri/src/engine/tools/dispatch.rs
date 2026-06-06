@@ -16,8 +16,8 @@ use super::state::{
 use super::types::{ToolCall, ToolResult};
 use super::{
     ask_user, bot_tools, browser_tools, canvas_tools, cheap_browser, companion_tools, cron_tools,
-    delegate_tools, file_tools, flash_tools, git_tools, lsp_tools, memory_tools, skill_tools,
-    snapshot_tools, spawn_tools, system_tools, task_tools, web_tools,
+    delegate_tools, file_tools, flash_tools, git_tools, lsp_tools, memory_tools, project_tools,
+    skill_tools, snapshot_tools, spawn_tools, system_tools, task_tools, web_tools,
 };
 
 /// After a tool returns, report touched paths into the session dirty-set
@@ -337,6 +337,7 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         "compact_context" => flash_tools::compact_context_tool(&args).await,
         "parallel_analyze" => flash_tools::parallel_analyze_tool(&args).await,
         "ask_user" => ask_user::ask_user_tool(&args).await,
+        "propose_project_plan" => project_tools::propose_project_plan_tool(&args).await,
         "ask_buddy" => {
             let question = args["question"].as_str().unwrap_or("");
             let ctx = args["context"].as_str().unwrap_or("");

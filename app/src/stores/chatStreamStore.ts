@@ -98,6 +98,20 @@ export interface PendingQuestionState {
   status: 'pending' | 'answered';
 }
 
+/** PM 发来的一条开工方案任务(S2③)。 */
+export interface ProjectPlanTask {
+  role: string;
+  objective: string;
+  depends_on: number[];
+}
+
+/** PM 发来待用户「开工」的方案(S2③)。 */
+export interface ProjectPlanState {
+  requestId: string;
+  summary: string;
+  tasks: ProjectPlanTask[];
+}
+
 interface ChatStreamState {
   // State
   loading: boolean;
@@ -118,6 +132,8 @@ interface ChatStreamState {
   // endStream)清空**——开放问题跨回合/跨会话存续,只由 setQuestions(切会话重载)、
   // showQuestion(事件入队)、dequeueQuestion(答完移除)管理。
   questionQueue: PendingQuestionState[];
+  // PM 发来的待「开工」方案(S2③)。同样不随回合清空;点开工/算了后清掉。
+  projectPlan: ProjectPlanState | null;
 
   // Canvas state
   canvases: CanvasEvent[];
@@ -195,6 +211,10 @@ interface ChatStreamState {
   setQuestions: (qs: PendingQuestionState[]) => void;
   dequeueQuestion: () => void;
 
+  // 开工方案 actions (S2③)
+  showProjectPlan: (p: ProjectPlanState) => void;
+  clearProjectPlan: () => void;
+
   // Focus task actions
   focusTask: (taskId: string, taskName: string, sessionId: string) => void;
   unfocusTask: () => void;
@@ -236,6 +256,7 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
   focusedTask: null,
   permissionQueue: [],
   questionQueue: [],
+  projectPlan: null,
   canvases: [],
   lastUsage: null,
   streamingArtifacts: [],
@@ -593,6 +614,9 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
   setQuestions: (qs) => set({ questionQueue: qs }),
   dequeueQuestion: () =>
     set((state) => ({ questionQueue: state.questionQueue.slice(1) })),
+
+  showProjectPlan: (p) => set({ projectPlan: p }),
+  clearProjectPlan: () => set({ projectPlan: null }),
 
   // Focus task actions
   focusTask: (taskId, taskName, sessionId) => set({

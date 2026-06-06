@@ -23,6 +23,7 @@ import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import { CollapsibleContent } from './CollapsibleContent';
 import { AskUserCard } from './AskUserCard';
+import { ProjectPlanCard } from './ProjectPlanCard';
 import { ThinkingBlock, markdownComponents } from './markdownShared';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -284,6 +285,8 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
   const streamingContent = useChatStreamStore((s) => s.streamingContent);
   // ask_user 待答问题:作为对话流末尾的一条气泡渲染(F1)。
   const activeQuestion = useChatStreamStore((s) => s.questionQueue[0] ?? null);
+  // PM 发来的开工方案:作为对话流末尾的一张卡渲染(S2③)。
+  const projectPlan = useChatStreamStore((s) => s.projectPlan);
   const streamingThinking = useChatStreamStore((s) => s.streamingThinking);
   const lastUsage = useChatStreamStore((s) => s.lastUsage);
   const streamingArtifacts = useChatStreamStore((s) => s.streamingArtifacts);
@@ -888,6 +891,8 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                 onAnswer={(answer) => onAnswerQuestion?.(activeQuestion.requestId, answer)}
               />
             )}
+
+            {projectPlan && <ProjectPlanCard plan={projectPlan} />}
 
             <div ref={messagesEndRef} />
           </div>
