@@ -440,13 +440,18 @@ async fn run_one_react(
     // 两层 task-local 包裹(都不依赖 working_dir,与 persona 注入门解耦):
     //  ① with_tool_filter:角色权限真生效——ReAct core 据此裁剪给 LLM 的工具集(F2)。
     //  ② with_ask_asker:分身调 ask_user 时提问气泡显示它自己的角色名/头像(F1)。
+    // run_agent 的 future 很大(整个 ReAct 循环 + 流式 + 工具分发)。Box::pin 把它的
+    // 状态机移到堆上,避免叠加三层 task-local scope 后在 debug 构建的 tokio worker 栈
+    // (2MB)上把帧撑爆(stack overflow)。
+    let agent_fut = Box::pin(crate::engine::agent_runner::run::run_agent(
+        cfg,
+        None,
+        sink,
+        dummy_cancel,
+    ));
     let run = crate::engine::tools::with_tool_filter(
         role_filter,
-        crate::engine::tools::ask_user::with_ask_asker(
-            p.companion_id,
-            p.name.clone(),
-            crate::engine::agent_runner::run::run_agent(cfg, None, sink, dummy_cancel),
-        ),
+        crate::engine::tools::ask_user::with_ask_asker(p.companion_id, p.name.clone(), agent_fut),
     );
     let reply = match group_workspace {
         Some(ws) => crate::engine::tools::with_task_working_dir(ws, run).await?,

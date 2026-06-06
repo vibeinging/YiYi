@@ -108,6 +108,31 @@ pub async fn try_group_dispatch(
         })
         .collect();
 
+    // S2②:项目群(有隔离工作区)里的明确"建造"任务 → PM 接手,绕开放养循环
+    // (放养有 revive_max_dry/变速等约束,且五人七嘴八舌不适合长程项目)。让 PM 用足
+    // 步数(F2)在项目工作区(S2①)里澄清需求(ask_user,F1)、给方案。@ 点名某成员、
+    // 或非建造类消息(讨论/闲聊)→ 照常走下面的放养群聊,保留"边干边聊"体感。
+    let is_project_group = db
+        .get_companion_group(gid)
+        .and_then(|g| g.workspace_path)
+        .is_some();
+    if is_project_group && forced_ids.is_empty() && is_project_build_intent(user_message) {
+        if let Some(pm) = members.iter().find(|m| m.agent_definition_name == "pm") {
+            let collab_id =
+                dispatch_project_intake(db.clone(), cfg.clone(), session_id, gid, pm, user_message)
+                    .await?;
+            return Ok(GroupDispatchOutcome::Dispatched {
+                collaboration_id: collab_id,
+                members: vec![DispatchedMember {
+                    companion_id: pm.id,
+                    name: pm.name.clone(),
+                    avatar_emoji: pm.avatar_emoji.clone(),
+                    color_hex: pm.color_hex.clone(),
+                }],
+            });
+        }
+    }
+
     // 放养事件循环 —— @ 与非 @ 统一进 v2:被 @ 的成员 wave-1 立即回(delay=0)、其余变速 5–30 秒,
     // YiYi 也作为一员入群,冷场自然收口。旧的单轮 / 讨论同步模型已退役删除。
     let (collab_id, participants) = conversation_driver::dispatch_group_loop(
@@ -187,6 +212,78 @@ pub async fn dispatch_to_companion(
     Ok(collab_id)
 }
 
+/// S2②:项目群的建造任务由 PM 接手 —— 单 PM 的协作(group 记忆 scope,共享团队上下文
+/// + 项目工作区),绕开放养循环。PM 据其 persona 用 ask_user 澄清需求、给方案;真正派工
+/// 给各角色是 S2③。结构同 `dispatch_to_companion`,差别:participant 用 Group scope、
+/// CollaborationMode 标 PM。
+async fn dispatch_project_intake(
+    db: Arc<Database>,
+    cfg: LLMConfig,
+    session_id: &str,
+    gid: i64,
+    pm: &CompanionProfile,
+    user_message: &str,
+) -> Result<i64, String> {
+    let participant = Participant {
+        companion_id: pm.id,
+        name: pm.name.clone(),
+        avatar_emoji: pm.avatar_emoji.clone(),
+        color_hex: pm.color_hex.clone(),
+        memory_scope: MemoryScope::Group(gid),
+    };
+    let plan = CollaborationPlan {
+        steps: vec![Step {
+            id: 1,
+            kind: StepKind::ParallelAgents, // 1 人也走 ParallelAgents(流式气泡渲染)
+            participants: vec![participant.clone()],
+            depends_on: vec![],
+            input: StepInput {
+                prompt: user_message.to_string(),
+                metadata: serde_json::Value::Null,
+            },
+            output: None,
+            status: StepStatus::Pending,
+            started_at: None,
+            finished_at: None,
+        }],
+    };
+    let executor = Arc::new(ConcreteExecutor::new(cfg));
+    let orch = SqliteOrchestrator::new(db.clone(), executor);
+    let parent_id = orch
+        .list_recent_by_session(session_id, 1)
+        .ok()
+        .and_then(|v| v.into_iter().next())
+        .map(|c| c.id);
+    let collab_id = orch
+        .submit(
+            session_id.to_string(),
+            user_message.to_string(),
+            plan,
+            CollaborationMode::Dispatched(pm.id),
+            parent_id,
+        )
+        .await?;
+    let placeholder = format!("@{} {}", participant.name, user_message);
+    let _ = db.upsert_collaboration_message(session_id, collab_id, &placeholder);
+    Ok(collab_id)
+}
+
+/// S2②:粗判用户消息是不是一个明确的"建造 / 开发"任务 —— 用来决定项目群里是否由
+/// PM 接手、绕开放养闲聊。保守:只认明确的动手信号,拿不准就回 false(走放养讨论),
+/// 因为误判成项目(把闲聊塞给 PM)比误判成闲聊更伤体感。
+pub fn is_project_build_intent(msg: &str) -> bool {
+    let m = msg.trim();
+    if m.chars().count() < 4 {
+        return false;
+    }
+    const BUILD_CUES: &[&str] = &[
+        "做个", "做一个", "做一款", "做款", "开发", "搭一个", "搭个", "搭建",
+        "实现一个", "写一个", "帮我做", "帮我写", "帮我开发", "做出来",
+        "build", "develop", "create a", "make a", "make an", "build a", "build me",
+    ];
+    let lower = m.to_lowercase();
+    BUILD_CUES.iter().any(|cue| lower.contains(&cue.to_lowercase()))
+}
 
 /// 用户喊"停"——放养群聊里任何消息都会起新一轮,所以"停"得显式识别:命中则只取消当前循环、
 /// 不再起新的(否则"停"被当成新话题又点燃,用户根本喊不停)。见用户反馈 2026-06-02。
@@ -207,5 +304,30 @@ pub fn is_stop_intent(msg: &str) -> bool {
         "不要说了", "都停", "停一停",
     ];
     KW.iter().any(|k| m.contains(k))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_project_build_intent;
+
+    #[test]
+    fn build_intent_recognizes_explicit_tasks() {
+        assert!(is_project_build_intent("做个 todo 网页应用"));
+        assert!(is_project_build_intent("帮我开发一个记账 app"));
+        assert!(is_project_build_intent("实现一个登录页面"));
+        assert!(is_project_build_intent("Build a REST API for notes"));
+        assert!(is_project_build_intent("Make an onboarding flow"));
+    }
+
+    #[test]
+    fn build_intent_ignores_chat_and_short_messages() {
+        // 讨论 / 提问 / 反馈 → 走放养,不该被 PM 接手。
+        assert!(!is_project_build_intent("你们觉得这个方向对吗?"));
+        assert!(!is_project_build_intent("这个 bug 怎么修?"));
+        assert!(!is_project_build_intent("辛苦了"));
+        // 太短 → false。
+        assert!(!is_project_build_intent("嗯"));
+        assert!(!is_project_build_intent("好的"));
+    }
 }
 
