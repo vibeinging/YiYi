@@ -565,6 +565,43 @@ pub async fn respond_permission_request(
     Ok(())
 }
 
+/// 回答一个 `ask_user` 抛出的开放问题。
+///
+/// 先把答案落库(`mark_question_answered`)——这样即便提问的 agent 运行已随
+/// app 重启蒸发(内存等待者不在了),答案也不丢、能被下次同问题去重命中;
+/// 再唤醒进程内仍在阻塞等待的调用方(若有)。
+#[tauri::command]
+pub async fn answer_user_question(
+    state: State<'_, AppState>,
+    request_id: String,
+    answer: String,
+) -> Result<(), String> {
+    // 把问答固化成一对真消息(提问气泡在等待期是临时的,答完才落库)。这样:
+    //  ① agent 完成后 loadMessages 重载,回答不被覆盖丢失;
+    //  ② 关 app 重开,这段问答在历史里连贯可见;
+    //  ③ 未答问题靠 pending_questions(临时气泡)恢复,已答问题靠这对消息——
+    //     二者不重叠,不会双重渲染。
+    if let Some(q) = state.db.get_pending_question(&request_id) {
+        if !q.session_id.is_empty() {
+            let _ = state.db.push_message(&q.session_id, "assistant", &q.question);
+            let _ = state.db.push_message(&q.session_id, "user", &answer);
+        }
+    }
+    state.db.mark_question_answered(&request_id, &answer)?;
+    crate::engine::tools::ask_user::respond(&request_id, answer).await;
+    Ok(())
+}
+
+/// 列出某会话下所有未答的 `ask_user` 问题(前端重开 app 后恢复卡片用)。
+/// `session_id` 为空时返回全部未答问题。
+#[tauri::command]
+pub async fn list_pending_questions(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<Vec<crate::engine::db::PendingQuestion>, String> {
+    Ok(state.db.list_pending_questions(&session_id))
+}
+
 pub async fn update_authorized_folder_impl(
     state: &AppState,
     id: String,

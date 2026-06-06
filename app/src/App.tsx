@@ -25,6 +25,7 @@ import { useChatEventBridge } from './hooks/useChatEventBridge';
 import { useTaskEventBridge } from './hooks/useTaskEventBridge';
 import { useBotEventBridge } from './hooks/useBotEventBridge';
 import { usePermissionBridge } from './hooks/usePermissionBridge';
+import { useAskUserBridge } from './hooks/useAskUserBridge';
 import { useGrowthEventBridge } from './hooks/useGrowthEventBridge';
 import { TaskSidebar, NavRail } from './components/TaskSidebar';
 import { TaskDetailOverlay } from './components/TaskDetailOverlay';
@@ -62,6 +63,7 @@ function MainApp() {
   useTaskEventBridge();
   useBotEventBridge();
   usePermissionBridge();
+  useAskUserBridge();
   useGrowthEventBridge();
 
   // Task sidebar store

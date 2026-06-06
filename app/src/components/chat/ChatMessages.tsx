@@ -22,6 +22,7 @@ import {
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import { CollapsibleContent } from './CollapsibleContent';
+import { AskUserCard } from './AskUserCard';
 import { ThinkingBlock, markdownComponents } from './markdownShared';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -248,6 +249,8 @@ interface ChatMessagesProps {
   renderUserContent: (text: string) => React.ReactNode;
   /** callback when user interacts with a canvas component (button click / form submit) */
   onCanvasAction?: CanvasActionHandler;
+  /** 回答流内 ask_user 提问气泡(点选项 chip 时触发);文本回答走主输入框 */
+  onAnswerQuestion?: (requestId: string, answer: string) => void;
 }
 
 export interface ChatMessagesHandle {
@@ -268,6 +271,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
     onSendPrompt,
     onCanvasAction,
     renderUserContent,
+    onAnswerQuestion,
   },
   ref,
 ) {
@@ -278,6 +282,8 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
   // Stream state from store
   const streamLoading = useChatStreamStore((s) => s.loading);
   const streamingContent = useChatStreamStore((s) => s.streamingContent);
+  // ask_user 待答问题:作为对话流末尾的一条气泡渲染(F1)。
+  const activeQuestion = useChatStreamStore((s) => s.questionQueue[0] ?? null);
   const streamingThinking = useChatStreamStore((s) => s.streamingThinking);
   const lastUsage = useChatStreamStore((s) => s.lastUsage);
   const streamingArtifacts = useChatStreamStore((s) => s.streamingArtifacts);
@@ -874,6 +880,13 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                   ) : null}
                 </div>
               </div>
+            )}
+
+            {activeQuestion && (
+              <AskUserCard
+                question={activeQuestion}
+                onAnswer={(answer) => onAnswerQuestion?.(activeQuestion.requestId, answer)}
+              />
             )}
 
             <div ref={messagesEndRef} />

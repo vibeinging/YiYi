@@ -15,7 +15,7 @@
 
 use super::types::{tool_def, ToolDefinition};
 use super::{
-    bot_tools, canvas_tools, cheap_browser, companion_tools, cron_tools, delegate_tools,
+    ask_user, bot_tools, canvas_tools, cheap_browser, companion_tools, cron_tools, delegate_tools,
     file_tools, flash_tools, git_tools, lsp_tools, memory_tools, skill_tools, snapshot_tools,
     spawn_tools, system_tools, task_tools, web_tools,
 };
@@ -56,6 +56,8 @@ pub fn core_tools() -> Vec<ToolDefinition> {
                 "activate_skills",
                 // Multi-step execution
                 "spawn_agents",
+                // Human-in-the-loop — ask the user an open question and wait
+                "ask_user",
             ];
 
             let mut all = Vec::new();
@@ -69,6 +71,7 @@ pub fn core_tools() -> Vec<ToolDefinition> {
             all.extend(memory_tools::definitions());
             all.extend(skill_tools::definitions());
             all.extend(spawn_tools::definitions());
+            all.extend(ask_user::definitions());
 
             all.into_iter()
                 .filter(|t| core_names.contains(&t.function.name.as_str()))

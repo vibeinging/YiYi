@@ -32,7 +32,7 @@ describe('usePermissionBridge', () => {
         risk_level: 'medium',
       });
     });
-    const perm = useChatStreamStore.getState().activePermission;
+    const perm = useChatStreamStore.getState().permissionQueue[0];
     expect(perm?.requestId).toBe('req-1');
     expect(perm?.permissionType).toBe('folder_write');
     expect(perm?.parentFolder).toBe('/tmp');

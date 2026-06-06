@@ -19,6 +19,7 @@ pub mod usage;
 mod quick_actions;
 mod companions;
 mod companion_groups;
+mod questions;
 
 // Re-export all public types
 pub use sessions::ChatSession;
@@ -35,6 +36,7 @@ pub use traces::{AgentTrace, NewAgentTrace};
 pub use quick_actions::QuickActionRow;
 pub use companions::{Companion, CompanionUpdate, NewCompanion};
 pub use companion_groups::CompanionGroup;
+pub use questions::PendingQuestion;
 
 pub struct Database {
     pub(super) conn: Mutex<Connection>,
@@ -524,6 +526,30 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_inbox_kind ON inbox_items(kind, status);",
         )
         .map_err(|e| format!("Failed to create inbox_items table: {}", e))?;
+
+        // Pending user questions —— `ask_user` 工具的跨会话持久化。agent 抛出的
+        // 开放问题在阻塞等待前落一行,关 app 重开后前端能从这里恢复未答卡片;
+        // 用户答完写回 answer,同一问题重问命中去重。见 engine/db/questions.rs。
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS pending_questions (
+                request_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL DEFAULT '',
+                collaboration_id INTEGER,              -- 留给 S2 项目模式
+                step_id INTEGER,                       -- 留给 S2 项目模式
+                companion_id INTEGER NOT NULL DEFAULT 0, -- 提问者(0 = YiYi)
+                asker_name TEXT NOT NULL DEFAULT '',
+                question TEXT NOT NULL,
+                options_json TEXT,                     -- 选项数组 JSON;NULL = 自由文本
+                kind TEXT NOT NULL DEFAULT 'text',      -- 'choice' | 'text' | 领域 kind
+                status TEXT NOT NULL DEFAULT 'pending', -- 'pending' | 'answered'
+                answer TEXT,
+                created_at INTEGER NOT NULL,
+                answered_at INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_pending_questions_session
+                ON pending_questions(session_id, status);",
+        )
+        .map_err(|e| format!("Failed to create pending_questions table: {}", e))?;
 
         // Companions: user-adopted agent instances. Each row represents the
         // *relationship* between the user and an agent role — distinct from

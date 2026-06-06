@@ -484,6 +484,8 @@ pub fn run() {
             commands::workspace::list_authorized_folders,
             commands::workspace::add_authorized_folder,
             commands::workspace::respond_permission_request,
+            commands::workspace::answer_user_question,
+            commands::workspace::list_pending_questions,
             commands::workspace::update_authorized_folder,
             commands::workspace::remove_authorized_folder,
             commands::workspace::list_sensitive_patterns,

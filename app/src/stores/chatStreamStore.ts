@@ -86,6 +86,18 @@ export interface PermissionRequestState {
   status: 'pending' | 'approved' | 'denied';
 }
 
+/** 一个 ask_user 抛出的待答问题(F1)。 */
+export interface PendingQuestionState {
+  requestId: string;
+  sessionId: string;
+  companionId: number;
+  askerName: string;
+  question: string;
+  options: string[]; // 空 → 自由文本回答
+  kind: string;
+  status: 'pending' | 'answered';
+}
+
 interface ChatStreamState {
   // State
   loading: boolean;
@@ -101,7 +113,11 @@ interface ChatStreamState {
   retryStatus: RetryStatus | null;
   longTask: LongTaskState;
   focusedTask: FocusedTask | null;
-  activePermission: PermissionRequestState | null;
+  permissionQueue: PermissionRequestState[];
+  // ask_user 待答问题队列。与 permissionQueue 不同:它**不随回合(startStream/
+  // endStream)清空**——开放问题跨回合/跨会话存续,只由 setQuestions(切会话重载)、
+  // showQuestion(事件入队)、dequeueQuestion(答完移除)管理。
+  questionQueue: PendingQuestionState[];
 
   // Canvas state
   canvases: CanvasEvent[];
@@ -172,6 +188,12 @@ interface ChatStreamState {
   // Permission gate actions
   showPermission: (req: PermissionRequestState) => void;
   resolvePermission: (status: 'approved' | 'denied') => void;
+  dequeuePermission: () => void;
+
+  // ask_user actions (F1)
+  showQuestion: (q: PendingQuestionState) => void;
+  setQuestions: (qs: PendingQuestionState[]) => void;
+  dequeueQuestion: () => void;
 
   // Focus task actions
   focusTask: (taskId: string, taskName: string, sessionId: string) => void;
@@ -212,7 +234,8 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
   retryStatus: null,
   longTask: { ...INITIAL_LONG_TASK },
   focusedTask: null,
-  activePermission: null,
+  permissionQueue: [],
+  questionQueue: [],
   canvases: [],
   lastUsage: null,
   streamingArtifacts: [],
@@ -229,7 +252,7 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
     claudeCode: null,
     errorMessage: null,
     retryStatus: null,
-    activePermission: null,
+    permissionQueue: [],
     lastUsage: null,
     streamingArtifacts: [],
   }),
@@ -268,7 +291,7 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
     return { activeTools: tools };
   }),
 
-  endStream: () => set({ loading: false, claudeCode: null, activePermission: null }),
+  endStream: () => set({ loading: false, claudeCode: null, permissionQueue: [] }),
 
   endStreamWithError: (error) => set({ loading: false, claudeCode: null, errorMessage: error, retryStatus: null }),
 
@@ -543,12 +566,33 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
   }),
 
   // Permission gate actions
-  showPermission: (req) => set({ activePermission: req }),
-  resolvePermission: (status) => set((state) => ({
-    activePermission: state.activePermission
-      ? { ...state.activePermission, status }
-      : null,
-  })),
+  showPermission: (req) =>
+    set((state) =>
+      // 群聊并发:多个伙伴可同时挂起授权。去重(同 requestId)后排队,逐个处理 ——
+      // 单槽时第二个会覆盖第一个,第一个被拖到后端 30s 超时拒绝。
+      state.permissionQueue.some((p) => p.requestId === req.requestId)
+        ? state
+        : { permissionQueue: [...state.permissionQueue, req] },
+    ),
+  resolvePermission: (status) =>
+    set((state) => {
+      if (state.permissionQueue.length === 0) return state;
+      const queue = [...state.permissionQueue];
+      queue[0] = { ...queue[0], status };
+      return { permissionQueue: queue };
+    }),
+  dequeuePermission: () =>
+    set((state) => ({ permissionQueue: state.permissionQueue.slice(1) })),
+
+  showQuestion: (q) =>
+    set((state) =>
+      state.questionQueue.some((x) => x.requestId === q.requestId)
+        ? state
+        : { questionQueue: [...state.questionQueue, q] }
+    ),
+  setQuestions: (qs) => set({ questionQueue: qs }),
+  dequeueQuestion: () =>
+    set((state) => ({ questionQueue: state.questionQueue.slice(1) })),
 
   // Focus task actions
   focusTask: (taskId, taskName, sessionId) => set({

@@ -43,6 +43,8 @@ function humanizeReason(raw: string): string {
 export function PermissionCard({ request }: { request: PermissionRequestState }) {
   const [responding, setResponding] = useState(false);
   const resolvePermission = useChatStreamStore((s) => s.resolvePermission);
+  const dequeuePermission = useChatStreamStore((s) => s.dequeuePermission);
+  const queueLen = useChatStreamStore((s) => s.permissionQueue.length);
 
   const config = TYPE_CONFIG[request.permissionType] || {
     icon: Shield,
@@ -84,6 +86,8 @@ export function PermissionCard({ request }: { request: PermissionRequestState })
       // Backend may have timed out
     }
     setResponding(false);
+    // 队列:短暂展示 resolved 态(已授权 / 已拒绝)后移除队首,下一个待处理请求顶上。
+    setTimeout(() => dequeuePermission(), 450);
   };
 
   return (
@@ -102,6 +106,14 @@ export function PermissionCard({ request }: { request: PermissionRequestState })
       >
         <Icon size={14} style={{ color: config.color }} />
         <span style={{ color: config.color }}>{config.label}</span>
+        {queueLen > 1 && (
+          <span
+            className="text-[10px] px-1.5 py-0.5 rounded-full"
+            style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-muted)' }}
+          >
+            还有 {queueLen - 1} 个待处理
+          </span>
+        )}
         {isResolved && (
           <span className="ml-auto flex items-center gap-1 text-[11px]" style={{ color: request.status === 'approved' ? 'var(--color-success)' : 'var(--color-error)' }}>
             {request.status === 'approved' ? <ShieldCheck size={12} /> : <ShieldX size={12} />}

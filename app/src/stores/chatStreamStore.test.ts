@@ -3,6 +3,7 @@ import {
   useChatStreamStore,
   type RetryStatus,
   type PermissionRequestState,
+  type PendingQuestionState,
 } from "./chatStreamStore";
 import type { CanvasEvent } from "../api/canvas";
 
@@ -42,7 +43,7 @@ describe("chatStreamStore", () => {
       expect(s.errorMessage).toBeNull();
       expect(s.retryStatus).toBeNull();
       expect(s.focusedTask).toBeNull();
-      expect(s.activePermission).toBeNull();
+      expect(s.permissionQueue).toEqual([]);
       expect(s.canvases).toEqual([]);
       expect(s.taskStreams.size).toBe(0);
     });
@@ -97,7 +98,7 @@ describe("chatStreamStore", () => {
       expect(next.claudeCode).toBeNull();
       expect(next.errorMessage).toBeNull();
       expect(next.retryStatus).toBeNull();
-      expect(next.activePermission).toBeNull();
+      expect(next.permissionQueue).toEqual([]);
     });
 
     it("is idempotent when called on an already-fresh store", () => {
@@ -203,7 +204,7 @@ describe("chatStreamStore", () => {
       const next = useChatStreamStore.getState();
       expect(next.loading).toBe(false);
       expect(next.claudeCode).toBeNull();
-      expect(next.activePermission).toBeNull();
+      expect(next.permissionQueue).toEqual([]);
     });
 
     it("endStreamWithError sets errorMessage + clears retry/claudeCode", () => {
@@ -634,19 +635,70 @@ describe("chatStreamStore", () => {
 
     it("showPermission stores the request", () => {
       useChatStreamStore.getState().showPermission(req);
-      expect(useChatStreamStore.getState().activePermission).toEqual(req);
+      expect(useChatStreamStore.getState().permissionQueue[0]).toEqual(req);
     });
 
     it("resolvePermission updates status when a request exists", () => {
       const s = useChatStreamStore.getState();
       s.showPermission(req);
       s.resolvePermission("approved");
-      expect(useChatStreamStore.getState().activePermission?.status).toBe("approved");
+      expect(useChatStreamStore.getState().permissionQueue[0]?.status).toBe("approved");
     });
 
     it("resolvePermission is a no-op when there is no active request", () => {
       useChatStreamStore.getState().resolvePermission("denied");
-      expect(useChatStreamStore.getState().activePermission).toBeNull();
+      expect(useChatStreamStore.getState().permissionQueue).toEqual([]);
+    });
+  });
+
+  describe("ask_user question queue", () => {
+    const q = (over: Partial<PendingQuestionState> = {}): PendingQuestionState => ({
+      requestId: "q1",
+      sessionId: "sess-1",
+      companionId: 0,
+      askerName: "小冰",
+      question: "给谁用?",
+      options: [],
+      kind: "text",
+      status: "pending",
+      ...over,
+    });
+
+    it("showQuestion enqueues a question", () => {
+      useChatStreamStore.getState().showQuestion(q());
+      expect(useChatStreamStore.getState().questionQueue[0]).toEqual(q());
+    });
+
+    it("showQuestion dedups by requestId", () => {
+      const s = useChatStreamStore.getState();
+      s.showQuestion(q());
+      s.showQuestion(q({ question: "改了文案但同 id" }));
+      expect(useChatStreamStore.getState().questionQueue.length).toBe(1);
+      expect(useChatStreamStore.getState().questionQueue[0].question).toBe("给谁用?");
+    });
+
+    it("dequeueQuestion removes the head, exposing the next", () => {
+      const s = useChatStreamStore.getState();
+      s.showQuestion(q({ requestId: "q1" }));
+      s.showQuestion(q({ requestId: "q2", question: "第二个" }));
+      s.dequeueQuestion();
+      expect(useChatStreamStore.getState().questionQueue.length).toBe(1);
+      expect(useChatStreamStore.getState().questionQueue[0].requestId).toBe("q2");
+    });
+
+    it("setQuestions replaces the whole queue (session-switch restore)", () => {
+      const s = useChatStreamStore.getState();
+      s.showQuestion(q({ requestId: "stale" }));
+      s.setQuestions([q({ requestId: "restored-a" }), q({ requestId: "restored-b" })]);
+      const queue = useChatStreamStore.getState().questionQueue;
+      expect(queue.map((x) => x.requestId)).toEqual(["restored-a", "restored-b"]);
+    });
+
+    it("startStream does NOT clear the question queue (questions outlive turns)", () => {
+      const s = useChatStreamStore.getState();
+      s.showQuestion(q());
+      s.startStream();
+      expect(useChatStreamStore.getState().questionQueue.length).toBe(1);
     });
   });
 

@@ -23,9 +23,10 @@ use futures_util::future::join_all;
 
 use super::{
     collab_semaphore, events, resolve_memme_user_id, CollaborationEvent, CollaborationId,
-    Executor, Step, StepId, StepKind, StepOutput, TokenUsage,
+    CompanionId, Executor, Step, StepId, StepKind, StepOutput, TokenUsage,
 };
 use crate::engine::agents::persona_loader;
+use crate::engine::react_agent::ToolFilter;
 use crate::engine::llm_client::{
     chat_completion_stream_tracked, LLMConfig, LLMMessage, MessageContent, StreamEvent,
 };
@@ -317,10 +318,50 @@ async fn run_one(
     })
 }
 
+/// 伙伴默认 ReAct 步数上限——角色定义没指定 `max_iterations` 时用它(也是群聊
+/// 闲聊的合理上限)。有角色定义则用角色自己的(如 code_reviewer=12),让能干活的
+/// 角色跑更多步、做更长的任务。这是 F2"分身能长程干活"的核心杠杆之一。
+const COMPANION_DEFAULT_MAX_ITER: usize = 6;
+
+/// 从角色定义算出这次伙伴 run 的(工具过滤器, ReAct 步数上限)。
+/// 无角色定义(blank companion / registry 未找到)→ 全套工具 + 默认 6 步(保持现状)。
+/// 纯函数,便于测试:角色权限"真生效"的决策逻辑全在这里。
+fn role_run_params(def: Option<&crate::engine::agents::AgentDefinition>) -> (ToolFilter, usize) {
+    match def {
+        Some(d) => (
+            d.tool_filter(),
+            d.max_iterations.unwrap_or(COMPANION_DEFAULT_MAX_ITER),
+        ),
+        None => (ToolFilter::All, COMPANION_DEFAULT_MAX_ITER),
+    }
+}
+
+/// 解析伙伴的角色定义 → (工具过滤器, max_iter)。沿用 `spawn_tools` 的范式:
+/// companion → `agent_definition_name` slug → `AppState.agent_registry`。
+/// registry / DB 不可达(headless 测试 / 未初始化)→ 回落全套工具 + 6 步——
+/// 因此本函数在测试里安全降级,不破坏现有行为。
+async fn resolve_companion_role(companion_id: CompanionId) -> (ToolFilter, usize) {
+    let slug = match crate::engine::tools::get_database()
+        .and_then(|db| db.get_companion(companion_id))
+    {
+        Some(c) => c.agent_definition_name,
+        None => return role_run_params(None),
+    };
+    let handle = match crate::engine::tools::get_app_handle() {
+        Some(h) => h,
+        None => return role_run_params(None),
+    };
+    use tauri::Manager;
+    let state = handle.state::<crate::state::AppState>();
+    let registry = state.agent_registry.read().await;
+    role_run_params(registry.get(&slug))
+}
+
 /// 伙伴(companion_id != 0)的执行器:带工具的 ReAct 循环。和主精灵 YiYi 共用
-/// `run_react_with_options_stream`(tools_override = None → 全套工具),区别只在
-/// 拼进 system prompt 的 persona 前缀和"动手能力"提示。流事件转成
-/// `CollaborationEvent::Token` 喂前端;工具的开始/结束摘要注入思考块(reasoning=true)。
+/// `run_react_with_options_stream`,但 F2 起**按角色注入工具过滤器 + 步数上限**
+/// (`resolve_companion_role`):读写/执行类工具只给角色允许的,步数上限随角色,
+/// 让"分工"真生效、能干活的角色跑更长。区别仍在 system prompt 的 persona 前缀。
+/// 流事件转成 `CollaborationEvent::Token` 喂前端;工具开始/结束注入思考块。
 async fn run_one_react(
     config: &LLMConfig,
     step: &Step,
@@ -329,6 +370,11 @@ async fn run_one_react(
     collab_id: CollaborationId,
 ) -> Result<StepOutput, String> {
     let p = &step.participants[participant_idx];
+
+    // F2:按角色注入工具过滤器 + ReAct 步数上限。无角色定义 → 全套工具 + 6 步(保持
+    // 现状);有角色 → 只给角色允许的工具、用角色自己的步数上限,让"分工"真生效、
+    // 能干活的角色跑更长的任务。headless 测试里 registry 不可达,安全回落。
+    let (role_filter, role_max_iter) = resolve_companion_role(p.companion_id).await;
 
     // system prompt = persona 前缀 + 群聊规则 + 动手能力说明(三段拼接)。
     // persona 前缀:载 companions/<id>/persona.md;文件不存在 → 空串。
@@ -376,15 +422,25 @@ async fn run_one_react(
         agent_message: user_message.clone(),
         augmented_message: user_message,
         llm_history: vec![],
-        max_iter: Some(6),
+        max_iter: Some(role_max_iter),
         is_first_message: false,
         session_id: String::new(),
         working_dir: None,
         shell: crate::engine::agent_runner::config::ShellOptions::default(),
     };
     let dummy_cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let reply =
-        crate::engine::agent_runner::run::run_agent(cfg, None, sink, dummy_cancel).await?;
+    // 两层 task-local 包裹(都不依赖 working_dir,与 persona 注入门解耦):
+    //  ① with_tool_filter:角色权限真生效——ReAct core 据此裁剪给 LLM 的工具集(F2)。
+    //  ② with_ask_asker:分身调 ask_user 时提问气泡显示它自己的角色名/头像(F1)。
+    let reply = crate::engine::tools::with_tool_filter(
+        role_filter,
+        crate::engine::tools::ask_user::with_ask_asker(
+            p.companion_id,
+            p.name.clone(),
+            crate::engine::agent_runner::run::run_agent(cfg, None, sink, dummy_cancel),
+        ),
+    )
+    .await?;
 
     let duration_ms = started.elapsed().as_millis() as u64;
     let tokens_used = TokenUsage {
@@ -578,4 +634,81 @@ impl Executor for ConcreteExecutor {
 /// Type-erased handle suitable for `Arc<dyn Executor>` consumption.
 pub fn into_handle(executor: ConcreteExecutor) -> Arc<dyn Executor> {
     Arc::new(executor)
+}
+
+#[cfg(test)]
+mod role_tests {
+    //! F2:验证"角色权限真生效"的决策逻辑(`role_run_params`)与工具裁剪原语
+    //! (`ToolFilter::apply`/`is_allowed`)。用真实内置角色定义(code_reviewer)驱动,
+    //! 不依赖 LLM / APP_HANDLE —— 后者(companion→registry 的运行时解析)是与 F1 emit
+    //! 同源的 headless 墙,沿用 spawn_tools 已验证的范式。
+    use super::*;
+    use crate::engine::agents::AgentRegistry;
+    use crate::engine::tools::{FunctionDef, ToolDefinition};
+    use tempfile::TempDir;
+
+    fn td(name: &str) -> ToolDefinition {
+        ToolDefinition {
+            r#type: "function".into(),
+            function: FunctionDef {
+                name: name.into(),
+                description: String::new(),
+                parameters: serde_json::json!({}),
+            },
+        }
+    }
+
+    #[test]
+    fn role_run_params_no_def_falls_back_to_all_and_default_iter() {
+        let (filter, max_iter) = role_run_params(None);
+        assert!(matches!(filter, ToolFilter::All));
+        assert_eq!(max_iter, COMPANION_DEFAULT_MAX_ITER);
+        // 无角色 → 仍是全套工具(保持现状,不破坏 blank companion)。
+        assert!(filter.is_allowed("write_file"));
+    }
+
+    #[test]
+    fn role_run_params_applies_role_whitelist_and_iter() {
+        // code_reviewer 是只读评审员:白名单不含写/执行工具,步数上限随角色。
+        let tmp = TempDir::new().unwrap();
+        let registry = AgentRegistry::load(tmp.path(), None);
+        let def = registry.get("code_reviewer").expect("内置 code_reviewer 应在 registry");
+
+        let (filter, max_iter) = role_run_params(Some(def));
+
+        // 角色权限真生效:白名单(Allow),能读不能写。
+        assert!(matches!(filter, ToolFilter::Allow(_)));
+        assert!(filter.is_allowed("read_file"), "评审员应能读文件");
+        assert!(!filter.is_allowed("write_file"), "评审员不该能写文件");
+        assert!(!filter.is_allowed("execute_shell"), "评审员不该能跑命令");
+        // 步数上限取角色自己的(code_reviewer 比默认 6 高),让它能多看几轮。
+        assert_eq!(max_iter, def.max_iterations.unwrap_or(COMPANION_DEFAULT_MAX_ITER));
+    }
+
+    #[test]
+    fn tool_filter_actually_trims_the_offered_tool_set() {
+        // 这正是 ReAct core(core.rs:235)对给 LLM 的工具集做的裁剪。
+        let all = vec![
+            td("read_file"),
+            td("write_file"),
+            td("execute_shell"),
+            td("grep_search"),
+        ];
+
+        // 白名单:只留 read_file / grep_search。
+        let allow = ToolFilter::Allow(vec!["read_file".into(), "grep_search".into()]);
+        let kept: Vec<String> = allow.apply(&all).into_iter().map(|t| t.function.name).collect();
+        assert_eq!(kept, vec!["read_file".to_string(), "grep_search".to_string()]);
+
+        // 只读预设:写/执行被删,读保留。
+        let names_after_readonly: Vec<String> = ToolFilter::read_only()
+            .apply(&all)
+            .into_iter()
+            .map(|t| t.function.name)
+            .collect();
+        assert!(names_after_readonly.contains(&"read_file".to_string()));
+        assert!(names_after_readonly.contains(&"grep_search".to_string()));
+        assert!(!names_after_readonly.contains(&"write_file".to_string()));
+        assert!(!names_after_readonly.contains(&"execute_shell".to_string()));
+    }
 }

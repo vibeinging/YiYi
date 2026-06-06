@@ -42,7 +42,7 @@ describe('PermissionCard', () => {
     const respond = vi.fn().mockResolvedValue(undefined);
     mockInvoke({ respond_permission_request: respond });
     render(<PermissionCard request={request()} />);
-    fireEvent.click(screen.getByRole('button', { name: /允许/ }));
+    fireEvent.click(screen.getByRole('button', { name: '允许' }));
     await waitFor(() => expect(respond).toHaveBeenCalled());
     expect(respond.mock.calls[0][0]).toMatchObject({
       requestId: 'req-1',
@@ -67,7 +67,7 @@ describe('PermissionCard', () => {
     render(
       <PermissionCard request={request({ permissionType: 'folder_write' })} />,
     );
-    fireEvent.click(screen.getByRole('button', { name: /允许/ }));
+    fireEvent.click(screen.getByRole('button', { name: '允许' }));
     await waitFor(() => expect(respond).toHaveBeenCalled());
     expect(respond.mock.calls[0][0].upgradePermission).toBe('/Users/me');
     expect(respond.mock.calls[0][0].addFolder).toBeNull();

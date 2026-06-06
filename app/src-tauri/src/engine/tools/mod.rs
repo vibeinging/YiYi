@@ -27,6 +27,7 @@ mod types;
 
 // ── Tool implementations (one file per tool family) ─────────────────
 mod bot_tools;
+pub(crate) mod ask_user;
 mod browser_tools;
 mod canvas_tools;
 mod cheap_browser;

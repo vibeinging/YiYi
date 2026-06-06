@@ -241,6 +241,27 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     }
     getSessionGroup(activeSessionId).then(setFamilyGroupId).catch(() => setFamilyGroupId(null));
 
+    // 恢复本会话未答的 ask_user 问题(关 app 重开 / 切回会话时卡片回来)。
+    invoke('list_pending_questions', { sessionId: activeSessionId })
+      .then((rows: any) => {
+        const qs = (Array.isArray(rows) ? rows : []).map((r: any) => {
+          let options: string[] = [];
+          try { options = r.options_json ? JSON.parse(r.options_json) : []; } catch { options = []; }
+          return {
+            requestId: r.request_id,
+            sessionId: r.session_id,
+            companionId: r.companion_id,
+            askerName: r.asker_name,
+            question: r.question,
+            options,
+            kind: r.kind,
+            status: 'pending' as const,
+          };
+        });
+        useChatStreamStore.getState().setQuestions(qs);
+      })
+      .catch(() => useChatStreamStore.getState().setQuestions([]));
+
     invoke('chat_stream_state', { sessionId: activeSessionId })
       .then((snapshot: any) => {
         if (snapshot && snapshot.is_active) {
@@ -296,8 +317,11 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   // --- Streaming chat ---
   const streamLoading = useChatStreamStore((s) => s.loading);
   const spawnAgents = useChatStreamStore((s) => s.spawnAgents);
-  const activePermission = useChatStreamStore((s) => s.activePermission);
+  const permissionQueue = useChatStreamStore((s) => s.permissionQueue);
+  const activePermission = permissionQueue[0] ?? null;
   const isPermissionPending = activePermission?.status === 'pending';
+  const questionQueue = useChatStreamStore((s) => s.questionQueue);
+  const activeQuestion = questionQueue[0] ?? null;
   const spawnRunning = spawnAgents.some((a) => a.status === 'running');
   const loading = streamLoading || spawnRunning;
 
@@ -320,8 +344,35 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     }
   };
 
+  // 回答 ask_user 提问:答案作为你的消息上屏(像群里回复),并回传给等待中的 agent。
+  // 点选项 chip 和在输入框打字两条路径都走这里。
+  const answerQuestion = async (requestId: string, answer: string) => {
+    const value = answer.trim();
+    if (!value) return;
+    setMessages(prev => [...prev, {
+      role: 'user' as const,
+      content: value,
+      timestamp: Date.now(),
+      attachments: undefined,
+    }]);
+    useChatStreamStore.getState().dequeueQuestion();
+    try {
+      await invoke('answer_user_question', { requestId, answer: value });
+    } catch {
+      // 后端可能已超时/重启;答案已落库,忽略。
+    }
+    messagesRef.current?.scrollToBottom();
+  };
+
   const handleSend = async (plainText: string, mentions: MentionTag[], attachments: Attachment[]) => {
     messagesRef.current?.scrollToBottom();
+
+    // 有待答 ask_user 问题时,这条消息就是回答:路由给等待中的 agent,不开启新一轮对话。
+    const pendingQ = useChatStreamStore.getState().questionQueue[0];
+    if (pendingQ) {
+      await answerQuestion(pendingQ.requestId, plainText);
+      return;
+    }
 
     // 草稿态(点好友进来、零会话 activeSessionId='')发首条消息 → 这时才建一段全新私聊会话并切过去。
     // skipLoadRef 让随之而来的 activeSessionId 变更 effect 跳过一次 loadMessages,避免空历史
@@ -717,11 +768,13 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
           onSendPrompt={sendQuickPrompt}
           onCanvasAction={handleCanvasAction}
           renderUserContent={renderUserContent}
+          onAnswerQuestion={answerQuestion}
         />
       )}
 
 
-      {/* Bottom dock: permission request takes over when pending */}
+      {/* Bottom dock: 权限请求 pending 时接管输入框;ask_user 提问改为流内气泡(见 ChatMessages),
+          回答走正常输入框,不接管。 */}
       {isPermissionPending ? (
         <div className="shrink-0 px-4 pt-2 pb-3 animate-in slide-in-from-bottom-2 duration-200"
           style={{ background: 'var(--color-bg)', borderTop: '1px solid var(--color-border)' }}>
@@ -730,7 +783,9 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
       ) : (
         <ChatInput
           ref={inputRef}
-          loading={loading}
+          // 有待答 ask_user 问题时,输入框保持可用(不显示 stop)——发送即回答,
+          // 就像在群里回复那条提问。
+          loading={loading && !activeQuestion}
           workspaceFiles={workspaceFiles}
           onSend={handleSend}
           onStop={handleStop}
