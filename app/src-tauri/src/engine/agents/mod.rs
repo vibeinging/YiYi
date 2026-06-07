@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use super::react_agent::ToolFilter;
 
+pub mod dynamic;
 pub mod persona_loader;
 
 /// Memory isolation scope for a companion / agent.
@@ -205,6 +206,13 @@ impl AgentRegistry {
     pub fn reload(&mut self, working_dir: &Path, resource_dir: Option<&Path>) {
         *self = Self::load(working_dir, resource_dir);
     }
+
+    /// 运行时加入/替换一个 agent 定义(动态角色用 —— 不必重启即可被执行器解析到)。
+    /// 同名替换(与 `load_from_dir_sync` 的覆盖语义一致)。
+    pub fn upsert(&mut self, def: AgentDefinition) {
+        self.agents.retain(|a| a.name != def.name);
+        self.agents.push(def);
+    }
 }
 
 /// Load AGENT.md files from a directory (synchronous, for startup).
@@ -372,6 +380,41 @@ mod tests {
         assert!(!qa.is_allowed("ask_user"), "QA 不直接打扰用户");
         // QA 的步数上限取它自己的(14),比闲聊默认 6 高。
         assert_eq!(registry.get("qa_engineer").unwrap().max_iterations, Some(14));
+    }
+
+    #[test]
+    fn upsert_adds_and_replaces_dynamic_role() {
+        use super::dynamic::{PermissionProfile, RoleSpec};
+        let tmp = TempDir::new().unwrap();
+        let mut registry = AgentRegistry::load(tmp.path(), None);
+        let before = registry.list().len();
+        assert!(registry.get("audio_engineer").is_none());
+
+        let spec = RoleSpec {
+            slug: "audio_engineer".into(),
+            name: "音频工程师".into(),
+            description: "音频".into(),
+            emoji: "🎧".into(),
+            color: "#22D3EE".into(),
+            profile: PermissionProfile::Builder,
+            persona: "你是音频工程师。".into(),
+        };
+        registry.upsert(spec.to_agent_def());
+        assert_eq!(registry.list().len(), before + 1, "新动态角色应入册");
+        let def = registry.get("audio_engineer").expect("可解析");
+        assert!(matches!(def.tool_filter(), ToolFilter::Allow(_)));
+        assert_eq!(def.max_iterations, Some(20));
+
+        // 同名 upsert 替换,不重复入册。
+        let mut spec2 = spec.clone();
+        spec2.profile = PermissionProfile::Coordinator;
+        registry.upsert(spec2.to_agent_def());
+        assert_eq!(registry.list().len(), before + 1, "同名应替换而非新增");
+        assert_eq!(
+            registry.get("audio_engineer").unwrap().max_iterations,
+            Some(10),
+            "替换为协调档,步数应变 10"
+        );
     }
 
     #[test]

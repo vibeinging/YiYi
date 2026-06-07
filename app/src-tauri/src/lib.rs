@@ -699,6 +699,7 @@ pub fn run() {
             commands::inbox::withdraw_inbox_item,
             // Companions (Buddy > 群 子标签)
             commands::companions::adopt_companion,
+            commands::companions::register_dynamic_role,
             commands::companions::adopt_software_company_team,
             commands::companions::update_companion,
             commands::companions::update_companion_draft_state,

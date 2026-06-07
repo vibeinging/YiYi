@@ -69,6 +69,78 @@ pub async fn adopt_companion(
     Ok(id)
 }
 
+// ── G1:动态角色(运行时生成,非编译期固化)──────────────────────────────
+
+/// 注册一个动态角色并收养成 companion。G2「agent 自生成团队」落地单个角色的底座:
+/// ① 落 `~/.yiyi/agents/<slug>/AGENT.md`(重启后 `AgentRegistry::load` 自动读回)
+/// ② 运行时 `upsert` 进 registry(不重启即可被执行器按权限档位解析,F2 真生效)
+/// ③ 收养成 companion(persona 落 `companions/<id>/persona.md`)
+///
+/// 返回新 companion 的 id。权限只能走 `RoleSpec.profile` 的预设安全档位 —— 生成器
+/// 无法给动态角色乱开全权工具(见 `engine/agents/dynamic.rs`)。
+#[tauri::command]
+pub async fn register_dynamic_role(
+    state: State<'_, AppState>,
+    spec: crate::engine::agents::dynamic::RoleSpec,
+) -> Result<i64, String> {
+    register_dynamic_role_impl(&state, spec).await
+}
+
+pub async fn register_dynamic_role_impl(
+    state: &AppState,
+    spec: crate::engine::agents::dynamic::RoleSpec,
+) -> Result<i64, String> {
+    use crate::engine::agents::dynamic::persist_role_agent_md;
+
+    validate_emoji(&spec.emoji)?;
+    validate_color(&spec.color)?;
+    if spec.slug.trim().is_empty()
+        || !spec.slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+    {
+        return Err("slug 必须为非空的小写字母/数字/下划线".into());
+    }
+    // slug 不能撞已有 agent(内置 pm/ui_designer/… 或别的动态角色)—— 否则 upsert 会悄悄
+    // 顶替内置角色定义(如把只读的 PM 换成带 execute_shell 的档位),破坏权限隔离。
+    if state.agent_registry.read().await.get(&spec.slug).is_some() {
+        return Err(format!("角色标识 '{}' 已被占用,换一个 slug", spec.slug));
+    }
+
+    // 顺序关键:先做最可能失败的 DB 收养(name/memory_user_id UNIQUE 约束),成功后**再**
+    // 落盘 AGENT.md + upsert registry。这样收养失败时不会留下「有 AGENT.md/registry 但没
+    // companion」的幽灵角色(那种 AGENT.md 重启会被 load 复活,却无 companion 管理)。
+    let name = unique_companion_name(&state.db, &spec.name);
+    validate_name(&name)?;
+    let now = chrono::Utc::now().timestamp_millis();
+    let memory_user_id = format!("companion_{}_{}", now, uuid::Uuid::new_v4().simple());
+    let id = state.db.adopt_companion(&NewCompanion {
+        name,
+        agent_definition_name: spec.slug.clone(),
+        avatar_emoji: spec.emoji.clone(),
+        color_hex: spec.color.clone(),
+        persona_md_path: None,
+        memory_user_id,
+        metadata_json: None,
+        role_label: Some(spec.description.clone()),
+    })?;
+    if let Some(path) = persist_persona(state.working_dir.as_path(), id, Some(&spec.persona))? {
+        state.db.update_companion(
+            id,
+            &CompanionUpdate { persona_md_path: Some(Some(path)), ..Default::default() },
+        )?;
+    }
+
+    // companion 已落库,再落角色定义 + 上线 registry。这俩万一失败,最坏只是角色权限本次
+    // 未生效(F2 回落 All/6),companion 仍在 UI 可见可删可重试 —— 不会留幽灵 AGENT.md。
+    persist_role_agent_md(state.working_dir.as_path(), &spec)
+        .map_err(|e| format!("角色落盘失败: {e}"))?;
+    {
+        // write 锁尽快释放,别跨后续 await 持有。
+        state.agent_registry.write().await.upsert(spec.to_agent_def());
+    }
+
+    Ok(id)
+}
+
 // ── S1:一键组建软件公司团队 ─────────────────────────────────────────────
 
 /// 软件公司角色清单。顺序 = 群成员展示顺序。
