@@ -11,7 +11,8 @@
  */
 
 import { useEffect, useState } from 'react'
-import { X, Trash2, Loader2, UsersRound } from 'lucide-react'
+import { X, Trash2, Loader2, UsersRound, ChevronLeft } from 'lucide-react'
+import { GroupTypeLauncher } from '../companions/GroupTypeLauncher'
 import {
   addCompanionToGroup,
   createGroupWithMembers,
@@ -22,8 +23,9 @@ import {
   updateCompanionGroup,
   type CompanionGroup,
 } from '../../api/groups'
-import { listCompanions, type Companion } from '../../api/companions'
+import { adoptSoftwareCompanyTeam, listCompanions, type Companion } from '../../api/companions'
 import { useGroupsStore } from '../../stores/groupsStore'
+import { useSessionStore } from '../../stores/sessionStore'
 import { toast, confirm } from '../Toast'
 import { validateGroupForm } from '../../utils/group'
 
@@ -50,6 +52,10 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
   /** edit 模式初始成员集 —— 保存时与当前 memberIds diff,决定 add/remove。 */
   const [initialMemberIds, setInitialMemberIds] = useState<Set<number>>(new Set())
   const [busy, setBusy] = useState(false)
+  /** 一键组团的独立 busy —— 与手动建群 busy 分开,两个按钮各自转圈。 */
+  const [teamBusy, setTeamBusy] = useState(false)
+  /** create 模式两步:launcher 选群类型 → form 选人;edit 模式直接 form。 */
+  const [view, setView] = useState<'launcher' | 'form'>(isCreate ? 'launcher' : 'form')
 
   useEffect(() => {
     void listCompanions(false).then(setCompanions).catch(() => {})
@@ -92,10 +98,13 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
           await deleteCompanionGroup(gid).catch(() => {})
           throw e
         }
-        toast.info(`已建群「${trimmed}」(${memberIds.size} 人),对话已变成群聊`)
-        void useGroupsStore.getState().load()
-        // 清成员缓存:这是新组,membersByGroup 还没拉过,下次自动拉。
+        // 清成员缓存(新组没拉过) → await load 让 byId 有这个群(FamilyHeader/侧栏要读)
+        // → await refreshSessions 把 chatSessions[].group_id 更新掉(否则侧栏会话卡还显示
+        // 旧名 + YiYi 头像,因为 setSessionGroup 只 invoke 不动 store)。
         useGroupsStore.getState().invalidateMembers(gid)
+        await useGroupsStore.getState().load()
+        await useSessionStore.getState().refreshSessions()
+        toast.info(`已建群「${trimmed}」(${memberIds.size} 人),对话已变成群聊`)
         onCreated?.(gid)
         onClose()
       } else {
@@ -117,6 +126,31 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
       toast.error(`操作失败: ${e}`)
     } finally {
       setBusy(false)
+    }
+  }
+
+  // 一键组建软件公司团队:后端批量收养 5 角色 + 建群,再把当前对话原地升级绑到该群
+  // (与 handleSave 的 create 分支同语义,只是省去手动起名/勾人)。仅 create 模式可用。
+  const createSoftwareTeam = async () => {
+    if (mode.kind !== 'create' || busy || teamBusy) return
+    setTeamBusy(true)
+    try {
+      const gid = await adoptSoftwareCompanyTeam()
+      // 不回滚删组:adopt 已建群 + 收养 5 个新伙伴,删组只删群会留下孤儿伙伴(比
+      // createGroupWithMembers 的纯空组更糟)。绑定失败就抛错,团队留着可重试绑定 ——
+      // 与 GroupCreateModal.createSoftwareTeam 行为一致(都不回滚)。
+      await setSessionGroup(mode.sessionId, gid)
+      // 顺序同 handleSave create 分支:清成员缓存 → await load(byId 有群)→
+      // await refreshSessions(chatSessions[].group_id 更新,侧栏卡才显示群名 + 头像拼图)。
+      useGroupsStore.getState().invalidateMembers(gid)
+      await useGroupsStore.getState().load()
+      await useSessionStore.getState().refreshSessions()
+      toast.success('软件公司团队已就位 — PM·UI·前端·后端·测试 5 人,对话已变群聊')
+      onCreated?.(gid)
+      onClose()
+    } catch (e) {
+      toast.error(`组建团队失败：${e}`)
+      setTeamBusy(false)
     }
   }
 
@@ -152,8 +186,24 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
         style={{ background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)' }}
       >
         <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--color-bg-subtle)' }}>
-          <div className="text-[14px] font-semibold" style={{ color: 'var(--color-text)' }}>
-            {isCreate ? '邀请伙伴进群(建一个群)' : `管理群「${initialGroup?.name}」`}
+          <div className="flex items-center gap-1.5">
+            {isCreate && view === 'form' && (
+              <button
+                onClick={() => setView('launcher')}
+                disabled={busy || teamBusy}
+                className="p-1 -ml-1 rounded transition-colors hover:bg-[var(--color-bg-subtle)] disabled:opacity-40"
+                title="返回选群类型"
+              >
+                <ChevronLeft size={16} style={{ color: 'var(--color-text-muted)' }} />
+              </button>
+            )}
+            <div className="text-[14px] font-semibold" style={{ color: 'var(--color-text)' }}>
+              {!isCreate
+                ? `管理群「${initialGroup?.name}」`
+                : view === 'launcher'
+                  ? '发起群聊'
+                  : '纯聊天群 · 选伙伴'}
+            </div>
           </div>
           <button
             onClick={onClose}
@@ -163,6 +213,15 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
           </button>
         </div>
 
+        {isCreate && view === 'launcher' ? (
+          <GroupTypeLauncher
+            onPickSocial={() => setView('form')}
+            onPickSoftwareCompany={createSoftwareTeam}
+            softwareTeamBusy={teamBusy}
+            busy={busy}
+            className="px-4 py-3 space-y-2.5"
+          />
+        ) : (
         <div className="px-4 py-3 space-y-3 overflow-y-auto">
           {isCreate && (
             <div
@@ -231,7 +290,9 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
             )}
           </div>
         </div>
+        )}
 
+        {(!isCreate || view === 'form') && (
         <div className="flex items-center justify-between px-4 py-3" style={{ borderTop: '1px solid var(--color-bg-subtle)' }}>
           <div>
             {!isCreate && (
@@ -249,7 +310,7 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
           <div className="flex gap-1.5">
             <button
               onClick={onClose}
-              disabled={busy}
+              disabled={busy || teamBusy}
               className="text-[12px] px-3 py-1.5 rounded transition-colors hover:bg-[var(--color-bg-subtle)]"
               style={{ color: 'var(--color-text-muted)' }}
             >
@@ -257,7 +318,7 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
             </button>
             <button
               onClick={handleSave}
-              disabled={busy}
+              disabled={busy || teamBusy}
               className="flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded font-medium transition-[filter] hover:brightness-110 active:brightness-95 disabled:opacity-50"
               style={{ background: 'var(--color-primary)', color: 'white' }}
             >
@@ -266,6 +327,7 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
             </button>
           </div>
         </div>
+        )}
       </div>
     </div>
   )

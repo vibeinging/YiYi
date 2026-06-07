@@ -6,7 +6,8 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import { X, Search, Check, Loader2, Users } from 'lucide-react'
+import { X, Search, Check, Loader2, Users, ChevronLeft } from 'lucide-react'
+import { GroupTypeLauncher } from './GroupTypeLauncher'
 import {
   createGroupWithMembers, setSessionGroup,
   updateCompanionGroup, addCompanionToGroup, removeCompanionFromGroup,
@@ -36,6 +37,8 @@ export function GroupCreateModal({
   const [selected, setSelected] = useState<Set<number>>(new Set(group?.memberIds ?? []))
   const [creating, setCreating] = useState(false)
   const [creatingTeam, setCreatingTeam] = useState(false)
+  /** 新建两步:launcher 选群类型 → form 选人;编辑直接 form。 */
+  const [view, setView] = useState<'launcher' | 'form'>(editing ? 'form' : 'launcher')
 
   // 一键组建软件公司团队:后端批量收养 5 角色 + 建群,前端复用"建群即开聊"流程进群。
   const createSoftwareTeam = async () => {
@@ -135,53 +138,38 @@ export function GroupCreateModal({
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: 'var(--color-border)' }}>
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: 'var(--color-primary)22' }}>
-              <Users size={18} style={{ color: 'var(--color-primary)' }} />
-            </div>
-            <h2 className="text-[15px] font-semibold" style={{ color: 'var(--color-text)' }}>{editing ? '编辑群' : '发起群聊'}</h2>
+            {!editing && view === 'form' ? (
+              <button
+                onClick={() => setView('launcher')}
+                disabled={creating || creatingTeam}
+                className="w-9 h-9 rounded-xl flex items-center justify-center hover:bg-[var(--color-bg-muted)] transition-all disabled:opacity-40"
+                title="返回选群类型"
+              >
+                <ChevronLeft size={18} style={{ color: 'var(--color-text-muted)' }} />
+              </button>
+            ) : (
+              <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: 'var(--color-primary)22' }}>
+                <Users size={18} style={{ color: 'var(--color-primary)' }} />
+              </div>
+            )}
+            <h2 className="text-[15px] font-semibold" style={{ color: 'var(--color-text)' }}>
+              {editing ? '编辑群' : view === 'launcher' ? '发起群聊' : '纯聊天群 · 选伙伴'}
+            </h2>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-[var(--color-bg-muted)] rounded-xl transition-all" title="取消">
             <X size={16} style={{ color: 'var(--color-text-muted)' }} />
           </button>
         </div>
 
-        {/* 一键组建软件公司团队 —— 新建时的高亮捷径 */}
-        {!editing && (
-          <div className="px-5 pt-4">
-            <button
-              onClick={createSoftwareTeam}
-              disabled={creating || creatingTeam}
-              className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all disabled:opacity-50 text-left"
-              style={{
-                background: 'color-mix(in srgb, var(--color-primary) 10%, var(--color-bg-elevated))',
-                border: '1px solid color-mix(in srgb, var(--color-primary) 35%, var(--color-border))',
-              }}
-              onMouseEnter={e => { e.currentTarget.style.background = 'color-mix(in srgb, var(--color-primary) 16%, var(--color-bg-elevated))' }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'color-mix(in srgb, var(--color-primary) 10%, var(--color-bg-elevated))' }}
-            >
-              <span className="shrink-0 w-10 h-10 rounded-xl flex items-center justify-center text-[20px]" style={{ background: 'var(--color-primary)22' }}>
-                🏢
-              </span>
-              <div className="flex-1 min-w-0">
-                <div className="text-[14px] font-semibold" style={{ color: 'var(--color-text)' }}>一键组建软件公司团队</div>
-                <div className="text-[12px] truncate" style={{ color: 'var(--color-text-muted)' }}>
-                  PM · UI 设计师 · 前端 · 后端 · 测试 —— 5 人就位即开工
-                </div>
-              </div>
-              {creatingTeam ? (
-                <Loader2 size={16} className="animate-spin shrink-0" style={{ color: 'var(--color-primary)' }} />
-              ) : (
-                <span className="shrink-0 text-[16px]" style={{ color: 'var(--color-primary)' }}>→</span>
-              )}
-            </button>
-            <div className="flex items-center gap-2 my-3">
-              <div className="flex-1 h-px" style={{ background: 'var(--color-border)' }} />
-              <span className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>或自己拉一个群</span>
-              <div className="flex-1 h-px" style={{ background: 'var(--color-border)' }} />
-            </div>
-          </div>
-        )}
-
+        {!editing && view === 'launcher' ? (
+          <GroupTypeLauncher
+            onPickSocial={() => setView('form')}
+            onPickSoftwareCompany={createSoftwareTeam}
+            softwareTeamBusy={creatingTeam}
+            busy={creating}
+          />
+        ) : (
+        <>
         {/* 群名 + emoji */}
         <div className="px-5 pt-4 flex items-center gap-2">
           <input
@@ -258,8 +246,11 @@ export function GroupCreateModal({
             })
           )}
         </div>
+        </>
+        )}
 
-        {/* Footer */}
+        {/* Footer —— 仅 form / 编辑视图(launcher 的卡片本身就是动作) */}
+        {(editing || view === 'form') && (
         <div className="flex items-center justify-between px-5 py-3 border-t" style={{ borderColor: 'var(--color-border)' }}>
           <span className="text-[12.5px]" style={{ color: 'var(--color-text-muted)' }}>
             已选 <span className="font-semibold tabular-nums" style={{ color: 'var(--color-text-secondary)' }}>{selected.size}</span> 位
@@ -274,6 +265,7 @@ export function GroupCreateModal({
             {editing ? '保存' : `创建${selected.size > 0 ? ` (${selected.size})` : ''}`}
           </button>
         </div>
+        )}
       </div>
     </div>
   )
