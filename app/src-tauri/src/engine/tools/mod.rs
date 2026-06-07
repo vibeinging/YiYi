@@ -62,6 +62,9 @@ pub(crate) use super::scheduler;
 // ── Re-exports: cheap_browser liveness probe → tool_registry_global ─
 pub(super) use cheap_browser::chrome_available;
 
+// ── Re-exports: 全权限模式(-p)────────────────────────────────────
+pub use permission_gate::{is_full_access, set_full_access};
+
 // ── Re-exports: types ──────────────────────────────────────────────
 pub use types::{FunctionCall, FunctionDef, ToolCall, ToolDefinition, ToolResult};
 pub(crate) use types::tool_def;

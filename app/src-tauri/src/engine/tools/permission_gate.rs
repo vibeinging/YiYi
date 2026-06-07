@@ -39,6 +39,23 @@ fn pending() -> &'static Mutex<HashMap<String, oneshot::Sender<bool>>> {
 const TIMEOUT_SECS: u64 = 30;
 
 // ---------------------------------------------------------------------------
+// 全权限模式(-p)—— 用户明确信任的环境,所有权限请求自动放行(shell_hardline 等
+// 绝对禁项除外)。让软件公司团队在项目工作区里自由读写 / 执行,不每次弹窗。
+// ---------------------------------------------------------------------------
+
+static FULL_ACCESS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 开关全权限模式。打开后,除 hardline 外的所有权限请求自动批准。
+pub fn set_full_access(on: bool) {
+    FULL_ACCESS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 当前是否全权限模式。
+pub fn is_full_access() -> bool {
+    FULL_ACCESS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+// ---------------------------------------------------------------------------
 // Session-level memory — approved items are remembered until app restart.
 // Keys: "shell_block::<command_prefix>" or "sensitive_path::<path>"
 // ---------------------------------------------------------------------------
@@ -124,6 +141,11 @@ pub async fn request_permission(req: PermissionRequest) -> bool {
             req.permission_type, req.path, req.reason
         );
         return false;
+    }
+
+    // 全权限模式(-p):信任环境,自动放行(hardline 已在上面拦掉)。
+    if is_full_access() {
+        return true;
     }
 
     // Blanket approval: user clicked "approve all" earlier in this chat.

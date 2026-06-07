@@ -11,15 +11,16 @@
 //!   cargo test --features test-support --test live_sw_company -- --nocapture --test-threads=1
 //! ```
 
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-use app_lib::engine::agents::AgentRegistry;
+use app_lib::engine::agents::{AgentDefinition, AgentRegistry};
 use app_lib::engine::db::Database;
 use app_lib::engine::llm_client::LLMConfig;
-use app_lib::engine::react_agent::run_react_with_options;
+use app_lib::engine::react_agent::{run_react_with_options, run_react_with_options_stream, AgentStreamEvent};
 use app_lib::engine::tools::{
-    get_database, mark_ready, set_database, with_task_working_dir, with_tool_filter,
+    get_database, mark_ready, set_database, set_full_access, with_task_working_dir, with_tool_filter,
 };
 
 fn live() -> Option<LLMConfig> {
@@ -139,3 +140,126 @@ async fn live_frontend_writes_real_code() {
     }
     let _ = std::fs::remove_dir_all(&ws);
 }
+
+/// 跑一个角色一轮:真人设 + 真 F2 过滤 + 角色真 max_iter + 共享工作区。
+async fn run_role(cfg: &LLMConfig, role: &AgentDefinition, ws: &Path, task: &str) -> String {
+    let sys = format!(
+        "{}\n\n【场景】你在软件公司群里,在团队共享的项目工作区里干活。产出必须用 \
+         write_file/edit_file 落成文件;读队友的东西用 read_file/list_directory。",
+        role.instructions
+    );
+    // idle 超时(不是总超时!):每个流事件(token/工具)重置计时;只有 150s 没新事件
+    // (LLM 流半开挂起)才中断 —— 进展中的长任务想跑多久跑多久,不被一刀切。
+    // cancelled 旗标在流读挂起时不会被检查,所以用 select! 让看门狗赢、把 future drop 掉
+    // (断开挂起的连接读)。
+    let last = Arc::new(Mutex::new(Instant::now()));
+    let last_for_event = last.clone();
+    let on_event = move |_ev: AgentStreamEvent| {
+        if let Ok(mut t) = last_for_event.lock() {
+            *t = Instant::now();
+        }
+    };
+    let run = with_task_working_dir(
+        ws.to_path_buf(),
+        with_tool_filter(
+            role.tool_filter(),
+            run_react_with_options_stream(
+                cfg, &sys, task, &[], role.max_iterations, None, on_event, None, None, None,
+            ),
+        ),
+    );
+    let idle_limit = Duration::from_secs(150);
+    let watchdog = async {
+        loop {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            let idle = last.lock().map(|t| t.elapsed()).unwrap_or_default();
+            if idle > idle_limit {
+                return;
+            }
+        }
+    };
+    tokio::select! {
+        r = run => r.unwrap_or_else(|e| format!("(运行出错: {e})")),
+        _ = watchdog => "(idle 超时:LLM 流 150s 无响应,该角色这轮跳过)".to_string(),
+    }
+}
+
+fn print_tree(ws: &Path) {
+    fn walk(dir: &Path, depth: usize) {
+        let mut entries: Vec<_> = std::fs::read_dir(dir).into_iter().flatten().flatten().collect();
+        entries.sort_by_key(|e| e.path());
+        for e in entries {
+            let p = e.path();
+            let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+            let kind = if p.is_dir() { "📁" } else { "📄" };
+            println!("{}{kind} {name} ({size} bytes)", "  ".repeat(depth));
+            if p.is_dir() {
+                walk(&p, depth + 1);
+            }
+        }
+    }
+    println!("\n############ 项目工作区文件树 ############");
+    walk(ws, 0);
+}
+
+/// 真实的长程多文件任务:团队建一个全栈待办 app。后端写 API+契约 → 前端读契约写 UI →
+/// 测试写并跑测试。多文件、多角色、真交接(靠工作区里的文件),全权限。review 产出。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_team_builds_a_real_fullstack_app() {
+    let Some(cfg) = live() else { return };
+    ensure_runtime_ready();
+    set_full_access(true); // -p 全权限:团队在工作区里自由读写 / 执行
+    let reg = registry();
+    // 固定路径,跑完不清理 —— 供事后逐行 review 代码。
+    let ws_root = std::env::temp_dir().join("yiyi-team-review");
+    let _ = std::fs::remove_dir_all(&ws_root);
+    std::fs::create_dir_all(&ws_root).unwrap();
+    let ws = ws_root.canonicalize().unwrap();
+    eprintln!("\n========== 团队建全栈待办 app(工作区 {}) ==========", ws.display());
+
+    // ① 后端:Python API + 数据 + 接口契约。
+    eprintln!("\n—————— ① 后端工程师 ——————");
+    let be = reg.get("backend_dev").expect("backend_dev");
+    let r1 = run_role(&cfg, be, &ws,
+        "做待办事项的后端:用 Python 标准库 http.server 写 server.py,提供 REST API:\
+         GET /todos 列出、POST /todos 新增、PUT /todos/<id> 改、DELETE /todos/<id> 删,\
+         数据持久化到 todos.json。再写一份 contract.md 讲清每个接口的路径/方法/请求体/返回。\
+         全部用 write_file 写到当前目录。").await;
+    println!("[后端] {}\n", r1.chars().take(600).collect::<String>());
+
+    // ② 前端:读契约,写 UI。
+    eprintln!("—————— ② 前端工程师 ——————");
+    let fe = reg.get("frontend_dev").expect("frontend_dev");
+    let r2 = run_role(&cfg, fe, &ws,
+        "先 read_file 看 contract.md 弄清后端接口,然后写 index.html(纯前端,用 fetch 调后端 API),\
+         实现待办的增、删、改、查、标记完成。用 write_file 写到当前目录的 index.html。").await;
+    println!("[前端] {}\n", r2.chars().take(600).collect::<String>());
+
+    // ③ 测试:读代码,写并跑测试。
+    eprintln!("—————— ③ 测试工程师 ——————");
+    let qa = reg.get("qa_engineer").expect("qa_engineer");
+    let r3 = run_role(&cfg, qa, &ws,
+        "先 list_directory 和 read_file 看后端 server.py 和 contract.md,写一个 test_api.py:\
+         用 subprocess 起 server.py、用 urllib 测一遍 CRUD,断言每步返回对。\
+         用 write_file 写到当前目录,再用 execute_shell 跑 python3 test_api.py,把跑的结果报出来。").await;
+    println!("[测试] {}\n", r3.chars().take(800).collect::<String>());
+
+    // review:文件树 + 关键文件预览。
+    print_tree(&ws);
+    for f in ["server.py", "contract.md", "index.html", "test_api.py"] {
+        let p = ws.join(f);
+        if p.exists() {
+            let c = std::fs::read_to_string(&p).unwrap_or_default();
+            println!("\n===== {f}（{} 字）=====\n{}", c.chars().count(), c.chars().take(1200).collect::<String>());
+        } else {
+            println!("\n⚠️ 缺 {f}");
+        }
+    }
+
+    // 至少后端 + 前端的核心文件该落盘。
+    assert!(ws.join("server.py").exists(), "后端应写出 server.py");
+    assert!(ws.join("index.html").exists(), "前端应写出 index.html");
+    eprintln!("\n========== 团队建 app 结束(文件留在 {}) ==========", ws.display());
+}
+

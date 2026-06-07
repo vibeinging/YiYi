@@ -592,6 +592,15 @@ pub async fn answer_user_question(
     Ok(())
 }
 
+/// 全权限模式(-p)开关 —— 打开后,信任此环境,除 hardline 外的所有权限请求自动放行,
+/// 让团队在项目工作区里自由读写 / 执行,不每次弹窗。用户在设置里明确开启。
+#[tauri::command]
+pub async fn set_full_access_mode(enabled: bool) -> Result<(), String> {
+    crate::engine::tools::set_full_access(enabled);
+    log::info!("全权限模式(-p)已{}", if enabled { "开启" } else { "关闭" });
+    Ok(())
+}
+
 /// 列出某会话下所有未答的 `ask_user` 问题(前端重开 app 后恢复卡片用)。
 /// `session_id` 为空时返回全部未答问题。
 #[tauri::command]
