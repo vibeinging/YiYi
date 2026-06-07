@@ -42,12 +42,27 @@ pub fn build_project_collaboration_plan(
     members: &[Companion],
     group_id: i64,
 ) -> Result<CollaborationPlan, String> {
-    if plan.tasks.is_empty() {
-        return Err("项目计划为空,没有可派的任务".into());
+    Ok(CollaborationPlan {
+        steps: build_steps(&plan.tasks, members, group_id, 0)?,
+    })
+}
+
+/// 把任务列表转成 step 列表。step id 从 `id_offset + 1` 开始 —— 初始计划 `id_offset=0`
+/// (→ 1..n);**S2⑤ 动态追加任务时 `id_offset = 已有 step 数`,续号不撞**。
+/// `depends_on` 是本批任务内的 0-based 下标,同样按 `id_offset` 偏移映射成 step id
+/// (所以追加批次内部的交接顺序也对)。
+pub fn build_steps(
+    tasks: &[ProjectTask],
+    members: &[Companion],
+    group_id: i64,
+    id_offset: StepId,
+) -> Result<Vec<Step>, String> {
+    if tasks.is_empty() {
+        return Err("没有可派的任务".into());
     }
-    let n = plan.tasks.len();
+    let n = tasks.len();
     let mut steps = Vec::with_capacity(n);
-    for (i, task) in plan.tasks.iter().enumerate() {
+    for (i, task) in tasks.iter().enumerate() {
         let member = members
             .iter()
             .find(|m| m.agent_definition_name == task.role)
@@ -62,13 +77,13 @@ pub fn build_project_collaboration_plan(
                 } else if d == i {
                     Err(format!("任务 {i} 依赖了自己"))
                 } else {
-                    Ok((d + 1) as StepId)
+                    Ok(id_offset + (d as StepId) + 1)
                 }
             })
             .collect::<Result<_, _>>()?;
 
         steps.push(Step {
-            id: (i + 1) as StepId,
+            id: id_offset + (i as StepId) + 1,
             kind: StepKind::ParallelAgents,
             participants: vec![Participant {
                 companion_id: member.id,
@@ -90,7 +105,24 @@ pub fn build_project_collaboration_plan(
             finished_at: None,
         });
     }
-    Ok(CollaborationPlan { steps })
+    Ok(steps)
+}
+
+/// S2⑤:QA 测出 bug → 生成"修复 + 重新验证"两条追加任务。修复派给出 bug 的角色,
+/// 重新验证派回 QA(依赖修复完成)。`qa_role` 通常是 "qa_engineer"。
+pub fn build_bug_fix_followup(target_role: &str, qa_role: &str, bug: &str) -> Vec<ProjectTask> {
+    vec![
+        ProjectTask {
+            role: target_role.into(),
+            objective: format!("修复测试发现的问题:{bug}\n改完用 write_file/edit_file 落盘,说清改了哪些文件。"),
+            depends_on: vec![],
+        },
+        ProjectTask {
+            role: qa_role.into(),
+            objective: format!("上面的修复完成后,重新验证这个问题是否真的修好了:{bug}\n还有问题就再报一次。"),
+            depends_on: vec![0], // 依赖修复任务(本批第 0 条)
+        },
+    ]
 }
 
 #[cfg(test)]
@@ -194,5 +226,31 @@ mod tests {
         let members = vec![companion(10, "frontend_dev")];
         let plan = ProjectPlan { tasks: vec![] };
         assert!(build_project_collaboration_plan(&plan, &members, 1).is_err());
+    }
+
+    // S2⑤:动态追加任务时,step id 从 offset 续号,本批内依赖也按 offset 映射。
+    #[test]
+    fn build_steps_continues_ids_from_offset() {
+        let members = vec![companion(10, "frontend_dev"), companion(30, "qa_engineer")];
+        // 已有 5 个 step → 追加批 offset=5。两条:修复(无依赖)+ 重验(依赖本批第 0 条)。
+        let followup = vec![task("frontend_dev", vec![]), task("qa_engineer", vec![0])];
+        let steps = build_steps(&followup, &members, 1, 5).unwrap();
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0].id, 6, "续号:offset 5 → 第一条 id 6");
+        assert_eq!(steps[1].id, 7);
+        // 本批内依赖 [0] → offset+0+1 = 6(指向本批第一条,不是初始计划的 step 1)。
+        assert_eq!(steps[1].depends_on, vec![6]);
+    }
+
+    // S2⑤:bug 修复回路 = 修复(派给出 bug 的角色)→ 重新验证(派回 QA,依赖修复)。
+    #[test]
+    fn bug_fix_followup_is_fix_then_requalify() {
+        let f = build_bug_fix_followup("frontend_dev", "qa_engineer", "删除按钮点不动");
+        assert_eq!(f.len(), 2);
+        assert_eq!(f[0].role, "frontend_dev", "修复派给出 bug 的角色");
+        assert!(f[0].objective.contains("删除按钮点不动"));
+        assert!(f[0].depends_on.is_empty());
+        assert_eq!(f[1].role, "qa_engineer", "重新验证派回 QA");
+        assert_eq!(f[1].depends_on, vec![0], "重验依赖修复");
     }
 }
