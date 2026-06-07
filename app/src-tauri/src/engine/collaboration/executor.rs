@@ -205,9 +205,11 @@ const PARTICIPANT_TIMEOUT_SECS: u64 = 150;
 /// 群事件循环里,一句闲聊不需要 150s 长推理;砍到 30s,既兜住挂起流,又把"被抢占后
 /// 仍在跑的那条"的成本/占槽时长压到 ≤ 群墙钟量级(中途取消的实用兜底)。
 const GROUP_LOOP_TIMEOUT_SECS: u64 = 30;
-/// 项目派工的写码任务(S2③ project_task)需要更长 —— 一个角色要写多个文件、跑构建/
-/// 测试,150s 不够。给到 10 分钟(仍是挂起流的兜底,不是常态时长)。
-const PROJECT_TASK_TIMEOUT_SECS: u64 = 600;
+/// 项目派工的写码任务(S2③ project_task)**不用总超时** —— 总超时会把进展中的长程任务
+/// 一刀切(一个角色写多文件 + 跑构建/测试可能很久)。改用 **idle 超时**:300s 内一点流
+/// 活动(token / 工具事件)都没有,才判 LLM 流真挂起 → 中断;有进展就重置 → 真长程任务
+/// 想跑多久跑多久。300s 也 > 单个工具(跑构建/测试)的常见耗时,避免长工具被误判。
+const PROJECT_TASK_IDLE_SECS: u64 = 300;
 
 /// run_one 的超时包装 —— 见 PARTICIPANT_TIMEOUT_SECS。
 async fn run_one_guarded(
@@ -223,19 +225,37 @@ async fn run_one_guarded(
         .get(participant_idx)
         .map(|p| p.name.clone())
         .unwrap_or_default();
-    let secs = match step_mode(step) {
-        Some("group_loop") => GROUP_LOOP_TIMEOUT_SECS,
-        Some("project_task") => PROJECT_TASK_TIMEOUT_SECS,
-        _ => PARTICIPANT_TIMEOUT_SECS,
-    };
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(secs),
-        run_one(config, step, participant_idx, upstream, collab_id, usage_source),
-    )
-    .await
-    {
-        Ok(r) => r,
-        Err(_) => Err(format!("{name} 响应超时({secs}s)")),
+    let run = run_one(config, step, participant_idx, upstream, collab_id, usage_source);
+
+    // project_task:idle 超时(有进展不切,真长程任务想跑多久跑多久)。看门狗在 idle
+    // 超过阈值时赢得 select! → run 被 drop → 断开挂起的连接读(cancelled 旗标在流读卡住
+    // 时不会被检查,所以靠 drop)。其余(群聊 30s / 普通 150s):保持总超时。
+    if step_mode(step) == Some("project_task") {
+        let activity = Arc::new(std::sync::Mutex::new(Instant::now()));
+        let watch = Arc::clone(&activity);
+        let watchdog = async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                let idle = watch.lock().map(|t| t.elapsed()).unwrap_or_default();
+                if idle > std::time::Duration::from_secs(PROJECT_TASK_IDLE_SECS) {
+                    return;
+                }
+            }
+        };
+        tokio::select! {
+            r = crate::engine::agent_runner::with_idle_activity(activity, run) => r,
+            _ = watchdog => Err(format!("{name} 卡住({PROJECT_TASK_IDLE_SECS}s 无流响应)")),
+        }
+    } else {
+        let secs = if step_mode(step) == Some("group_loop") {
+            GROUP_LOOP_TIMEOUT_SECS
+        } else {
+            PARTICIPANT_TIMEOUT_SECS
+        };
+        match tokio::time::timeout(std::time::Duration::from_secs(secs), run).await {
+            Ok(r) => r,
+            Err(_) => Err(format!("{name} 响应超时({secs}s)")),
+        }
     }
 }
 
@@ -291,6 +311,7 @@ async fn run_one(
         &messages,
         &[],
         move |evt| {
+            crate::engine::agent_runner::mark_idle_activity(); // YiYi 若在 project_task 步里也算流活动
             let (delta, reasoning) = match evt {
                 StreamEvent::ContentDelta(d) => (d, false),
                 StreamEvent::ReasoningDelta(d) => (d, true),

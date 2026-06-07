@@ -44,6 +44,7 @@ impl CollabEventSink {
     }
 
     fn emit_token(&self, delta: String, reasoning: bool) {
+        super::mark_idle_activity(); // 有流活动 → 重置项目任务 idle 计时
         if delta.is_empty() {
             return;
         }
@@ -67,6 +68,7 @@ impl AgentEventSink for CollabEventSink {
     }
 
     fn on_tool_start(&self, name: &str, args_preview: &str) {
+        super::mark_idle_activity();
         events::emit(CollaborationEvent::ToolStart {
             collaboration_id: self.collaboration_id,
             step_id: self.step_id,
@@ -77,6 +79,7 @@ impl AgentEventSink for CollabEventSink {
     }
 
     fn on_tool_end(&self, name: &str, result_preview: &str) {
+        super::mark_idle_activity();
         events::emit(CollaborationEvent::ToolEnd {
             collaboration_id: self.collaboration_id,
             step_id: self.step_id,

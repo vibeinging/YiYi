@@ -5,6 +5,34 @@ pub mod run;
 
 use crate::engine::react_agent::{AgentStreamEvent, ToolArtifact};
 
+// ── idle 超时活动标记(项目长程任务用)──────────────────────────────────
+// project_task 不用总超时(会切掉进展中的长任务),改用 idle 超时:每次有流活动
+// (token / 思考 / 工具事件)就 mark,executor 的看门狗据"多久没活动"判断 LLM 流
+// 是否真挂起。群聊/普通步不设此 scope → mark 是 no-op,仍走总超时。
+tokio::task_local! {
+    static IDLE_ACTIVITY: std::sync::Arc<std::sync::Mutex<std::time::Instant>>;
+}
+
+/// 在 fut 期间绑定一个 idle 活动时间戳(executor 创建 Arc 并在看门狗里读同一个)。
+pub async fn with_idle_activity<F, R>(
+    activity: std::sync::Arc<std::sync::Mutex<std::time::Instant>>,
+    fut: F,
+) -> R
+where
+    F: std::future::Future<Output = R>,
+{
+    IDLE_ACTIVITY.scope(activity, fut).await
+}
+
+/// 标记"刚有流活动"。不在 `with_idle_activity` scope 内 → no-op。
+pub fn mark_idle_activity() {
+    let _ = IDLE_ACTIVITY.try_with(|a| {
+        if let Ok(mut t) = a.lock() {
+            *t = std::time::Instant::now();
+        }
+    });
+}
+
 /// Auto-continue 外壳的轮次事件。`run_with_shell` 在多轮长任务里发出,
 /// YiYi 的 `ChatEventSink` 翻译成 `chat://auto_continue`;伙伴 sink no-op。
 #[derive(Debug, Clone)]
