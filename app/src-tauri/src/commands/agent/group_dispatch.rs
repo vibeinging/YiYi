@@ -117,17 +117,19 @@ pub async fn try_group_dispatch(
         .and_then(|g| g.workspace_path)
         .is_some();
     if is_project_group && forced_ids.is_empty() && is_project_build_intent(user_message) {
-        if let Some(pm) = members.iter().find(|m| m.agent_definition_name == "pm") {
+        // 牵头者:软件公司的 PM,或自定义团队里 coordinator 档位的协调者(G3 —— 泛化,
+        // 不再硬编码 "pm" slug)。纯执行团队(无协调角色)→ None,落回放养(没人拆解/澄清)。
+        if let Some(lead) = find_project_lead(&members).await {
             let collab_id =
-                dispatch_project_intake(db.clone(), cfg.clone(), session_id, gid, pm, user_message)
+                dispatch_project_intake(db.clone(), cfg.clone(), session_id, gid, lead, user_message)
                     .await?;
             return Ok(GroupDispatchOutcome::Dispatched {
                 collaboration_id: collab_id,
                 members: vec![DispatchedMember {
-                    companion_id: pm.id,
-                    name: pm.name.clone(),
-                    avatar_emoji: pm.avatar_emoji.clone(),
-                    color_hex: pm.color_hex.clone(),
+                    companion_id: lead.id,
+                    name: lead.name.clone(),
+                    avatar_emoji: lead.avatar_emoji.clone(),
+                    color_hex: lead.color_hex.clone(),
                 }],
             });
         }
@@ -268,9 +270,45 @@ async fn dispatch_project_intake(
     Ok(collab_id)
 }
 
+/// 在成员的 `(slug, is_coordinator)` 中选项目牵头者下标:**PM slug 优先**(软件公司),
+/// 否则**首个 coordinator 档位成员**(自定义团队)。都没有 → None。纯函数,可测。
+fn pick_project_lead_idx(members: &[(&str, bool)]) -> Option<usize> {
+    if let Some(i) = members.iter().position(|(slug, _)| *slug == "pm") {
+        return Some(i);
+    }
+    members.iter().position(|(_, is_coord)| *is_coord)
+}
+
+/// 找项目接管的牵头成员(G3):软件公司 PM,或自定义团队里 coordinator 档位的协调者。
+/// coordinator 判定读 registry 里该角色定义的 `permission_profile`(G1/G2 动态角色有此元数据)。
+/// app handle / registry 不可达(headless)→ 退化为只认 "pm" slug。
+async fn find_project_lead(members: &[CompanionProfile]) -> Option<&CompanionProfile> {
+    let coord_flags: Vec<bool> = match crate::engine::tools::get_app_handle() {
+        Some(handle) => {
+            use tauri::Manager;
+            let state = handle.state::<crate::state::AppState>();
+            let registry = state.agent_registry.read().await;
+            members
+                .iter()
+                .map(|m| {
+                    registry.get(&m.agent_definition_name).and_then(|d| d.permission_profile())
+                        == Some("coordinator")
+                })
+                .collect()
+        }
+        None => vec![false; members.len()],
+    };
+    let pairs: Vec<(&str, bool)> = members
+        .iter()
+        .zip(coord_flags.iter())
+        .map(|(m, &c)| (m.agent_definition_name.as_str(), c))
+        .collect();
+    pick_project_lead_idx(&pairs).map(|i| &members[i])
+}
+
 /// S2②:粗判用户消息是不是一个明确的"建造 / 开发"任务 —— 用来决定项目群里是否由
-/// PM 接手、绕开放养闲聊。保守:只认明确的动手信号,拿不准就回 false(走放养讨论),
-/// 因为误判成项目(把闲聊塞给 PM)比误判成闲聊更伤体感。
+/// 牵头者接手、绕开放养闲聊。保守:只认明确的动手信号,拿不准就回 false(走放养讨论),
+/// 因为误判成项目(把闲聊塞给牵头者)比误判成闲聊更伤体感。
 pub fn is_project_build_intent(msg: &str) -> bool {
     let m = msg.trim();
     if m.chars().count() < 4 {
@@ -308,7 +346,23 @@ pub fn is_stop_intent(msg: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_project_build_intent;
+    use super::{is_project_build_intent, pick_project_lead_idx};
+
+    #[test]
+    fn pick_lead_prefers_pm_then_first_coordinator() {
+        // 软件公司:有 pm slug → 选 pm(即便前面有 coordinator 档位成员)。
+        assert_eq!(
+            pick_project_lead_idx(&[("designer", false), ("pm", false), ("coord", true)]),
+            Some(1),
+        );
+        // 自定义团队:无 pm → 选首个 coordinator 档位成员。
+        assert_eq!(
+            pick_project_lead_idx(&[("builder_x", false), ("lead_y", true), ("qa_z", false)]),
+            Some(1),
+        );
+        // 纯执行团队(无 pm、无 coordinator)→ None,落回放养(没人拆解/澄清)。
+        assert_eq!(pick_project_lead_idx(&[("builder_x", false), ("qa_z", false)]), None);
+    }
 
     #[test]
     fn build_intent_recognizes_explicit_tasks() {

@@ -123,6 +123,14 @@ impl AgentDefinition {
             .unwrap_or(false)
     }
 
+    /// 动态角色(G1)的权限档位字符串(coordinator/designer/builder/reviewer)。
+    /// 非动态角色(内置/收养)没有这个字段 → None。用于 G3 项目分流找"协调者"牵头。
+    pub fn permission_profile(&self) -> Option<&str> {
+        self.metadata
+            .as_ref()
+            .and_then(|m| m["yiyi"]["permission_profile"].as_str())
+    }
+
     /// Hidden agents are still loaded into the registry (so `spawn_agents`
     /// can dispatch to them by name) but are filtered out of user-facing
     /// listings such as the @-mention picker. Set `metadata.yiyi.hidden: true`
