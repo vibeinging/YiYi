@@ -30,6 +30,7 @@ mod bot_tools;
 pub(crate) mod ask_user;
 mod browser_tools;
 pub(crate) mod project_tools;
+pub(crate) mod work_tools;
 mod canvas_tools;
 mod cheap_browser;
 mod companion_tools;
