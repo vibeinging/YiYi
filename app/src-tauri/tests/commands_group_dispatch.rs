@@ -2,16 +2,20 @@
 //!
 //! IM 心智:session 1:1 绑 group。未绑 group → 单聊主精灵自答;空群 → EmptyGroup。
 //!
-//! 路由(对话循环引擎,见 docs/design/2026-05-31 §A):
-//! - **@点名必答**(forced_ids 非空):被点的人(取群内交集)直接进静态 ParallelAgents,
-//!   必答、无 `<pass>` 余地、无 YiYi 兜底位。
-//! - **非点名**(去中心化):全员进 ConversationDriver 的第 1 轮 step,"接不接"是发言
-//!   本身(fused reply-or-`<pass>`),不再前置 judge/claim 过滤。全员 `<pass>` → YiYi
-//!   兜底位接(Driver 运行时的异步下一步)。
+//! 路由(v2 对话循环引擎 = conversation_driver::dispatch_group_loop):
+//! - **全员 + YiYi 入轮**:participants = 全部群成员(按成员顺序)+ 末尾追加 YiYi
+//!   (companion_id=0,name "YiYi",emoji 🦊,color #6366F1;群里已有 id=0 则不重复加)。
+//!   @点名与非点名走的是**同一条**路径,都把全员拉进第 1 波。
+//! - **forced 只决定谁先开口,不过滤成员**:被 @ 点名的成员 wave-1 立即回(delay=0)、
+//!   其余变速。forced **不再排他** —— 点 1 个人,其余成员和 YiYi 照样入轮。@ 一个
+//!   不在群里的 id 也**不再触发自答兜底**:群照常派遣,只是没有对应成员立即开口。
+//! - **wave-1 结构**:N+1 个**各含 1 个 participant** 的独立 step(每成员一个,id 1..N),
+//!   而不是一个 ParallelAgents step 含 N 个 participant。mode = Dispatched(0),
+//!   所有 participant 的 memory_scope = Group(gid)。
 //!
 //! 本文件验**同步契约**:try_group_dispatch 的返回(SelfAnswer / EmptyGroup /
 //! Dispatched)+ 协作落库形态(plan / mode / parent_id / 成员 scope)。Driver 的
-//! 运行时收口(谁发言 / 全让兜底)需内容感知 mock,留待集成测试。
+//! 运行时收口(谁发言 / 谁 `<pass>` / 冷场收口)需内容感知 mock,留待集成测试。
 //! Mock 固定响应即可(同步路径不依赖 LLM 内容),TempDb 隔离,#[serial]。
 
 mod common;
@@ -127,7 +131,7 @@ async fn try_group_dispatch_with_empty_group_returns_empty_group() {
     );
 }
 
-// === 高置信单成员 → 派遣 ParallelAgents(1 人)===
+// === 非点名:单群成员 → 全员(含 YiYi 兜底)入轮 ===
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
@@ -158,9 +162,11 @@ async fn try_group_dispatch_high_confidence_single_member_dispatches() {
             collaboration_id,
             members,
         } => {
-            assert_eq!(members.len(), 1, "高置信单选应只派 1 人");
-            assert_eq!(members[0].companion_id, cid, "应派给被 judge 选中的成员");
+            // v2:全员入轮 + 末尾追加 YiYi 兜底 → [阿狸, YiYi]。
+            assert_eq!(members.len(), 2, "非点名:全员(含 YiYi 兜底)入轮");
+            assert_eq!(members[0].companion_id, cid, "群成员排在前");
             assert_eq!(members[0].name, "阿狸");
+            assert_eq!(members[1].companion_id, 0, "YiYi(id=0)追加在末尾");
             collaboration_id
         }
         other => panic!("高置信应派遣，got {other:?}"),
@@ -197,7 +203,7 @@ async fn try_group_dispatch_high_confidence_single_member_dispatches() {
     );
 }
 
-// === @点名必答:forced_ids 强制成员上场,跳过 L1/L2 智能路由 ===
+// === v2:@点名只让被点的先开口,不排他;全员 + YiYi 照样入轮 ===
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
@@ -221,21 +227,24 @@ async fn try_group_dispatch_forced_mention_dispatches_named_members() {
     add_companion_to_group_impl(t.state(), gid, cid_b).await.unwrap();
     set_session_group_impl(t.state(), sid.into(), Some(gid)).await.unwrap();
 
-    // 只点名阿狸(cid_a)→ 必答,跳过智能路由,只派该 1 位(不带出小冰)。
+    // 只点名阿狸(cid_a)→ v2 forced **不排他**:阿狸 wave-1 立即开口,小冰 + YiYi
+    // 照样入轮(变速接话)。members = [阿狸, 小冰, YiYi]。
     let outcome = try_group_dispatch(db, cfg, sid, "@阿狸 帮我看下", &[cid_a])
         .await
         .unwrap();
     match outcome {
         GroupDispatchOutcome::Dispatched { members, .. } => {
-            assert_eq!(members.len(), 1, "点名 1 位应只派该 1 位");
-            assert_eq!(members[0].companion_id, cid_a, "应派给被点名的成员");
-            assert_eq!(members[0].name, "阿狸");
+            let ids: Vec<i64> = members.iter().map(|m| m.companion_id).collect();
+            assert_eq!(ids.len(), 3, "@点名不排他:全员 + YiYi 入轮,got {ids:?}");
+            assert!(ids.contains(&cid_a), "被点名的阿狸在轮里(且 delay=0 先开口)");
+            assert!(ids.contains(&cid_b), "未被点名的小冰照样入轮(forced 不排他)");
+            assert!(ids.contains(&0), "YiYi(id=0)兜底入轮");
         }
-        other => panic!("点名必答应派遣, got {other:?}"),
+        other => panic!("@点名应派遣(全员入轮), got {other:?}"),
     }
 }
 
-// === L1 核心:多成员同框 → ParallelAgents(N 人)===
+// === 多成员:全员 + YiYi 入轮,wave-1 = N+1 个各 1-participant 的独立 step ===
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
@@ -282,13 +291,14 @@ async fn try_group_dispatch_multi_member_dispatches_in_one_step() {
         other => panic!("多成员高置信应派遣,got {other:?}"),
     };
 
-    // 全员 claim 接 → 三人都上场。
-    assert_eq!(member_ids.len(), 3, "三人都 claim 应都派遣,got {member_ids:?}");
+    // v2:全员入轮 + 末尾追加 YiYi → 三人 + YiYi = 4 位。
+    assert_eq!(member_ids.len(), 4, "三人 + YiYi 都入轮,got {member_ids:?}");
     assert!(member_ids.contains(&cid_a));
     assert!(member_ids.contains(&cid_b));
     assert!(member_ids.contains(&cid_c));
 
-    // plan 是一个 ParallelAgents step,含 3 个 participant,共享 Family scope。
+    // v2 wave-1 结构:N+1 个**各含 1 个 participant** 的独立 step(每成员一个),
+    // 而非一个 ParallelAgents step 含 N 个 participant。所有 participant scope = Group(gid)。
     let orch = SqliteOrchestrator::new(db.clone(), Arc::new(ConcreteExecutor::new(cfg)));
     let c = orch
         .list_recent_by_session(sid, 5)
@@ -296,15 +306,17 @@ async fn try_group_dispatch_multi_member_dispatches_in_one_step() {
         .into_iter()
         .find(|c| c.id == collab_id)
         .expect("协作已落库");
-    let step = c.plan.steps.first().expect("应有 1 个 step");
-    assert_eq!(step.participants.len(), 3, "ParallelAgents 应含 3 个成员");
-    for p in &step.participants {
-        assert_eq!(
-            p.memory_scope,
-            MemoryScope::Group(gid),
-            "多成员都该升级到本 group 的 Group scope,got {:?}",
-            p.memory_scope,
-        );
+    assert_eq!(c.plan.steps.len(), 4, "wave-1 应是 4 个独立 step(三人 + YiYi)");
+    for step in &c.plan.steps {
+        assert_eq!(step.participants.len(), 1, "每个 step 只含 1 个 participant");
+        for p in &step.participants {
+            assert_eq!(
+                p.memory_scope,
+                MemoryScope::Group(gid),
+                "成员都该升级到本 group 的 Group scope,got {:?}",
+                p.memory_scope,
+            );
+        }
     }
     // 对话循环引擎:不再有 DispatchJudged(无前置 judge/claim)。全员入第 1 轮,
     // 谁发言谁 <pass> 在运行时由 fused prompt 自决。
@@ -346,14 +358,16 @@ async fn try_group_dispatch_non_forced_puts_all_members_in_round() {
     match outcome {
         GroupDispatchOutcome::Dispatched { members, .. } => {
             let ids: Vec<i64> = members.iter().map(|m| m.companion_id).collect();
-            assert_eq!(ids.len(), 2, "非点名应把全员放进第 1 轮,got {ids:?}");
+            // v2:两位群成员 + 末尾追加 YiYi = 3 位入轮。
+            assert_eq!(ids.len(), 3, "非点名应把全员 + YiYi 放进第 1 轮,got {ids:?}");
             assert!(ids.contains(&cid_a) && ids.contains(&cid_b));
+            assert!(ids.contains(&0), "YiYi(id=0)兜底入轮");
         }
         other => panic!("非点名应派遣(全员入轮),got {other:?}"),
     }
 }
 
-// === 去中心化:被点名成员不在群里 → 回落自答 ===
+// === v2:@ 一个不在群的 id 不再触发自答兜底,群照常派遣 ===
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
@@ -374,14 +388,21 @@ async fn try_group_dispatch_forced_member_not_in_group_self_answers() {
     add_companion_to_group_impl(t.state(), gid, cid).await.unwrap();
     set_session_group_impl(t.state(), sid.into(), Some(gid)).await.unwrap();
 
-    // 点名一个不在群里的 id(99999)→ forced ∩ 群成员为空 → 回落自答。
+    // 点名一个不在群里的 id(99999)。v2 **没有** "@非成员 → SelfAnswer 兜底" 了 ——
+    // 照样进 dispatch_group_loop:全员 + YiYi 入轮。forced 仅影响开口顺序,99999 无对应
+    // 成员即无人立即开口,但群照常派遣。members = [小冰, YiYi]。
     let outcome = try_group_dispatch(db, cfg, sid, "随便聊聊", &[99999])
         .await
         .unwrap();
-    assert!(
-        matches!(outcome, GroupDispatchOutcome::SelfAnswer { .. }),
-        "被点名的成员不在群里应回落自答,got {outcome:?}"
-    );
+    match outcome {
+        GroupDispatchOutcome::Dispatched { members, .. } => {
+            let ids: Vec<i64> = members.iter().map(|m| m.companion_id).collect();
+            assert_eq!(ids.len(), 2, "群照常派遣:小冰 + YiYi,got {ids:?}");
+            assert!(ids.contains(&cid), "在群的成员照常入轮");
+            assert!(ids.contains(&0), "YiYi(id=0)兜底入轮");
+        }
+        other => panic!("@非成员不再自答兜底,应照常派遣,got {other:?}"),
+    }
 }
 
 // === 多轮接力 → parent_id 链 ===
@@ -460,11 +481,12 @@ async fn try_group_dispatch_uses_group_roster_and_isolates_buckets() {
         }
         other => panic!("应派遣,got {other:?}"),
     };
-    // 去中心化:组内两位都 claim 接 → 都上场;组外 cid_other **不在 roster**,永不出现
-    //(roster 隔离:all_members 只取本 group 的成员)。
-    assert_eq!(member_ids.len(), 2, "组内两位都该上场,got {member_ids:?}");
+    // v2:组内两位 + 末尾追加 YiYi = 3 位上场;组外 cid_other **不在 roster**,永不出现
+    //(roster 隔离:dispatch_group_loop 只拿到本 group 的成员)。
+    assert_eq!(member_ids.len(), 3, "组内两位 + YiYi 上场,got {member_ids:?}");
     assert!(member_ids.contains(&cid_in_a));
     assert!(member_ids.contains(&cid_in_b));
+    assert!(member_ids.contains(&0), "YiYi(id=0)兜底入轮");
     assert!(!member_ids.contains(&cid_other), "组外成员不该被拉进来(roster 隔离)");
 
     // 协作落库的 plan participant.memory_scope 是 Group(gid) —— 桶名
