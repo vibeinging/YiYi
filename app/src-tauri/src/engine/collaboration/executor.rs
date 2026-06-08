@@ -53,10 +53,46 @@ impl ConcreteExecutor {
 /// trim 后等于它即视为"没接话":不进 verdict、前端不渲染气泡。
 pub const PASS_SENTINEL: &str = "<pass>";
 
-/// 读 step 的对话模式标记(Driver 写进 metadata)。
-/// `group_round` = 群聊一轮(全员 reply-or-pass);`yiyi_fallback` = 全让兜底位。
-fn step_mode(step: &Step) -> Option<&str> {
-    step.input.metadata.get("mode").and_then(|v| v.as_str())
+/// step 的语义模式(chat×work 2×2)。metadata["mode"] 字符串在此**翻译一次**,
+/// 调用点用穷尽 match / enum 比较,编译器兜底——取代散落各处的 `== Some("...")` 魔法字符串。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StepMode {
+    /// 放养群聊:点名转让一轮,全员 reply-or-pass(chat)
+    GroupRound,
+    /// 放养群聊:自由热聊事件循环(chat)
+    GroupLoop,
+    /// 群聊全冷场,YiYi 兜底位接住(chat)
+    YiyiFallback,
+    /// 群聊显式要结论,YiYi 收口(chat)
+    YiyiSummary,
+    /// 工作群牵头者接手:主导推进 + ask_user 澄清(work)
+    Intake,
+    /// 派工任务步:按上游交付接力(work)
+    ProjectTask,
+    /// 无 mode / 未知:普通单/多 agent step
+    Plain,
+}
+
+impl StepMode {
+    /// work 象限(chat×work 2×2):派工接手 / 派工任务。S6 路由 + S8 删 chat 引擎里
+    /// work 残留时按此判别;现阶段尚无调用方,先立 API。
+    #[allow(dead_code)]
+    fn is_work(self) -> bool {
+        matches!(self, Self::Intake | Self::ProjectTask)
+    }
+}
+
+/// 读 step 的语义模式(Driver / 派工器写进 metadata["mode"])。
+fn step_mode(step: &Step) -> StepMode {
+    match step.input.metadata.get("mode").and_then(|v| v.as_str()) {
+        Some("group_round") => StepMode::GroupRound,
+        Some("group_loop") => StepMode::GroupLoop,
+        Some("yiyi_fallback") => StepMode::YiyiFallback,
+        Some("yiyi_summary") => StepMode::YiyiSummary,
+        Some("intake") => StepMode::Intake,
+        Some("project_task") => StepMode::ProjectTask,
+        _ => StepMode::Plain,
+    }
 }
 
 /// 把 metadata 里的群历史渲染成 append-only 块。**缓存纪律**:历史在前(只增),
@@ -83,7 +119,7 @@ fn render_system_prompt(step: &Step, participant_idx: usize) -> String {
     match step_mode(step) {
         // 群聊一轮:每位成员自决发言或 <pass>。人设 + 静态规则进 system(稳定前缀,可缓存)。
         // 规则强偏向"让"——群里抢话比冷场更伤体验(见用户反馈:点名了别人,其他成员还硬插话)。
-        Some("group_round") => format!(
+        StepMode::GroupRound => format!(
             "你是 {} {}。这是用户的群聊,群里还有其他 AI 伙伴。\n\n\
              【发言规则 —— 群里别抢话】\n\
              - 用户**点名或明显在问某一位**(直接喊名字、或\"你\"指向某人)→ 那是 TA 的话,\
@@ -97,7 +133,7 @@ fn render_system_prompt(step: &Step, participant_idx: usize) -> String {
         ),
         // 群事件循环(v2,放养模式):像在群里熬夜热聊一样自然接茬,基调偏"积极往下聊",
         // 但仍允许真没料时 pass(防尬聊/复读)。
-        Some("group_loop") => format!(
+        StepMode::GroupLoop => format!(
             "你是 {} {}。这是用户的群聊,你能看到群里刚刚的对话。大家在热聊,你也在群里。\n\n\
              【接话规则】\n\
              - 默认积极接话:顺着刚才的话往下聊——追问、补个新角度/例子、调侃一句、@ 谁请教,\
@@ -109,13 +145,13 @@ fn render_system_prompt(step: &Step, participant_idx: usize) -> String {
             p.avatar_emoji, p.name
         ),
         // 全让兜底位:群里没人接,YiYi 群管家接住。
-        Some("yiyi_fallback") => format!(
+        StepMode::YiyiFallback => format!(
             "你是群管家 {}。群里这条消息暂时没有成员接话,由你接住它:简短自然地回答用户;\
              若确实不是你擅长的领域,就坦诚点一句并把方向轻轻递出去,别生硬推托。",
             p.name
         ),
         // 要结论出口:群聊完一轮,用户明确要个结论 → YiYi 收口。
-        Some("yiyi_summary") => format!(
+        StepMode::YiyiSummary => format!(
             "你是群管家 {}。群里刚聊完一轮,用户想要一个结论。看完上面的对话,直接给出:\
              先一句话核心结论,再简述大家的共识 / 分歧(如有),最后一条可落地建议。\
              别复述每个人说了啥、别开新话题。",
@@ -141,7 +177,7 @@ fn render_system_prompt(step: &Step, participant_idx: usize) -> String {
 fn render_user_prompt(step: &Step, upstream: &[(StepId, StepOutput)]) -> String {
     // S2④:项目派工 task —— 上游产出作为"交接"喂给下游(后端的接口契约给前端、
     // 前后端的实现给测试…),而不是"群里的讨论"。让下游角色清楚这是在接力建造。
-    if step_mode(step) == Some("project_task") {
+    if step_mode(step) == StepMode::ProjectTask {
         let mut s = String::new();
         if !upstream.is_empty() {
             s.push_str(
@@ -159,7 +195,7 @@ fn render_user_prompt(step: &Step, upstream: &[(StepId, StepOutput)]) -> String 
     // 对话循环的轮 step:历史 append-only 在前,用户新消息在最末(缓存纪律)。
     if matches!(
         step_mode(step),
-        Some("group_round") | Some("yiyi_fallback") | Some("group_loop") | Some("yiyi_summary")
+        StepMode::GroupRound | StepMode::YiyiFallback | StepMode::GroupLoop | StepMode::YiyiSummary
     ) {
         return format!("{}【用户刚说】\n{}", history_block(step), step.input.prompt);
     }
@@ -233,7 +269,7 @@ async fn run_one_guarded(
     // project_task:idle 超时(有进展不切,真长程任务想跑多久跑多久)。看门狗在 idle
     // 超过阈值时赢得 select! → run 被 drop → 断开挂起的连接读(cancelled 旗标在流读卡住
     // 时不会被检查,所以靠 drop)。其余(群聊 30s / 普通 150s):保持总超时。
-    if step_mode(step) == Some("project_task") {
+    if step_mode(step) == StepMode::ProjectTask {
         let activity = Arc::new(std::sync::Mutex::new(Instant::now()));
         let watch = Arc::clone(&activity);
         let watchdog = async move {
@@ -251,8 +287,8 @@ async fn run_one_guarded(
         }
     } else {
         let secs = match step_mode(step) {
-            Some("group_loop") => GROUP_LOOP_TIMEOUT_SECS,
-            Some("intake") => INTAKE_TIMEOUT_SECS,
+            StepMode::GroupLoop => GROUP_LOOP_TIMEOUT_SECS,
+            StepMode::Intake => INTAKE_TIMEOUT_SECS,
             _ => PARTICIPANT_TIMEOUT_SECS,
         };
         match tokio::time::timeout(std::time::Duration::from_secs(secs), run).await {
@@ -422,7 +458,7 @@ async fn run_one_react(
     // intake 接手者(接口人)兜底获得 propose_project_plan。它现已声明在 Coordinator 档位
     // (dynamic.rs),这里是**向后兼容垫片**:覆盖该工具进档位之前已落盘的旧动态角色(AGENT.md
     // 还没这工具),以及任何非协调档却来接手的 lead。idempotent;All 已含、Deny 不动。
-    if step_mode(step) == Some("intake") {
+    if step_mode(step) == StepMode::Intake {
         if let ToolFilter::Allow(v) = &mut role_filter {
             if !v.iter().any(|t| t == "propose_project_plan") {
                 v.push("propose_project_plan".to_string());
@@ -446,7 +482,7 @@ async fn run_one_react(
     let group_rules = render_system_prompt(step, participant_idx);
     // intake 步(工作群牵头者接手)给"主导推进"指令,而非放养的"以对话为主"——这是把工作群
     // 从七嘴八舌空转、拉回有组织推进的关键(配合路由:工作群默认牵头者接手)。
-    let tools_note = if step_mode(step) == Some("intake") {
+    let tools_note = if step_mode(step) == StepMode::Intake {
         let roster = step
             .input
             .metadata
