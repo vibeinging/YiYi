@@ -206,14 +206,8 @@ impl AppState {
     }
 
     pub fn new() -> Self {
-        let working_dir = std::env::var("YIYI_WORKING_DIR")
-            .or_else(|_| std::env::var("YIYICLAW_WORKING_DIR"))
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                dirs::home_dir()
-                    .unwrap_or_else(|| PathBuf::from("."))
-                    .join(".yiyi")
-            });
+        // 单一真相:与 backup/checkpoint/doctor 共用 engine::yiyi_data_root(YIYI_WORKING_DIR→~/.yiyi)。
+        let working_dir = crate::engine::yiyi_data_root();
 
         let secret_dir = working_dir
             .parent()

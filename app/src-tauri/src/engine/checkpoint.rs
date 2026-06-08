@@ -100,14 +100,8 @@ pub struct FileDiff {
 }
 
 fn yiyi_data_root() -> PathBuf {
-    std::env::var("YIYI_WORKING_DIR")
-        .or_else(|_| std::env::var("YIYICLAW_WORKING_DIR"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".yiyi")
-        })
+    // 单一真相收口到 engine::yiyi_data_root(本地保留同名薄封装,调用点不变)。
+    super::yiyi_data_root()
 }
 
 /// Stable FNV-1a 64-bit hash of the canonical workspace path.

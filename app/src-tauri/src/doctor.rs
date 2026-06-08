@@ -70,14 +70,8 @@ impl DoctorReport {
 /// constructor side-effects (which create directories — undesirable for
 /// a doctor probe).
 fn resolve_working_dir() -> PathBuf {
-    std::env::var("YIYI_WORKING_DIR")
-        .or_else(|_| std::env::var("YIYICLAW_WORKING_DIR"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".yiyi")
-        })
+    // 单一真相:与 backup/checkpoint/app_state 共用 engine::yiyi_data_root。
+    crate::engine::yiyi_data_root()
 }
 
 fn resolve_user_workspace() -> PathBuf {

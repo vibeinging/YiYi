@@ -38,7 +38,9 @@
 /// human-readable scaffolding so listing `~/.yiyi/backups/` still gives a
 /// hint about which path each backup came from.
 pub(crate) fn backup_slot_for(path: &str) -> Option<std::path::PathBuf> {
-    let home = dirs::home_dir()?;
+    // 备份根跟随 YIYI_WORKING_DIR(默认 ~/.yiyi)—— 用收口后的单一真相,别再写死 home/.yiyi
+    // (写死会让测试无法隔离备份、与真实 ~/.yiyi 及正在跑的 app 互踩 → file_tools 并行 flake)。
+    let root = crate::engine::yiyi_data_root();
     let mut h: u64 = 0xcbf29ce484222325;
     for b in path.as_bytes() {
         h ^= *b as u64;
@@ -53,8 +55,7 @@ pub(crate) fn backup_slot_for(path: &str) -> Option<std::path::PathBuf> {
         .map(|c| if c == '/' || c == '\\' || c == ':' { '_' } else { c })
         .collect();
     Some(
-        home.join(".yiyi")
-            .join("backups")
+        root.join("backups")
             .join(format!("{:016x}__{}.backup", h, safe_tail)),
     )
 }
