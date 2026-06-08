@@ -664,6 +664,7 @@ impl Database {
                 chat_session_id TEXT NOT NULL,
                 intent TEXT NOT NULL,              -- 用户原始 prompt
                 mode_json TEXT NOT NULL,           -- CollaborationMode: Manual / Dispatched{by}
+                kind TEXT NOT NULL DEFAULT 'chat_group', -- S1(chat×work 2×2): chat_group/chat_single/work_dispatch — 判别 chat 群聊 vs work 派工引擎
                 status TEXT NOT NULL,              -- planning / awaiting_confirm / running / done / aborted / failed
                 status_reason TEXT,                -- Failed 时的 reason 描述
                 plan_json TEXT NOT NULL,           -- CollaborationPlan (DAG)
@@ -852,6 +853,30 @@ impl Database {
                  CREATE INDEX IF NOT EXISTS idx_messages_companion ON messages(companion_id);"
             ).map_err(|e| format!("Migration error (messages collab cols): {}", e))?;
             log::info!("Migrated messages table: added collaboration_id, step_id, companion_id columns");
+        }
+
+        // S1(chat×work 2×2 正交化):判别器列。collaborations.kind 区分 chat 群聊 / work 派工
+        // 引擎;messages.context_type 让前端消息流按 chat(collab)/ work(work_job)分发渲染。
+        // 幂等:老库补列;默认值('chat_group' / 'collab')保证迁移前数据与旧行为不变(一律按 chat)。
+        let has_collab_kind: bool = conn
+            .prepare("SELECT kind FROM collaborations LIMIT 0")
+            .is_ok();
+        if !has_collab_kind {
+            conn.execute_batch(
+                "ALTER TABLE collaborations ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat_group';",
+            )
+            .map_err(|e| format!("Migration error (collaborations.kind): {}", e))?;
+            log::info!("Migrated collaborations table: added kind column (chat×work discriminator)");
+        }
+        let has_msg_context: bool = conn
+            .prepare("SELECT context_type FROM messages LIMIT 0")
+            .is_ok();
+        if !has_msg_context {
+            conn.execute_batch(
+                "ALTER TABLE messages ADD COLUMN context_type TEXT DEFAULT 'collab';",
+            )
+            .map_err(|e| format!("Migration error (messages.context_type): {}", e))?;
+            log::info!("Migrated messages table: added context_type column (chat/work render discriminator)");
         }
 
         // Add source/source_meta to sessions table
@@ -1165,6 +1190,50 @@ impl Database {
         std::fs::rename(&json_path, &backup).ok();
 
         Ok(())
+    }
+}
+
+/// S1(chat×work 2×2 正交化):collaboration 的 chat/work 判别器读写。
+/// `kind ∈ {chat_group, chat_single, work_dispatch}` —— work 引擎落地后(S5/S6)
+/// 派工协作 submit 时标 `work_dispatch`,前端据此与 chat 群聊分流。
+impl Database {
+    /// 设置某协作的 kind(派工路径在 submit 后调,标 work_dispatch)。
+    pub fn set_collaboration_kind(&self, collab_id: i64, kind: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE collaborations SET kind = ?1 WHERE id = ?2",
+            params![kind, collab_id],
+        )
+        .map_err(|e| format!("set_collaboration_kind: {e}"))?;
+        Ok(())
+    }
+
+    /// 读某协作的 kind(缺省 'chat_group');不存在返回 None。
+    pub fn get_collaboration_kind(&self, collab_id: i64) -> Option<String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT kind FROM collaborations WHERE id = ?1",
+            params![collab_id],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+    }
+
+    /// 列出某 kind 的所有协作 id(按新→旧)。
+    pub fn list_collaborations_by_kind(&self, kind: &str) -> Vec<i64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = match conn
+            .prepare("SELECT id FROM collaborations WHERE kind = ?1 ORDER BY created_at DESC")
+        {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("list_collaborations_by_kind prepare: {e}");
+                return Vec::new();
+            }
+        };
+        stmt.query_map(params![kind], |r| r.get::<_, i64>(0))
+            .map(|rows| rows.filter_map(|r| r.ok()).collect())
+            .unwrap_or_default()
     }
 }
 
