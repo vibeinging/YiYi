@@ -243,12 +243,12 @@ const PARTICIPANT_TIMEOUT_SECS: u64 = 150;
 const GROUP_LOOP_TIMEOUT_SECS: u64 = 30;
 /// 牵头者接手步(intake):可能 ask_user 阻塞等用户答澄清问题(如发布日期),150s 太短
 /// (问个日期都可能超时被砍)。给 10 分钟总超时,让用户有从容作答的时间;答完即继续。
-const INTAKE_TIMEOUT_SECS: u64 = 600;
+pub(crate) const INTAKE_TIMEOUT_SECS: u64 = 600;
 /// 项目派工的写码任务(S2③ project_task)**不用总超时** —— 总超时会把进展中的长程任务
 /// 一刀切(一个角色写多文件 + 跑构建/测试可能很久)。改用 **idle 超时**:300s 内一点流
 /// 活动(token / 工具事件)都没有,才判 LLM 流真挂起 → 中断;有进展就重置 → 真长程任务
 /// 想跑多久跑多久。300s 也 > 单个工具(跑构建/测试)的常见耗时,避免长工具被误判。
-const PROJECT_TASK_IDLE_SECS: u64 = 300;
+pub(crate) const PROJECT_TASK_IDLE_SECS: u64 = 300;
 
 /// run_one 的超时包装 —— 见 PARTICIPANT_TIMEOUT_SECS。
 async fn run_one_guarded(
@@ -420,7 +420,7 @@ fn role_run_params(def: Option<&crate::engine::agents::AgentDefinition>) -> (Too
 /// companion → `agent_definition_name` slug → `AppState.agent_registry`。
 /// registry / DB 不可达(headless 测试 / 未初始化)→ 回落全套工具 + 6 步——
 /// 因此本函数在测试里安全降级,不破坏现有行为。
-async fn resolve_companion_role(companion_id: CompanionId) -> (ToolFilter, usize) {
+pub(crate) async fn resolve_companion_role(companion_id: CompanionId) -> (ToolFilter, usize) {
     let slug = match crate::engine::tools::get_database()
         .and_then(|db| db.get_companion(companion_id))
     {
@@ -447,7 +447,7 @@ async fn resolve_companion_role(companion_id: CompanionId) -> (ToolFilter, usize
 /// **不含任何 mode 判断**——调用方(chat 的 run_one_react / 未来 work 的 worker)各自按
 /// 象限构造 prompt 后复用本内核。S3:从 run_one_react 抽出,ask_user 内联整条进内核。
 #[allow(clippy::too_many_arguments)]
-async fn run_react_inner(
+pub(crate) async fn run_react_inner(
     config: &LLMConfig,
     collab_id: CollaborationId,
     step_id: StepId,
