@@ -700,6 +700,8 @@ pub fn run() {
             // Companions (Buddy > 群 子标签)
             commands::companions::adopt_companion,
             commands::companions::register_dynamic_role,
+            commands::companions::generate_team,
+            commands::companions::commit_dynamic_team,
             commands::companions::adopt_software_company_team,
             commands::companions::update_companion,
             commands::companions::update_companion_draft_state,

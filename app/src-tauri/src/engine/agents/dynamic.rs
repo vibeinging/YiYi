@@ -177,6 +177,124 @@ pub fn persist_role_agent_md(working_dir: &Path, spec: &RoleSpec) -> std::io::Re
     Ok(path)
 }
 
+// ── G2 slice1:把 LLM 产出的组队 JSON 宽容解析成 RoleSpec 列表 ──────────────
+
+/// profile 字符串 → 安全档位。**未知一律落 Coordinator(最安全档)** —— 生成器哪怕乱填
+/// "admin"/"root" 也拿不到额外权限,这是动态角色不越权的最后一道软防线。
+pub fn profile_from_str(s: &str) -> PermissionProfile {
+    match s.trim().to_lowercase().as_str() {
+        "builder" | "dev" | "developer" | "engineer" | "coder" | "programmer" => {
+            PermissionProfile::Builder
+        }
+        "reviewer" | "qa" | "tester" | "test" => PermissionProfile::Reviewer,
+        "designer" | "design" | "writer" | "ui" | "ux" => PermissionProfile::Designer,
+        // "coordinator" / "pm" / "planner" / 未知 → 最安全档
+        _ => PermissionProfile::Coordinator,
+    }
+}
+
+/// 把任意字符串清成合法 slug([a-z0-9_],收尾去 `_`)。CJK / 空 → 返回空串(由调用方兜底)。
+fn sanitize_slug(raw: &str) -> String {
+    let mapped: String = raw
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    // 只留 ascii 小写/数字/下划线,折叠连续下划线、去收尾下划线。
+    let mut out = String::new();
+    let mut prev_us = false;
+    for c in mapped.chars() {
+        let ok = c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_';
+        if !ok {
+            continue;
+        }
+        if c == '_' {
+            if prev_us || out.is_empty() {
+                continue;
+            }
+            prev_us = true;
+        } else {
+            prev_us = false;
+        }
+        out.push(c);
+    }
+    while out.ends_with('_') {
+        out.pop();
+    }
+    out
+}
+
+fn is_valid_hex(c: &str) -> bool {
+    let c = c.trim();
+    c.len() == 7
+        && c.starts_with('#')
+        && c[1..].chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
+/// 按字符数截断(保 UTF-8 边界)—— 给 LLM 产出字段封顶,防 persona 爆长拖垮每次 prompt。
+fn clamp_chars(s: &str, max: usize) -> String {
+    s.chars().take(max).collect()
+}
+
+/// 把 LLM 产出的 JSON(形如 `{"roles":[{slug,name,description,emoji,color,profile,persona}]}`)
+/// **宽容**解析成 `RoleSpec` 列表。容错策略(白盒安全的一部分):
+/// - `profile` 未知 → Coordinator(最安全档,见 [`profile_from_str`])
+/// - `slug` 非法/缺失/重复 → `role_<i>` / 加序号去重(team 内唯一)
+/// - `emoji`/`color` 缺省/非法 → 默认值
+/// - 空 `name` 的角色直接跳过
+pub fn parse_team_from_json(v: &serde_json::Value) -> Vec<RoleSpec> {
+    let arr = v.get("roles").and_then(|r| r.as_array()).cloned().unwrap_or_default();
+    let mut out: Vec<RoleSpec> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for (i, item) in arr.iter().enumerate() {
+        let name = item.get("name").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+        if name.is_empty() {
+            continue;
+        }
+
+        let mut slug = sanitize_slug(item.get("slug").and_then(|x| x.as_str()).unwrap_or(""));
+        if slug.is_empty() {
+            slug = format!("role_{}", i + 1);
+        }
+        // team 内去重(与 registry 既有 agent 的撞名在 register 时再兜)。
+        let base = slug.clone();
+        let mut n = 2;
+        while seen.contains(&slug) {
+            slug = format!("{base}_{n}");
+            n += 1;
+        }
+        seen.insert(slug.clone());
+
+        let emoji = {
+            let e = item.get("emoji").and_then(|x| x.as_str()).unwrap_or("").trim();
+            if e.is_empty() { "🤖".to_string() } else { e.to_string() }
+        };
+        let color = {
+            let c = item.get("color").and_then(|x| x.as_str()).unwrap_or("").trim();
+            if is_valid_hex(c) { c.to_string() } else { "#6366F1".to_string() }
+        };
+
+        out.push(RoleSpec {
+            slug,
+            name: clamp_chars(&name, 40),
+            description: clamp_chars(
+                item.get("description").and_then(|x| x.as_str()).unwrap_or("").trim(),
+                80,
+            ),
+            emoji,
+            color,
+            profile: profile_from_str(item.get("profile").and_then(|x| x.as_str()).unwrap_or("")),
+            persona: clamp_chars(
+                item.get("persona").and_then(|x| x.as_str()).unwrap_or("").trim(),
+                2000,
+            ),
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,6 +379,64 @@ mod tests {
         assert!(f.is_allowed("read_file"));
         assert!(!f.is_allowed("write_file"), "协调者不写");
         assert!(!f.is_allowed("execute_shell"), "协调者不跑命令");
+    }
+
+    #[test]
+    fn profile_from_str_clamps_unknown_to_safest() {
+        assert_eq!(profile_from_str("builder"), PermissionProfile::Builder);
+        assert_eq!(profile_from_str("QA"), PermissionProfile::Reviewer);
+        assert_eq!(profile_from_str("designer"), PermissionProfile::Designer);
+        // 未知 / 危险词 / 空 → 最安全档(动态角色不越权的软防线)。
+        assert_eq!(profile_from_str("admin"), PermissionProfile::Coordinator);
+        assert_eq!(profile_from_str("root"), PermissionProfile::Coordinator);
+        assert_eq!(profile_from_str(""), PermissionProfile::Coordinator);
+        assert!(!profile_from_str("admin").can_execute(), "乱填 admin 也拿不到执行权");
+    }
+
+    #[test]
+    fn parse_team_generates_slugs_for_cjk_and_dedups() {
+        // CJK 名 → slug 清空 → 回落 role_<i>;英文 slug 清洗;重复 slug team 内去重。
+        let v = serde_json::json!({
+            "roles": [
+                {"name": "音频工程师", "profile": "builder", "persona": "p1"},
+                {"slug": "Audio Engineer!", "name": "音频工程师2", "profile": "reviewer", "persona": "p2"},
+                {"slug": "audio_engineer", "name": "又一个", "profile": "builder", "persona": "p3"},
+            ]
+        });
+        let team = parse_team_from_json(&v);
+        assert_eq!(team.len(), 3);
+        assert_eq!(team[0].slug, "role_1", "CJK 名无 slug → role_<i>");
+        assert_eq!(team[1].slug, "audio_engineer", "'Audio Engineer!' → audio_engineer");
+        assert_eq!(team[2].slug, "audio_engineer_2", "撞名 → 加序号");
+        // slug 全部合法(register 的校验:[a-z0-9_])
+        for r in &team {
+            assert!(r.slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'));
+            assert!(!r.slug.is_empty());
+        }
+    }
+
+    #[test]
+    fn parse_team_skips_empty_names_and_defaults_emoji_color() {
+        let v = serde_json::json!({
+            "roles": [
+                {"name": "", "profile": "builder"},                 // 空名 → 跳过
+                {"name": "策划", "profile": "weird_profile"},        // 未知 profile → Coordinator
+                {"name": "测试", "profile": "qa", "color": "not-a-hex", "emoji": ""},
+            ]
+        });
+        let team = parse_team_from_json(&v);
+        assert_eq!(team.len(), 2, "空名被跳过");
+        assert_eq!(team[0].profile, PermissionProfile::Coordinator);
+        assert_eq!(team[1].profile, PermissionProfile::Reviewer);
+        assert_eq!(team[1].color, "#6366F1", "非法 hex → 默认色");
+        assert_eq!(team[1].emoji, "🤖", "空 emoji → 默认");
+    }
+
+    #[test]
+    fn parse_team_empty_or_missing_roles_yields_empty() {
+        assert!(parse_team_from_json(&serde_json::json!({})).is_empty());
+        assert!(parse_team_from_json(&serde_json::json!({"roles": []})).is_empty());
+        assert!(parse_team_from_json(&serde_json::json!({"roles": "nope"})).is_empty());
     }
 
     #[test]

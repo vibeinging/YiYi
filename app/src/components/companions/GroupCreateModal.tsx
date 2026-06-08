@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { X, Search, Check, Loader2, Users, ChevronLeft } from 'lucide-react'
 import { GroupTypeLauncher } from './GroupTypeLauncher'
+import { CustomTeamPanel } from './CustomTeamPanel'
 import {
   createGroupWithMembers, setSessionGroup,
   updateCompanionGroup, addCompanionToGroup, removeCompanionFromGroup,
@@ -37,8 +38,8 @@ export function GroupCreateModal({
   const [selected, setSelected] = useState<Set<number>>(new Set(group?.memberIds ?? []))
   const [creating, setCreating] = useState(false)
   const [creatingTeam, setCreatingTeam] = useState(false)
-  /** 新建两步:launcher 选群类型 → form 选人;编辑直接 form。 */
-  const [view, setView] = useState<'launcher' | 'form'>(editing ? 'form' : 'launcher')
+  /** 新建:launcher 选群类型 → form 选人 / custom 自生成团队;编辑直接 form。 */
+  const [view, setView] = useState<'launcher' | 'form' | 'custom'>(editing ? 'form' : 'launcher')
 
   // 一键组建软件公司团队:后端批量收养 5 角色 + 建群,前端复用"建群即开聊"流程进群。
   const createSoftwareTeam = async () => {
@@ -138,7 +139,7 @@ export function GroupCreateModal({
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: 'var(--color-border)' }}>
           <div className="flex items-center gap-2.5">
-            {!editing && view === 'form' ? (
+            {!editing && view !== 'launcher' ? (
               <button
                 onClick={() => setView('launcher')}
                 disabled={creating || creatingTeam}
@@ -153,7 +154,13 @@ export function GroupCreateModal({
               </div>
             )}
             <h2 className="text-[15px] font-semibold" style={{ color: 'var(--color-text)' }}>
-              {editing ? '编辑群' : view === 'launcher' ? '发起群聊' : '纯聊天群 · 选伙伴'}
+              {editing
+                ? '编辑群'
+                : view === 'launcher'
+                  ? '发起群聊'
+                  : view === 'custom'
+                    ? '自定义团队 · YiYi 组队'
+                    : '纯聊天群 · 选伙伴'}
             </h2>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-[var(--color-bg-muted)] rounded-xl transition-all" title="取消">
@@ -165,9 +172,12 @@ export function GroupCreateModal({
           <GroupTypeLauncher
             onPickSocial={() => setView('form')}
             onPickSoftwareCompany={createSoftwareTeam}
+            onPickCustom={() => setView('custom')}
             softwareTeamBusy={creatingTeam}
             busy={creating}
           />
+        ) : !editing && view === 'custom' ? (
+          <CustomTeamPanel onClose={onClose} />
         ) : (
         <>
         {/* 群名 + emoji */}

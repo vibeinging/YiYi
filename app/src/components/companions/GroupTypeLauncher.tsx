@@ -21,6 +21,8 @@ interface Props {
   onPickSocial: () => void
   /** 软件公司群 —— 一键成团。 */
   onPickSoftwareCompany: () => void
+  /** 自定义团队 —— 进 agent 自生成流程(G2)。 */
+  onPickCustom: () => void
   /** 软件公司成团进行中(卡片转圈)。 */
   softwareTeamBusy: boolean
   /** 其它操作进行时整体禁用。 */
@@ -32,6 +34,7 @@ interface Props {
 export function GroupTypeLauncher({
   onPickSocial,
   onPickSoftwareCompany,
+  onPickCustom,
   softwareTeamBusy,
   busy,
   className = 'px-5 py-4 space-y-2.5',
@@ -60,13 +63,13 @@ export function GroupTypeLauncher({
         spinner={softwareTeamBusy}
       />
 
-      {/* 自定义团队(G2 占位:agent 自生成) */}
+      {/* 自定义团队(G2:agent 自生成) */}
       <LauncherCard
         emoji="🛠️"
         title="自定义团队"
         desc="描述要做什么,YiYi 自动组队"
-        badge="敬请期待"
-        disabled
+        onClick={onPickCustom}
+        disabled={disabled}
       />
     </div>
   )

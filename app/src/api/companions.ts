@@ -81,6 +81,36 @@ export async function adoptSoftwareCompanyTeam(): Promise<number> {
   return groupId
 }
 
+/** 动态角色权限档位(对应后端 PermissionProfile)。决定该角色能用什么工具。 */
+export type PermissionProfile = 'coordinator' | 'designer' | 'builder' | 'reviewer'
+
+/** 一个待落地的角色规格(generate_team 产出、用户审阅、commit_dynamic_team 落地)。 */
+export interface RoleSpec {
+  slug: string
+  name: string
+  description: string
+  emoji: string
+  color: string
+  profile: PermissionProfile
+  persona: string
+}
+
+/** G2:据用户目标让 LLM 生成一支角色团队草稿。**不落地** —— 走白盒审阅。 */
+export async function generateTeam(goal: string): Promise<RoleSpec[]> {
+  return await invoke<RoleSpec[]>('generate_team', { goal })
+}
+
+/** G2:落地审阅通过的团队 —— 逐个收养 + 建群 + 隔离工作区,返回新群 group_id。 */
+export async function commitDynamicTeam(
+  groupName: string,
+  emoji: string | null,
+  roles: RoleSpec[],
+): Promise<number> {
+  const groupId = await invoke<number>('commit_dynamic_team', { groupName, emoji, roles })
+  notifyCompanionsChanged()
+  return groupId
+}
+
 export async function updateCompanion(id: number, input: UpdateCompanionInput): Promise<void> {
   await invoke('update_companion', { id, input })
   notifyCompanionsChanged()

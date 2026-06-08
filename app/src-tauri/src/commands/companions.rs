@@ -94,20 +94,25 @@ pub async fn register_dynamic_role_impl(
 
     validate_emoji(&spec.emoji)?;
     validate_color(&spec.color)?;
-    if spec.slug.trim().is_empty()
-        || !spec.slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-    {
-        return Err("slug 必须为非空的小写字母/数字/下划线".into());
-    }
+    validate_role_slug(&spec.slug)?;
     // slug 不能撞已有 agent(内置 pm/ui_designer/… 或别的动态角色)—— 否则 upsert 会悄悄
     // 顶替内置角色定义(如把只读的 PM 换成带 execute_shell 的档位),破坏权限隔离。
     if state.agent_registry.read().await.get(&spec.slug).is_some() {
         return Err(format!("角色标识 '{}' 已被占用,换一个 slug", spec.slug));
     }
 
-    // 顺序关键:先做最可能失败的 DB 收养(name/memory_user_id UNIQUE 约束),成功后**再**
-    // 落盘 AGENT.md + upsert registry。这样收养失败时不会留下「有 AGENT.md/registry 但没
-    // companion」的幽灵角色(那种 AGENT.md 重启会被 load 复活,却无 companion 管理)。
+    // 顺序关键(安全):**先**落 AGENT.md + upsert registry,**再** adopt companion。
+    // 反过来(先 adopt)若 AGENT.md 落盘失败,companion 会带着未注册的 agent_definition_name →
+    // F2 解析不到 → 回落 ToolFilter::All(**全权!**)= 提权,违背档位隔离。先注册定义则:
+    // 落盘失败 → 干净报错无 companion;adopt 失败 → 只留一个「受限(带档位白名单)、无 companion
+    // 引用」的孤儿定义(benign,不会被跑到,顶多占用该 slug 待重试时换名)。
+    persist_role_agent_md(state.working_dir.as_path(), &spec)
+        .map_err(|e| format!("角色落盘失败: {e}"))?;
+    {
+        // write 锁尽快释放,别跨后续 await 持有。
+        state.agent_registry.write().await.upsert(spec.to_agent_def());
+    }
+
     let name = unique_companion_name(&state.db, &spec.name);
     validate_name(&name)?;
     let now = chrono::Utc::now().timestamp_millis();
@@ -129,16 +134,119 @@ pub async fn register_dynamic_role_impl(
         )?;
     }
 
-    // companion 已落库,再落角色定义 + 上线 registry。这俩万一失败,最坏只是角色权限本次
-    // 未生效(F2 回落 All/6),companion 仍在 UI 可见可删可重试 —— 不会留幽灵 AGENT.md。
-    persist_role_agent_md(state.working_dir.as_path(), &spec)
-        .map_err(|e| format!("角色落盘失败: {e}"))?;
+    Ok(id)
+}
+
+/// slug 格式校验:非空 + 纯 ascii 小写/数字/下划线(register / commit_dynamic_team 共用)。
+fn validate_role_slug(slug: &str) -> Result<(), String> {
+    if slug.trim().is_empty()
+        || !slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
     {
-        // write 锁尽快释放,别跨后续 await 持有。
-        state.agent_registry.write().await.upsert(spec.to_agent_def());
+        return Err("slug 必须为非空的小写字母/数字/下划线".into());
+    }
+    Ok(())
+}
+
+/// 找一个不撞 registry 既有 agent(内置或动态)的 slug —— 撞了加 `_2`/`_3`…
+/// commit_dynamic_team 在注册每个角色前调,避免整团因撞名失败。
+async fn unique_role_slug(state: &AppState, base: &str) -> String {
+    let reg = state.agent_registry.read().await;
+    if reg.get(base).is_none() {
+        return base.to_string();
+    }
+    for i in 2..1000 {
+        let cand = format!("{base}_{i}");
+        if reg.get(&cand).is_none() {
+            return cand;
+        }
+    }
+    format!("{base}_{}", chrono::Utc::now().timestamp_millis())
+}
+
+/// 把团队名清成安全的目录名。**白名单**:字母/数字(`is_alphanumeric` 含 CJK)+ 空格/`-`/`_`,
+/// 其余(`/` `\` `:` `.` 及 Unicode 形似分隔符如 U+FF0F/U+2044 等)一律 → `_`;再去收尾的
+/// `.`/`_`/空白,杜绝 `..` 等。空则回落"团队"。配合 `-{gid}` 后缀,保证是单层安全叶子名。
+fn sanitize_team_folder(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let cleaned = cleaned
+        .trim_matches(|c: char| c == '.' || c == '_' || c.is_whitespace())
+        .to_string();
+    if cleaned.is_empty() { "团队".to_string() } else { cleaned }
+}
+
+/// 落地一支动态团队(G2 白盒 Apply):审阅通过的 RoleSpec[] → 逐个收养成 companion →
+/// 建群 + 拉成员 + 隔离工作区。返回 group_id(前端复用"建群即开聊"进群)。
+///
+/// 每个角色走 `register_dynamic_role_impl` 的安全路径(撞名拒绝 + adopt-first 防幽灵);
+/// slug 先经 `unique_role_slug` 兜底,避免与既有 agent / 批内成员撞名导致整团失败。
+#[tauri::command]
+pub async fn commit_dynamic_team(
+    state: State<'_, AppState>,
+    group_name: String,
+    emoji: Option<String>,
+    roles: Vec<crate::engine::agents::dynamic::RoleSpec>,
+) -> Result<i64, String> {
+    let group_name = group_name.trim();
+    if group_name.is_empty() {
+        return Err("先给团队起个名".into());
+    }
+    if roles.is_empty() {
+        return Err("团队至少要一个角色".into());
+    }
+    if roles.len() > 8 {
+        return Err("一个团队最多 8 个角色".into());
     }
 
-    Ok(id)
+    // 落地前把每个角色的格式校验一遍(emoji/color/slug),format 错就 fail-fast,
+    // 不留半队已收养的 companion。
+    for role in &roles {
+        validate_emoji(&role.emoji)?;
+        validate_color(&role.color)?;
+        validate_role_slug(&role.slug)?;
+    }
+
+    // 逐个落地。slug 先唯一化(读 registry,含已注册的批内成员),再 register。
+    // 任一角色失败 → 整团回滚:退休已收养的成员,不留半队孤儿 companion 在伙伴面板。
+    // (已注册的 AGENT.md/registry 定义是受限孤儿定义,benign,不会被跑到,留待后续 GC。)
+    let mut member_ids = Vec::with_capacity(roles.len());
+    for mut role in roles {
+        role.slug = unique_role_slug(&state, &role.slug).await;
+        match register_dynamic_role_impl(&state, role).await {
+            Ok(id) => member_ids.push(id),
+            Err(e) => {
+                for cid in &member_ids {
+                    let _ = state.db.retire_companion(*cid);
+                }
+                return Err(e);
+            }
+        }
+    }
+
+    // 建群 + 拉成员入群。
+    let emoji = emoji
+        .as_deref()
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+        .unwrap_or("🛠️");
+    let group_id = state.db.create_companion_group(group_name, Some(emoji), Some("#6366F1"))?;
+    for cid in &member_ids {
+        state.db.add_group_member(group_id, *cid)?;
+    }
+
+    // 隔离项目工作区(同软件公司团队:落 ~/Documents/YiYi/projects/<团队名>-<gid>/)。
+    let user_ws = {
+        let g = state.user_workspace.read().unwrap_or_else(|e| e.into_inner());
+        g.clone()
+    };
+    let folder = format!("{}-{group_id}", sanitize_team_folder(group_name));
+    let workspace = user_ws.join("projects").join(folder);
+    std::fs::create_dir_all(&workspace).map_err(|e| format!("建项目工作区失败: {e}"))?;
+    state.db.set_group_workspace(group_id, &workspace.to_string_lossy())?;
+
+    Ok(group_id)
 }
 
 // ── S1:一键组建软件公司团队 ─────────────────────────────────────────────
@@ -545,6 +653,65 @@ pub async fn generate_companion(
 }
 
 /// 从可能裹着代码块/解释的文本里抽第一个完整 `{...}`。
+// ── G2:agent 自生成团队 ──────────────────────────────────────────────────
+
+/// 据用户目标,让 LLM 生成一支角色团队(`RoleSpec` 草稿)。**不落地** —— 走白盒
+/// Draft → Review → Apply:返回草稿给前端审阅/编辑,用户确认后再 `commit_dynamic_team`。
+///
+/// 安全:profile 只能是四档之一,LLM 乱填会被 `parse_team_from_json` 落到最安全的 Coordinator。
+#[tauri::command]
+pub async fn generate_team(
+    state: State<'_, AppState>,
+    goal: String,
+) -> Result<Vec<crate::engine::agents::dynamic::RoleSpec>, String> {
+    let goal = goal.trim();
+    if goal.is_empty() {
+        return Err("先描述要做什么".into());
+    }
+    let mut config = resolve_llm_config(&state).await?;
+    config.enable_thinking = Some(false);
+    let messages = vec![LLMMessage {
+        role: "user".into(),
+        content: Some(MessageContent::text(build_team_gen_prompt(goal))),
+        tool_calls: None,
+        tool_call_id: None,
+        reasoning_content: None,
+    }];
+    let resp = chat_completion_tracked(UsageSource::Growth, &config, &messages, &[]).await?;
+    let text = resp.message.content.map(|c| c.into_text()).unwrap_or_default();
+    let json = extract_json_object(&text).ok_or_else(|| "组队这次没说清,再试一次".to_string())?;
+    let v: serde_json::Value =
+        serde_json::from_str(&json).map_err(|e| format!("组队结果格式不对({e}),再试一次"))?;
+    let team = crate::engine::agents::dynamic::parse_team_from_json(&v);
+    if team.is_empty() {
+        return Err("没生成出有效角色,换个说法再试".into());
+    }
+    Ok(team)
+}
+
+fn build_team_gen_prompt(goal: &str) -> String {
+    format!(
+        "用户要做这件事:「{goal}」\n\n\
+         为这个目标组建一支 3-5 人的 AI 角色团队,模拟真实协作。每个角色职责清晰、不重叠。\n\
+         **只输出一个 JSON 对象**,不要代码块、不要解释:\n\
+         {{\"roles\": [{{\
+         \"slug\": \"english_snake_case 标识(纯小写字母/数字/下划线)\", \
+         \"name\": \"2-8 字中文角色名\", \
+         \"description\": \"一句话职责(12 字内)\", \
+         \"emoji\": \"一个贴切 emoji\", \
+         \"color\": \"#RRGGBB 十六进制色\", \
+         \"profile\": \"四选一权限档位\", \
+         \"persona\": \"50-120 字角色人设/工作方式,第二人称'你是…'\"\
+         }}]}}\n\n\
+         profile 必须从这四档里选(决定能用什么工具,按职责选**最小够用**的):\n\
+         - coordinator:协调/规划型 —— 能问用户、读资料,**不写文件不跑命令**。适合产品、策划、协调。\n\
+         - designer:设计/文档型 —— 能问用户、读写文件,**不跑命令**。适合设计、文案、方案。\n\
+         - builder:开发型 —— 能读写文件 + **跑命令/脚本**。只给真正要写代码/做实现的角色。\n\
+         - reviewer:测试/评审型 —— 能读 + **跑命令(测试)** + 写测试。适合测试、质检。\n\
+         至少有一个 coordinator 牵头。不要轻易给 builder/reviewer(那是能跑命令的高权限档)。"
+    )
+}
+
 fn extract_json_object(text: &str) -> Option<String> {
     let start = text.find('{')?;
     let end = text.rfind('}')?;

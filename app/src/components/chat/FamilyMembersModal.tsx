@@ -13,6 +13,7 @@
 import { useEffect, useState } from 'react'
 import { X, Trash2, Loader2, UsersRound, ChevronLeft } from 'lucide-react'
 import { GroupTypeLauncher } from '../companions/GroupTypeLauncher'
+import { CustomTeamPanel } from '../companions/CustomTeamPanel'
 import {
   addCompanionToGroup,
   createGroupWithMembers,
@@ -54,8 +55,8 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
   const [busy, setBusy] = useState(false)
   /** 一键组团的独立 busy —— 与手动建群 busy 分开,两个按钮各自转圈。 */
   const [teamBusy, setTeamBusy] = useState(false)
-  /** create 模式两步:launcher 选群类型 → form 选人;edit 模式直接 form。 */
-  const [view, setView] = useState<'launcher' | 'form'>(isCreate ? 'launcher' : 'form')
+  /** create 模式:launcher 选群类型 → form 选人 / custom 自生成团队;edit 直接 form。 */
+  const [view, setView] = useState<'launcher' | 'form' | 'custom'>(isCreate ? 'launcher' : 'form')
 
   useEffect(() => {
     void listCompanions(false).then(setCompanions).catch(() => {})
@@ -187,7 +188,7 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
       >
         <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--color-bg-subtle)' }}>
           <div className="flex items-center gap-1.5">
-            {isCreate && view === 'form' && (
+            {isCreate && view !== 'launcher' && (
               <button
                 onClick={() => setView('launcher')}
                 disabled={busy || teamBusy}
@@ -202,7 +203,9 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
                 ? `管理群「${initialGroup?.name}」`
                 : view === 'launcher'
                   ? '发起群聊'
-                  : '纯聊天群 · 选伙伴'}
+                  : view === 'custom'
+                    ? '自定义团队 · YiYi 组队'
+                    : '纯聊天群 · 选伙伴'}
             </div>
           </div>
           <button
@@ -217,10 +220,13 @@ export function FamilyMembersModal({ mode, onClose, onCreated, onDeleted }: Prop
           <GroupTypeLauncher
             onPickSocial={() => setView('form')}
             onPickSoftwareCompany={createSoftwareTeam}
+            onPickCustom={() => setView('custom')}
             softwareTeamBusy={teamBusy}
             busy={busy}
             className="px-4 py-3 space-y-2.5"
           />
+        ) : isCreate && view === 'custom' ? (
+          <CustomTeamPanel onClose={onClose} />
         ) : (
         <div className="px-4 py-3 space-y-3 overflow-y-auto">
           {isCreate && (
