@@ -315,7 +315,14 @@ pub(crate) async fn append_file_tool(args: &serde_json::Value) -> String {
         .await
     {
         Ok(mut file) => match file.write_all(content.as_bytes()).await {
-            Ok(_) => format!("Appended {} bytes to {}", content.len(), path),
+            // tokio::fs::File 带内部写缓冲:必须 flush 才能保证字节落到 OS、对随后的 read
+            // 可见。不 flush 只靠 drop 的异步 flush,高并发下会被延迟 → 函数已回 "Appended"
+            // 但文件还没刷新(测试 flake 的真因;也是生产隐患:agent 收到 Appended 后立刻
+            // read_file 可能读到旧内容)。
+            Ok(_) => match file.flush().await {
+                Ok(_) => format!("Appended {} bytes to {}", content.len(), path),
+                Err(e) => format!("Error flushing: {}", e),
+            },
             Err(e) => format!("Error appending: {}", e),
         },
         Err(e) => format!("Error opening file: {}", e),
