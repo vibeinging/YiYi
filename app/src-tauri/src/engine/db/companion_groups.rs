@@ -205,8 +205,11 @@ impl super::Database {
     /// 反查:某 companion 在哪些组里(UI 的"我所属群"展示用)。
     pub fn list_groups_for_companion(&self, companion_id: i64) -> Vec<CompanionGroup> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        // 必须 SELECT 全列(含 workspace_path)——map_group_row 读 7 列(idx 6 = workspace_path),
+        // 漏列会让每行 row.get(6) 越界报错、被下面的 filter_map(r.ok()) 静默丢弃 → 整表返回空。
+        // 用 GROUP_COLS 单一真相防再漂(其列在本 JOIN 里都只属 companion_groups,无歧义)。
         let sql = format!(
-            "SELECT g.id, g.name, g.emoji, g.color_hex, g.created_at, g.updated_at \
+            "SELECT {GROUP_COLS} \
              FROM companion_groups g \
              INNER JOIN companion_group_members m ON g.id = m.group_id \
              WHERE m.companion_id = ?1 \
