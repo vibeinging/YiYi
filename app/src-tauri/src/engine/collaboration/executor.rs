@@ -442,6 +442,115 @@ async fn resolve_companion_role(companion_id: CompanionId) -> (ToolFilter, usize
 /// (`resolve_companion_role`):读写/执行类工具只给角色允许的,步数上限随角色,
 /// 让"分工"真生效、能干活的角色跑更长。区别仍在 system prompt 的 persona 前缀。
 /// 流事件转成 `CollaborationEvent::Token` 喂前端;工具开始/结束注入思考块。
+/// 纯 ReAct 执行内核(chat×work 共享):给定**已构造好的** system/user prompt + 角色权限
+/// 过滤 + 步数上限,跑统一 run_agent,收尾把本步内 ask_user 的问答内联进该成员气泡。
+/// **不含任何 mode 判断**——调用方(chat 的 run_one_react / 未来 work 的 worker)各自按
+/// 象限构造 prompt 后复用本内核。S3:从 run_one_react 抽出,ask_user 内联整条进内核。
+#[allow(clippy::too_many_arguments)]
+async fn run_react_inner(
+    config: &LLMConfig,
+    collab_id: CollaborationId,
+    step_id: StepId,
+    companion_id: CompanionId,
+    companion_name: &str,
+    system_prompt: String,
+    user_message: String,
+    role_filter: ToolFilter,
+    role_max_iter: usize,
+) -> Result<StepOutput, String> {
+    let started = Instant::now();
+
+    // token 用量累加交给 CollabEventSink 的 on_usage;收尾时读回。
+    let in_tokens = Arc::new(AtomicU32::new(0));
+    let out_tokens = Arc::new(AtomicU32::new(0));
+
+    // 伙伴的流事件统一经 AgentEventSink 翻译:正文 / 思考 → Token{reasoning},
+    // 工具开始 / 结束 → 结构化 ToolStart / ToolEnd。
+    let sink: Arc<dyn crate::engine::agent_runner::AgentEventSink> =
+        Arc::new(crate::engine::agent_runner::collab_sink::CollabEventSink::new(
+            collab_id,
+            step_id,
+            companion_id,
+            Arc::clone(&in_tokens),
+            Arc::clone(&out_tokens),
+        ));
+    // 收尾追加 Q&A 块要复用同一条成员流(同 collab/step/companion key)→ 先留个克隆,
+    // 因为 sink 本体随后会被 move 进 run_agent。
+    let sink_for_qa = Arc::clone(&sink);
+
+    // 走统一 run_agent:shell 全关 + working_dir=None(伙伴人设已在 system_prompt)+ persist=None
+    // (产出是协作 step output,由本函数收成 StepOutput,不入 chat 会话)。
+    let cfg = crate::engine::agent_runner::config::AgentRunConfig {
+        llm: config.clone(),
+        system_prompt,
+        agent_message: user_message.clone(),
+        augmented_message: user_message,
+        llm_history: vec![],
+        max_iter: Some(role_max_iter),
+        is_first_message: false,
+        session_id: String::new(),
+        working_dir: None,
+        shell: crate::engine::agent_runner::config::ShellOptions::default(),
+    };
+    let dummy_cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    // 若这次协作属于有隔离项目工作区的群(软件公司团队),把成员的文件 / shell 工具 scope
+    // 到该工作区;普通群 / 单聊 / headless → None,不 scope。
+    let group_workspace = crate::engine::tools::get_database()
+        .and_then(|db| db.group_workspace_for_collaboration(collab_id))
+        .map(std::path::PathBuf::from);
+
+    // 三层 task-local 包裹:① with_tool_filter 角色权限真生效(F2);② with_ask_asker
+    // 提问气泡显示分身自己的角色名/头像(F1);③ with_collab_qa 收集本步 ask_user 问答。
+    // run_agent 的 future 很大(整个 ReAct 循环 + 流式 + 工具分发),Box::pin 移到堆上,
+    // 避免叠加三层 task-local scope 后在 debug 的 tokio worker 栈上把帧撑爆(stack overflow)。
+    let agent_fut = Box::pin(crate::engine::agent_runner::run::run_agent(
+        cfg,
+        None,
+        sink,
+        dummy_cancel,
+    ));
+    let qa_acc = Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
+    let run = crate::engine::tools::with_tool_filter(
+        role_filter,
+        crate::engine::tools::ask_user::with_ask_asker(
+            companion_id,
+            companion_name.to_string(),
+            crate::engine::tools::ask_user::with_collab_qa(Arc::clone(&qa_acc), agent_fut),
+        ),
+    );
+    let mut reply = match group_workspace {
+        Some(ws) => crate::engine::tools::with_task_working_dir(ws, run).await?,
+        None => run.await?,
+    };
+
+    // 本步内向用户确认过的问答 → 拼成块,既推进实时气泡流(用户立刻看到问答内联在该成员
+    // 气泡末尾,不再单开一条 YiYi 消息),又追进 full_output(重开 hydrate 从持久化产出还原)。
+    // 两条路同源,内容一致、不双渲染。
+    let qa = qa_acc.lock().map(|v| v.clone()).unwrap_or_default();
+    if !qa.is_empty() {
+        let mut block = String::new();
+        for (q, a) in &qa {
+            block.push_str(&format!("\n\n> **❓ {}**\n>\n> {}", q.trim(), a.trim()));
+        }
+        sink_for_qa.on_token(&block);
+        reply.push_str(&block);
+    }
+
+    let duration_ms = started.elapsed().as_millis() as u64;
+    let tokens_used = TokenUsage {
+        input: in_tokens.load(Ordering::Relaxed),
+        output: out_tokens.load(Ordering::Relaxed),
+    };
+
+    Ok(StepOutput {
+        summary: summarize(&reply),
+        full_output: reply,
+        tokens_used,
+        duration_ms,
+    })
+}
+
 async fn run_one_react(
     config: &LLMConfig,
     step: &Step,
@@ -509,102 +618,26 @@ async fn run_one_react(
     let system_prompt = format!("{persona_prefix}{group_rules}{tools_note}");
     let user_message = render_user_prompt(step, upstream);
 
-    let started = Instant::now();
-
-    // token 用量累加交给 CollabEventSink 的 on_usage;executor 收尾时读回。
-    let in_tokens = Arc::new(AtomicU32::new(0));
-    let out_tokens = Arc::new(AtomicU32::new(0));
-
-    // 伙伴的流事件统一经 AgentEventSink 翻译:正文 / 思考 → Token{reasoning},
-    // 工具开始 / 结束 → 结构化 ToolStart / ToolEnd(不再降级成 🔧 文本注入思考块)。
-    let sink: Arc<dyn crate::engine::agent_runner::AgentEventSink> =
-        Arc::new(crate::engine::agent_runner::collab_sink::CollabEventSink::new(
-            collab_id,
-            step.id,
-            p.companion_id,
-            Arc::clone(&in_tokens),
-            Arc::clone(&out_tokens),
-        ));
-    // 收尾追加 Q&A 块要复用同一条成员流(同 collab/step/companion key)→ 先留个克隆,
-    // 因为 sink 本体随后会被 move 进 run_agent。
-    let sink_for_qa = Arc::clone(&sink);
-
-    // 走统一 run_agent:shell 全关(单轮 ReAct)+ working_dir=None(不注入 YiYi 的
-    // SOUL.md/AGENTS.md persona —— 伙伴自己的人设已在 system_prompt 里)+ persist=None
-    // (产出是协作 step output,由本函数收成 StepOutput,不入 chat 会话)。
-    let cfg = crate::engine::agent_runner::config::AgentRunConfig {
-        llm: config.clone(),
+    // 构造完(mode-aware:prompt / 权限 / 步数)→ 交给共享 ReAct 内核执行(S3 抽出)。
+    // 内核不含 mode 判断;ask_user 内联收尾在内核里,chat/work 复用同一条。
+    //
+    // 类型擦除成 boxed trait object:抽出内核后 async fn 链多一层,`run_step` 的 Send
+    // 自动 trait 求值沿链深递归会撞 E0275(overflow evaluating ... : Send)。在内核边界
+    // 装成 `dyn Future + Send` 截断这条递归(内核本就是 Send,只是不让编译器递归展开它)。
+    let fut: std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<StepOutput, String>> + Send>,
+    > = Box::pin(run_react_inner(
+        config,
+        collab_id,
+        step.id,
+        p.companion_id,
+        &p.name,
         system_prompt,
-        agent_message: user_message.clone(),
-        augmented_message: user_message,
-        llm_history: vec![],
-        max_iter: Some(role_max_iter),
-        is_first_message: false,
-        session_id: String::new(),
-        working_dir: None,
-        shell: crate::engine::agent_runner::config::ShellOptions::default(),
-    };
-    let dummy_cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-
-    // S2 步骤①:若这次协作属于一个有隔离项目工作区的群(软件公司团队),把成员的
-    // 文件 / shell 工具 scope 到该工作区;普通群 / 单聊 / headless(registry 不可达)
-    // → None,不 scope,落回用户默认工作区(不影响闲聊群)。与 persona 注入门解耦。
-    let group_workspace = crate::engine::tools::get_database()
-        .and_then(|db| db.group_workspace_for_collaboration(collab_id))
-        .map(std::path::PathBuf::from);
-
-    // 两层 task-local 包裹(都不依赖 working_dir,与 persona 注入门解耦):
-    //  ① with_tool_filter:角色权限真生效——ReAct core 据此裁剪给 LLM 的工具集(F2)。
-    //  ② with_ask_asker:分身调 ask_user 时提问气泡显示它自己的角色名/头像(F1)。
-    // run_agent 的 future 很大(整个 ReAct 循环 + 流式 + 工具分发)。Box::pin 把它的
-    // 状态机移到堆上,避免叠加三层 task-local scope 后在 debug 构建的 tokio worker 栈
-    // (2MB)上把帧撑爆(stack overflow)。
-    let agent_fut = Box::pin(crate::engine::agent_runner::run::run_agent(
-        cfg,
-        None,
-        sink,
-        dummy_cancel,
-    ));
-    // 本步内成员调 ask_user 的问答收进累加器(收尾时内联进它的气泡 + 持久化进产出)。
-    let qa_acc = Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
-    let run = crate::engine::tools::with_tool_filter(
+        user_message,
         role_filter,
-        crate::engine::tools::ask_user::with_ask_asker(
-            p.companion_id,
-            p.name.clone(),
-            crate::engine::tools::ask_user::with_collab_qa(Arc::clone(&qa_acc), agent_fut),
-        ),
-    );
-    let mut reply = match group_workspace {
-        Some(ws) => crate::engine::tools::with_task_working_dir(ws, run).await?,
-        None => run.await?,
-    };
-
-    // 本步内向用户确认过的问答 → 拼成块,既推进实时气泡流(用户立刻看到问答内联在
-    // 「{name}」自己的气泡末尾,不再单开一条 YiYi 消息),又追进 full_output(重开
-    // hydrate 时从持久化产出还原)。两条路同源,内容一致、不双渲染。
-    let qa = qa_acc.lock().map(|v| v.clone()).unwrap_or_default();
-    if !qa.is_empty() {
-        let mut block = String::new();
-        for (q, a) in &qa {
-            block.push_str(&format!("\n\n> **❓ {}**\n>\n> {}", q.trim(), a.trim()));
-        }
-        sink_for_qa.on_token(&block);
-        reply.push_str(&block);
-    }
-
-    let duration_ms = started.elapsed().as_millis() as u64;
-    let tokens_used = TokenUsage {
-        input: in_tokens.load(Ordering::Relaxed),
-        output: out_tokens.load(Ordering::Relaxed),
-    };
-
-    Ok(StepOutput {
-        summary: summarize(&reply),
-        full_output: reply,
-        tokens_used,
-        duration_ms,
-    })
+        role_max_iter,
+    ));
+    fut.await
 }
 
 fn summarize(text: &str) -> String {
