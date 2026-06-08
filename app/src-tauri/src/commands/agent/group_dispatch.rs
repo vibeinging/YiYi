@@ -116,13 +116,17 @@ pub async fn try_group_dispatch(
         .get_companion_group(gid)
         .and_then(|g| g.workspace_path)
         .is_some();
-    if is_project_group && forced_ids.is_empty() && is_project_build_intent(user_message) {
-        // 牵头者:软件公司的 PM,或自定义团队里 coordinator 档位的协调者(G3 —— 泛化,
-        // 不再硬编码 "pm" slug)。纯执行团队(无协调角色)→ None,落回放养(没人拆解/澄清)。
+    // 工作群(有 workspace)+ 无 @ 点名 → **牵头者有序接手**,而非放养闲聊。
+    // 关键修复(2026-06-08):不再要求"必须是 build intent" —— 工作团队卡住的根因就是
+    // "开始吧/继续"等非建造措辞落进放养循环,N 人七嘴八舌、没人主导、ask_user 被 30s 砍掉、
+    // 卡在一个问题(如发布日期)空转上百轮。让牵头者(coordinator/PM)接手则:单点主导、
+    // 能正经 ask_user 阻塞澄清、能拆解派工。纯执行团队(无协调角色)→ None 落回放养。
+    if is_project_group && forced_ids.is_empty() {
         if let Some(lead) = find_project_lead(&members).await {
-            let collab_id =
-                dispatch_project_intake(db.clone(), cfg.clone(), session_id, gid, lead, user_message)
-                    .await?;
+            let collab_id = dispatch_project_intake(
+                db.clone(), cfg.clone(), session_id, gid, lead, &members, user_message,
+            )
+            .await?;
             return Ok(GroupDispatchOutcome::Dispatched {
                 collaboration_id: collab_id,
                 members: vec![DispatchedMember {
@@ -224,6 +228,7 @@ async fn dispatch_project_intake(
     session_id: &str,
     gid: i64,
     pm: &CompanionProfile,
+    members: &[CompanionProfile],
     user_message: &str,
 ) -> Result<i64, String> {
     let participant = Participant {
@@ -233,6 +238,18 @@ async fn dispatch_project_intake(
         color_hex: pm.color_hex.clone(),
         memory_scope: MemoryScope::Group(gid),
     };
+
+    // 队友名单:接口人用 propose_project_plan 派工时,role 字段要填队友的 agent_definition_name。
+    // 动态团队的接口人不认识队友 slug,靠这份名单才能写对计划。排除接口人自己。
+    // 复用调用方已查好的 members(CompanionProfile.description 已是 role_label→slug 的回落),
+    // 不再二次查 list_group_members。
+    let roster = members
+        .iter()
+        .filter(|m| m.id != pm.id)
+        .map(|m| format!("- {}(派工 role=`{}`):{}", m.name, m.agent_definition_name, m.description))
+        .collect::<Vec<_>>()
+        .join("\n");
+
     let plan = CollaborationPlan {
         steps: vec![Step {
             id: 1,
@@ -241,7 +258,9 @@ async fn dispatch_project_intake(
             depends_on: vec![],
             input: StepInput {
                 prompt: user_message.to_string(),
-                metadata: serde_json::Value::Null,
+                // mode=intake:牵头者接手步,run_one_guarded 给宽裕总超时(ask_user 阻塞等答);
+                // roster=队友名单,run_one_react 注入接口人 prompt,让它知道派工时 role 填谁。
+                metadata: serde_json::json!({ "mode": "intake", "roster": roster }),
             },
             output: None,
             status: StepStatus::Pending,
@@ -306,23 +325,6 @@ async fn find_project_lead(members: &[CompanionProfile]) -> Option<&CompanionPro
     pick_project_lead_idx(&pairs).map(|i| &members[i])
 }
 
-/// S2②:粗判用户消息是不是一个明确的"建造 / 开发"任务 —— 用来决定项目群里是否由
-/// 牵头者接手、绕开放养闲聊。保守:只认明确的动手信号,拿不准就回 false(走放养讨论),
-/// 因为误判成项目(把闲聊塞给牵头者)比误判成闲聊更伤体感。
-pub fn is_project_build_intent(msg: &str) -> bool {
-    let m = msg.trim();
-    if m.chars().count() < 4 {
-        return false;
-    }
-    const BUILD_CUES: &[&str] = &[
-        "做个", "做一个", "做一款", "做款", "开发", "搭一个", "搭个", "搭建",
-        "实现一个", "写一个", "帮我做", "帮我写", "帮我开发", "做出来",
-        "build", "develop", "create a", "make a", "make an", "build a", "build me",
-    ];
-    let lower = m.to_lowercase();
-    BUILD_CUES.iter().any(|cue| lower.contains(&cue.to_lowercase()))
-}
-
 /// 用户喊"停"——放养群聊里任何消息都会起新一轮,所以"停"得显式识别:命中则只取消当前循环、
 /// 不再起新的(否则"停"被当成新话题又点燃,用户根本喊不停)。见用户反馈 2026-06-02。
 pub fn is_stop_intent(msg: &str) -> bool {
@@ -346,7 +348,7 @@ pub fn is_stop_intent(msg: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_project_build_intent, pick_project_lead_idx};
+    use super::pick_project_lead_idx;
 
     #[test]
     fn pick_lead_prefers_pm_then_first_coordinator() {
@@ -362,26 +364,6 @@ mod tests {
         );
         // 纯执行团队(无 pm、无 coordinator)→ None,落回放养(没人拆解/澄清)。
         assert_eq!(pick_project_lead_idx(&[("builder_x", false), ("qa_z", false)]), None);
-    }
-
-    #[test]
-    fn build_intent_recognizes_explicit_tasks() {
-        assert!(is_project_build_intent("做个 todo 网页应用"));
-        assert!(is_project_build_intent("帮我开发一个记账 app"));
-        assert!(is_project_build_intent("实现一个登录页面"));
-        assert!(is_project_build_intent("Build a REST API for notes"));
-        assert!(is_project_build_intent("Make an onboarding flow"));
-    }
-
-    #[test]
-    fn build_intent_ignores_chat_and_short_messages() {
-        // 讨论 / 提问 / 反馈 → 走放养,不该被 PM 接手。
-        assert!(!is_project_build_intent("你们觉得这个方向对吗?"));
-        assert!(!is_project_build_intent("这个 bug 怎么修?"));
-        assert!(!is_project_build_intent("辛苦了"));
-        // 太短 → false。
-        assert!(!is_project_build_intent("嗯"));
-        assert!(!is_project_build_intent("好的"));
     }
 }
 

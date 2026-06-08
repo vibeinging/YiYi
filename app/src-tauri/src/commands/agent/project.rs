@@ -49,6 +49,16 @@ pub async fn commit_project_plan_impl(
 ) -> Result<i64, String> {
     let (cplan, _gid) = prepare_project_dispatch(&state.db, session_id, &plan)?;
 
+    // 派工成员名(去重)—— cplan 随后被 submit 消费,先取出来给锚点占位消息用。
+    let mut member_names: Vec<String> = Vec::new();
+    for s in &cplan.steps {
+        for p in &s.participants {
+            if !member_names.iter().any(|n| n == &p.name) {
+                member_names.push(p.name.clone());
+            }
+        }
+    }
+
     let cfg = resolve_llm_config(state).await?;
     let executor = Arc::new(ConcreteExecutor::new(cfg));
     let orch = SqliteOrchestrator::new(state.db.clone(), executor);
@@ -67,6 +77,20 @@ pub async fn commit_project_plan_impl(
             parent_id,
         )
         .await?;
+
+    // 锚点占位消息:派工协作也要在聊天流里有挂载点,前端 get_history 才会把它映射成
+    // role='collaboration' → CollaborationMessageCard hydrate 该 collab → 渲染队友实时发言。
+    // 放养/intake/私聊派发都 upsert 占位,唯独"开工"这条之前漏了 → 开工后页面静默看不到队友干活。
+    let mention = member_names
+        .iter()
+        .map(|n| format!("@{n}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let _ = state.db.upsert_collaboration_message(
+        session_id,
+        collab_id,
+        &format!("🛠️ 开工 —— {mention} 按方案并行推进中…"),
+    );
     Ok(collab_id)
 }
 

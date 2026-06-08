@@ -4,11 +4,13 @@
 //! `docs/design/2026-05-15_companions-system.md`.
 
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::commands::agent::resolve_llm_config;
 use crate::engine::db::{Companion, CompanionUpdate, NewCompanion};
-use crate::engine::llm_client::{chat_completion_tracked, LLMMessage, MessageContent};
+use crate::engine::llm_client::{
+    chat_completion_stream_tracked, chat_completion_tracked, LLMMessage, MessageContent, StreamEvent,
+};
 use crate::engine::usage::UsageSource;
 use crate::state::AppState;
 
@@ -655,21 +657,29 @@ pub async fn generate_companion(
 /// 从可能裹着代码块/解释的文本里抽第一个完整 `{...}`。
 // ── G2:agent 自生成团队 ──────────────────────────────────────────────────
 
-/// 据用户目标,让 LLM 生成一支角色团队(`RoleSpec` 草稿)。**不落地** —— 走白盒
+/// `generate_team` 产出:团队名(LLM 生成)+ 角色草稿。
+#[derive(Debug, Clone, Serialize)]
+pub struct GeneratedTeam {
+    pub name: String,
+    pub roles: Vec<crate::engine::agents::dynamic::RoleSpec>,
+}
+
+/// 据用户目标,让 LLM 生成一支角色团队(团队名 + `RoleSpec` 草稿)。**不落地** —— 走白盒
 /// Draft → Review → Apply:返回草稿给前端审阅/编辑,用户确认后再 `commit_dynamic_team`。
 ///
 /// 安全:profile 只能是四档之一,LLM 乱填会被 `parse_team_from_json` 落到最安全的 Coordinator。
 #[tauri::command]
 pub async fn generate_team(
+    app: AppHandle,
     state: State<'_, AppState>,
     goal: String,
-) -> Result<Vec<crate::engine::agents::dynamic::RoleSpec>, String> {
+) -> Result<GeneratedTeam, String> {
     let goal = goal.trim();
     if goal.is_empty() {
         return Err("先描述要做什么".into());
     }
     let mut config = resolve_llm_config(&state).await?;
-    config.enable_thinking = Some(false);
+    config.enable_thinking = Some(true); // 要思考流给前端展开面板看
     let messages = vec![LLMMessage {
         role: "user".into(),
         content: Some(MessageContent::text(build_team_gen_prompt(goal))),
@@ -677,16 +687,65 @@ pub async fn generate_team(
         tool_call_id: None,
         reasoning_content: None,
     }];
-    let resp = chat_completion_tracked(UsageSource::Growth, &config, &messages, &[]).await?;
+
+    // 流式:思考(reasoning)+ 正文(content)增量都 emit 给前端实时展示;最终用累计的
+    // content(JSON)解析成团队。失败也 emit done 让前端关 loading。
+    let done = |app: &AppHandle, ok: bool| {
+        let _ = app.emit("team_gen://done", serde_json::json!({ "ok": ok }));
+    };
+    let app_evt = app.clone();
+    let resp = chat_completion_stream_tracked(
+        UsageSource::Growth,
+        &config,
+        &messages,
+        &[],
+        move |evt| {
+            let (kind, text) = match evt {
+                StreamEvent::ContentDelta(d) => ("content", d),
+                StreamEvent::ReasoningDelta(d) => ("thinking", d),
+                _ => return,
+            };
+            if text.is_empty() {
+                return;
+            }
+            let _ = app_evt.emit("team_gen://delta", serde_json::json!({ "kind": kind, "text": text }));
+        },
+        None,
+    )
+    .await;
+
+    let resp = match resp {
+        Ok(r) => r,
+        Err(e) => {
+            done(&app, false);
+            return Err(e);
+        }
+    };
     let text = resp.message.content.map(|c| c.into_text()).unwrap_or_default();
-    let json = extract_json_object(&text).ok_or_else(|| "组队这次没说清,再试一次".to_string())?;
-    let v: serde_json::Value =
-        serde_json::from_str(&json).map_err(|e| format!("组队结果格式不对({e}),再试一次"))?;
-    let team = crate::engine::agents::dynamic::parse_team_from_json(&v);
-    if team.is_empty() {
+    let parsed = extract_json_object(&text)
+        .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok());
+    let v = match parsed {
+        Some(v) => v,
+        None => {
+            done(&app, false);
+            return Err("组队这次没说清,再试一次".into());
+        }
+    };
+    let roles = crate::engine::agents::dynamic::parse_team_from_json(&v);
+    if roles.is_empty() {
+        done(&app, false);
         return Err("没生成出有效角色,换个说法再试".into());
     }
-    Ok(team)
+    // 团队名:LLM 生成,缺省/超长兜底。
+    let name = v
+        .get("team_name")
+        .and_then(|x| x.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.chars().take(20).collect::<String>())
+        .unwrap_or_else(|| "新团队".to_string());
+    done(&app, true);
+    Ok(GeneratedTeam { name, roles })
 }
 
 fn build_team_gen_prompt(goal: &str) -> String {
@@ -694,7 +753,8 @@ fn build_team_gen_prompt(goal: &str) -> String {
         "用户要做这件事:「{goal}」\n\n\
          为这个目标组建一支 3-5 人的 AI 角色团队,模拟真实协作。每个角色职责清晰、不重叠。\n\
          **只输出一个 JSON 对象**,不要代码块、不要解释:\n\
-         {{\"roles\": [{{\
+         {{\"team_name\": \"给团队起个 4-10 字的名字(如'播客工坊'/'记账小队')\", \
+         \"roles\": [{{\
          \"slug\": \"english_snake_case 标识(纯小写字母/数字/下划线)\", \
          \"name\": \"2-8 字中文角色名\", \
          \"description\": \"一句话职责(12 字内)\", \

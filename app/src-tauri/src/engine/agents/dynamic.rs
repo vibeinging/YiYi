@@ -37,8 +37,9 @@ impl PermissionProfile {
     pub fn tools(&self) -> Vec<String> {
         let names: &[&str] = match self {
             Self::Coordinator => &[
-                "ask_user", "read_file", "list_directory", "project_tree", "grep_search",
-                "web_search", "memory_search", "memory_add",
+                // 协调者的本职就是拆解派工 → 声明式给 propose_project_plan(intake 接手后据此派工)。
+                "ask_user", "propose_project_plan", "read_file", "list_directory", "project_tree",
+                "grep_search", "web_search", "memory_search", "memory_add",
             ],
             Self::Designer => &[
                 "ask_user", "read_file", "write_file", "edit_file", "list_directory",

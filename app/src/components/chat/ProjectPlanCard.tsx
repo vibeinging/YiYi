@@ -35,6 +35,9 @@ export function ProjectPlanCard({ plan }: { plan: ProjectPlanState }) {
         sessionId,
         plan: { tasks: plan.tasks },
       });
+      // 让聊天重载,把派工协作的锚点消息拉进来 → CollaborationMessageCard 渲染队友的实时发言
+      // (否则开工后页面静默,看不到团队在干活)。
+      window.dispatchEvent(new CustomEvent('yiyi:reload-messages'));
       setDone(true);
       toast.success('开工!团队已按方案开干');
       setTimeout(() => clearProjectPlan(), 600);

@@ -64,6 +64,35 @@ fn current_asker() -> (i64, String) {
         .unwrap_or((0, "YiYi".to_string()))
 }
 
+// ── 协作 Q&A 累加器(task-local)──────────────────────────────────────────────
+// 协作成员(分身)在执行步里调 ask_user 时,把「问题 → 答案」收集起来,由执行器
+// (run_one_react)收尾时追进该成员的 step 产出 + 推进它的实时气泡流,让问答**内联**
+// 显示在提问者自己的群聊气泡里(而非在群聊下方单开一条 YiYi 消息)。
+// 单聊 YiYi(未包这层)→ record_qa 静默 no-op,问答仍按老路固化成一条 chat 消息。
+tokio::task_local! {
+    static COLLAB_QA: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>;
+}
+
+/// 协作执行器包这一层,使本步内 ask_user 的问答被收集到 `acc`。
+pub async fn with_collab_qa<F, R>(
+    acc: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    fut: F,
+) -> R
+where
+    F: std::future::Future<Output = R>,
+{
+    COLLAB_QA.scope(acc, fut).await
+}
+
+/// 记录一对问答到当前协作累加器;不在协作上下文(task-local 未设)则 no-op。
+fn record_qa(question: &str, answer: &str) {
+    let _ = COLLAB_QA.try_with(|acc| {
+        if let Ok(mut v) = acc.lock() {
+            v.push((question.to_string(), answer.to_string()));
+        }
+    });
+}
+
 fn scope_key(session_id: &str, collaboration_id: Option<i64>) -> String {
     if !session_id.is_empty() {
         session_id.to_string()
@@ -84,6 +113,7 @@ pub async fn ask_user(req: AskUserRequest) -> String {
         if let Some(db) = super::get_database() {
             if let Some(prev) = db.find_answered_question(&key, &req.question) {
                 log::info!("ask_user: dedup hit answered question in scope {key}");
+                record_qa(&req.question, &prev);
                 return prev;
             }
         }
@@ -135,7 +165,10 @@ pub async fn ask_user(req: AskUserRequest) -> String {
     }
 
     match await_answer(&req.request_id, rx, TIMEOUT_SECS).await {
-        Some(answer) => answer,
+        Some(answer) => {
+            record_qa(&req.question, &answer);
+            answer
+        }
         None => {
             log::info!("ask_user: timed out for {}", req.request_id);
             "（用户暂时没有回答。请基于现有信息继续，或稍后再确认。）".to_string()

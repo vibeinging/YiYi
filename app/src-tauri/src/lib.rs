@@ -18,6 +18,19 @@ pub fn run() {
     // macOS GUI apps don't inherit the user's shell PATH — fix it before anything else.
     fix_path_env();
 
+    // 自定义 tokio 运行时:把 worker 线程栈从默认 2MB 加大到 16MB。debug 构建里 ReAct 循环
+    // + 流式 + 工具分发是一条很深的 async poll 链(每帧未优化、巨大),叠加群聊的三层
+    // task-local scope(team 群多一层 with_task_working_dir)会把默认 2MB worker 栈打爆
+    // (`thread 'tokio-rt-worker' has overflowed its stack` → abort,自定义团队开聊即崩)。
+    // 必须在 Tauri 首次取用 async_runtime 之前 set;运行时 leak 成 'static,活到进程结束。
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(16 * 1024 * 1024)
+        .build()
+        .expect("构建 tokio 运行时失败");
+    let rt: &'static tokio::runtime::Runtime = Box::leak(Box::new(rt));
+    tauri::async_runtime::set(rt.handle().clone());
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())

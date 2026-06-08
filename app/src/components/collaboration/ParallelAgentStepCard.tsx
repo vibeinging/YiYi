@@ -52,6 +52,8 @@ export function memberPersistedText(full: string, name: string, participantCount
 export const ParallelAgentStepCard = memo(function ParallelAgentStepCard({ collaborationId, step }: Props) {
   if (step.participants.length === 0) return null
   const persistedFull = step.output?.full_output ?? ''
+  // step 级事实,算一次(派工任务的等待文案是"等上游交付")。
+  const isProjectTask = (step.input?.metadata as { mode?: string } | null)?.mode === 'project_task'
 
   return (
     <div className="flex flex-col gap-3">
@@ -63,6 +65,7 @@ export const ParallelAgentStepCard = memo(function ParallelAgentStepCard({ colla
           stepStatus={step.status}
           participant={p}
           persistedText={memberPersistedText(persistedFull, p.name, step.participants.length)}
+          isProjectTask={isProjectTask}
         />
       ))}
       {step.status === 'failed' && (
@@ -96,9 +99,11 @@ interface BubbleProps {
   participant: Participant
   /** 持久化回落:hydrate 后实时流为空时,从 step.output 解析出的本成员发言。 */
   persistedText: string
+  /** 派工任务(project_task,有交接依赖)→ 等待文案是"等上游交付"而非放养的"等开口"。 */
+  isProjectTask: boolean
 }
 
-function MemberMessageBubble({ collaborationId, stepId, stepStatus, participant, persistedText }: BubbleProps) {
+function MemberMessageBubble({ collaborationId, stepId, stepStatus, participant, persistedText, isProjectTask }: BubbleProps) {
   const stream = useCollaborationStore(
     selectStream(collaborationId, stepId, participant.companion_id),
   )
@@ -153,7 +158,9 @@ function MemberMessageBubble({ collaborationId, stepId, stepStatus, participant,
             </span>
           )}
           {isWaiting && (
-            <span className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>等开口…</span>
+            <span className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
+              {isProjectTask ? '等上游交付…' : '等开口…'}
+            </span>
           )}
           {stepStatus === 'completed' && text && (
             <span className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>说完</span>

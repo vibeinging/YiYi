@@ -582,9 +582,13 @@ pub async fn answer_user_question(
     //  ③ 未答问题靠 pending_questions(临时气泡)恢复,已答问题靠这对消息——
     //     二者不重叠,不会双重渲染。
     if let Some(q) = state.db.get_pending_question(&request_id) {
-        if !q.session_id.is_empty() {
-            let _ = state.db.push_message(&q.session_id, "assistant", &q.question);
-            let _ = state.db.push_message(&q.session_id, "user", &answer);
+        // 单聊 YiYi(companion_id==0)才把问答固化成**一条** chat 消息(选择落在原问题块内,
+        // 不单开用户气泡)——与前端乐观上屏的一条一致,reload 后不双渲染。
+        // 协作里分身提问(companion_id>0)的问答已由执行器内联进该成员的群聊气泡(step
+        // 产出 + 实时流),这里不再单开 🦊 消息,免得和气泡内问答重复。
+        if !q.session_id.is_empty() && q.companion_id == 0 {
+            let combined = format!("{}\n\n**你的选择:** {}", q.question, answer);
+            let _ = state.db.push_message(&q.session_id, "assistant", &combined);
         }
     }
     state.db.mark_question_answered(&request_id, &answer)?;

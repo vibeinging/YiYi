@@ -314,6 +314,13 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     return () => { unlisten.then(fn => fn()); };
   }, [activeSessionId]);
 
+  // 开工(commit_project_plan)后重载,把派工协作的锚点消息拉进来 → 渲染队友实时发言。
+  useEffect(() => {
+    const onReload = () => { if (activeSessionId) loadMessages(activeSessionId); };
+    window.addEventListener('yiyi:reload-messages', onReload);
+    return () => window.removeEventListener('yiyi:reload-messages', onReload);
+  }, [activeSessionId]);
+
   // --- Streaming chat ---
   const streamLoading = useChatStreamStore((s) => s.loading);
   const spawnAgents = useChatStreamStore((s) => s.spawnAgents);
@@ -349,12 +356,24 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   const answerQuestion = async (requestId: string, answer: string) => {
     const value = answer.trim();
     if (!value) return;
-    setMessages(prev => [...prev, {
-      role: 'user' as const,
-      content: value,
-      timestamp: Date.now(),
-      attachments: undefined,
-    }]);
+    const pendingQ =
+      useChatStreamStore.getState().questionQueue.find((q) => q.requestId === requestId) ??
+      useChatStreamStore.getState().questionQueue[0];
+    // 协作里分身提问(companionId>0):问答已内联进它自己的群聊气泡(后端追进 step 产出 +
+    // 实时流),这里**不**单开消息,免得重复。单聊 YiYi(companionId 0/空)才把「问题 +
+    // 你的选择」合成一条消息(选择落在原问题块内,不单开用户气泡),与后端固化的一条一致。
+    const isCompanionAsk = (pendingQ?.companionId ?? 0) > 0;
+    if (pendingQ?.question && !isCompanionAsk) {
+      setMessages(prev => [...prev, {
+        role: 'assistant' as const,
+        content: `${pendingQ.question}\n\n**你的选择:** ${value}`,
+        timestamp: Date.now(),
+      }]);
+    } else if (!pendingQ?.question) {
+      setMessages(prev => [...prev, {
+        role: 'user' as const, content: value, timestamp: Date.now(), attachments: undefined,
+      }]);
+    }
     useChatStreamStore.getState().dequeueQuestion();
     try {
       await invoke('answer_user_question', { requestId, answer: value });

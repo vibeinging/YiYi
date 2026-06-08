@@ -205,6 +205,9 @@ const PARTICIPANT_TIMEOUT_SECS: u64 = 150;
 /// 群事件循环里,一句闲聊不需要 150s 长推理;砍到 30s,既兜住挂起流,又把"被抢占后
 /// 仍在跑的那条"的成本/占槽时长压到 ≤ 群墙钟量级(中途取消的实用兜底)。
 const GROUP_LOOP_TIMEOUT_SECS: u64 = 30;
+/// 牵头者接手步(intake):可能 ask_user 阻塞等用户答澄清问题(如发布日期),150s 太短
+/// (问个日期都可能超时被砍)。给 10 分钟总超时,让用户有从容作答的时间;答完即继续。
+const INTAKE_TIMEOUT_SECS: u64 = 600;
 /// 项目派工的写码任务(S2③ project_task)**不用总超时** —— 总超时会把进展中的长程任务
 /// 一刀切(一个角色写多文件 + 跑构建/测试可能很久)。改用 **idle 超时**:300s 内一点流
 /// 活动(token / 工具事件)都没有,才判 LLM 流真挂起 → 中断;有进展就重置 → 真长程任务
@@ -247,10 +250,10 @@ async fn run_one_guarded(
             _ = watchdog => Err(format!("{name} 卡住({PROJECT_TASK_IDLE_SECS}s 无流响应)")),
         }
     } else {
-        let secs = if step_mode(step) == Some("group_loop") {
-            GROUP_LOOP_TIMEOUT_SECS
-        } else {
-            PARTICIPANT_TIMEOUT_SECS
+        let secs = match step_mode(step) {
+            Some("group_loop") => GROUP_LOOP_TIMEOUT_SECS,
+            Some("intake") => INTAKE_TIMEOUT_SECS,
+            _ => PARTICIPANT_TIMEOUT_SECS,
         };
         match tokio::time::timeout(std::time::Duration::from_secs(secs), run).await {
             Ok(r) => r,
@@ -415,7 +418,17 @@ async fn run_one_react(
     // F2:按角色注入工具过滤器 + ReAct 步数上限。无角色定义 → 全套工具 + 6 步(保持
     // 现状);有角色 → 只给角色允许的工具、用角色自己的步数上限,让"分工"真生效、
     // 能干活的角色跑更长的任务。headless 测试里 registry 不可达,安全回落。
-    let (role_filter, role_max_iter) = resolve_companion_role(p.companion_id).await;
+    let (mut role_filter, role_max_iter) = resolve_companion_role(p.companion_id).await;
+    // intake 接手者(接口人)兜底获得 propose_project_plan。它现已声明在 Coordinator 档位
+    // (dynamic.rs),这里是**向后兼容垫片**:覆盖该工具进档位之前已落盘的旧动态角色(AGENT.md
+    // 还没这工具),以及任何非协调档却来接手的 lead。idempotent;All 已含、Deny 不动。
+    if step_mode(step) == Some("intake") {
+        if let ToolFilter::Allow(v) = &mut role_filter {
+            if !v.iter().any(|t| t == "propose_project_plan") {
+                v.push("propose_project_plan".to_string());
+            }
+        }
+    }
 
     // system prompt = persona 前缀 + 群聊规则 + 动手能力说明(三段拼接)。
     // persona 前缀:载 companions/<id>/persona.md;文件不存在 → 空串。
@@ -431,9 +444,32 @@ async fn run_one_react(
         .unwrap_or_default();
 
     let group_rules = render_system_prompt(step, participant_idx);
-    let tools_note = "\n\n【动手能力】你能用工具(读写文件、执行命令、查资料、开浏览器等)。\
-        但这是群聊,以对话为主——只在用户的需求确实需要你动手查/做时才调工具;\
-        平时顺着聊就行,别为用而用。用完工具,用你自己的口吻把结果说出来,别贴原始输出。";
+    // intake 步(工作群牵头者接手)给"主导推进"指令,而非放养的"以对话为主"——这是把工作群
+    // 从七嘴八舌空转、拉回有组织推进的关键(配合路由:工作群默认牵头者接手)。
+    let tools_note = if step_mode(step) == Some("intake") {
+        let roster = step
+            .input
+            .metadata
+            .get("roster")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(暂无队友信息)");
+        format!(
+            "\n\n【你是这个工作群的牵头者/接口人】用户只跟你对接,你来主导推进,别只是闲聊:\n\
+             1. 先看有没有**阻塞性的关键未知**(日期/预算/范围/受众等)——有就用 ask_user 工具\
+             **一次性问清**(可给选项),等用户答了再往下。别空喊「@用户 请告诉我 X」(不阻塞、易漏、\
+             让团队空转);要用 ask_user 阻塞式地问。\n\
+             2. 关键信息齐了 → 用 **propose_project_plan** 工具把活拆成任务派给队友:每条填 role\
+             (队友的标识,见下方名单)、objective(这条做什么)、depends_on(依赖哪几条,0-based 下标,\
+             无依赖留空)。会给用户发「开工方案」卡,用户点开工后队友才真正并行开干。\n\
+             3. 你自己(协调档)一般不写文件,产出靠派给能写的队友;别自己硬扛所有活。\n\
+             【你的队友(propose_project_plan 的 role 填这些标识)】\n{roster}"
+        )
+    } else {
+        "\n\n【动手能力】你能用工具(读写文件、执行命令、查资料、开浏览器等)。\
+         但这是群聊,以对话为主——只在用户的需求确实需要你动手查/做时才调工具;\
+         平时顺着聊就行,别为用而用。用完工具,用你自己的口吻把结果说出来,别贴原始输出。"
+            .to_string()
+    };
     let system_prompt = format!("{persona_prefix}{group_rules}{tools_note}");
     let user_message = render_user_prompt(step, upstream);
 
@@ -453,6 +489,9 @@ async fn run_one_react(
             Arc::clone(&in_tokens),
             Arc::clone(&out_tokens),
         ));
+    // 收尾追加 Q&A 块要复用同一条成员流(同 collab/step/companion key)→ 先留个克隆,
+    // 因为 sink 本体随后会被 move 进 run_agent。
+    let sink_for_qa = Arc::clone(&sink);
 
     // 走统一 run_agent:shell 全关(单轮 ReAct)+ working_dir=None(不注入 YiYi 的
     // SOUL.md/AGENTS.md persona —— 伙伴自己的人设已在 system_prompt 里)+ persist=None
@@ -490,14 +529,33 @@ async fn run_one_react(
         sink,
         dummy_cancel,
     ));
+    // 本步内成员调 ask_user 的问答收进累加器(收尾时内联进它的气泡 + 持久化进产出)。
+    let qa_acc = Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
     let run = crate::engine::tools::with_tool_filter(
         role_filter,
-        crate::engine::tools::ask_user::with_ask_asker(p.companion_id, p.name.clone(), agent_fut),
+        crate::engine::tools::ask_user::with_ask_asker(
+            p.companion_id,
+            p.name.clone(),
+            crate::engine::tools::ask_user::with_collab_qa(Arc::clone(&qa_acc), agent_fut),
+        ),
     );
-    let reply = match group_workspace {
+    let mut reply = match group_workspace {
         Some(ws) => crate::engine::tools::with_task_working_dir(ws, run).await?,
         None => run.await?,
     };
+
+    // 本步内向用户确认过的问答 → 拼成块,既推进实时气泡流(用户立刻看到问答内联在
+    // 「{name}」自己的气泡末尾,不再单开一条 YiYi 消息),又追进 full_output(重开
+    // hydrate 时从持久化产出还原)。两条路同源,内容一致、不双渲染。
+    let qa = qa_acc.lock().map(|v| v.clone()).unwrap_or_default();
+    if !qa.is_empty() {
+        let mut block = String::new();
+        for (q, a) in &qa {
+            block.push_str(&format!("\n\n> **❓ {}**\n>\n> {}", q.trim(), a.trim()));
+        }
+        sink_for_qa.on_token(&block);
+        reply.push_str(&block);
+    }
 
     let duration_ms = started.elapsed().as_millis() as u64;
     let tokens_used = TokenUsage {

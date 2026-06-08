@@ -49,9 +49,9 @@ export function CustomTeamPanel({ onClose }: { onClose: () => void }) {
     setGenerating(true)
     try {
       const team = await generateTeam(g)
-      setRoles(team.map(tag))
-      // 团队名默认取目标前 12 字,用户可改。
-      setTeamName(g.length > 12 ? g.slice(0, 12) : g)
+      setRoles(team.roles.map(tag))
+      // 团队名用 LLM 生成的(用户仍可改);兜底取目标前 12 字。
+      setTeamName(team.name?.trim() || (g.length > 12 ? g.slice(0, 12) : g))
       setStep('review')
     } catch (e) {
       toast.error(`生成失败：${e}`)

@@ -21,10 +21,10 @@ pub fn definitions() -> Vec<super::types::ToolDefinition> {
     vec![super::types::tool_def(
         "propose_project_plan",
         "把项目拆成一份开工方案发给用户审阅 —— 列出每个角色要做的任务和依赖顺序。\
-         需求澄清清楚后再调它(PM 专用)。**用户点「开工」后团队才会真正开干**,在此之前别催、别自己派工。\
-         tasks 每条:role(frontend_dev / backend_dev / ui_designer / qa_engineer)、\
-         objective(这条要做什么)、depends_on(依赖哪些任务的下标,0-based,无依赖留空 —— \
-         比如前端依赖后端接口,就把后端那条的下标填进来)。",
+         需求澄清清楚后再调它(牵头者/接口人专用)。**用户点「开工」后团队才会真正开干**,在此之前别催、别自己硬扛。\
+         tasks 每条:role(**填队友的标识** —— 见系统提示里给你的「队友名单」,如 frontend_dev / \
+         creative_director 等,必须和名单里的 role 完全一致才派得动)、objective(这条要做什么)、\
+         depends_on(依赖哪些任务的下标,0-based,无依赖留空 —— 比如前端依赖后端接口,就把后端那条的下标填进来)。",
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -34,7 +34,7 @@ pub fn definitions() -> Vec<super::types::ToolDefinition> {
                     "items": {
                         "type": "object",
                         "properties": {
-                            "role": { "type": "string", "description": "执行角色:frontend_dev / backend_dev / ui_designer / qa_engineer" },
+                            "role": { "type": "string", "description": "执行角色 = 队友的标识(见系统提示「队友名单」里的 role,必须完全一致)" },
                             "objective": { "type": "string", "description": "这个角色这条任务要做什么" },
                             "depends_on": { "type": "array", "items": { "type": "integer" }, "description": "依赖的上游任务下标(0-based),无则留空" }
                         },

@@ -334,12 +334,25 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
     return () => container.removeEventListener('scroll', handleScroll);
   }, []);
 
-  // Auto-scroll
+  // 唯一的自动滚动机制:MutationObserver 观察聊天容器内**任意** DOM 变化(新气泡 / 流式
+  // 文本增长,含主精灵流、群成员逐字、工具卡等),贴底时跟着滚到底(rAF 去抖,避免每个
+  // token 都 reflow)。比"按 React state 依赖数组触发"更稳 —— 协作流式走 collaborationStore
+  // 不在 messages 里,旧的依赖数组 effect 漏了它(也省了每加一种流就要补依赖的维护陷阱)。
+  // 用户主动发消息时的 smooth 滚动走 imperative scrollToBottom(handleSend 调)。
   useEffect(() => {
-    if (isAtBottomRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [messages, streamingContent, activeTools, claudeCode, spawnAgents, currentTaskStream]);
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    let raf = 0;
+    const mo = new MutationObserver(() => {
+      if (!isAtBottomRef.current) return;
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+      });
+    });
+    mo.observe(container, { childList: true, subtree: true, characterData: true });
+    return () => { mo.disconnect(); cancelAnimationFrame(raf); };
+  }, []);
 
   const spawnRunning = spawnAgents.some((a) => a.status === 'running');
   const isStreaming = streamLoading || spawnRunning;

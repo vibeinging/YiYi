@@ -95,9 +95,15 @@ export interface RoleSpec {
   persona: string
 }
 
-/** G2:据用户目标让 LLM 生成一支角色团队草稿。**不落地** —— 走白盒审阅。 */
-export async function generateTeam(goal: string): Promise<RoleSpec[]> {
-  return await invoke<RoleSpec[]>('generate_team', { goal })
+/** G2 生成的团队草稿:团队名(LLM 生成)+ 角色。 */
+export interface GeneratedTeam {
+  name: string
+  roles: RoleSpec[]
+}
+
+/** G2:据用户目标让 LLM 生成一支角色团队草稿(含团队名)。**不落地** —— 走白盒审阅。 */
+export async function generateTeam(goal: string): Promise<GeneratedTeam> {
+  return await invoke<GeneratedTeam>('generate_team', { goal })
 }
 
 /** G2:落地审阅通过的团队 —— 逐个收养 + 建群 + 隔离工作区,返回新群 group_id。 */
