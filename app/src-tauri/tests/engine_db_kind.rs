@@ -86,3 +86,21 @@ async fn message_context_type_defaults_collab() {
         .unwrap();
     assert_eq!(ctx.as_deref(), Some("collab"), "未指定 context_type 应默认 collab");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn list_work_jobs_returns_only_work_dispatch() {
+    let t = TempDb::new();
+    let chat = insert_bare_collaboration(&t, "sess-wj"); // 默认 chat_group
+    let work = insert_bare_collaboration(&t, "sess-wj");
+    t.db().set_collaboration_kind(work, "work_dispatch").unwrap();
+
+    let jobs = t.db().list_work_jobs();
+    // 只列 work_dispatch 的;chat 那条不在
+    assert_eq!(jobs.len(), 1, "list_work_jobs 只列 kind=work_dispatch");
+    assert_eq!(jobs[0].id, work);
+    assert_eq!(jobs[0].intent, "做点事");
+    assert_eq!(jobs[0].status, "planning");
+    assert_eq!(jobs[0].session_id, "sess-wj");
+    assert!(!jobs.iter().any(|j| j.id == chat), "chat 协作不该出现在 work job 列表");
+}

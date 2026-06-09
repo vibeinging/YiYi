@@ -33,6 +33,7 @@ import { TaskSidebar, NavRail } from './components/TaskSidebar';
 import { TaskDetailOverlay } from './components/TaskDetailOverlay';
 import { useTaskSidebarStore } from './stores/taskSidebarStore';
 import { useTaskStore } from './stores/taskStore';
+import { useSessionStore } from './stores/sessionStore';
 export type Page = 'chat' | 'work' | 'buddy' | 'skills' | 'extensions' | 'cronjobs' | 'workspace' | 'mcp' | 'heartbeat' | 'growth' | 'bots' | 'terminal' | 'settings';
 
 function App() {
@@ -181,7 +182,10 @@ function MainApp() {
   const renderPage = () => {
     switch (currentPage) {
       case 'chat': return <ChatPage consumeNotifContext={consumeNotifContext} healthStatus={healthStatus} />;
-      case 'work': return <WorkPage onGoChat={() => { setCurrentPage('chat'); window.dispatchEvent(new CustomEvent('chat:go-main')); }} />;
+      case 'work': return <WorkPage
+        onGoChat={() => { setCurrentPage('chat'); window.dispatchEvent(new CustomEvent('chat:go-main')); }}
+        onOpenSession={(sid) => { useSessionStore.getState().switchToSession(sid); setCurrentPage('chat'); }}
+      />;
       case 'buddy': return <BuddyPage />;
       case 'skills': return <SkillsPage />;
       case 'extensions': return <ExtensionsPage />;

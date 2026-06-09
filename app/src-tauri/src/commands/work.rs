@@ -21,9 +21,15 @@ use crate::commands::agent::helpers::resolve_llm_config;
 use crate::engine::collaboration::executor::ConcreteExecutor;
 use crate::engine::collaboration::orchestrator::SqliteOrchestrator;
 use crate::engine::collaboration::{CollaborationMode, CollaborationOrchestrator, CollaborationPlan};
-use crate::engine::db::Database;
+use crate::engine::db::{Database, WorkJobSummary};
 use crate::engine::work::plan::{build_project_collaboration_plan, ProjectPlan};
 use crate::state::AppState;
+
+/// WorkPage(work 象限入口)的监控列表:列出所有 work job(kind=work_dispatch)摘要,新→旧(S7)。
+#[tauri::command]
+pub fn list_work_jobs(state: State<'_, AppState>) -> Vec<WorkJobSummary> {
+    state.db.list_work_jobs()
+}
 
 /// 解析并构建派工 DAG(不 submit):会话 → 群 → 成员 → build。返回 (协作 plan, group_id)。
 /// 纯 DB + builder,可确定性测试。

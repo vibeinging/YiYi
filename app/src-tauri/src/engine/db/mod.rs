@@ -1235,6 +1235,47 @@ impl Database {
             .map(|rows| rows.filter_map(|r| r.ok()).collect())
             .unwrap_or_default()
     }
+
+    /// 列出所有 work job(kind=work_dispatch)摘要,新→旧 —— WorkPage 监控列表用(S7)。
+    pub fn list_work_jobs(&self) -> Vec<WorkJobSummary> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = match conn.prepare(
+            "SELECT id, chat_session_id, intent, status, created_at, completed_at
+             FROM collaborations WHERE kind = 'work_dispatch' ORDER BY created_at DESC",
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("list_work_jobs prepare: {e}");
+                return Vec::new();
+            }
+        };
+        stmt.query_map([], |r| {
+            Ok(WorkJobSummary {
+                id: r.get(0)?,
+                session_id: r.get(1)?,
+                intent: r.get(2)?,
+                status: r.get(3)?,
+                created_at: r.get(4)?,
+                completed_at: r.get(5)?,
+            })
+        })
+        .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+    }
+}
+
+/// work job(kind=work_dispatch 的协作)摘要 —— WorkPage 监控列表项(S7)。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct WorkJobSummary {
+    pub id: i64,
+    /// 所属群聊 session(点击跳到该工作群对话看进度)。
+    pub session_id: String,
+    /// 用户原始诉求(任务标题)。
+    pub intent: String,
+    /// planning / running / done / aborted / failed。
+    pub status: String,
+    pub created_at: i64,
+    pub completed_at: Option<i64>,
 }
 
 #[cfg(test)]
