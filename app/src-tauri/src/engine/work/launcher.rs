@@ -23,69 +23,10 @@ use crate::engine::collaboration::{
 use crate::engine::db::Database;
 use crate::engine::llm_client::LLMConfig;
 
-/// 是否该为这条群消息 launch 一个 work job(缝 4 / §7 收口)。
-///
-/// 北极星:work 是从 chat 里**显式发起**的任务,不靠措辞乱猜;但工作群里"开始吧 / 继续"这类
-/// 非建造措辞落进放养循环 = N 人七嘴八舌、没人主导 = 卡死(WIP 的倒退)。所以这里用**规则**
-/// (不花 token)三道判据全中才启动:
-///
-///   1. **群是 work 视角** —— 暂仍用 `workspace_path.is_some()`(按蓝图 §3-S4:本轮先沿用,
-///      §7-P-low 提示 S6 改读 `collaborations.kind`/群配置、与 S8 删列解耦;S4 不接线,先保最小复制)。
-///   2. **含 coordinator / PM 档成员** —— 有人能主导拆解 / 阻塞式澄清(`find_project_lead` 能选出
-///      牵头者)。纯执行团队(无协调角色)→ 没人拆解,落回放养更合适。
-///   3. **非闲聊(build-intent)** —— **恢复 WIP 删掉的 `is_project_build_intent` gate**:消息是明确的
-///      "建造"意图(做个 / 开发 / 实现一个 / build a …)才接手。讨论 / 提问 / 反馈(如"你们觉得这方向
-///      对吗?")→ 不触发 PM,照常放养闲聊。判错 = 工作群没法纯闲聊 = WIP 倒退。
-///
-/// 另:用户 @ 点名了具体成员(`forced_ids` 非空)= 点名必答,绕过 work 启动(走 chat 放养的
-/// wave-1 立即回),所以 `forced_ids` 非空直接返回 false。
-pub async fn should_launch_work<'a>(
-    db: &Database,
-    gid: i64,
-    msg: &str,
-    forced_ids: &[i64],
-    members: &'a [CompanionProfile],
-) -> Option<&'a CompanionProfile> {
-    // @ 点名 → 点名必答,不启动 work(走 chat 放养)。
-    if !forced_ids.is_empty() {
-        return None;
-    }
-    // 判据 1:群是 work 视角(本轮先沿用 workspace_path;后续可改读 kind)。
-    let is_work_view = db
-        .get_companion_group(gid)
-        .and_then(|g| g.workspace_path)
-        .is_some();
-    if !is_work_view {
-        return None;
-    }
-    // 判据 3:非闲聊 / 是建造意图(恢复 build-intent gate)。
-    if !is_project_build_intent(msg) {
-        return None;
-    }
-    // 判据 2:有牵头者(coordinator / PM 档)能接手 → 返回它(同时即"该启动")。
-    find_project_lead(members).await
-}
-
-/// 建造意图启发式(缝 4 / §7 收口:恢复 WIP 删掉的 `is_project_build_intent`)。
-///
-/// 命中"做个 / 开发 / 实现一个 / build a …"等明确建造措辞 → true(该走 PM intake)。
-/// 讨论 / 提问 / 反馈 / 太短 → false(走放养闲聊)。判据是**规则启发式**(不花 token),
-/// 故意保守:宁可漏判(落回放养,用户可再明确说"做个X")也别误判(把闲聊当建造,PM 强行接手)。
-/// 实现参照 git 历史里被 WIP 删掉的同名函数(commit 17ecd67),不改判据。
-pub fn is_project_build_intent(msg: &str) -> bool {
-    let m = msg.trim();
-    // 太短 → 不可能是个明确的建造诉求("嗯""好的"等)。
-    if m.chars().count() < 4 {
-        return false;
-    }
-    const BUILD_CUES: &[&str] = &[
-        "做个", "做一个", "做一款", "做款", "开发", "搭一个", "搭个", "搭建",
-        "实现一个", "写一个", "帮我做", "帮我写", "帮我开发", "做出来",
-        "build", "develop", "create a", "make a", "make an", "build a", "build me",
-    ];
-    let lower = m.to_lowercase();
-    BUILD_CUES.iter().any(|cue| lower.contains(&cue.to_lowercase()))
-}
+// 退役说明:原 `should_launch_work` + `is_project_build_intent`(硬编码建造措辞词表)已删。
+// chat×work 2×2 双入口落地后,**不再在 chat 里猜"这条是不是工作"** —— work 一律从「工作」
+// 入口显式发起(commands::work::launch_work_job → 下面的 launch_intake),群聊永远放养。
+// 措辞检测脆(换个说法就漏)、且与"显式 launch"的决策 X 相悖,故整套退役。
 
 /// work job 的 intake 入口(缝 4 归位,从 `dispatch_project_intake` 复制改名)。
 ///
@@ -177,7 +118,7 @@ fn pick_project_lead_idx(members: &[(&str, bool)]) -> Option<usize> {
 /// 找项目接管的牵头成员:软件公司 PM,或自定义团队里 coordinator 档位的协调者。
 /// coordinator 判定读 registry 里该角色定义的 `permission_profile`(G1/G2 动态角色有此元数据)。
 /// app handle / registry 不可达(headless)→ 退化为只认 "pm" slug。
-async fn find_project_lead(members: &[CompanionProfile]) -> Option<&CompanionProfile> {
+pub(crate) async fn find_project_lead(members: &[CompanionProfile]) -> Option<&CompanionProfile> {
     let coord_flags: Vec<bool> = match crate::engine::tools::get_app_handle() {
         Some(handle) => {
             use tauri::Manager;
@@ -203,7 +144,7 @@ async fn find_project_lead(members: &[CompanionProfile]) -> Option<&CompanionPro
 
 #[cfg(test)]
 mod tests {
-    use super::{is_project_build_intent, pick_project_lead_idx};
+    use super::pick_project_lead_idx;
 
     #[test]
     fn pick_lead_prefers_pm_then_first_coordinator() {
@@ -221,23 +162,4 @@ mod tests {
         assert_eq!(pick_project_lead_idx(&[("builder_x", false), ("qa_z", false)]), None);
     }
 
-    #[test]
-    fn build_intent_recognizes_explicit_tasks() {
-        assert!(is_project_build_intent("做个 todo 网页应用"));
-        assert!(is_project_build_intent("帮我开发一个记账 app"));
-        assert!(is_project_build_intent("实现一个登录页面"));
-        assert!(is_project_build_intent("Build a REST API for notes"));
-        assert!(is_project_build_intent("Make an onboarding flow"));
-    }
-
-    #[test]
-    fn build_intent_ignores_chat_and_short_messages() {
-        // 讨论 / 提问 / 反馈 → 走放养,不该被 PM 接手。
-        assert!(!is_project_build_intent("你们觉得这个方向对吗?"));
-        assert!(!is_project_build_intent("这个 bug 怎么修?"));
-        assert!(!is_project_build_intent("辛苦了"));
-        // 太短 → false。
-        assert!(!is_project_build_intent("嗯"));
-        assert!(!is_project_build_intent("好的"));
-    }
 }

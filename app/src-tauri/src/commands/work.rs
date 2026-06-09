@@ -20,7 +20,9 @@ use tauri::State;
 use crate::commands::agent::helpers::resolve_llm_config;
 use crate::engine::collaboration::executor::ConcreteExecutor;
 use crate::engine::collaboration::orchestrator::SqliteOrchestrator;
-use crate::engine::collaboration::{CollaborationMode, CollaborationOrchestrator, CollaborationPlan};
+use crate::engine::collaboration::{
+    CollaborationMode, CollaborationOrchestrator, CollaborationPlan, CompanionProfile,
+};
 use crate::engine::db::{Database, WorkJobSummary};
 use crate::engine::work::plan::{build_project_collaboration_plan, ProjectPlan};
 use crate::state::AppState;
@@ -29,6 +31,78 @@ use crate::state::AppState;
 #[tauri::command]
 pub fn list_work_jobs(state: State<'_, AppState>) -> Vec<WorkJobSummary> {
     state.db.list_work_jobs()
+}
+
+/// 「新建工作」发起后返回的句柄:新建的 work 会话 + intake 协作 id(前端跳过去看团队推进)。
+#[derive(serde::Serialize)]
+pub struct LaunchedWork {
+    pub session_id: String,
+    pub collaboration_id: i64,
+}
+
+/// 工作入口「新建工作」:在指定团队群上**显式发起**一个 work job —— 不靠 chat 措辞检测,
+/// 用户从 work 入口明确开工(对齐决策 X:work 是从 chat 显式 launch 的)。建一个 work 会话
+/// 绑团队群 → 牵头者(coordinator / PM 档)接手 intake(澄清需求 → propose → 派工)。
+#[tauri::command]
+pub async fn launch_work_job(
+    state: State<'_, AppState>,
+    team_gid: i64,
+    task: String,
+) -> Result<LaunchedWork, String> {
+    launch_work_job_impl(&state, team_gid, &task).await
+}
+
+pub async fn launch_work_job_impl(
+    state: &AppState,
+    team_gid: i64,
+    task: &str,
+) -> Result<LaunchedWork, String> {
+    let task = task.trim().to_string();
+    if task.is_empty() {
+        return Err("请描述要做什么".into());
+    }
+    let db = state.db.clone();
+    let companions = db.list_group_members(team_gid);
+    if companions.is_empty() {
+        return Err("这个团队还没有成员".into());
+    }
+    let members: Vec<CompanionProfile> = companions
+        .into_iter()
+        .map(|c| CompanionProfile {
+            id: c.id,
+            name: c.name,
+            avatar_emoji: c.avatar_emoji,
+            color_hex: c.color_hex,
+            description: c.role_label.unwrap_or_else(|| c.agent_definition_name.clone()),
+            agent_definition_name: c.agent_definition_name,
+            last_used_at: c.last_used_at,
+        })
+        .collect();
+    let lead = crate::engine::work::launcher::find_project_lead(&members)
+        .await
+        .ok_or_else(|| "这个团队里没有能接手的牵头者(需要 coordinator / PM 档角色)".to_string())?;
+    let cfg = resolve_llm_config(state).await?;
+
+    // 新建一个 work 会话,绑团队群(intake / 派工 / 执行都在这个会话里)。
+    let session_id = format!("work-{}", uuid::Uuid::new_v4());
+    let title: String = task.chars().take(30).collect();
+    db.ensure_session(&session_id, &title, "work", None)?;
+    db.set_session_group(&session_id, Some(team_gid))?;
+
+    let collab_id = crate::engine::work::launcher::launch_intake(
+        db.clone(),
+        cfg,
+        &session_id,
+        team_gid,
+        lead,
+        &members,
+        &task,
+    )
+    .await?;
+    Ok(LaunchedWork {
+        session_id,
+        collaboration_id: collab_id,
+    })
 }
 
 /// 解析并构建派工 DAG(不 submit):会话 → 群 → 成员 → build。返回 (协作 plan, group_id)。

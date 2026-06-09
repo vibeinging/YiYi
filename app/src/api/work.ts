@@ -18,3 +18,13 @@ export interface WorkJob {
 export async function listWorkJobs(): Promise<WorkJob[]> {
   return await invoke<WorkJob[]>('list_work_jobs');
 }
+
+export interface LaunchedWork {
+  session_id: string;
+  collaboration_id: number;
+}
+
+/** 「新建工作」:在指定团队群上显式发起一个 work job(牵头者接手 intake)。返回新会话 + 协作 id。 */
+export async function launchWorkJob(teamGid: number, task: string): Promise<LaunchedWork> {
+  return await invoke<LaunchedWork>('launch_work_job', { teamGid, task });
+}

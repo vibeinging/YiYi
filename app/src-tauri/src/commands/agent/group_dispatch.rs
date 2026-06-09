@@ -108,32 +108,10 @@ pub async fn try_group_dispatch(
         })
         .collect();
 
-    // S6 切流量(chat×work 2×2):是否为这条群消息启动一个 **work job** 由 work 模块决策
-    // (work::should_launch_work)—— 工作群(有工作区)+ 无 @ 点名 + **明确建造意图**(恢复
-    // 被 WIP 删的 build-intent gate:"开始吧/继续/你们觉得呢"等闲聊**不**触发,只有"做个X/
-    // 开发Y"才接手)+ 有牵头者可接手。命中 → work::launch_intake 启动 work job(标
-    // kind=work_dispatch,finalize 走 work 交付摘要、锚点标 context_type=work_job);否则照常
-    // 落下面的 chat 放养循环。work 启动 / 牵头者选取 / intake 已迁 engine/work/(S4),
-    // 本文件原 is_project_group / find_project_lead / dispatch_project_intake 不再被调用(S8 删)。
-    if let Some(lead) = crate::engine::work::launcher::should_launch_work(
-        &db, gid, user_message, forced_ids, &members,
-    )
-    .await
-    {
-        let collab_id = crate::engine::work::launcher::launch_intake(
-            db.clone(), cfg.clone(), session_id, gid, lead, &members, user_message,
-        )
-        .await?;
-        return Ok(GroupDispatchOutcome::Dispatched {
-            collaboration_id: collab_id,
-            members: vec![DispatchedMember {
-                companion_id: lead.id,
-                name: lead.name.clone(),
-                avatar_emoji: lead.avatar_emoji.clone(),
-                color_hex: lead.color_hex.clone(),
-            }],
-        });
-    }
+    // chat×work 2×2:**群聊(chat 入口)永远放养** —— 不在这里猜"这条是不是工作"。
+    // 两个入口已把 chat/work 分开:work 从「工作」入口显式发起(`launch_work_job` →
+    // work::launcher::launch_intake),所以这里**不再做任何 work 检测**(原 should_launch_work /
+    // is_project_build_intent 硬编码词表已退役)。不论"做个X"还是"你们觉得呢",在群里都只是聊天。
 
     // 放养事件循环 —— @ 与非 @ 统一进 v2:被 @ 的成员 wave-1 立即回(delay=0)、其余变速 5–30 秒,
     // YiYi 也作为一员入群,冷场自然收口。旧的单轮 / 讨论同步模型已退役删除。

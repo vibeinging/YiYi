@@ -531,7 +531,10 @@ fn new_pm(name: &str) -> NewCompanion {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn work_group_build_intent_launches_lead_only() {
+async fn workspace_group_message_no_longer_auto_launches_work() {
+    // chat×work 2×2 双入口落地后:**群聊永远放养,不再在 chat 里猜 work**(原 should_launch_work
+    // + 硬编码建造词表已退役)。work 改从「工作」入口显式发起(launch_work_job)。所以哪怕是
+    // 工作区群 + "做个X"(以前会触发 PM 接手),现在也只走放养(全员 + YiYi)。
     let t = build_test_app_state().await;
     let db = t.state().db.clone();
     let pm = db.adopt_companion(&new_pm("产品经理")).unwrap();
@@ -539,60 +542,60 @@ async fn work_group_build_intent_launches_lead_only() {
     mock.mock_chat_completion_response(&decision_json(&[(pm, 0.9)])).await;
     seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
     let cfg = resolve_llm_config(t.state()).await.unwrap();
-    let sid = "work-build";
+    let sid = "ws-retire";
     db.ensure_session(sid, "工作群", "chat", None).ok();
     let gid = create_companion_group_impl(t.state(), "软件公司".into(), None, None)
         .await
         .unwrap();
-    db.set_group_workspace(gid, "/tmp/yiyi_ws_build").unwrap(); // 有工作区 → work 视角
+    db.set_group_workspace(gid, "/tmp/yiyi_ws_retire").unwrap(); // 有工作区也一样放养
     add_companion_to_group_impl(t.state(), gid, pm).await.unwrap();
     set_session_group_impl(t.state(), sid.into(), Some(gid)).await.unwrap();
 
-    // 明确建造意图 → launch work:牵头者(pm)单点接手,**不**带全员 + YiYi 入轮。
+    // 以前的"建造意图" → 现在也只放养,不再单点 PM intake。
     let outcome = try_group_dispatch(db, cfg, sid, "做个 todo 网页应用", &[])
         .await
         .unwrap();
     match outcome {
         GroupDispatchOutcome::Dispatched { members, .. } => {
             let ids: Vec<i64> = members.iter().map(|m| m.companion_id).collect();
-            assert_eq!(members.len(), 1, "建造意图应由牵头者单点接手(work),got {ids:?}");
-            assert_eq!(members[0].companion_id, pm, "应派给牵头者");
-            assert!(!ids.contains(&0), "work intake 不该带 YiYi 兜底位");
+            assert!(ids.contains(&0), "群聊永远放养(含 YiYi 兜底位),不再自动起 work,got {ids:?}");
+            assert!(ids.contains(&pm), "放养应含群成员 pm");
+            assert!(members.len() >= 2, "放养是全员+YiYi,不是单点 PM intake,got {ids:?}");
         }
-        other => panic!("工作群建造意图应 launch work,got {other:?}"),
+        other => panic!("群聊应走放养(work 改从工作入口显式发起),got {other:?}"),
     }
 }
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn work_group_chat_message_stays_group_loop() {
+async fn launch_work_job_creates_work_dispatch_collab() {
+    use app_lib::commands::work::launch_work_job_impl;
+    // 「工作」入口的「新建工作」走这条:显式发起 → 牵头者接手 intake。
     let t = build_test_app_state().await;
     let db = t.state().db.clone();
     let pm = db.adopt_companion(&new_pm("产品经理")).unwrap();
     let mock = MockLlmServer::start().await;
     mock.mock_chat_completion_response(&decision_json(&[(pm, 0.9)])).await;
     seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
-    let cfg = resolve_llm_config(t.state()).await.unwrap();
-    let sid = "work-chat";
-    db.ensure_session(sid, "工作群", "chat", None).ok();
     let gid = create_companion_group_impl(t.state(), "软件公司".into(), None, None)
         .await
         .unwrap();
-    db.set_group_workspace(gid, "/tmp/yiyi_ws_chat").unwrap(); // 同样是 work 视角的群
+    db.set_group_workspace(gid, "/tmp/yiyi_ws_launch").unwrap();
     add_companion_to_group_impl(t.state(), gid, pm).await.unwrap();
-    set_session_group_impl(t.state(), sid.into(), Some(gid)).await.unwrap();
 
-    // 非建造的闲聊/讨论 → **不**触发 PM,照常放养(全员 + YiYi 入轮)= 工作群可纯闲聊。
-    let outcome = try_group_dispatch(db, cfg, sid, "你们觉得这个方向对吗?", &[])
+    let launched = launch_work_job_impl(t.state(), gid, "做个 todo 网页应用")
         .await
         .unwrap();
-    match outcome {
-        GroupDispatchOutcome::Dispatched { members, .. } => {
-            let ids: Vec<i64> = members.iter().map(|m| m.companion_id).collect();
-            assert!(ids.contains(&0), "工作群闲聊应走放养(含 YiYi 兜底位),got {ids:?}");
-            assert!(ids.contains(&pm), "放养应含群成员 pm");
-            assert!(members.len() >= 2, "放养是全员+YiYi,不是单点 PM intake,got {ids:?}");
-        }
-        other => panic!("工作群闲聊应走放养群聊,got {other:?}"),
-    }
+
+    // 产出一个 work job:协作标 kind=work_dispatch、会话绑团队群、进 work job 列表。
+    assert_eq!(
+        db.get_collaboration_kind(launched.collaboration_id).as_deref(),
+        Some("work_dispatch"),
+        "显式发起的协作应标 work_dispatch",
+    );
+    assert_eq!(db.get_session_group(&launched.session_id), Some(gid), "work 会话应绑团队群");
+    assert!(
+        db.list_work_jobs().iter().any(|j| j.id == launched.collaboration_id),
+        "应出现在 work job 列表",
+    );
 }
