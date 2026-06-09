@@ -9,7 +9,7 @@
 import { memo, useState, useEffect, useRef, useCallback } from 'react';
 import {
   Settings, Puzzle, Bot, Zap, FolderOpen, Sprout, Sparkles,
-  Trash2, MessageCircle, Clock,
+  Trash2, MessageCircle, Clock, Hammer,
   PanelLeftClose, PanelLeft, Grid3X3,
   Plus, Pencil, Search, X, Users,
 } from 'lucide-react';
@@ -511,6 +511,30 @@ export function NavRail({
         </div>
         <span className="text-[9px] font-medium leading-none">对话</span>
       </button>
+
+      {/* 工作(chat×work 2×2 的 work 象限)—— 与「对话」并列的对等入口,琥珀 Hammer
+          一眼区别于对话的 YiYi 紫(关系 vs 交付)。点进 work 页(多 agent 派工监控)。 */}
+      {(() => {
+        const workActive = currentPage === 'work';
+        return (
+          <button
+            onClick={() => onPageChange('work')}
+            title="工作 · 团队交付"
+            className={cell(workActive)}
+            style={{
+              color: workActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)',
+              background: workActive ? 'var(--sidebar-active)' : 'transparent',
+            }}
+            onMouseEnter={(e) => { if (!workActive) e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
+            onMouseLeave={(e) => { if (!workActive) e.currentTarget.style.background = 'transparent'; }}
+          >
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center">
+              <Hammer size={18} color="var(--color-warning)" strokeWidth={workActive ? 2.3 : 2} />
+            </div>
+            <span className="text-[9px] font-medium leading-none">工作</span>
+          </button>
+        );
+      })()}
 
       {/* 主导航(设置除外)—— 顶部 */}
       <div className="mt-0.5 flex flex-col items-center gap-0.5">
