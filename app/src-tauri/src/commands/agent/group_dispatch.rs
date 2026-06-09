@@ -108,35 +108,31 @@ pub async fn try_group_dispatch(
         })
         .collect();
 
-    // S2②:项目群(有隔离工作区)里的明确"建造"任务 → PM 接手,绕开放养循环
-    // (放养有 revive_max_dry/变速等约束,且五人七嘴八舌不适合长程项目)。让 PM 用足
-    // 步数(F2)在项目工作区(S2①)里澄清需求(ask_user,F1)、给方案。@ 点名某成员、
-    // 或非建造类消息(讨论/闲聊)→ 照常走下面的放养群聊,保留"边干边聊"体感。
-    let is_project_group = db
-        .get_companion_group(gid)
-        .and_then(|g| g.workspace_path)
-        .is_some();
-    // 工作群(有 workspace)+ 无 @ 点名 → **牵头者有序接手**,而非放养闲聊。
-    // 关键修复(2026-06-08):不再要求"必须是 build intent" —— 工作团队卡住的根因就是
-    // "开始吧/继续"等非建造措辞落进放养循环,N 人七嘴八舌、没人主导、ask_user 被 30s 砍掉、
-    // 卡在一个问题(如发布日期)空转上百轮。让牵头者(coordinator/PM)接手则:单点主导、
-    // 能正经 ask_user 阻塞澄清、能拆解派工。纯执行团队(无协调角色)→ None 落回放养。
-    if is_project_group && forced_ids.is_empty() {
-        if let Some(lead) = find_project_lead(&members).await {
-            let collab_id = dispatch_project_intake(
-                db.clone(), cfg.clone(), session_id, gid, lead, &members, user_message,
-            )
-            .await?;
-            return Ok(GroupDispatchOutcome::Dispatched {
-                collaboration_id: collab_id,
-                members: vec![DispatchedMember {
-                    companion_id: lead.id,
-                    name: lead.name.clone(),
-                    avatar_emoji: lead.avatar_emoji.clone(),
-                    color_hex: lead.color_hex.clone(),
-                }],
-            });
-        }
+    // S6 切流量(chat×work 2×2):是否为这条群消息启动一个 **work job** 由 work 模块决策
+    // (work::should_launch_work)—— 工作群(有工作区)+ 无 @ 点名 + **明确建造意图**(恢复
+    // 被 WIP 删的 build-intent gate:"开始吧/继续/你们觉得呢"等闲聊**不**触发,只有"做个X/
+    // 开发Y"才接手)+ 有牵头者可接手。命中 → work::launch_intake 启动 work job(标
+    // kind=work_dispatch,finalize 走 work 交付摘要、锚点标 context_type=work_job);否则照常
+    // 落下面的 chat 放养循环。work 启动 / 牵头者选取 / intake 已迁 engine/work/(S4),
+    // 本文件原 is_project_group / find_project_lead / dispatch_project_intake 不再被调用(S8 删)。
+    if let Some(lead) = crate::engine::work::launcher::should_launch_work(
+        &db, gid, user_message, forced_ids, &members,
+    )
+    .await
+    {
+        let collab_id = crate::engine::work::launcher::launch_intake(
+            db.clone(), cfg.clone(), session_id, gid, lead, &members, user_message,
+        )
+        .await?;
+        return Ok(GroupDispatchOutcome::Dispatched {
+            collaboration_id: collab_id,
+            members: vec![DispatchedMember {
+                companion_id: lead.id,
+                name: lead.name.clone(),
+                avatar_emoji: lead.avatar_emoji.clone(),
+                color_hex: lead.color_hex.clone(),
+            }],
+        });
     }
 
     // 放养事件循环 —— @ 与非 @ 统一进 v2:被 @ 的成员 wave-1 立即回(delay=0)、其余变速 5–30 秒,
@@ -222,6 +218,8 @@ pub async fn dispatch_to_companion(
 /// + 项目工作区),绕开放养循环。PM 据其 persona 用 ask_user 澄清需求、给方案;真正派工
 /// 给各角色是 S2③。结构同 `dispatch_to_companion`,差别:participant 用 Group scope、
 /// CollaborationMode 标 PM。
+/// S6:已迁 engine/work/launcher::launch_intake,路由不再调用本函数;死代码 S8 删。
+#[allow(dead_code)]
 async fn dispatch_project_intake(
     db: Arc<Database>,
     cfg: LLMConfig,
@@ -301,6 +299,8 @@ fn pick_project_lead_idx(members: &[(&str, bool)]) -> Option<usize> {
 /// 找项目接管的牵头成员(G3):软件公司 PM,或自定义团队里 coordinator 档位的协调者。
 /// coordinator 判定读 registry 里该角色定义的 `permission_profile`(G1/G2 动态角色有此元数据)。
 /// app handle / registry 不可达(headless)→ 退化为只认 "pm" slug。
+/// S6:已迁 engine/work/launcher,路由改用 work::should_launch_work;死代码 S8 删。
+#[allow(dead_code)]
 async fn find_project_lead(members: &[CompanionProfile]) -> Option<&CompanionProfile> {
     let coord_flags: Vec<bool> = match crate::engine::tools::get_app_handle() {
         Some(handle) => {

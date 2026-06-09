@@ -39,31 +39,31 @@ use crate::engine::llm_client::LLMConfig;
 ///
 /// 另:用户 @ 点名了具体成员(`forced_ids` 非空)= 点名必答,绕过 work 启动(走 chat 放养的
 /// wave-1 立即回),所以 `forced_ids` 非空直接返回 false。
-pub async fn should_launch_work(
+pub async fn should_launch_work<'a>(
     db: &Database,
     gid: i64,
     msg: &str,
     forced_ids: &[i64],
-    members: &[CompanionProfile],
-) -> bool {
+    members: &'a [CompanionProfile],
+) -> Option<&'a CompanionProfile> {
     // @ 点名 → 点名必答,不启动 work(走 chat 放养)。
     if !forced_ids.is_empty() {
-        return false;
+        return None;
     }
-    // 判据 1:群是 work 视角(本轮先沿用 workspace_path;S6 改读 kind)。
+    // 判据 1:群是 work 视角(本轮先沿用 workspace_path;后续可改读 kind)。
     let is_work_view = db
         .get_companion_group(gid)
         .and_then(|g| g.workspace_path)
         .is_some();
     if !is_work_view {
-        return false;
+        return None;
     }
     // 判据 3:非闲聊 / 是建造意图(恢复 build-intent gate)。
     if !is_project_build_intent(msg) {
-        return false;
+        return None;
     }
-    // 判据 2:有牵头者(coordinator / PM 档)能接手。
-    find_project_lead(members).await.is_some()
+    // 判据 2:有牵头者(coordinator / PM 档)能接手 → 返回它(同时即"该启动")。
+    find_project_lead(members).await
 }
 
 /// 建造意图启发式(缝 4 / §7 收口:恢复 WIP 删掉的 `is_project_build_intent`)。
@@ -157,8 +157,11 @@ pub async fn launch_intake(
             parent_id,
         )
         .await?;
+    // S6 / §7-P0-2:这条协作是 work job → 标 kind=work_dispatch(让 finalize 走 work 结论分叉);
+    // intake 锚点消息标 context_type=work_job(让前端按 work 分流渲染,而非群聊气泡)。
+    let _ = db.set_collaboration_kind(collab_id, "work_dispatch");
     let placeholder = format!("@{} {}", participant.name, user_message);
-    let _ = db.upsert_collaboration_message(session_id, collab_id, &placeholder);
+    let _ = db.upsert_collaboration_message_ctx(session_id, collab_id, &placeholder, "work_job");
     Ok(collab_id)
 }
 

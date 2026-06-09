@@ -254,6 +254,19 @@ impl super::Database {
         collaboration_id: i64,
         content: &str,
     ) -> Result<i64, String> {
+        self.upsert_collaboration_message_ctx(session_id, collaboration_id, content, "collab")
+    }
+
+    /// 同 `upsert_collaboration_message`,但显式标 `context_type`:chat 群聊用 'collab',
+    /// work job 的 intake / 开工 / 结论锚点用 'work_job'(S6 / §7-P0-2:让前端按 context_type
+    /// 分流 chat 群聊渲染 vs work 结果渲染)。
+    pub fn upsert_collaboration_message_ctx(
+        &self,
+        session_id: &str,
+        collaboration_id: i64,
+        content: &str,
+        context_type: &str,
+    ) -> Result<i64, String> {
         let now = super::now_ts();
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -271,8 +284,8 @@ impl super::Database {
 
         let msg_id = if let Some(id) = existing {
             tx.execute(
-                "UPDATE messages SET content = ?1, timestamp = ?2 WHERE id = ?3",
-                params![content, now, id],
+                "UPDATE messages SET content = ?1, timestamp = ?2, context_type = ?3 WHERE id = ?4",
+                params![content, now, context_type, id],
             )
             .map_err(|e| format!("Failed to update collaboration message: {}", e))?;
             id
@@ -283,9 +296,9 @@ impl super::Database {
             )
             .map_err(|e| format!("Failed to ensure session: {}", e))?;
             tx.execute(
-                "INSERT INTO messages (session_id, role, content, timestamp, collaboration_id)
-                 VALUES (?1, 'assistant', ?2, ?3, ?4)",
-                params![session_id, content, now, collaboration_id],
+                "INSERT INTO messages (session_id, role, content, timestamp, collaboration_id, context_type)
+                 VALUES (?1, 'assistant', ?2, ?3, ?4, ?5)",
+                params![session_id, content, now, collaboration_id, context_type],
             )
             .map_err(|e| format!("Failed to insert collaboration message: {}", e))?;
             tx.last_insert_rowid()

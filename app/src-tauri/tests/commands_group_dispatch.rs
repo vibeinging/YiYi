@@ -510,3 +510,89 @@ async fn try_group_dispatch_uses_group_roster_and_isolates_buckets() {
     assert_eq!(group_bucket(gid), format!("group_shared_{}", gid));
     assert_ne!(group_bucket(gid), group_bucket(gid + 1));
 }
+
+// === S6 切流量回归:工作群(有工作区)路由 work 还是 chat ===
+// 核心:恢复被 WIP 删的 build-intent gate —— 工作群里**明确建造意图**才让牵头者接手(work),
+// **闲聊/讨论**照常放养(chat)。判错 = 工作群没法纯闲聊 = WIP 倒退。
+// headless(无 app handle)下 find_project_lead 只认 "pm" slug,故牵头者用 agent_def="pm"。
+
+fn new_pm(name: &str) -> NewCompanion {
+    NewCompanion {
+        name: name.into(),
+        agent_definition_name: "pm".into(),
+        avatar_emoji: "🧭".into(),
+        color_hex: "#6366F1".into(),
+        persona_md_path: None,
+        memory_user_id: format!("pm_{name}"),
+        metadata_json: None,
+        role_label: Some("产品经理".into()),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn work_group_build_intent_launches_lead_only() {
+    let t = build_test_app_state().await;
+    let db = t.state().db.clone();
+    let pm = db.adopt_companion(&new_pm("产品经理")).unwrap();
+    let mock = MockLlmServer::start().await;
+    mock.mock_chat_completion_response(&decision_json(&[(pm, 0.9)])).await;
+    seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
+    let cfg = resolve_llm_config(t.state()).await.unwrap();
+    let sid = "work-build";
+    db.ensure_session(sid, "工作群", "chat", None).ok();
+    let gid = create_companion_group_impl(t.state(), "软件公司".into(), None, None)
+        .await
+        .unwrap();
+    db.set_group_workspace(gid, "/tmp/yiyi_ws_build").unwrap(); // 有工作区 → work 视角
+    add_companion_to_group_impl(t.state(), gid, pm).await.unwrap();
+    set_session_group_impl(t.state(), sid.into(), Some(gid)).await.unwrap();
+
+    // 明确建造意图 → launch work:牵头者(pm)单点接手,**不**带全员 + YiYi 入轮。
+    let outcome = try_group_dispatch(db, cfg, sid, "做个 todo 网页应用", &[])
+        .await
+        .unwrap();
+    match outcome {
+        GroupDispatchOutcome::Dispatched { members, .. } => {
+            let ids: Vec<i64> = members.iter().map(|m| m.companion_id).collect();
+            assert_eq!(members.len(), 1, "建造意图应由牵头者单点接手(work),got {ids:?}");
+            assert_eq!(members[0].companion_id, pm, "应派给牵头者");
+            assert!(!ids.contains(&0), "work intake 不该带 YiYi 兜底位");
+        }
+        other => panic!("工作群建造意图应 launch work,got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn work_group_chat_message_stays_group_loop() {
+    let t = build_test_app_state().await;
+    let db = t.state().db.clone();
+    let pm = db.adopt_companion(&new_pm("产品经理")).unwrap();
+    let mock = MockLlmServer::start().await;
+    mock.mock_chat_completion_response(&decision_json(&[(pm, 0.9)])).await;
+    seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
+    let cfg = resolve_llm_config(t.state()).await.unwrap();
+    let sid = "work-chat";
+    db.ensure_session(sid, "工作群", "chat", None).ok();
+    let gid = create_companion_group_impl(t.state(), "软件公司".into(), None, None)
+        .await
+        .unwrap();
+    db.set_group_workspace(gid, "/tmp/yiyi_ws_chat").unwrap(); // 同样是 work 视角的群
+    add_companion_to_group_impl(t.state(), gid, pm).await.unwrap();
+    set_session_group_impl(t.state(), sid.into(), Some(gid)).await.unwrap();
+
+    // 非建造的闲聊/讨论 → **不**触发 PM,照常放养(全员 + YiYi 入轮)= 工作群可纯闲聊。
+    let outcome = try_group_dispatch(db, cfg, sid, "你们觉得这个方向对吗?", &[])
+        .await
+        .unwrap();
+    match outcome {
+        GroupDispatchOutcome::Dispatched { members, .. } => {
+            let ids: Vec<i64> = members.iter().map(|m| m.companion_id).collect();
+            assert!(ids.contains(&0), "工作群闲聊应走放养(含 YiYi 兜底位),got {ids:?}");
+            assert!(ids.contains(&pm), "放养应含群成员 pm");
+            assert!(members.len() >= 2, "放养是全员+YiYi,不是单点 PM intake,got {ids:?}");
+        }
+        other => panic!("工作群闲聊应走放养群聊,got {other:?}"),
+    }
+}

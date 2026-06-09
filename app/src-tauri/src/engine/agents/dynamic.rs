@@ -37,9 +37,10 @@ impl PermissionProfile {
     pub fn tools(&self) -> Vec<String> {
         let names: &[&str] = match self {
             Self::Coordinator => &[
-                // 协调者的本职就是拆解派工 → 声明式给 propose_project_plan(intake 接手后据此派工)。
-                "ask_user", "propose_project_plan", "read_file", "list_directory", "project_tree",
-                "grep_search", "web_search", "memory_search", "memory_add",
+                // 协调者的本职就是拆解派工 → 声明式给 propose_work_plan(work intake 接手后据此派工)。
+                // propose_project_plan 暂留兼容旧 chat 派工路径(S8 切净后可删)。
+                "ask_user", "propose_work_plan", "propose_project_plan", "read_file", "list_directory",
+                "project_tree", "grep_search", "web_search", "memory_search", "memory_add",
             ],
             Self::Designer => &[
                 "ask_user", "read_file", "write_file", "edit_file", "list_directory",
@@ -318,10 +319,10 @@ mod tests {
         // 防止档位里写出 catalog 不存在的工具(那样该工具直接拿不到,等于白名单写废)。
         // 这里的"真实工具名"集合 = 软件公司 5 角色 AGENT.md 用到的并集。
         let real: &[&str] = &[
-            "ask_user", "propose_project_plan", "read_file", "write_file", "edit_file",
-            "append_file", "list_directory", "project_tree", "grep_search", "glob_search",
-            "execute_shell", "run_python", "run_python_script", "pip_install", "web_search",
-            "browser_fetch", "memory_search", "memory_add",
+            "ask_user", "propose_project_plan", "propose_work_plan", "read_file", "write_file",
+            "edit_file", "append_file", "list_directory", "project_tree", "grep_search",
+            "glob_search", "execute_shell", "run_python", "run_python_script", "pip_install",
+            "web_search", "browser_fetch", "memory_search", "memory_add",
         ];
         for p in [
             PermissionProfile::Coordinator,

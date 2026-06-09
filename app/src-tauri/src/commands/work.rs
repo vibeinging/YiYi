@@ -98,10 +98,13 @@ pub async fn commit_work_plan_impl(
         .map(|n| format!("@{n}"))
         .collect::<Vec<_>>()
         .join(" ");
-    let _ = state.db.upsert_collaboration_message(
+    // §7-P0-2:开工锚点标 context_type=work_job(前端按 work 分流)。kind=work_dispatch 已由
+    // commit_work_plan_impl 上面的 set_collaboration_kind 标过。
+    let _ = state.db.upsert_collaboration_message_ctx(
         session_id,
         collab_id,
         &format!("🛠️ 开工 —— {mention} 按方案并行推进中…"),
+        "work_job",
     );
     Ok(collab_id)
 }

@@ -690,31 +690,93 @@ impl SqliteOrchestrator {
         status: &CollaborationStatus,
     ) -> Result<(), String> {
         let conn = self.db.get_conn().ok_or_else(|| "db lock".to_string())?;
-        let chat_session_id: String = conn
+        let (chat_session_id, kind): (String, String) = conn
             .query_row(
-                "SELECT chat_session_id FROM collaborations WHERE id = ?1",
+                "SELECT chat_session_id, kind FROM collaborations WHERE id = ?1",
                 params![collab_id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .map_err(|e| format!("read chat_session_id: {e}"))?;
+            .map_err(|e| format!("read chat_session_id/kind: {e}"))?;
 
-        let text = match status {
-            CollaborationStatus::Done => Self::compose_done_verdict(&conn, collab_id)?,
-            CollaborationStatus::Failed(reason) => {
-                if reason.trim().is_empty() {
-                    "（群协作未完成）".to_string()
+        // §7-P0-1:work job 完成走 **work 交付摘要**(不写群聊「【名字】…」格式),并标
+        // context_type=work_job —— 否则 work 完成时仍以群聊身份写回聊天流 = chat 引擎仍在
+        // 替 work 写结论(对抗校验抓的"假解耦",decoupled:false 的根)。
+        let is_work = kind == "work_dispatch";
+        let text = match &status {
+            CollaborationStatus::Done => {
+                if is_work {
+                    Self::compose_work_verdict(&conn, collab_id)?
                 } else {
-                    format!("（群协作未完成）{reason}")
+                    Self::compose_done_verdict(&conn, collab_id)?
                 }
             }
-            CollaborationStatus::Aborted => "（群协作已中止）".to_string(),
+            CollaborationStatus::Failed(reason) => {
+                let label = if is_work { "工作未完成" } else { "群协作未完成" };
+                if reason.trim().is_empty() {
+                    format!("（{label}）")
+                } else {
+                    format!("（{label}）{reason}")
+                }
+            }
+            CollaborationStatus::Aborted => {
+                (if is_work { "（工作已中止）" } else { "（群协作已中止）" }).to_string()
+            }
             _ => return Ok(()),
         };
         drop(conn);
 
+        let ctx = if is_work { "work_job" } else { "collab" };
         self.db
-            .upsert_collaboration_message(&chat_session_id, collab_id, &text)?;
+            .upsert_collaboration_message_ctx(&chat_session_id, collab_id, &text, ctx)?;
         Ok(())
+    }
+
+    /// §7-P0-1:work job 完成的交付摘要(对照 `compose_done_verdict` 的 chat 群聊版)。
+    /// 读 collab 的 intent 当标题 + 各**完成步**的 (牵头者/队友名, StepOutput),交给
+    /// `work::worker::compose_work_summary` 拼成"✅ 交付完成"结构,而非群聊气泡拼接。
+    fn compose_work_verdict(
+        conn: &rusqlite::Connection,
+        collab_id: CollaborationId,
+    ) -> Result<String, String> {
+        let title: String = conn
+            .query_row(
+                "SELECT intent FROM collaborations WHERE id = ?1",
+                params![collab_id],
+                |r| r.get(0),
+            )
+            .unwrap_or_default();
+        let mut stmt = conn
+            .prepare(
+                "SELECT participants_json, output_json, status FROM collaboration_steps
+                 WHERE collaboration_id = ?1 ORDER BY position ASC",
+            )
+            .map_err(|e| format!("prep work verdict query: {e}"))?;
+        let rows = stmt
+            .query_map(params![collab_id], |row| {
+                let p: String = row.get(0)?;
+                let o: Option<String> = row.get(1)?;
+                let s: String = row.get(2)?;
+                Ok((p, o, s))
+            })
+            .map_err(|e| format!("query work verdict steps: {e}"))?;
+        let mut outputs: Vec<(String, StepOutput)> = Vec::new();
+        for r in rows {
+            let (p_json, o_json, status) = r.map_err(|e| format!("work verdict row: {e}"))?;
+            if status != "completed" {
+                continue;
+            }
+            let Some(out_raw) = o_json else { continue };
+            let output: StepOutput =
+                serde_json::from_str(&out_raw).map_err(|e| format!("decode output: {e}"))?;
+            let participants: Vec<Participant> =
+                serde_json::from_str(&p_json).map_err(|e| format!("decode participants: {e}"))?;
+            let name = participants
+                .first()
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| "成员".into());
+            outputs.push((name, output));
+        }
+        Ok(crate::engine::work::worker::compose_work_summary(&title, &outputs))
     }
 
     /// 把一个已完成协作的可见产出拼成 verdict 文本 —— 写回 chat stream,主精灵
