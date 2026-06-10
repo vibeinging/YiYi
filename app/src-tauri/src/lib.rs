@@ -541,7 +541,6 @@ pub fn run() {
             commands::agent::chat::chat,
             commands::agent::chat::chat_stream_start,
             commands::agent::chat::chat_stream_stop,
-            commands::agent::project::commit_project_plan,
             commands::work::commit_work_plan,
             commands::work::list_work_jobs,
             commands::work::launch_work_job,

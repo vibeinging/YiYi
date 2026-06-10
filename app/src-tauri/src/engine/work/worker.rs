@@ -11,19 +11,25 @@
 //! work intake 复用同一管道)。**不含 chat 的 group_round/group_loop/yiyi_* 任何臂**——
 //! 那些归 chat。
 //!
-//! **缝 8 / §7-排序**:`compose_work_summary`(work job 终态摘要,S6 用)在此创建。
+//! **缝 8 / §7-排序**:`compose_work_summary`(work job 终态摘要,finalize 的 work 分支用)在此。
 //!
-//! S4:整模块未接线(`run_work_step` / `compose_work_summary` 由 S6 路由调用),
-//! `#[allow(dead_code)]` 压住未接线告警。
-
-#![allow(dead_code)]
+//! R2(S8 收口):本模块是 work 步的**真实执行路径** —— executor 在 step 入口按
+//! `WorkStepKind::from_step` 早路由到 `run_work_step_guarded`,chat executor 不再含任何
+//! work prompt / 超时分支。
 
 use crate::engine::agents::persona_loader;
-use crate::engine::collaboration::executor::{
-    resolve_companion_role, run_react_inner, INTAKE_TIMEOUT_SECS, PROJECT_TASK_IDLE_SECS,
-};
+use crate::engine::collaboration::executor::{resolve_companion_role, run_react_inner};
 use crate::engine::collaboration::{CollaborationId, Step, StepId, StepOutput};
 use crate::engine::llm_client::LLMConfig;
+
+/// 牵头者接手步(intake)总超时:可能 ask_user 阻塞等用户答澄清问题(如发布日期),chat 的
+/// 150s 太短(问个日期都可能超时被砍)。给 10 分钟,让用户有从容作答的时间;答完即继续。
+pub(crate) const INTAKE_TIMEOUT_SECS: u64 = 600;
+/// 派工写码任务(project_task)**不用总超时** —— 总超时会把进展中的长程任务一刀切(一个
+/// 角色写多文件 + 跑构建/测试可能很久)。改用 **idle 超时**:300s 内一点流活动(token /
+/// 工具事件)都没有,才判 LLM 流真挂起 → 中断;有进展就重置 → 真长程任务想跑多久跑多久。
+/// 300s 也 > 单个工具(跑构建/测试)的常见耗时,避免长工具被误判。
+pub(crate) const PROJECT_TASK_IDLE_SECS: u64 = 300;
 
 /// work 步的语义(本表面只认这两种;chat 的 group_* / yiyi_* 不在此)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,7 +199,23 @@ pub async fn run_work_step(
         }
     }
 
-    let system_prompt = render_work_system_prompt(step, participant_idx, kind);
+    // 项目工作目录注入 prompt:`with_task_working_dir`(run_react_inner)只把**工具 cwd**
+    // scope 到项目目录,agent 的 prompt 里并没有这个路径 —— 不告诉它,它就不知道自己在哪个
+    // 绝对路径干活、是不是在改用户指定的现成项目。这里把目录显式写进 system prompt。
+    let workspace_note = crate::engine::tools::get_database()
+        .and_then(|db| db.group_workspace_for_collaboration(collab_id))
+        .map(|ws| {
+            format!(
+                "\n\n【项目工作目录】你的工作目录是 `{ws}`。文件读写、命令执行都默认在这个目录里进行,\
+                 用相对路径(相对该目录)或这个绝对路径都行。这是用户为本项目指定的目录,可能**已有现成文件**\
+                 ——动手前先看清里面有什么(列目录 / 读关键文件),别假设是空目录、别在目录外乱建。"
+            )
+        })
+        .unwrap_or_default();
+    let system_prompt = format!(
+        "{}{workspace_note}",
+        render_work_system_prompt(step, participant_idx, kind)
+    );
     let user_message = render_work_user_prompt(step, kind, upstream);
 
     // 构造完(mode-aware:prompt / 权限 / 步数)→ 交给共享 ReAct 内核执行。内核不含 mode
@@ -215,6 +237,55 @@ pub async fn run_work_step(
         role_max_iter,
     ));
     fut.await
+}
+
+/// work 步的超时包装(缝 2 归位后的执行入口):按 `work_timeout_policy` 给 `run_work_step`
+/// 套 Total 总超时 / Idle 看门狗。executor 在 step 入口路由到这里,chat 超时策略不再掺 work。
+///
+/// - **Total(intake)**:整步从开始算,到点即砍 —— `tokio::time::timeout`。
+/// - **Idle(project_task)**:看门狗在 idle 超过阈值时赢得 select! → run 被 drop → 断开挂起
+///   的连接读(cancelled 旗标在流读卡住时不会被检查,所以靠 drop);有流活动就重置。
+pub async fn run_work_step_guarded(
+    config: &LLMConfig,
+    step: &Step,
+    participant_idx: usize,
+    upstream: &[(StepId, StepOutput)],
+    collab_id: CollaborationId,
+) -> Result<StepOutput, String> {
+    let kind = WorkStepKind::from_step(step)
+        .ok_or_else(|| "run_work_step_guarded:非 work step".to_string())?;
+    let name = step
+        .participants
+        .get(participant_idx)
+        .map(|p| p.name.clone())
+        .unwrap_or_default();
+    let run = run_work_step(config, step, participant_idx, upstream, collab_id);
+
+    match work_timeout_policy(kind) {
+        WorkTimeoutPolicy::Total(secs) => {
+            match tokio::time::timeout(std::time::Duration::from_secs(secs), run).await {
+                Ok(r) => r,
+                Err(_) => Err(format!("{name} 响应超时({secs}s)")),
+            }
+        }
+        WorkTimeoutPolicy::Idle(idle_secs) => {
+            let activity = std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
+            let watch = std::sync::Arc::clone(&activity);
+            let watchdog = async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    let idle = watch.lock().map(|t| t.elapsed()).unwrap_or_default();
+                    if idle > std::time::Duration::from_secs(idle_secs) {
+                        return;
+                    }
+                }
+            };
+            tokio::select! {
+                r = crate::engine::agent_runner::with_idle_activity(activity, run) => r,
+                _ = watchdog => Err(format!("{name} 卡住({idle_secs}s 无流响应)")),
+            }
+        }
+    }
 }
 
 /// §7 / 缝 8:work job 终态摘要 —— 写回 chat stream 的"✅ 交付完成"结果消息。

@@ -8,9 +8,8 @@
 //! 调度(无依赖并行、有依赖串行)。纯函数、可测透。
 //!
 //! S4:整模块未接线(`build_*` 由 work/launcher 与 commands/work 在 S5/S6 调用),
-//! `#[allow(dead_code)]` 压住未接线告警。
 
-#![allow(dead_code)]
+
 
 use serde::{Deserialize, Serialize};
 

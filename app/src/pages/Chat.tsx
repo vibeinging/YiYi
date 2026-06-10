@@ -325,7 +325,7 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking', embed
     return () => { unlisten.then(fn => fn()); };
   }, [activeSessionId]);
 
-  // 开工(commit_project_plan)后重载,把派工协作的锚点消息拉进来 → 渲染队友实时发言。
+  // 开工(commit_work_plan)后重载,把派工协作的锚点消息拉进来 → 渲染队友实时发言。
   useEffect(() => {
     const onReload = () => { if (activeSessionId) loadMessages(activeSessionId); };
     window.addEventListener('yiyi:reload-messages', onReload);

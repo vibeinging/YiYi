@@ -1,7 +1,6 @@
 pub mod chat;
 pub mod group_dispatch;
 pub mod helpers;
-pub mod project;
 pub mod session;
 
 use serde::{Deserialize, Serialize};

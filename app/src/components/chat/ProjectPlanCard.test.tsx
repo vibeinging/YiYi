@@ -34,9 +34,9 @@ describe('ProjectPlanCard', () => {
     expect(screen.getByText('写前端')).toBeInTheDocument();
   });
 
-  it('开工 invokes commit_project_plan with sessionId + the plan tasks', async () => {
+  it('开工 invokes commit_work_plan with sessionId + the plan tasks', async () => {
     const commit = vi.fn().mockResolvedValue(1);
-    mockInvoke({ commit_project_plan: commit });
+    mockInvoke({ commit_work_plan: commit });
     render(<ProjectPlanCard plan={plan()} />);
 
     fireEvent.click(screen.getByRole('button', { name: /开工/ }));
@@ -48,7 +48,7 @@ describe('ProjectPlanCard', () => {
 
   it('算了 clears the plan without dispatching', () => {
     const commit = vi.fn();
-    mockInvoke({ commit_project_plan: commit });
+    mockInvoke({ commit_work_plan: commit });
     render(<ProjectPlanCard plan={plan()} />);
 
     fireEvent.click(screen.getByRole('button', { name: /算了/ }));

@@ -17,7 +17,6 @@ pub mod events;
 pub mod executor;
 pub mod learning;
 pub mod orchestrator;
-pub mod project;
 
 use std::sync::{Arc, OnceLock};
 use tokio::sync::{broadcast, Semaphore};

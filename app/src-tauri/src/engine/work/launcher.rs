@@ -7,9 +7,8 @@
 //! 的 build-intent 语义**(缝 4 / §7 收口)。
 //!
 //! S4:整模块未接线(S6 在 `chat.rs` 调 `should_launch_work` 分流 → `launch_intake`),
-//! `#[allow(dead_code)]` 压住未接线告警。
 
-#![allow(dead_code)]
+
 
 use std::sync::Arc;
 

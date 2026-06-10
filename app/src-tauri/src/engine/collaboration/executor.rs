@@ -53,8 +53,10 @@ impl ConcreteExecutor {
 /// trim 后等于它即视为"没接话":不进 verdict、前端不渲染气泡。
 pub const PASS_SENTINEL: &str = "<pass>";
 
-/// step 的语义模式(chat×work 2×2)。metadata["mode"] 字符串在此**翻译一次**,
+/// step 的语义模式(**纯 chat**)。metadata["mode"] 字符串在此**翻译一次**,
 /// 调用点用穷尽 match / enum 比较,编译器兜底——取代散落各处的 `== Some("...")` 魔法字符串。
+/// work 模式(intake/project_task)不在此:run_one_guarded 入口已按
+/// `work::worker::WorkStepKind::from_step` 早路由出去,chat 路径永远见不到 work 步。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StepMode {
     /// 放养群聊:点名转让一轮,全员 reply-or-pass(chat)
@@ -65,32 +67,17 @@ enum StepMode {
     YiyiFallback,
     /// 群聊显式要结论,YiYi 收口(chat)
     YiyiSummary,
-    /// 工作群牵头者接手:主导推进 + ask_user 澄清(work)
-    Intake,
-    /// 派工任务步:按上游交付接力(work)
-    ProjectTask,
     /// 无 mode / 未知:普通单/多 agent step
     Plain,
 }
 
-impl StepMode {
-    /// work 象限(chat×work 2×2):派工接手 / 派工任务。S6 路由 + S8 删 chat 引擎里
-    /// work 残留时按此判别;现阶段尚无调用方,先立 API。
-    #[allow(dead_code)]
-    fn is_work(self) -> bool {
-        matches!(self, Self::Intake | Self::ProjectTask)
-    }
-}
-
-/// 读 step 的语义模式(Driver / 派工器写进 metadata["mode"])。
+/// 读 step 的语义模式(Driver 写进 metadata["mode"])。
 fn step_mode(step: &Step) -> StepMode {
     match step.input.metadata.get("mode").and_then(|v| v.as_str()) {
         Some("group_round") => StepMode::GroupRound,
         Some("group_loop") => StepMode::GroupLoop,
         Some("yiyi_fallback") => StepMode::YiyiFallback,
         Some("yiyi_summary") => StepMode::YiyiSummary,
-        Some("intake") => StepMode::Intake,
-        Some("project_task") => StepMode::ProjectTask,
         _ => StepMode::Plain,
     }
 }
@@ -175,23 +162,6 @@ fn render_system_prompt(step: &Step, participant_idx: usize) -> String {
 /// Render the user prompt fed to a single participant. Includes the
 /// step's input prompt plus, for HostSummarize, the upstream summaries.
 fn render_user_prompt(step: &Step, upstream: &[(StepId, StepOutput)]) -> String {
-    // S2④:项目派工 task —— 上游产出作为"交接"喂给下游(后端的接口契约给前端、
-    // 前后端的实现给测试…),而不是"群里的讨论"。让下游角色清楚这是在接力建造。
-    if step_mode(step) == StepMode::ProjectTask {
-        let mut s = String::new();
-        if !upstream.is_empty() {
-            s.push_str(
-                "【上游交付】队友已完成前置任务,产出如下。请在此基础上接着做 —— \
-                 别重复造,按上游给的接口 / 契约 / 设计来:\n\n",
-            );
-            for (id, out) in upstream {
-                s.push_str(&format!("—— 任务 #{} 的产出 ——\n{}\n\n", id, out.full_output));
-            }
-        }
-        s.push_str("【你这条任务】\n");
-        s.push_str(&step.input.prompt);
-        return s;
-    }
     // 对话循环的轮 step:历史 append-only 在前,用户新消息在最末(缓存纪律)。
     if matches!(
         step_mode(step),
@@ -241,16 +211,11 @@ const PARTICIPANT_TIMEOUT_SECS: u64 = 150;
 /// 群事件循环里,一句闲聊不需要 150s 长推理;砍到 30s,既兜住挂起流,又把"被抢占后
 /// 仍在跑的那条"的成本/占槽时长压到 ≤ 群墙钟量级(中途取消的实用兜底)。
 const GROUP_LOOP_TIMEOUT_SECS: u64 = 30;
-/// 牵头者接手步(intake):可能 ask_user 阻塞等用户答澄清问题(如发布日期),150s 太短
-/// (问个日期都可能超时被砍)。给 10 分钟总超时,让用户有从容作答的时间;答完即继续。
-pub(crate) const INTAKE_TIMEOUT_SECS: u64 = 600;
-/// 项目派工的写码任务(S2③ project_task)**不用总超时** —— 总超时会把进展中的长程任务
-/// 一刀切(一个角色写多文件 + 跑构建/测试可能很久)。改用 **idle 超时**:300s 内一点流
-/// 活动(token / 工具事件)都没有,才判 LLM 流真挂起 → 中断;有进展就重置 → 真长程任务
-/// 想跑多久跑多久。300s 也 > 单个工具(跑构建/测试)的常见耗时,避免长工具被误判。
-pub(crate) const PROJECT_TASK_IDLE_SECS: u64 = 300;
 
 /// run_one 的超时包装 —— 见 PARTICIPANT_TIMEOUT_SECS。
+/// **chat×work 路由点(R2/S8)**:work 步(intake/project_task)在此早路由到
+/// `work::worker::run_work_step_guarded`(work prompt + work 超时策略都在 work 表面);
+/// 本函数往下只剩纯 chat —— 群聊 30s / 普通 150s 总超时。
 async fn run_one_guarded(
     config: &LLMConfig,
     step: &Step,
@@ -259,6 +224,12 @@ async fn run_one_guarded(
     collab_id: CollaborationId,
     usage_source: UsageSource,
 ) -> Result<StepOutput, String> {
+    if crate::engine::work::worker::WorkStepKind::from_step(step).is_some() {
+        return crate::engine::work::worker::run_work_step_guarded(
+            config, step, participant_idx, upstream, collab_id,
+        )
+        .await;
+    }
     let name = step
         .participants
         .get(participant_idx)
@@ -266,35 +237,13 @@ async fn run_one_guarded(
         .unwrap_or_default();
     let run = run_one(config, step, participant_idx, upstream, collab_id, usage_source);
 
-    // project_task:idle 超时(有进展不切,真长程任务想跑多久跑多久)。看门狗在 idle
-    // 超过阈值时赢得 select! → run 被 drop → 断开挂起的连接读(cancelled 旗标在流读卡住
-    // 时不会被检查,所以靠 drop)。其余(群聊 30s / 普通 150s):保持总超时。
-    if step_mode(step) == StepMode::ProjectTask {
-        let activity = Arc::new(std::sync::Mutex::new(Instant::now()));
-        let watch = Arc::clone(&activity);
-        let watchdog = async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                let idle = watch.lock().map(|t| t.elapsed()).unwrap_or_default();
-                if idle > std::time::Duration::from_secs(PROJECT_TASK_IDLE_SECS) {
-                    return;
-                }
-            }
-        };
-        tokio::select! {
-            r = crate::engine::agent_runner::with_idle_activity(activity, run) => r,
-            _ = watchdog => Err(format!("{name} 卡住({PROJECT_TASK_IDLE_SECS}s 无流响应)")),
-        }
-    } else {
-        let secs = match step_mode(step) {
-            StepMode::GroupLoop => GROUP_LOOP_TIMEOUT_SECS,
-            StepMode::Intake => INTAKE_TIMEOUT_SECS,
-            _ => PARTICIPANT_TIMEOUT_SECS,
-        };
-        match tokio::time::timeout(std::time::Duration::from_secs(secs), run).await {
-            Ok(r) => r,
-            Err(_) => Err(format!("{name} 响应超时({secs}s)")),
-        }
+    let secs = match step_mode(step) {
+        StepMode::GroupLoop => GROUP_LOOP_TIMEOUT_SECS,
+        _ => PARTICIPANT_TIMEOUT_SECS,
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(secs), run).await {
+        Ok(r) => r,
+        Err(_) => Err(format!("{name} 响应超时({secs}s)")),
     }
 }
 
@@ -350,7 +299,7 @@ async fn run_one(
         &messages,
         &[],
         move |evt| {
-            crate::engine::agent_runner::mark_idle_activity(); // YiYi 若在 project_task 步里也算流活动
+            crate::engine::agent_runner::mark_idle_activity(); // 流活动上报(idle 看门狗场景的通用埋点)
             let (delta, reasoning) = match evt {
                 StreamEvent::ContentDelta(d) => (d, false),
                 StreamEvent::ReasoningDelta(d) => (d, true),
@@ -563,17 +512,7 @@ async fn run_one_react(
     // F2:按角色注入工具过滤器 + ReAct 步数上限。无角色定义 → 全套工具 + 6 步(保持
     // 现状);有角色 → 只给角色允许的工具、用角色自己的步数上限,让"分工"真生效、
     // 能干活的角色跑更长的任务。headless 测试里 registry 不可达,安全回落。
-    let (mut role_filter, role_max_iter) = resolve_companion_role(p.companion_id).await;
-    // intake 接手者(接口人)兜底获得 propose_work_plan。它现已声明在 Coordinator 档位
-    // (dynamic.rs),这里是**向后兼容垫片**:覆盖该工具进档位之前已落盘的旧动态角色(AGENT.md
-    // 还没这工具),以及任何非协调档却来接手的 lead。idempotent;All 已含、Deny 不动。
-    if step_mode(step) == StepMode::Intake {
-        if let ToolFilter::Allow(v) = &mut role_filter {
-            if !v.iter().any(|t| t == "propose_work_plan") {
-                v.push("propose_work_plan".to_string());
-            }
-        }
-    }
+    let (role_filter, role_max_iter) = resolve_companion_role(p.companion_id).await;
 
     // system prompt = persona 前缀 + 群聊规则 + 动手能力说明(三段拼接)。
     // persona 前缀:载 companions/<id>/persona.md;文件不存在 → 空串。
@@ -589,44 +528,10 @@ async fn run_one_react(
         .unwrap_or_default();
 
     let group_rules = render_system_prompt(step, participant_idx);
-    // intake 步(工作群牵头者接手)给"主导推进"指令,而非放养的"以对话为主"——这是把工作群
-    // 从七嘴八舌空转、拉回有组织推进的关键(配合路由:工作群默认牵头者接手)。
-    let tools_note = if step_mode(step) == StepMode::Intake {
-        let roster = step
-            .input
-            .metadata
-            .get("roster")
-            .and_then(|v| v.as_str())
-            .unwrap_or("(暂无队友信息)");
-        format!(
-            "\n\n【你是这个工作群的牵头者/接口人】用户只跟你对接,你来主导推进,别只是闲聊:\n\
-             1. 先看有没有**阻塞性的关键未知**(日期/预算/范围/受众等)——有就用 ask_user 工具\
-             **一次性问清**(可给选项),等用户答了再往下。别空喊「@用户 请告诉我 X」(不阻塞、易漏、\
-             让团队空转);要用 ask_user 阻塞式地问。\n\
-             2. 关键信息齐了 → 用 **propose_work_plan** 工具把活拆成任务派给队友:每条填 role\
-             (队友的标识,见下方名单)、objective(这条做什么)、depends_on(依赖哪几条,0-based 下标,\
-             无依赖留空)。会给用户发「开工方案」卡,用户点开工后队友才真正并行开干。\n\
-             3. 你自己(协调档)一般不写文件,产出靠派给能写的队友;别自己硬扛所有活。\n\
-             【你的队友(propose_work_plan 的 role 填这些标识)】\n{roster}"
-        )
-    } else {
-        "\n\n【动手能力】你能用工具(读写文件、执行命令、查资料、开浏览器等)。\
+    let tools_note = "\n\n【动手能力】你能用工具(读写文件、执行命令、查资料、开浏览器等)。\
          但这是群聊,以对话为主——只在用户的需求确实需要你动手查/做时才调工具;\
-         平时顺着聊就行,别为用而用。用完工具,用你自己的口吻把结果说出来,别贴原始输出。"
-            .to_string()
-    };
-    // 项目工作目录注入 prompt:`with_task_working_dir`(run_react_inner)只把**工具 cwd**
-    // scope 到项目目录,agent 的 prompt 里并没有这个路径 —— 不告诉它,它就不知道自己在哪个
-    // 绝对路径干活、是不是在改用户指定的现成项目。这里把目录显式写进 system prompt。
-    let workspace_note = crate::engine::tools::get_database()
-        .and_then(|db| db.group_workspace_for_collaboration(collab_id))
-        .map(|ws| format!(
-            "\n\n【项目工作目录】你的工作目录是 `{ws}`。文件读写、命令执行都默认在这个目录里进行,\
-             用相对路径(相对该目录)或这个绝对路径都行。这是用户为本项目指定的目录,可能**已有现成文件**\
-             ——动手前先看清里面有什么(列目录 / 读关键文件),别假设是空目录、别在目录外乱建。"
-        ))
-        .unwrap_or_default();
-    let system_prompt = format!("{persona_prefix}{group_rules}{tools_note}{workspace_note}");
+         平时顺着聊就行,别为用而用。用完工具,用你自己的口吻把结果说出来,别贴原始输出。";
+    let system_prompt = format!("{persona_prefix}{group_rules}{tools_note}");
     let user_message = render_user_prompt(step, upstream);
 
     // 构造完(mode-aware:prompt / 权限 / 步数)→ 交给共享 ReAct 内核执行(S3 抽出)。
@@ -907,43 +812,4 @@ mod role_tests {
         assert!(!names_after_readonly.contains(&"execute_shell".to_string()));
     }
 
-    // S2④:项目 task 的上游产出按"交接"语义注入,而非"群里的讨论"。
-    #[test]
-    fn project_task_prompt_frames_upstream_as_handoff() {
-        use super::super::{StepInput, StepStatus};
-        let step = Step {
-            id: 2,
-            kind: StepKind::ParallelAgents,
-            participants: vec![],
-            depends_on: vec![1],
-            input: StepInput {
-                prompt: "写前端界面".into(),
-                metadata: serde_json::json!({ "mode": "project_task" }),
-            },
-            output: None,
-            status: StepStatus::Pending,
-            started_at: None,
-            finished_at: None,
-        };
-        let upstream = vec![(
-            1i64,
-            StepOutput {
-                summary: "后端 API".into(),
-                full_output: "GET /todos 返回 [{id,title,done}]".into(),
-                tokens_used: TokenUsage::default(),
-                duration_ms: 0,
-            },
-        )];
-        let prompt = render_user_prompt(&step, &upstream);
-        assert!(prompt.contains("上游交付"), "应是交接语义: {prompt}");
-        assert!(prompt.contains("GET /todos"), "应注入上游产出");
-        assert!(prompt.contains("写前端界面"), "应含本任务");
-        assert!(!prompt.contains("群里目前的讨论"), "不该是讨论语义");
-
-        // 无上游(第一棒)→ 只有任务,无交接块。
-        let first = Step { depends_on: vec![], ..step.clone() };
-        let p0 = render_user_prompt(&first, &[]);
-        assert!(!p0.contains("上游交付"));
-        assert!(p0.contains("写前端界面"));
-    }
 }
