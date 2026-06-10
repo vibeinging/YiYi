@@ -27,6 +27,8 @@ import { useSessionStore } from '../stores/sessionStore';
 import { useWorkStore } from '../stores/workStore';
 import { CustomTeamPanel } from '../components/companions/CustomTeamPanel';
 import { ChatPage } from './Chat';
+import { open as openInFinder } from '@tauri-apps/plugin-shell';
+import { useRef } from 'react';
 
 const AMBER = 'var(--color-warning)'; // #FF9F0A —— work 象限强调色,区别于 chat 的靛紫
 
@@ -75,6 +77,16 @@ export function WorkPage() {
   // 不再丢选中;旁路入口(switchToSession 检测 work- 前缀)也写它。
   const selectedSessionId = useWorkStore((s) => s.selectedSessionId);
   const [launcherOpen, setLauncherOpen] = useState(false);
+  const [launcherPrefill, setLauncherPrefill] = useState('');
+  // chat 引导卡「去工作页发起」带来的任务文本(R6):经 workStore 传递(跨页导航后
+  // WorkPage 才挂载,window 事件会丢),挂载/变化时消费并打开启动器。
+  const pendingTask = useWorkStore((s) => s.pendingLauncherTask);
+  useEffect(() => {
+    if (pendingTask == null) return;
+    setLauncherPrefill(pendingTask);
+    setLauncherOpen(true);
+    useWorkStore.getState().setPendingLauncherTask(null);
+  }, [pendingTask]);
 
   useEffect(() => {
     let alive = true;
@@ -180,14 +192,15 @@ export function WorkPage() {
                     {g.groupName}
                   </span>
                   {g.workspacePath && (
-                    <span
-                      className="text-[10.5px] truncate inline-flex items-center gap-0.5"
+                    <button
+                      className="text-[10.5px] truncate inline-flex items-center gap-0.5 hover:underline"
                       style={{ color: 'var(--color-text-muted)' }}
-                      title={g.workspacePath}
+                      title={`打开 ${g.workspacePath}`}
+                      onClick={(e) => { e.stopPropagation(); openInFinder(g.workspacePath!).catch(() => {}); }}
                     >
                       <Folder size={10} strokeWidth={2} />
                       {basename(g.workspacePath)}
-                    </span>
+                    </button>
                   )}
                 </div>
 
@@ -285,8 +298,9 @@ export function WorkPage() {
 
       {launcherOpen && (
         <WorkLauncher
-          onClose={() => setLauncherOpen(false)}
-          onLaunched={(sessionId) => { setLauncherOpen(false); selectSession(sessionId); }}
+          initialTask={launcherPrefill}
+          onClose={() => { setLauncherOpen(false); setLauncherPrefill(''); }}
+          onLaunched={(sessionId) => { setLauncherOpen(false); setLauncherPrefill(''); selectSession(sessionId); }}
         />
       )}
     </div>
@@ -306,13 +320,18 @@ export function WorkPage() {
 function WorkLauncher({
   onClose,
   onLaunched,
+  initialTask,
 }: {
   onClose: () => void;
   onLaunched: (sessionId: string) => void;
+  /** chat 引导卡带来的任务文本(预填,免得用户重打)。 */
+  initialTask?: string;
 }) {
   const [folderMode, setFolderMode] = useState<'auto' | 'pick'>('auto');
   const [pickedFolder, setPickedFolder] = useState<string | null>(null);
-  const [task, setTask] = useState('');
+  const [task, setTask] = useState(initialTask ?? '');
+  // 已组建团队的 gid(R6):launch 失败重试时复用,不再重复组队(失败留孤儿团队的根)。
+  const committedGidRef = useRef<number | null>(null);
   const [launching, setLaunching] = useState(false);
   const [phase, setPhase] = useState(''); // 进度文案:正在组队 / 开工中
   const [error, setError] = useState('');
@@ -345,12 +364,15 @@ function WorkLauncher({
     setLaunching(true);
     setError('');
     try {
-      // 项目复用:选了已有文件夹且该目录已绑团队 → 复用,不重复组队。
-      let gid: number | null = folder ? await findTeamByFolder(folder) : null;
+      // 项目复用:本次弹窗里已组建过(launch 失败重试)→ 复用;选了已有文件夹且
+      // 该目录已绑团队 → 复用;都没有才组队。失败重试不再留一地孤儿团队。
+      let gid: number | null =
+        committedGidRef.current ?? (folder ? await findTeamByFolder(folder) : null);
       if (!gid) {
         setPhase('正在组队…');
         const team = await generateTeam(task.trim());
         gid = await commitDynamicTeam(team.name, '🛠️', team.roles);
+        committedGidRef.current = gid;
       }
       await launchOn(gid);
     } catch (e) {
@@ -388,11 +410,23 @@ function WorkLauncher({
               <X size={16} />
             </button>
           </div>
-          {/* 预填任务作 goal;落地后不开 chat,改为用该团队开工(folder 非 null 时覆盖工作区)。 */}
+          {/* 预填任务作 goal;落地后不开 chat,改为用该团队开工(folder 非 null 时覆盖工作区)。
+              onClose 回表单而非关启动器(任务文本不丢);launch 失败也回表单,gid 已记下,
+              重试时复用该团队(不重复组队)。 */}
           <CustomTeamPanel
             goal={task.trim()}
-            onClose={onClose}
-            onCommitted={async (gid) => { await launchOn(gid); }}
+            onClose={() => setReview(false)}
+            onCommitted={async (gid) => {
+              committedGidRef.current = gid;
+              try {
+                await launchOn(gid);
+              } catch (e) {
+                setReview(false);
+                setLaunching(false);
+                setPhase('');
+                setError(`团队已组建,但开工失败:${e}。直接点「开工」重试(会用这支团队)。`);
+              }
+            }}
           />
         </div>
       </div>
@@ -478,8 +512,16 @@ function WorkLauncher({
         </div>
 
         {error && (
-          <div className="text-[12px] px-2.5 py-1.5 rounded-lg" style={{ background: 'var(--color-error-bg, #fee)', color: 'var(--color-error, #c00)' }}>
-            {error}
+          <div className="text-[12px] px-2.5 py-1.5 rounded-lg flex items-start gap-2" style={{ background: 'var(--color-error-bg, #fee)', color: 'var(--color-error, #c00)' }}>
+            <span className="flex-1">{error}</span>
+            {/(api|key|配置|模型|provider|401|未设置)/i.test(error) && (
+              <button
+                className="shrink-0 underline"
+                onClick={() => { onClose(); window.dispatchEvent(new CustomEvent('navigate', { detail: 'settings' })); }}
+              >
+                去设置
+              </button>
+            )}
           </div>
         )}
 

@@ -673,14 +673,14 @@ impl SqliteOrchestrator {
         // 状态(intake done 只是"牵头者说完这轮话",job 仍在 clarifying/pending_commit —— 把
         // intake done 当"已交付"正是旧 MAX(id) 倒推的 P0 错乱)。best-effort,不阻塞 finalize。
         if let Ok(conn) = self.db.get_conn().ok_or(()) {
-            let row: Result<(String, String), _> = conn
+            let row: Result<(String, String, String), _> = conn
                 .query_row(
-                    "SELECT chat_session_id, kind FROM collaborations WHERE id = ?1",
+                    "SELECT chat_session_id, kind, intent FROM collaborations WHERE id = ?1",
                     params![collab_id],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 );
             drop(conn);
-            if let Ok((session_id, kind)) = row {
+            if let Ok((session_id, kind, intent)) = row {
                 if kind == "work_dispatch" {
                     let job_status = match &status {
                         CollaborationStatus::Done => "done",
@@ -690,6 +690,31 @@ impl SqliteOrchestrator {
                     };
                     if let Err(e) = self.db.set_work_job_status(&session_id, job_status) {
                         log::warn!("collab {collab_id}: sync work job status: {e}");
+                    }
+                    // R6(交付闭环):交付那一刻不再静默 —— 系统通知 + work://job_done 事件
+                    // (NavRail 红点/列表即刷)。中止是用户自己点的,不打扰。通知 context 走
+                    // 既有 notification://pending 管道(page=chat+session_id),点击跳转由
+                    // switchToSession 的 work- 前缀分支接到工作页(R5)。
+                    let notify = match &status {
+                        CollaborationStatus::Done => Some(("✅ 工作已交付", intent)),
+                        CollaborationStatus::Failed(_) => Some(("⚠️ 工作没做完", intent)),
+                        _ => None,
+                    };
+                    if let Some((title, body)) = notify {
+                        crate::engine::scheduler::send_notification_with_context(
+                            title,
+                            &body,
+                            serde_json::json!({ "page": "chat", "session_id": session_id }),
+                        );
+                    }
+                    if let Some(handle) = crate::engine::tools::get_app_handle() {
+                        use tauri::Emitter;
+                        handle
+                            .emit(
+                                "work://job_done",
+                                serde_json::json!({ "session_id": session_id, "status": job_status }),
+                            )
+                            .ok();
                     }
                 }
             }

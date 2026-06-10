@@ -33,6 +33,7 @@ import { TaskSidebar, NavRail } from './components/TaskSidebar';
 import { TaskDetailOverlay } from './components/TaskDetailOverlay';
 import { useTaskSidebarStore } from './stores/taskSidebarStore';
 import { useTaskStore } from './stores/taskStore';
+import { useWorkStore } from './stores/workStore';
 export type Page = 'chat' | 'work' | 'buddy' | 'skills' | 'extensions' | 'cronjobs' | 'workspace' | 'mcp' | 'heartbeat' | 'growth' | 'bots' | 'terminal' | 'settings';
 
 function App() {
@@ -108,6 +109,19 @@ function MainApp() {
     window.addEventListener('navigate', handler);
     return () => window.removeEventListener('navigate', handler);
   }, []);
+
+  // R6(交付闭环):job 完成时不在工作页 → NavRail「工作」入口红点;进工作页即清。
+  useEffect(() => {
+    const unlisten = listen<{ session_id: string; status: string }>('work://job_done', () => {
+      if (currentPageRef.current !== 'work') useWorkStore.getState().bumpUnseenDone();
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, []);
+  const currentPageRef = useRef(currentPage);
+  useEffect(() => {
+    currentPageRef.current = currentPage;
+    if (currentPage === 'work') useWorkStore.getState().clearUnseenDone();
+  }, [currentPage]);
 
   // Tray menu navigation: jump to a specific page (and optional sub-tab).
   useEffect(() => {

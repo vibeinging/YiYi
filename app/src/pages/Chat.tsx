@@ -5,7 +5,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X, Clock } from 'lucide-react';
+import { X, Clock, Hammer } from 'lucide-react';
 import { TimelinePanel } from '../components/TimelinePanel';
 import {
   chatStreamStart,
@@ -32,6 +32,8 @@ import { useChatStreamStore } from '../stores/chatStreamStore';
 import { useTaskSidebarStore } from '../stores/taskSidebarStore';
 import { useTaskStore } from '../stores/taskStore';
 import { useSessionStore } from '../stores/sessionStore';
+import { useWorkStore } from '../stores/workStore';
+import { looksLikeBuildIntent } from '../utils/buildIntent';
 import { useDragRegion } from '../hooks/useDragRegion';
 import { toast } from '../components/Toast';
 
@@ -424,6 +426,11 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking', embed
       return;
     }
 
+    // R6:群聊里像"要建造交付物"的话 → 出一条路标横幅(不拦消息,照常进群聊)。
+    if (!embedded && familyGroupId != null && looksLikeBuildIntent(plainText)) {
+      setWorkHint(plainText);
+    }
+
     // 草稿态(点好友进来、零会话 activeSessionId='')发首条消息 → 这时才建一段全新私聊会话并切过去。
     // skipLoadRef 让随之而来的 activeSessionId 变更 effect 跳过一次 loadMessages,避免空历史
     // 覆盖下面的乐观插入(消息闪一下)。
@@ -679,6 +686,11 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking', embed
     return <>{parts}</>;
   }, []);
 
+  // --- work 引导卡(R6):群聊里说了像"建造交付物"的话 → 轻提示去工作页发起 ---
+  // 措辞检测已从路由退役(决策 X:不猜,显式发起);这里只是**不挡路的路标**,
+  // 消息照常进群聊,横幅可一键带文本去工作页、也可无视。
+  const [workHint, setWorkHint] = useState<string | null>(null);
+
   // --- Lightbox ---
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const [timelineOpen, setTimelineOpen] = useState(false);
@@ -837,6 +849,39 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking', embed
           <PermissionCard request={activePermission!} />
         </div>
       ) : (
+        <>
+        {workHint && (
+          <div
+            className="mx-4 mb-1.5 px-3 py-2 rounded-xl flex items-center gap-2 text-[12.5px] animate-in fade-in slide-in-from-bottom-1"
+            style={{
+              background: 'color-mix(in srgb, var(--color-warning) 10%, var(--color-bg-elevated))',
+              border: '1px solid color-mix(in srgb, var(--color-warning) 30%, var(--color-border))',
+              color: 'var(--color-text)',
+            }}
+          >
+            <Hammer size={14} style={{ color: 'var(--color-warning)', flexShrink: 0 }} />
+            <span className="flex-1 min-w-0 truncate">这像是个工程活 —— 要去工作页让一支团队接手吗?</span>
+            <button
+              className="shrink-0 px-2.5 py-1 rounded-lg text-[12px] font-medium"
+              style={{ background: 'var(--color-warning)', color: '#1a1206' }}
+              onClick={() => {
+                useWorkStore.getState().setPendingLauncherTask(workHint);
+                setWorkHint(null);
+                window.dispatchEvent(new CustomEvent('navigate', { detail: 'work' }));
+              }}
+            >
+              去发起
+            </button>
+            <button
+              className="shrink-0 p-1 rounded-md"
+              style={{ color: 'var(--color-text-muted)' }}
+              onClick={() => setWorkHint(null)}
+              title="就在这聊"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        )}
         <ChatInput
           ref={inputRef}
           // 有待答 ask_user 问题时,输入框保持可用(不显示 stop)——发送即回答,
@@ -850,6 +895,7 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking', embed
           onFileSelect={() => {}}
           onFetchWorkspaceFiles={fetchWorkspaceFiles}
         />
+        </>
       )}
 
       <TimelinePanel

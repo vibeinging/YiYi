@@ -55,10 +55,15 @@ export function useChatEventBridge() {
         },
       ),
 
-      listen<{ text: string; session_id: string }>('chat://complete', (event) => {
+      listen<{ text: string; session_id: string; collaboration_id?: number }>('chat://complete', (event) => {
         if (cancelled) return;
         if (event.payload.session_id !== store().sessionId) return;
         store().endStream();
+        // work followup:后端已起 intake 协作(载荷带 collaboration_id),立即重载消息
+        // 把牵头者接手的协作卡拉出来 —— 消「发出去没下文」的零反馈空窗(R6)。
+        if (event.payload.collaboration_id != null) {
+          window.dispatchEvent(new CustomEvent('yiyi:reload-messages'));
+        }
       }),
 
       listen<{ text: string; session_id: string }>('chat://error', (event) => {

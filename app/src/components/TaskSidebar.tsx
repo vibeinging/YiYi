@@ -17,6 +17,7 @@ import { useTranslation } from 'react-i18next';
 import { useTaskSidebarStore } from '../stores/taskSidebarStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useGroupsStore } from '../stores/groupsStore';
+import { useWorkStore } from '../stores/workStore';
 import { AvatarGrid } from './AvatarGrid';
 import { timeAgo } from '../utils/taskStatus';
 import type { Page } from '../App';
@@ -483,6 +484,7 @@ export function NavRail({
   sidebarCollapsed: boolean;
   onDragMouseDown: (e: React.MouseEvent) => void;
 }) {
+  const workUnseen = useWorkStore((s) => s.unseenDone); // R6:job 完成红点
   const { t } = useTranslation();
   const chatActive = currentPage === 'chat';
   const cell = (active: boolean) =>
@@ -528,8 +530,15 @@ export function NavRail({
             onMouseEnter={(e) => { if (!workActive) e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
             onMouseLeave={(e) => { if (!workActive) e.currentTarget.style.background = 'transparent'; }}
           >
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center">
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center relative">
               <Hammer size={18} color="var(--color-warning)" strokeWidth={workActive ? 2.3 : 2} />
+              {workUnseen > 0 && (
+                <span
+                  className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full"
+                  style={{ background: 'var(--color-success)' }}
+                  title="有工作完成了"
+                />
+              )}
             </div>
             <span className="text-[9px] font-medium leading-none">工作</span>
           </button>
