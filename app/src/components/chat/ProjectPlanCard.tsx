@@ -23,8 +23,10 @@ const ACCENT = 'var(--color-primary)';
 export function ProjectPlanCard({ plan }: { plan: ProjectPlanState }) {
   const [committing, setCommitting] = useState(false);
   const [done, setDone] = useState(false);
+  const [dismissed, setDismissed] = useState(false); // R4:卡片可能来自持久化消息,「算了」=本地收起
   const sessionId = useChatStreamStore((s) => s.sessionId);
   const clearProjectPlan = useChatStreamStore((s) => s.clearProjectPlan);
+  if (dismissed) return null;
 
   const start = async () => {
     if (committing || done) return;
@@ -90,9 +92,9 @@ export function ProjectPlanCard({ plan }: { plan: ProjectPlanState }) {
               <div className="min-w-0 flex-1">
                 <div className="text-[12px] font-medium" style={{ color: meta.color }}>
                   {meta.name}
-                  {t.depends_on.length > 0 && (
+                  {(t.depends_on?.length ?? 0) > 0 && (
                     <span className="ml-1.5 text-[10.5px] font-normal" style={{ color: 'var(--color-text-muted)' }}>
-                      <ArrowRight size={9} className="inline -mt-0.5" /> 接 {t.depends_on.map((d) => `#${d + 1}`).join('、')}
+                      <ArrowRight size={9} className="inline -mt-0.5" /> 接 {(t.depends_on ?? []).map((d) => `#${d + 1}`).join('、')}
                     </span>
                   )}
                 </div>
@@ -126,7 +128,7 @@ export function ProjectPlanCard({ plan }: { plan: ProjectPlanState }) {
               开工
             </button>
             <button
-              onClick={() => clearProjectPlan()}
+              onClick={() => { setDismissed(true); clearProjectPlan(); }}
               disabled={committing}
               className="flex items-center gap-1 py-1.5 px-3 rounded-xl text-[12.5px] transition-colors disabled:opacity-50"
               style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-secondary)' }}

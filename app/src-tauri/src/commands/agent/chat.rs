@@ -581,10 +581,26 @@ pub async fn get_history_impl(
                 (m.role, None, None)
             };
 
+            // R4:work_plan 锚点(propose_work_plan 落库的开工方案)→ 提取方案载荷,
+            // 前端渲染**持久化**的开工方案卡(不再依赖易失的一次性事件单槽)。
+            let work_plan = if m.context_type.as_deref() == Some("work_plan") {
+                meta.as_ref().map(|mv| {
+                    serde_json::json!({
+                        "request_id": mv.get("request_id").cloned().unwrap_or_default(),
+                        "summary": mv.get("summary").cloned().unwrap_or_default(),
+                        "plan": mv.get("plan").cloned().unwrap_or_default(),
+                    })
+                })
+            } else {
+                None
+            };
+
             ChatMessage {
                 id: Some(m.id),
                 role: role_for_frontend,
                 content: m.content,
+                context_type: m.context_type,
+                work_plan,
                 timestamp: Some(m.timestamp as u64),
                 attachments,
                 source,

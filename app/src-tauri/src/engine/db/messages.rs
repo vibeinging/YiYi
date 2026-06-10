@@ -12,6 +12,8 @@ pub struct ChatMessage {
     pub collaboration_id: Option<i64>,
     pub step_id: Option<i64>,
     pub companion_id: Option<i64>,
+    /// chat/work 渲染判别器(R4):collab(默认)/ work_job / work_plan。
+    pub context_type: Option<String>,
 }
 
 impl super::Database {
@@ -28,7 +30,7 @@ impl super::Database {
         let mut stmt = conn
             .prepare(
                 "SELECT id, session_id, role, content, timestamp, metadata,
-                        collaboration_id, step_id, companion_id FROM messages
+                        collaboration_id, step_id, companion_id, context_type FROM messages
                  WHERE session_id = ?1 ORDER BY timestamp ASC LIMIT ?2",
             )
             .map_err(|e| format!("Query error: {}", e))?;
@@ -45,6 +47,7 @@ impl super::Database {
                     collaboration_id: row.get(6)?,
                     step_id: row.get(7)?,
                     companion_id: row.get(8)?,
+                    context_type: row.get(9).ok(),
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?
@@ -65,7 +68,7 @@ impl super::Database {
         let mut stmt = conn
             .prepare(
                 "SELECT id, session_id, role, content, timestamp, metadata,
-                        collaboration_id, step_id, companion_id FROM messages
+                        collaboration_id, step_id, companion_id, context_type FROM messages
                  WHERE companion_id = ?1 ORDER BY timestamp DESC, id DESC LIMIT ?2",
             )
             .map_err(|e| format!("Query error: {}", e))?;
@@ -82,6 +85,7 @@ impl super::Database {
                     collaboration_id: row.get(6)?,
                     step_id: row.get(7)?,
                     companion_id: row.get(8)?,
+                    context_type: row.get(9).ok(),
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?
@@ -104,7 +108,7 @@ impl super::Database {
         let mut stmt = conn
             .prepare(
                 "SELECT id, session_id, role, content, timestamp, metadata,
-                        collaboration_id, step_id, companion_id FROM messages
+                        collaboration_id, step_id, companion_id, context_type FROM messages
                  WHERE session_id = ?1 ORDER BY timestamp DESC LIMIT ?2",
             )
             .map_err(|e| format!("Query error: {}", e))?;
@@ -122,6 +126,7 @@ impl super::Database {
                     collaboration_id: row.get(6)?,
                     step_id: row.get(7)?,
                     companion_id: row.get(8)?,
+                    context_type: row.get(9).ok(),
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?
@@ -151,7 +156,7 @@ impl super::Database {
         let mut stmt = conn
             .prepare(
                 "SELECT id, session_id, role, content, timestamp, metadata,
-                        collaboration_id, step_id, companion_id FROM messages
+                        collaboration_id, step_id, companion_id, context_type FROM messages
                  WHERE session_id = ?1 ORDER BY timestamp DESC",
             )
             .map_err(|e| format!("Query error: {}", e))?;
@@ -167,6 +172,7 @@ impl super::Database {
                     collaboration_id: row.get(6)?,
                     step_id: row.get(7)?,
                     companion_id: row.get(8)?,
+                    context_type: row.get(9).ok(),
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?

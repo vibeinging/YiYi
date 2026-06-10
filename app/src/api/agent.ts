@@ -71,6 +71,13 @@ export interface CompanionDraftEnvelope {
   adopted_companion_id?: number;
 }
 
+/** 开工方案里的一条任务(role/objective/depends_on)。 */
+export interface WorkPlanTask {
+  role: string;
+  objective: string;
+  depends_on?: number[];
+}
+
 export interface ChatMessage {
   id?: number;
   role: 'user' | 'assistant' | 'system' | 'tool' | 'context_reset' | 'collaboration' | 'companion_draft';
@@ -88,6 +95,10 @@ export interface ChatMessage {
   tool_artifacts?: ToolArtifact[];
   /** When role === 'collaboration', the orchestrator id this message renders. */
   collaboration_id?: number;
+  /** chat/work 渲染判别器(R4):'collab'(默认)/ 'work_job' / 'work_plan'。 */
+  context_type?: string;
+  /** context_type === 'work_plan' 时的方案载荷:{ request_id, summary, plan: { tasks } }。 */
+  work_plan?: { request_id?: string; summary?: string; plan?: { tasks?: WorkPlanTask[] } };
   /** When role === 'companion_draft', the draft payload (incl. draft_state). */
   companion_draft?: CompanionDraftEnvelope;
 }

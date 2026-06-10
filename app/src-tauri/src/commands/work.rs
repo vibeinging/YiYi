@@ -41,7 +41,16 @@ pub fn find_team_by_folder(state: State<'_, AppState>, folder: String) -> Option
     if folder.is_empty() {
         return None;
     }
-    state.db.find_group_by_workspace(folder)
+    state.db.find_group_by_workspace(&canonical_path(folder))
+}
+
+/// 路径规范化(R4):同一文件夹的不同写法(尾斜杠 / macOS `/tmp`→`/private/tmp` symlink /
+/// 相对段)统一成 canonical 形,否则「同项目复用团队」按裸字符串匹配会失配 → 重复组队、
+/// 两支团队绑同一目录互踩。canonicalize 失败(目录不存在等)回退 trim 原文。
+fn canonical_path(p: &str) -> String {
+    std::fs::canonicalize(p)
+        .map(|pb| pb.to_string_lossy().to_string())
+        .unwrap_or_else(|_| p.trim_end_matches('/').to_string())
 }
 
 /// 「新建工作」发起后返回的句柄:新建的 work 会话 + intake 协作 id(前端跳过去看团队推进)。
@@ -91,7 +100,13 @@ pub async fn launch_work_job_impl(
     // 执行期 executor 经 group_workspace_for_collaboration → with_task_working_dir 把成员的
     // 文件/shell 工具 cwd scope 到这里。必须同时登记成 read_write 授权文件夹,否则工具读写
     // 会被路径授权门禁拦弹窗(add_authorized_folder_impl 是 upsert,重复登记安全)。
-    if let Some(ws) = workspace_path.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+    if let Some(ws) = workspace_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(canonical_path)
+        .as_deref()
+    {
         db.set_group_workspace(team_gid, ws)?;
         let team_name = db.get_companion_group(team_gid).map(|g| g.name);
         crate::commands::workspace::add_authorized_folder_impl(
@@ -282,6 +297,10 @@ pub async fn commit_work_plan_impl(
     session_id: &str,
     plan: ProjectPlan,
 ) -> Result<i64, String> {
+    // R4:开工卡持久化后可被重复点击 —— 队伍已在跑时拒绝重复派工(失败/中止后重派合法)。
+    if state.db.get_work_job_status(session_id).as_deref() == Some("running") {
+        return Err("团队已经在干了,别重复开工;要改方向先「停」再说新需求".into());
+    }
     let (cplan, _gid) = prepare_work_dispatch(&state.db, session_id, &plan)?;
 
     // 派工成员名(去重)—— cplan 随后被 submit 消费,先取出来给锚点占位消息用。
