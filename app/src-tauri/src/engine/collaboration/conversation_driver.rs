@@ -90,9 +90,11 @@ fn deregister_group_loop(session_id: &str, cancel: &Arc<AtomicBool>) {
 const REACT_DELAY_MIN_MS: u64 = 5000;
 const REACT_DELAY_SPAN_MS: u64 = 25000; // 5000..30000ms = 随机 5–30 秒
 
-/// 群"放养式"持续群聊的护栏。**全是防失控的硬上限,不是体验上限**——产品意图是"他们自己
-/// 一直聊到冷场或用户打断"(用户决策:热闹 + 不设限 + 我喊停)。正常停因是 ① 用户发消息打断
-/// ② 连续几波重新点火仍没人接(真冷场)。下面数值只在 bug 失控时兜底,免得无限烧 token;
+/// 群"放养式"持续群聊的护栏。产品意图仍是"他们自己聊到冷场或用户打断"(热闹感),但上限
+/// 语义从「防失控兜底」收紧为「**成本护栏**」——实测(用户反馈 2026-06-09)旧值(500 调用/
+/// 200 条/30 分钟)下一条消息能烧掉几十轮全员互聊,token 账单不可接受。新值保证一条用户
+/// 消息触发的总开销有界:5 人群 ≈ 12 波全员扇出,依然够"热闹",到顶由 YiYi 总结收尾
+/// (用户可见的自然收口,而非无声截断)。后续若做群设置,这组值是配置位。
 /// 测试注入小值以快速验证"撞顶会停"。
 #[derive(Clone)]
 struct GroupLimits {
@@ -111,9 +113,9 @@ struct GroupLimits {
 impl GroupLimits {
     fn production() -> Self {
         Self {
-            max_messages: 200,
-            max_calls: 500,
-            wall: Duration::from_secs(1800), // 30 分钟硬兜底
+            max_messages: 40,
+            max_calls: 60,
+            wall: Duration::from_secs(600), // 10 分钟硬兜底
             revive_max_dry: 2,
             wake_debounce: Duration::from_millis(5000),
         }
@@ -508,6 +510,9 @@ async fn drive_group_loop(
 
     // 自然冷场(inflight 归零)→ cancel 仍为 false;被抢占 / 墙钟超时 → 已为 true。
     let natural_quiesce = !cancel.load(Ordering::Relaxed);
+    // 撞成本护栏收口(calls/msg 到顶):聊得正热被护栏停的,让 YiYi 总结收尾——用户可见的
+    // 自然收口,而不是无声截断(收紧护栏后这条路径会真实发生,见 GroupLimits 文档)。
+    let capped_close = at_hard_cap(calls, msg_count);
 
     // 收口:取消任何残留在途任务。
     cancel.store(true, Ordering::Relaxed);
@@ -523,7 +528,7 @@ async fn drive_group_loop(
             if orch.add_pending_step(collab_id, &fb).is_ok() {
                 let _ = orch.run_round_step(collab_id, &fb, &[]).await;
             }
-        } else if wants_conclusion(&user_message) {
+        } else if wants_conclusion(&user_message) || capped_close {
             let sum = yiyi_summary_step(next_id + 1, scope, &hist_json, &user_message);
             if orch.add_pending_step(collab_id, &sum).is_ok() {
                 let _ = orch.run_round_step(collab_id, &sum, &[]).await;
@@ -545,9 +550,12 @@ mod tests {
     use std::collections::HashMap as Map;
 
     /// 记录每个成员看到的历史 + 返回配置好的发言,验证事件循环行为(不碰 LLM)。
+    /// `pass_after_first`:每人只在首次被调时说话,之后一律 `<pass>` —— 模拟"说完就没话了"
+    /// 的自然冷场(静态 replies 会永远有话说,只能撞护栏收口,盖不住冷场路径)。
     struct MockExec {
         replies: Map<i64, String>,
         seen: StdMutex<Vec<(i64, String)>>,
+        pass_after_first: bool,
     }
     #[async_trait]
     impl Executor for MockExec {
@@ -559,8 +567,17 @@ mod tests {
         ) -> Result<StepOutput, String> {
             let p = step.participants[0].clone();
             let hist = step.input.metadata.get("history").map(|v| v.to_string()).unwrap_or_default();
-            self.seen.lock().unwrap().push((p.companion_id, hist));
-            let reply = self.replies.get(&p.companion_id).cloned().unwrap_or_else(|| "<pass>".into());
+            let prior_calls = {
+                let mut seen = self.seen.lock().unwrap();
+                let n = seen.iter().filter(|(c, _)| *c == p.companion_id).count();
+                seen.push((p.companion_id, hist));
+                n
+            };
+            let reply = if self.pass_after_first && prior_calls >= 1 {
+                "<pass>".to_string()
+            } else {
+                self.replies.get(&p.companion_id).cloned().unwrap_or_else(|| "<pass>".into())
+            };
             let full = if reply == "<pass>" { reply.clone() } else { format!("【{}】{}", p.name, reply) };
             Ok(StepOutput {
                 summary: reply,
@@ -604,7 +621,7 @@ mod tests {
         let mut replies = Map::new();
         replies.insert(1, "我先说".to_string());
         replies.insert(2, "我接一句".to_string());
-        let mock = Arc::new(MockExec { replies, seen: StdMutex::new(Vec::new()) });
+        let mock = Arc::new(MockExec { replies, seen: StdMutex::new(Vec::new()), pass_after_first: false });
         let executor: ExecutorHandle = mock.clone();
         let orch = SqliteOrchestrator::new(db.clone(), executor);
 
@@ -656,7 +673,7 @@ mod tests {
         // 两人都永远有话说(若无护栏会无限循环)。
         replies.insert(1, "我还有话".to_string());
         replies.insert(2, "我也接".to_string());
-        let mock = Arc::new(MockExec { replies, seen: StdMutex::new(Vec::new()) });
+        let mock = Arc::new(MockExec { replies, seen: StdMutex::new(Vec::new()), pass_after_first: false });
         let executor: ExecutorHandle = mock.clone();
         let orch = SqliteOrchestrator::new(db.clone(), executor);
 
@@ -690,8 +707,60 @@ mod tests {
             seen.len(),
             test_limits().max_calls
         );
-        // 没说"要结论" → 不应有 YiYi(companion 0)收口。
-        assert!(!seen.iter().any(|(c, _)| *c == 0), "未要结论时不该硬塞 YiYi 总结");
+        // 撞成本护栏收口 → YiYi(companion 0)总结收尾(用户可见的自然收口,非无声截断)。
+        assert!(
+            seen.iter().any(|(c, _)| *c == 0),
+            "撞护栏收口应由 YiYi 总结收尾;seen={:?}",
+            *seen
+        );
+    }
+
+    /// 自然冷场(说完就没话了)+ 用户没要结论 → 不硬塞 YiYi 总结(收口保持安静)。
+    /// 与 caps_runaway 互为边界:总结只属于「用户要结论」或「撞护栏被截」两种收口。
+    #[tokio::test(start_paused = true)]
+    #[serial]
+    async fn group_loop_natural_quiesce_without_conclusion_skips_summary() {
+        let tmp = TempDb::new();
+        let db = tmp.db();
+        db.ensure_session("sess-quiet", "群测试", "chat", None).unwrap();
+        let participants = parts();
+        let mut replies = Map::new();
+        replies.insert(1, "我说一句就够了".to_string());
+        replies.insert(2, "我也说一句".to_string());
+        // 每人只说一次,之后全 pass → 干涸波收口(自然冷场),远不到护栏。
+        let mock = Arc::new(MockExec { replies, seen: StdMutex::new(Vec::new()), pass_after_first: true });
+        let executor: ExecutorHandle = mock.clone();
+        let orch = SqliteOrchestrator::new(db.clone(), executor);
+
+        let hist0 = turns_to_json(&[]);
+        let wave1: Vec<Step> = participants
+            .iter()
+            .enumerate()
+            .map(|(i, p)| loop_step((i + 1) as StepId, p.clone(), &hist0, "随便聊聊"))
+            .collect();
+        let plan = CollaborationPlan { steps: wave1 };
+        let collab_id = orch
+            .create_conversation("sess-quiet", "随便聊聊", &plan, &CollaborationMode::Dispatched(0), None)
+            .unwrap();
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let notify = Arc::new(Notify::new());
+        drive_group_loop(
+            orch, collab_id, "sess-quiet", participants, MemoryScope::Group(1),
+            vec![], "随便聊聊".into(), cancel, notify, delay_zero,
+            test_limits(),
+            vec![],
+        )
+        .await;
+
+        let seen = mock.seen.lock().unwrap();
+        // 都说过话(冷场前有内容),但没要结论、没撞顶 → 不该出现 YiYi(0)。
+        assert!(seen.iter().any(|(c, _)| *c == 1), "阿狸应说过话");
+        assert!(
+            !seen.iter().any(|(c, _)| *c == 0),
+            "自然冷场且未要结论时不该硬塞 YiYi 总结;seen={:?}",
+            *seen
+        );
     }
 
     /// 用户明确"要个结论" → 群聊冷场后 YiYi(companion 0)收口给结论。
@@ -706,7 +775,7 @@ mod tests {
         // 阿狸说一句、小二 pass → msg_count==1(有人聊过),走"要结论"收口而非全冷场兜底。
         replies.insert(1, "我觉得 A 方案".to_string());
         replies.insert(2, "<pass>".to_string());
-        let mock = Arc::new(MockExec { replies, seen: StdMutex::new(Vec::new()) });
+        let mock = Arc::new(MockExec { replies, seen: StdMutex::new(Vec::new()), pass_after_first: false });
         let executor: ExecutorHandle = mock.clone();
         let orch = SqliteOrchestrator::new(db.clone(), executor);
 
@@ -756,7 +825,7 @@ mod tests {
         let mut replies = Map::new();
         replies.insert(1, "阿狸说一句".to_string());
         replies.insert(2, "小二接一句".to_string());
-        let mock = Arc::new(MockExec { replies, seen: StdMutex::new(Vec::new()) });
+        let mock = Arc::new(MockExec { replies, seen: StdMutex::new(Vec::new()), pass_after_first: false });
         let executor: ExecutorHandle = mock.clone();
         let orch = SqliteOrchestrator::new(db.clone(), executor);
 
