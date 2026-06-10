@@ -204,6 +204,17 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking', embed
     })();
   }, []);
 
+  // R5(防幽灵会话):整页 chat 挂载/会话变化时,若活跃会话是 work 会话(work- 前缀,
+  // 不在 chat 列表里),回落到最近的 chat 会话 —— 从 Work 页切回「聊天」不再带着 work
+  // 会话进 chat 表面(侧栏无高亮、顶栏错乱的精神分裂态)。
+  useEffect(() => {
+    if (embedded || !initialized) return;
+    if (activeSessionId.startsWith('work-')) {
+      const fallback = useSessionStore.getState().chatSessions[0]?.id ?? '';
+      useSessionStore.getState().switchToSession(fallback);
+    }
+  }, [embedded, initialized, activeSessionId]);
+
   useEffect(() => {
     if (embedded || !pendingSessionId || !initialized) return; // 嵌入态不抢跳转
     useTaskSidebarStore.getState().consumePendingSession();
@@ -339,7 +350,12 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking', embed
   const activePermission = permissionQueue[0] ?? null;
   const isPermissionPending = activePermission?.status === 'pending';
   const questionQueue = useChatStreamStore((s) => s.questionQueue);
-  const activeQuestion = questionQueue[0] ?? null;
+  // R5:提问卡按**会话**路由 —— 只渲染/消费属于当前会话的问题(work PM 在后台提问时,
+  // 用户在别的会话打的字不再被劫持为答案)。无 sessionId 的旧载荷向后兼容:跟随任意会话。
+  const sessionQuestions = questionQueue.filter(
+    (q) => !q.sessionId || q.sessionId === activeSessionId,
+  );
+  const activeQuestion = sessionQuestions[0] ?? null;
   const spawnRunning = spawnAgents.some((a) => a.status === 'running');
   const loading = streamLoading || spawnRunning;
 
@@ -367,9 +383,10 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking', embed
   const answerQuestion = async (requestId: string, answer: string) => {
     const value = answer.trim();
     if (!value) return;
+    const all = useChatStreamStore.getState().questionQueue;
     const pendingQ =
-      useChatStreamStore.getState().questionQueue.find((q) => q.requestId === requestId) ??
-      useChatStreamStore.getState().questionQueue[0];
+      all.find((q) => q.requestId === requestId) ??
+      all.find((q) => !q.sessionId || q.sessionId === activeSessionId);
     // 协作里分身提问(companionId>0):问答已内联进它自己的群聊气泡(后端追进 step 产出 +
     // 实时流),这里**不**单开消息,免得重复。单聊 YiYi(companionId 0/空)才把「问题 +
     // 你的选择」合成一条消息(选择落在原问题块内,不单开用户气泡),与后端固化的一条一致。
@@ -385,7 +402,7 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking', embed
         role: 'user' as const, content: value, timestamp: Date.now(), attachments: undefined,
       }]);
     }
-    useChatStreamStore.getState().dequeueQuestion();
+    useChatStreamStore.getState().removeQuestion(pendingQ?.requestId ?? requestId);
     try {
       await invoke('answer_user_question', { requestId, answer: value });
     } catch {
@@ -398,7 +415,10 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking', embed
     messagesRef.current?.scrollToBottom();
 
     // 有待答 ask_user 问题时,这条消息就是回答:路由给等待中的 agent,不开启新一轮对话。
-    const pendingQ = useChatStreamStore.getState().questionQueue[0];
+    // R5:只认**当前会话**的问题 —— 别的会话(如 work PM)在等答案时,这里的消息照常聊天。
+    const pendingQ = useChatStreamStore
+      .getState()
+      .questionQueue.find((q) => !q.sessionId || q.sessionId === activeSessionId);
     if (pendingQ) {
       await answerQuestion(pendingQ.requestId, plainText);
       return;
@@ -731,8 +751,10 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking', embed
         </div>
       )}
 
-      {/* 顶栏:私聊 = 显示"和 X 私聊"条;群/单聊 = FamilyHeader(管理群/邀请入口) */}
-      {activeSessionId && !isTaskSession && !isCronSession && (
+      {/* 顶栏:私聊 = 显示"和 X 私聊"条;群/单聊 = FamilyHeader(管理群/邀请入口)。
+          嵌入态(Work 右栏)不渲染:群管理(改名/踢人/删群)不属于 work 监控面 ——
+          删群会直接废掉整个 work job;Work 页自带 header,也消除双层头。 */}
+      {!embedded && activeSessionId && !isTaskSession && !isCronSession && (
         (() => {
           const sess = chatSessions.find(s => s.id === activeSessionId);
           const companionId = draftCompanionId ?? (sess?.companion_id ?? null);

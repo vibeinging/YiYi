@@ -468,6 +468,12 @@ pub(crate) async fn run_react_inner(
             crate::engine::tools::ask_user::with_collab_qa(Arc::clone(&qa_acc), agent_fut),
         ),
     );
+    // R5:把协作所属会话绑进 task-local —— ask_user 等会话感知工具的事件载荷才带得上真实
+    // session_id(此前 collab 步的提问 session 为空,前端无从按会话路由,提问卡跨会话劫持)。
+    let collab_session = crate::engine::tools::get_database()
+        .and_then(|db| db.collaboration_session_id(collab_id))
+        .unwrap_or_default();
+    let run = crate::engine::tools::with_session_id(collab_session, run);
     let mut reply = match group_workspace {
         Some(ws) => crate::engine::tools::with_task_working_dir(ws, run).await?,
         None => run.await?,

@@ -24,6 +24,7 @@ import { listWorkJobs, launchWorkJob, findTeamByFolder, abortWorkJob, type WorkJ
 import { pickFolder } from '../api/workspace';
 import { generateTeam, commitDynamicTeam } from '../api/companions';
 import { useSessionStore } from '../stores/sessionStore';
+import { useWorkStore } from '../stores/workStore';
 import { CustomTeamPanel } from '../components/companions/CustomTeamPanel';
 import { ChatPage } from './Chat';
 
@@ -70,9 +71,9 @@ interface JobGroup {
 export function WorkPage() {
   const [jobs, setJobs] = useState<WorkJob[]>([]);
   const [loaded, setLoaded] = useState(false);
-  // 选中键用**会话 id**(稳定),不用协作 id:点「开工」会新建第二条 work_dispatch 协作,
-  // list_work_jobs 去重后该会话的代表协作 id 会变,用协作 id 会让选中态在轮询后丢失。
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  // 选中键用**会话 id**(稳定)。R5:存 workStore(模块级常驻)—— 切页卸载重挂 WorkPage
+  // 不再丢选中;旁路入口(switchToSession 检测 work- 前缀)也写它。
+  const selectedSessionId = useWorkStore((s) => s.selectedSessionId);
   const [launcherOpen, setLauncherOpen] = useState(false);
 
   useEffect(() => {
@@ -109,11 +110,18 @@ export function WorkPage() {
     return [...map.values()];
   }, [jobs]);
 
-  // 选中一个工作会话:同步切全局活跃会话(在渲染右栏前设好,ChatPage 据此加载),再记选中态。
+  // 选中一个工作会话:switchToSession 一站式处理(设全局活跃会话 + 写 workStore 选中态;
+  // work- 前缀分支里完成,见 sessionStore)。
   const selectSession = (sessionId: string) => {
     useSessionStore.getState().switchToSession(sessionId);
-    setSelectedSessionId(sessionId);
   };
+  // 切回 Work 页时,把右栏会话恢复成左栏选中的 job(全局活跃会话可能在 Chat 页被改走)。
+  useEffect(() => {
+    if (selectedSessionId && useSessionStore.getState().activeSessionId !== selectedSessionId) {
+      useSessionStore.getState().switchToSession(selectedSessionId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="h-full flex" style={{ background: 'var(--color-bg)' }}>

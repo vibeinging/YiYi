@@ -177,6 +177,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   switchToSession: (id: string) => {
+    // R5(防幽灵会话):work 会话(id 以 work- 开头)不属于 chat 表面 —— 任何入口
+    // (通知跳转/搜索/Work 页选中)切到它,都同步 Work 页选中态并把导航指到工作页。
+    // chat 列表(只含 source='chat')里没有它,留在 chat 页会进「我在哪」精神分裂态。
+    if (id.startsWith('work-')) {
+      import('../stores/workStore').then(({ useWorkStore }) => {
+        useWorkStore.getState().setSelectedSessionId(id);
+      });
+      window.dispatchEvent(new CustomEvent('navigate', { detail: 'work' }));
+      // activeSessionId 仍要设:Work 页右栏的嵌入会话当前由它驱动。
+      // 不持久化(localStorage 留给 chat 会话,重启回到 chat 侧)。
+      set({ activeSessionId: id, draftCompanionId: null });
+      return;
+    }
     // 切到真会话 → 草稿作废(草稿好友只对空草稿台有效)。
     set({ activeSessionId: id, draftCompanionId: null });
     get()._persistActive();
