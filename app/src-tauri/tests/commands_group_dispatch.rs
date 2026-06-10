@@ -583,7 +583,7 @@ async fn launch_work_job_creates_work_dispatch_collab() {
     db.set_group_workspace(gid, "/tmp/yiyi_ws_launch").unwrap();
     add_companion_to_group_impl(t.state(), gid, pm).await.unwrap();
 
-    let launched = launch_work_job_impl(t.state(), gid, "做个 todo 网页应用")
+    let launched = launch_work_job_impl(t.state(), gid, "做个 todo 网页应用", None)
         .await
         .unwrap();
 

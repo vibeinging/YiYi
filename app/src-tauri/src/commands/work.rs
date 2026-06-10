@@ -33,6 +33,17 @@ pub fn list_work_jobs(state: State<'_, AppState>) -> Vec<WorkJobSummary> {
     state.db.list_work_jobs()
 }
 
+/// 项目复用:某个文件夹是否已绑过团队(同一项目反复干活复用同支团队,不重复组队)。
+/// 「项目优先」的新建工作在选了已有文件夹时据此决定复用 / 现组。命中返回 group_id。
+#[tauri::command]
+pub fn find_team_by_folder(state: State<'_, AppState>, folder: String) -> Option<i64> {
+    let folder = folder.trim();
+    if folder.is_empty() {
+        return None;
+    }
+    state.db.find_group_by_workspace(folder)
+}
+
 /// 「新建工作」发起后返回的句柄:新建的 work 会话 + intake 协作 id(前端跳过去看团队推进)。
 #[derive(serde::Serialize)]
 pub struct LaunchedWork {
@@ -48,36 +59,23 @@ pub async fn launch_work_job(
     state: State<'_, AppState>,
     team_gid: i64,
     task: String,
+    workspace_path: Option<String>,
 ) -> Result<LaunchedWork, String> {
-    launch_work_job_impl(&state, team_gid, &task).await
+    launch_work_job_impl(&state, team_gid, &task, workspace_path).await
 }
 
 pub async fn launch_work_job_impl(
     state: &AppState,
     team_gid: i64,
     task: &str,
+    workspace_path: Option<String>,
 ) -> Result<LaunchedWork, String> {
     let task = task.trim().to_string();
     if task.is_empty() {
         return Err("请描述要做什么".into());
     }
     let db = state.db.clone();
-    let companions = db.list_group_members(team_gid);
-    if companions.is_empty() {
-        return Err("这个团队还没有成员".into());
-    }
-    let members: Vec<CompanionProfile> = companions
-        .into_iter()
-        .map(|c| CompanionProfile {
-            id: c.id,
-            name: c.name,
-            avatar_emoji: c.avatar_emoji,
-            color_hex: c.color_hex,
-            description: c.role_label.unwrap_or_else(|| c.agent_definition_name.clone()),
-            agent_definition_name: c.agent_definition_name,
-            last_used_at: c.last_used_at,
-        })
-        .collect();
+    let members = team_members(&db, team_gid)?;
     let lead = crate::engine::work::launcher::find_project_lead(&members)
         .await
         .ok_or_else(|| "这个团队里没有能接手的牵头者(需要 coordinator / PM 档角色)".to_string())?;
@@ -88,6 +86,22 @@ pub async fn launch_work_job_impl(
     let title: String = task.chars().take(30).collect();
     db.ensure_session(&session_id, &title, "work", None)?;
     db.set_session_group(&session_id, Some(team_gid))?;
+
+    // 项目文件夹(per-team):用户在「新建工作」选/建的目录设为这支团队的工作区,
+    // 执行期 executor 经 group_workspace_for_collaboration → with_task_working_dir 把成员的
+    // 文件/shell 工具 cwd scope 到这里。必须同时登记成 read_write 授权文件夹,否则工具读写
+    // 会被路径授权门禁拦弹窗(add_authorized_folder_impl 是 upsert,重复登记安全)。
+    if let Some(ws) = workspace_path.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        db.set_group_workspace(team_gid, ws)?;
+        let team_name = db.get_companion_group(team_gid).map(|g| g.name);
+        crate::commands::workspace::add_authorized_folder_impl(
+            state,
+            ws.to_string(),
+            team_name,
+            Some("read_write".into()),
+        )
+        .await?;
+    }
 
     let collab_id = crate::engine::work::launcher::launch_intake(
         db.clone(),
@@ -103,6 +117,47 @@ pub async fn launch_work_job_impl(
         session_id,
         collaboration_id: collab_id,
     })
+}
+
+/// 群成员 → `CompanionProfile` 列表(work 派工 / intake 用)。空群报错。
+fn team_members(db: &Database, gid: i64) -> Result<Vec<CompanionProfile>, String> {
+    let companions = db.list_group_members(gid);
+    if companions.is_empty() {
+        return Err("这个团队还没有成员".into());
+    }
+    Ok(companions
+        .into_iter()
+        .map(|c| CompanionProfile {
+            id: c.id,
+            name: c.name,
+            avatar_emoji: c.avatar_emoji,
+            color_hex: c.color_hex,
+            description: c.role_label.unwrap_or_else(|| c.agent_definition_name.clone()),
+            agent_definition_name: c.agent_definition_name,
+            last_used_at: c.last_used_at,
+        })
+        .collect())
+}
+
+/// work 会话的**后续消息**:不走放养群聊(那会让全员几十轮空转烧 token),交给牵头者
+/// **单 agent 有界接手**(intake:澄清 → 需要时 propose_work_plan 再派工)。chat×work 决策 B ——
+/// work 永远结构化,放养只属于纯聊天群。返回新建的 intake 协作 id。
+pub async fn dispatch_work_followup(
+    state: &AppState,
+    session_id: &str,
+    message: &str,
+) -> Result<i64, String> {
+    let db = state.db.clone();
+    let gid = db
+        .get_session_group(session_id)
+        .ok_or_else(|| "工作会话未绑团队群".to_string())?;
+    let members = team_members(&db, gid)?;
+    let lead = crate::engine::work::launcher::find_project_lead(&members)
+        .await
+        .ok_or_else(|| "这个团队里没有能接手的牵头者(需要 coordinator / PM 档角色)".to_string())?;
+    let cfg = resolve_llm_config(state).await?;
+    crate::engine::work::launcher::launch_intake(db.clone(), cfg, session_id, gid, lead, &members, message)
+        .await
 }
 
 /// 解析并构建派工 DAG(不 submit):会话 → 群 → 成员 → build。返回 (协作 plan, group_id)。

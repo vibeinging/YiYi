@@ -1,6 +1,7 @@
 /**
- * 开工方案 Bridge(S2③)—— 监听 PM 发来的 `chat://project_plan` 事件,在聊天流里
- * 插入一张「开工方案」卡片。用户点「开工」后由前端调 commit_project_plan 派工。
+ * 开工方案 Bridge —— 监听 work 牵头者发来的 `work://plan_proposed` 事件(chat×work 2×2:
+ * work 表面独立事件),在会话里插入一张「开工方案」卡片。用户点「开工」后由前端调
+ * commit_work_plan 派工(标 kind=work_dispatch)。
  */
 
 import { useEffect } from 'react';
@@ -15,7 +16,7 @@ interface ProjectPlanPayload {
 
 export function useProjectPlanBridge() {
   useEffect(() => {
-    const unlisten = listen<ProjectPlanPayload>('chat://project_plan', (event) => {
+    const unlisten = listen<ProjectPlanPayload>('work://plan_proposed', (event) => {
       const p = event.payload;
       useChatStreamStore.getState().showProjectPlan({
         requestId: p.request_id,

@@ -59,13 +59,19 @@ import logoImg from '../assets/yiyi-logo.png';
 interface ChatPageProps {
   consumeNotifContext?: () => Record<string, unknown> | null;
   healthStatus?: 'ok' | 'error' | 'checking';
+  /**
+   * 嵌入模式:作为工作页右栏挂载(非整页)。会话仍由全局 `activeSessionId` 驱动,
+   * 交互逻辑全部复用;只关掉整页装饰/副作用 —— 顶部拖动区、欢迎页、notif/侧栏跳转、
+   * 托盘新会话监听 —— 这些是"整页聊天"语义,嵌入右栏时不该响应。
+   */
+  embedded?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
 /*  ChatPage Component                                                 */
 /* ------------------------------------------------------------------ */
 
-export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: ChatPageProps) {
+export function ChatPage({ consumeNotifContext, healthStatus = 'checking', embedded = false }: ChatPageProps) {
   const { t, i18n } = useTranslation();
   const lang: 'zh' | 'en' = i18n.language?.startsWith('zh') ? 'zh' : 'en';
   const drag = useDragRegion();
@@ -185,6 +191,9 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   useEffect(() => {
     (async () => {
       await useSessionStore.getState().initialize();
+      // 嵌入态(工作页右栏):活跃会话由左栏选中的 work job 驱动,不消费 notif/pending 跳转
+      // (那是整页聊天的语义),否则会抢走 Work 选中的会话。
+      if (embedded) return;
       const ctx = consumeNotifContext?.();
       if (ctx?.page === 'chat' && ctx?.session_id) {
         useSessionStore.getState().switchToSession(ctx.session_id as string);
@@ -196,10 +205,10 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   }, []);
 
   useEffect(() => {
-    if (!pendingSessionId || !initialized) return;
+    if (embedded || !pendingSessionId || !initialized) return; // 嵌入态不抢跳转
     useTaskSidebarStore.getState().consumePendingSession();
     navigateToSession(pendingSessionId);
-  }, [pendingSessionId, navigateToSession, initialized]);
+  }, [pendingSessionId, navigateToSession, initialized, embedded]);
 
   // Consume pending new tab: add task session tab without switching away
   const pendingNewTab = useTaskSidebarStore((s) => s.pendingNewTab);
@@ -295,16 +304,18 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   };
 
   useEffect(() => {
+    if (embedded) return; // 嵌入态不响应托盘"新会话"(那会切走 Work 选中的工作会话)
     const unlisten = listen('tray://new-session', () => handleNewSession());
     return () => { unlisten.then(fn => fn()); };
-  }, []);
+  }, [embedded]);
 
   // Sidebar "聊天" click → switch to most recent chat session
   useEffect(() => {
+    if (embedded) return; // 嵌入态不响应侧栏"聊天"跳转
     const handler = () => handleGoToRecentChat();
     window.addEventListener('chat:go-main', handler);
     return () => window.removeEventListener('chat:go-main', handler);
-  }, [handleGoToRecentChat]);
+  }, [handleGoToRecentChat, embedded]);
 
   // Spawn complete
   useEffect(() => {
@@ -692,29 +703,33 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   // 群会话从创建起就是对话页面 —— 不走欢迎页(欢迎页只给私聊/YiYi 的草稿空态)。
   // 用同步的 session.group_id 判断,不等异步的 familyGroupId,避免切群瞬间闪一下 YiYi 欢迎页。
   const activeGroupId = chatSessions.find(s => s.id === activeSessionId)?.group_id ?? null;
-  const showWelcome = isChatSession && messages.length === 0 && !loading && activeGroupId == null;
+  // 嵌入态(工作页右栏)永不走欢迎页:work 会话 source='work' 不在 chatSessions(列表仅
+  // source='chat'),同步 activeGroupId 取不到 group_id 会误判空态;且 work 详情不需要欢迎页。
+  const showWelcome = !embedded && isChatSession && messages.length === 0 && !loading && activeGroupId == null;
 
   // --- Render ---
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden">
-      {/* Drag region — replaces the tab bar */}
-      <div
-        data-tauri-drag-region
-        className="shrink-0 app-drag-region relative"
-        style={{ background: 'var(--color-bg)', height: '38px' }}
-      >
-        {activeSessionId && (
-          <button
-            className="absolute right-3 top-1.5 w-7 h-7 rounded-md flex items-center justify-center hover:bg-[var(--color-hover)]"
-            style={{ color: 'var(--color-text-secondary)' }}
-            onClick={() => setTimelineOpen(true)}
-            aria-label="时间线"
-            title="时间线"
-          >
-            <Clock size={15} />
-          </button>
-        )}
-      </div>
+      {/* Drag region — replaces the tab bar(嵌入态由工作页自带 header,不要这条拖动区) */}
+      {!embedded && (
+        <div
+          data-tauri-drag-region
+          className="shrink-0 app-drag-region relative"
+          style={{ background: 'var(--color-bg)', height: '38px' }}
+        >
+          {activeSessionId && (
+            <button
+              className="absolute right-3 top-1.5 w-7 h-7 rounded-md flex items-center justify-center hover:bg-[var(--color-hover)]"
+              style={{ color: 'var(--color-text-secondary)' }}
+              onClick={() => setTimelineOpen(true)}
+              aria-label="时间线"
+              title="时间线"
+            >
+              <Clock size={15} />
+            </button>
+          )}
+        </div>
+      )}
 
       {/* 顶栏:私聊 = 显示"和 X 私聊"条;群/单聊 = FamilyHeader(管理群/邀请入口) */}
       {activeSessionId && !isTaskSession && !isCronSession && (

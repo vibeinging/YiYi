@@ -99,6 +99,18 @@ impl super::Database {
         self.get_companion_group(group_id)?.workspace_path
     }
 
+    /// 按项目工作区绝对路径找团队(项目复用):同一文件夹已绑过团队 → 返回其 group_id。
+    /// 「项目优先」的新建工作据此在选了已有文件夹时复用同支团队,不重复组队。命中多个取最早建的。
+    pub fn find_group_by_workspace(&self, workspace_path: &str) -> Option<i64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT id FROM companion_groups WHERE workspace_path = ?1 ORDER BY created_at ASC LIMIT 1",
+            params![workspace_path],
+            |row| row.get(0),
+        )
+        .ok()
+    }
+
     pub fn list_companion_groups(&self) -> Vec<CompanionGroup> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let sql = format!(

@@ -564,13 +564,13 @@ async fn run_one_react(
     // 现状);有角色 → 只给角色允许的工具、用角色自己的步数上限,让"分工"真生效、
     // 能干活的角色跑更长的任务。headless 测试里 registry 不可达,安全回落。
     let (mut role_filter, role_max_iter) = resolve_companion_role(p.companion_id).await;
-    // intake 接手者(接口人)兜底获得 propose_project_plan。它现已声明在 Coordinator 档位
+    // intake 接手者(接口人)兜底获得 propose_work_plan。它现已声明在 Coordinator 档位
     // (dynamic.rs),这里是**向后兼容垫片**:覆盖该工具进档位之前已落盘的旧动态角色(AGENT.md
     // 还没这工具),以及任何非协调档却来接手的 lead。idempotent;All 已含、Deny 不动。
     if step_mode(step) == StepMode::Intake {
         if let ToolFilter::Allow(v) = &mut role_filter {
-            if !v.iter().any(|t| t == "propose_project_plan") {
-                v.push("propose_project_plan".to_string());
+            if !v.iter().any(|t| t == "propose_work_plan") {
+                v.push("propose_work_plan".to_string());
             }
         }
     }
@@ -603,11 +603,11 @@ async fn run_one_react(
              1. 先看有没有**阻塞性的关键未知**(日期/预算/范围/受众等)——有就用 ask_user 工具\
              **一次性问清**(可给选项),等用户答了再往下。别空喊「@用户 请告诉我 X」(不阻塞、易漏、\
              让团队空转);要用 ask_user 阻塞式地问。\n\
-             2. 关键信息齐了 → 用 **propose_project_plan** 工具把活拆成任务派给队友:每条填 role\
+             2. 关键信息齐了 → 用 **propose_work_plan** 工具把活拆成任务派给队友:每条填 role\
              (队友的标识,见下方名单)、objective(这条做什么)、depends_on(依赖哪几条,0-based 下标,\
              无依赖留空)。会给用户发「开工方案」卡,用户点开工后队友才真正并行开干。\n\
              3. 你自己(协调档)一般不写文件,产出靠派给能写的队友;别自己硬扛所有活。\n\
-             【你的队友(propose_project_plan 的 role 填这些标识)】\n{roster}"
+             【你的队友(propose_work_plan 的 role 填这些标识)】\n{roster}"
         )
     } else {
         "\n\n【动手能力】你能用工具(读写文件、执行命令、查资料、开浏览器等)。\
@@ -615,7 +615,18 @@ async fn run_one_react(
          平时顺着聊就行,别为用而用。用完工具,用你自己的口吻把结果说出来,别贴原始输出。"
             .to_string()
     };
-    let system_prompt = format!("{persona_prefix}{group_rules}{tools_note}");
+    // 项目工作目录注入 prompt:`with_task_working_dir`(run_react_inner)只把**工具 cwd**
+    // scope 到项目目录,agent 的 prompt 里并没有这个路径 —— 不告诉它,它就不知道自己在哪个
+    // 绝对路径干活、是不是在改用户指定的现成项目。这里把目录显式写进 system prompt。
+    let workspace_note = crate::engine::tools::get_database()
+        .and_then(|db| db.group_workspace_for_collaboration(collab_id))
+        .map(|ws| format!(
+            "\n\n【项目工作目录】你的工作目录是 `{ws}`。文件读写、命令执行都默认在这个目录里进行,\
+             用相对路径(相对该目录)或这个绝对路径都行。这是用户为本项目指定的目录,可能**已有现成文件**\
+             ——动手前先看清里面有什么(列目录 / 读关键文件),别假设是空目录、别在目录外乱建。"
+        ))
+        .unwrap_or_default();
+    let system_prompt = format!("{persona_prefix}{group_rules}{tools_note}{workspace_note}");
     let user_message = render_user_prompt(step, upstream);
 
     // 构造完(mode-aware:prompt / 权限 / 步数)→ 交给共享 ReAct 内核执行(S3 抽出)。

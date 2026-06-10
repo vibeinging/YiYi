@@ -28,9 +28,22 @@ const PROFILE_META: Record<PermissionProfile, { label: string; canExecute: boole
 }
 const PROFILE_ORDER: PermissionProfile[] = ['coordinator', 'designer', 'builder', 'reviewer']
 
-export function CustomTeamPanel({ onClose }: { onClose: () => void }) {
+export function CustomTeamPanel({
+  onClose,
+  goal: initialGoal,
+  onCommitted,
+}: {
+  onClose: () => void
+  /** 预填的目标描述(如「工作页」把任务带进来,免得用户重打一遍)。 */
+  goal?: string
+  /**
+   * 落地(commit_dynamic_team)成功后的动作覆盖。给了就**不**走默认的"新开 chat 会话进群",
+   * 改由调用方处理新 gid(如工作页:用这支团队开工 launch_work_job)。不传 = 维持原 Buddy 行为。
+   */
+  onCommitted?: (gid: number) => void | Promise<void>
+}) {
   const [step, setStep] = useState<'describe' | 'review'>('describe')
-  const [goal, setGoal] = useState('')
+  const [goal, setGoal] = useState(initialGoal ?? '')
   const [generating, setGenerating] = useState(false)
   const [roles, setRoles] = useState<Array<RoleSpec & { _k: number }>>([])
   const [teamName, setTeamName] = useState('')
@@ -91,15 +104,20 @@ export function CustomTeamPanel({ onClose }: { onClose: () => void }) {
     try {
       const clean = roles.map(({ _k, ...r }) => r) // 剥离客户端 key
       const gid = await commitDynamicTeam(nm, teamEmoji || null, clean)
-      // 新开一段会话绑该群并切过去(建团队是明确动作,总开新窗口)。
-      const sid = (await createSession('New Chat')).id
-      await setSessionGroup(sid, gid)
-      useGroupsStore.getState().invalidateMembers(gid)
-      await useGroupsStore.getState().load()
-      await useSessionStore.getState().refreshSessions()
-      useSessionStore.getState().switchToSession(sid)
-      window.dispatchEvent(new CustomEvent('navigate', { detail: 'chat' }))
-      toast.success(`「${nm}」已就位 — ${roles.length} 个角色入群`)
+      if (onCommitted) {
+        // 调用方接管落地后动作(如工作页:用这支团队开工);不开 chat 会话、不导航、不在此 toast。
+        await onCommitted(gid)
+      } else {
+        // 默认(Buddy):新开一段会话绑该群并切过去(建团队是明确动作,总开新窗口)。
+        const sid = (await createSession('New Chat')).id
+        await setSessionGroup(sid, gid)
+        useGroupsStore.getState().invalidateMembers(gid)
+        await useGroupsStore.getState().load()
+        await useSessionStore.getState().refreshSessions()
+        useSessionStore.getState().switchToSession(sid)
+        window.dispatchEvent(new CustomEvent('navigate', { detail: 'chat' }))
+        toast.success(`「${nm}」已就位 — ${roles.length} 个角色入群`)
+      }
       onClose()
     } catch (e) {
       toast.error(`落地失败：${e}`)

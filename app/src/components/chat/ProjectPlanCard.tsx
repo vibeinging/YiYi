@@ -31,7 +31,7 @@ export function ProjectPlanCard({ plan }: { plan: ProjectPlanState }) {
     if (!sessionId) { toast.error('没有会话,无法开工'); return; }
     setCommitting(true);
     try {
-      await invoke('commit_project_plan', {
+      await invoke('commit_work_plan', {
         sessionId,
         plan: { tasks: plan.tasks },
       });

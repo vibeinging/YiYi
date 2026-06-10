@@ -1236,12 +1236,25 @@ impl Database {
             .unwrap_or_default()
     }
 
-    /// 列出所有 work job(kind=work_dispatch)摘要,新→旧 —— WorkPage 监控列表用(S7)。
+    /// 列出所有 work job 摘要,新→旧 —— WorkPage 监控列表用(S7)。
+    ///
+    /// **按会话去重**:一个工作会话会产生两条 kind='work_dispatch' 协作(intake 一条、
+    /// 开工派工一条,见 launcher.rs:launch_intake 与 commands/work.rs:commit_work_plan 都标
+    /// kind),取每会话 MAX(id) 的那条作代表,避免同一工作在列表里重复出现。
+    /// **带分组字段**:LEFT JOIN sessions + companion_groups,前端按文件夹(团队工作区)分组。
     pub fn list_work_jobs(&self) -> Vec<WorkJobSummary> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = match conn.prepare(
-            "SELECT id, chat_session_id, intent, status, created_at, completed_at
-             FROM collaborations WHERE kind = 'work_dispatch' ORDER BY created_at DESC",
+            "SELECT c.id, c.chat_session_id, COALESCE(s.name, c.intent) AS title,
+                    c.status, c.created_at, c.completed_at,
+                    s.group_id, g.name, g.emoji, g.workspace_path
+             FROM collaborations c
+             JOIN (SELECT chat_session_id, MAX(id) AS mid
+                   FROM collaborations WHERE kind = 'work_dispatch'
+                   GROUP BY chat_session_id) latest ON latest.mid = c.id
+             LEFT JOIN sessions s ON s.id = c.chat_session_id
+             LEFT JOIN companion_groups g ON g.id = s.group_id
+             ORDER BY c.created_at DESC",
         ) {
             Ok(s) => s,
             Err(e) => {
@@ -1257,6 +1270,10 @@ impl Database {
                 status: r.get(3)?,
                 created_at: r.get(4)?,
                 completed_at: r.get(5)?,
+                group_id: r.get(6)?,
+                group_name: r.get(7)?,
+                group_emoji: r.get(8)?,
+                workspace_path: r.get(9)?,
             })
         })
         .map(|rows| rows.filter_map(|r| r.ok()).collect())
@@ -1270,12 +1287,21 @@ pub struct WorkJobSummary {
     pub id: i64,
     /// 所属群聊 session(点击跳到该工作群对话看进度)。
     pub session_id: String,
-    /// 用户原始诉求(任务标题)。
+    /// 任务标题(优先会话名,回退协作 intent)。
     pub intent: String,
     /// planning / running / done / aborted / failed。
     pub status: String,
     pub created_at: i64,
     pub completed_at: Option<i64>,
+    // ── 分组字段(前端按文件夹/团队分组;LEFT JOIN 可能为 NULL)──
+    /// 所属团队群 id。
+    pub group_id: Option<i64>,
+    /// 团队群名(分组组头)。
+    pub group_name: Option<String>,
+    /// 团队群 emoji。
+    pub group_emoji: Option<String>,
+    /// 团队项目工作区绝对路径(团队在里面干活的文件夹)。
+    pub workspace_path: Option<String>,
 }
 
 #[cfg(test)]

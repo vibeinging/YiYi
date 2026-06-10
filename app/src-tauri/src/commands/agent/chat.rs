@@ -230,6 +230,33 @@ pub async fn chat_stream_start(
 
     let ctx = prepare_chat_context(&state, &sid, &message, &attachments).await?;
 
+    // work 会话(source='work'):后续消息**不进放养群聊**(放养是无上限事件循环,全员会
+    // 几十轮空转烧 token —— 见用户反馈 2026-06-09)。chat×work 决策 B:work 永远结构化 ——
+    // 交给牵头者单 agent 有界接手(intake:澄清,需要时 propose_work_plan 再派工)。
+    if state.db.get_session(&sid).ok().flatten().map(|s| s.source).as_deref() == Some("work") {
+        match crate::commands::work::dispatch_work_followup(&state, &sid, &message).await {
+            Ok(collab_id) => {
+                app.emit("chat://complete", serde_json::json!({
+                    "text": "",
+                    "session_id": sid,
+                    "collaboration_id": collab_id,
+                })).ok();
+                return Ok(());
+            }
+            Err(e) => {
+                // 不回落放养(避免又烧 token)——给一条可见提示并结束本轮。
+                log::warn!("work followup dispatch 失败:{e}");
+                let hint = format!("这个工作群暂时没法接手:{e}");
+                let _ = state.db.push_message(&sid, "assistant", &hint);
+                app.emit("chat://complete", serde_json::json!({
+                    "text": hint,
+                    "session_id": sid,
+                })).ok();
+                return Ok(());
+            }
+        }
+    }
+
     // 群会话(群聊):session 绑定了具名 group 时,主精灵 L1+L2 调度,
     // 命中成员 → ParallelAgents 同框;否则回落主精灵自答。
     // group_id == None 直接当单聊(family_mode 字段已退役,只读 group_id)。
