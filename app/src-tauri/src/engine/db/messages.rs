@@ -200,6 +200,19 @@ impl super::Database {
         content: &str,
         metadata: Option<&str>,
     ) -> Result<i64, String> {
+        self.push_message_with_context(session_id, role, content, metadata, "collab")
+    }
+
+    /// `push_message_with_metadata` 的 context_type 版本(R3):work 落库的消息要标渲染
+    /// 判别器(如开工方案锚点 `work_plan`、交付摘要 `work_job`),前端按它分发渲染分支。
+    pub fn push_message_with_context(
+        &self,
+        session_id: &str,
+        role: &str,
+        content: &str,
+        metadata: Option<&str>,
+        context_type: &str,
+    ) -> Result<i64, String> {
         let now = super::now_ts();
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let tx = conn.unchecked_transaction()
@@ -213,8 +226,8 @@ impl super::Database {
         .map_err(|e| format!("Failed to ensure session: {}", e))?;
 
         tx.execute(
-            "INSERT INTO messages (session_id, role, content, timestamp, metadata) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![session_id, role, content, now, metadata],
+            "INSERT INTO messages (session_id, role, content, timestamp, metadata, context_type) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![session_id, role, content, now, metadata, context_type],
         )
         .map_err(|e| format!("Failed to insert message: {}", e))?;
 

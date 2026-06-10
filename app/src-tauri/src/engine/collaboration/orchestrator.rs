@@ -589,6 +589,13 @@ impl SqliteOrchestrator {
         self.finalize(collab_id, status)
     }
 
+    /// 显式中止一条协作(R3:work job 逃生门)。复用 `finalize` 的 CAS 终态守卫:已终态则
+    /// 幂等 no-op;在跑的步任务收尾时撞守卫,完成回调被静默忽略(不会翻回 Done)。
+    /// 注:已在跑的 ReAct 步不被强杀(detached task),只是其结果不再落库 —— v1 取舍。
+    pub fn abort_collaboration(&self, collab_id: CollaborationId) -> Result<(), String> {
+        self.finalize(collab_id, CollaborationStatus::Aborted)
+    }
+
     fn all_steps_terminal(&self, collab_id: CollaborationId) -> Result<bool, String> {
         let conn = self.db.get_conn().ok_or_else(|| "db lock".to_string())?;
         let pending: i64 = conn
@@ -662,6 +669,32 @@ impl SqliteOrchestrator {
             log::warn!("collab {collab_id}: failed to write verdict message: {e}");
         }
 
+        // R3:派工协作终态 → 同步 job 级状态机(work_jobs)。intake 协作终态**不**动 job
+        // 状态(intake done 只是"牵头者说完这轮话",job 仍在 clarifying/pending_commit —— 把
+        // intake done 当"已交付"正是旧 MAX(id) 倒推的 P0 错乱)。best-effort,不阻塞 finalize。
+        if let Ok(conn) = self.db.get_conn().ok_or(()) {
+            let row: Result<(String, String), _> = conn
+                .query_row(
+                    "SELECT chat_session_id, kind FROM collaborations WHERE id = ?1",
+                    params![collab_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                );
+            drop(conn);
+            if let Ok((session_id, kind)) = row {
+                if kind == "work_dispatch" {
+                    let job_status = match &status {
+                        CollaborationStatus::Done => "done",
+                        CollaborationStatus::Aborted => "aborted",
+                        CollaborationStatus::Failed(_) => "failed",
+                        _ => "running",
+                    };
+                    if let Err(e) = self.db.set_work_job_status(&session_id, job_status) {
+                        log::warn!("collab {collab_id}: sync work job status: {e}");
+                    }
+                }
+            }
+        }
+
         let kind = match &status {
             CollaborationStatus::Done => AuditKind::CollaborationCompleted,
             CollaborationStatus::Aborted => AuditKind::Aborted,
@@ -701,17 +734,31 @@ impl SqliteOrchestrator {
         // §7-P0-1:work job 完成走 **work 交付摘要**(不写群聊「【名字】…」格式),并标
         // context_type=work_job —— 否则 work 完成时仍以群聊身份写回聊天流 = chat 引擎仍在
         // 替 work 写结论(对抗校验抓的"假解耦",decoupled:false 的根)。
-        let is_work = kind == "work_dispatch";
+        //
+        // R3:intake 协作(kind=work_intake)与派工协作(work_dispatch)分治 ——
+        // intake done 只是"牵头者说完这轮话"(澄清/提案),**不是交付**:不写「✅ 交付完成」、
+        // 不覆盖锚点(否则用户的原始请求被假交付摘要吃掉,且 Work 列表错标"已交付")。
+        // 「✅ 交付完成」只属于派工协作 Done。
+        let is_work = kind == "work_dispatch" || kind == "work_intake";
+        let is_intake = kind == "work_intake";
         let text = match &status {
             CollaborationStatus::Done => {
-                if is_work {
+                if is_intake {
+                    return Ok(()); // 牵头者的话已是协作消息本体,无需 verdict、不动锚点
+                } else if is_work {
                     Self::compose_work_verdict(&conn, collab_id)?
                 } else {
                     Self::compose_done_verdict(&conn, collab_id)?
                 }
             }
             CollaborationStatus::Failed(reason) => {
-                let label = if is_work { "工作未完成" } else { "群协作未完成" };
+                let label = if is_intake {
+                    "牵头者这轮没接上,再发一条消息可以重新唤起"
+                } else if is_work {
+                    "工作未完成"
+                } else {
+                    "群协作未完成"
+                };
                 if reason.trim().is_empty() {
                     format!("（{label}）")
                 } else {
@@ -866,15 +913,19 @@ impl SqliteOrchestrator {
     }
 }
 
-#[async_trait::async_trait]
-impl CollaborationOrchestrator for SqliteOrchestrator {
-    async fn submit(
+impl SqliteOrchestrator {
+    /// submit 的 kinded 版本(R3):`collaborations.kind` 在**调度前**钉死。旧流程
+    /// (submit 后补 `set_collaboration_kind`)有竞态 —— 步骤秒败时 finalize 已按默认
+    /// chat_group 写了群聊式终态。work 调用方(launch_intake / commit_work_plan)用本方法;
+    /// trait 的 `submit` 委托到这里(kind=None → 默认 'chat_group')。
+    pub async fn submit_kinded(
         &self,
         chat_session_id: String,
         intent: String,
         plan: CollaborationPlan,
         mode: CollaborationMode,
         parent_id: Option<CollaborationId>,
+        kind: Option<&str>,
     ) -> Result<CollaborationId, String> {
         if plan.steps.is_empty() {
             return Err("plan must contain at least one step".into());
@@ -902,6 +953,9 @@ impl CollaborationOrchestrator for SqliteOrchestrator {
             &initial_status,
             parent_id,
         )?;
+        if let Some(k) = kind {
+            self.db.set_collaboration_kind(collab_id, k)?;
+        }
 
         self.audit.emit(
             collab_id,
@@ -919,6 +973,21 @@ impl CollaborationOrchestrator for SqliteOrchestrator {
             self.schedule_ready_steps(collab_id).await?;
         }
         Ok(collab_id)
+    }
+}
+
+#[async_trait::async_trait]
+impl CollaborationOrchestrator for SqliteOrchestrator {
+    async fn submit(
+        &self,
+        chat_session_id: String,
+        intent: String,
+        plan: CollaborationPlan,
+        mode: CollaborationMode,
+        parent_id: Option<CollaborationId>,
+    ) -> Result<CollaborationId, String> {
+        self.submit_kinded(chat_session_id, intent, plan, mode, parent_id, None)
+            .await
     }
 
     /// 释放一个 `AwaitingConfirm` 协作。注意:产品砍掉 jury 拍板卡后,`AwaitingConfirm`

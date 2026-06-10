@@ -18,8 +18,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Hammer, Loader2, CheckCircle2, XCircle, Plus, X, Folder, Sparkles, Check,
+  CircleHelp, PlayCircle, OctagonX,
 } from 'lucide-react';
-import { listWorkJobs, launchWorkJob, findTeamByFolder, type WorkJob } from '../api/work';
+import { listWorkJobs, launchWorkJob, findTeamByFolder, abortWorkJob, type WorkJob } from '../api/work';
 import { pickFolder } from '../api/workspace';
 import { generateTeam, commitDynamicTeam } from '../api/companions';
 import { useSessionStore } from '../stores/sessionStore';
@@ -28,16 +29,21 @@ import { ChatPage } from './Chat';
 
 const AMBER = 'var(--color-warning)'; // #FF9F0A —— work 象限强调色,区别于 chat 的靛紫
 
-function statusMeta(status: string): { label: string; color: string; Icon: typeof Loader2; spin: boolean } {
+/** job 级状态机(R3)→ 视觉。澄清/待开工是「等用户」态(不转圈),running 才转圈。 */
+function statusMeta(status: string): { label: string; color: string; Icon: typeof Loader2; spin: boolean; active: boolean } {
   switch (status) {
+    case 'clarifying':
+      return { label: '澄清中', color: 'var(--color-info, #5AC8FA)', Icon: CircleHelp, spin: false, active: true };
+    case 'pending_commit':
+      return { label: '待开工', color: AMBER, Icon: PlayCircle, spin: false, active: true };
     case 'done':
-      return { label: '已交付', color: 'var(--color-success)', Icon: CheckCircle2, spin: false };
+      return { label: '已交付', color: 'var(--color-success)', Icon: CheckCircle2, spin: false, active: false };
     case 'aborted':
-      return { label: '已中止', color: 'var(--color-text-muted)', Icon: XCircle, spin: false };
+      return { label: '已中止', color: 'var(--color-text-muted)', Icon: XCircle, spin: false, active: false };
     case 'failed':
-      return { label: '失败', color: 'var(--color-error)', Icon: XCircle, spin: false };
-    default: // planning / running
-      return { label: '进行中', color: AMBER, Icon: Loader2, spin: true };
+      return { label: '失败', color: 'var(--color-error)', Icon: XCircle, spin: false, active: false };
+    default: // running / 未知值兜底
+      return { label: '进行中', color: AMBER, Icon: Loader2, spin: true, active: true };
   }
 }
 
@@ -181,10 +187,13 @@ export function WorkPage() {
                   const m = statusMeta(job.status);
                   const sel = job.session_id === selectedSessionId;
                   return (
-                    <button
+                    <div
                       key={job.id}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => selectSession(job.session_id)}
-                      className="group w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors"
+                      onKeyDown={(e) => { if (e.key === 'Enter') selectSession(job.session_id); }}
+                      className="group w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors cursor-pointer"
                       style={{ background: sel ? 'var(--color-bg-subtle)' : 'transparent' }}
                       onMouseEnter={(e) => { if (!sel) e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
                       onMouseLeave={(e) => { if (!sel) e.currentTarget.style.background = 'transparent'; }}
@@ -204,7 +213,22 @@ export function WorkPage() {
                           <span> · {fmtTime(job.created_at)}</span>
                         </div>
                       </div>
-                    </button>
+                      {/* 中止(逃生门):仅活动态显示,hover 出现;双击免误触(一次确认) */}
+                      {m.active && (
+                        <button
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            if (!window.confirm(`中止「${job.intent}」?运行中的任务将停止。`)) return;
+                            try { await abortWorkJob(job.session_id); } catch { /* 轮询会刷新真状态 */ }
+                          }}
+                          className="shrink-0 w-6 h-6 rounded-md hidden group-hover:flex items-center justify-center transition-colors hover:bg-[var(--color-bg-muted)]"
+                          style={{ color: 'var(--color-text-muted)' }}
+                          title="中止这项工作"
+                        >
+                          <OctagonX size={13} strokeWidth={2} />
+                        </button>
+                      )}
+                    </div>
                   );
                 })}
               </section>

@@ -103,6 +103,12 @@ pub async fn launch_work_job_impl(
         .await?;
     }
 
+    // R3:用户的任务原文落成 user 气泡(此前只有协作锚点,原始请求不在历史里、
+    // followup 的 intake 历史块也带不上它);job 入 work_jobs 状态机(clarifying),
+    // 牵头者固化(followup 复用,不重选,防 PM 漂移 + 省一次 find_project_lead)。
+    let _ = db.push_message(&session_id, "user", &task);
+    db.create_work_job(&session_id, &task, Some(lead.id))?;
+
     let collab_id = crate::engine::work::launcher::launch_intake(
         db.clone(),
         cfg,
@@ -139,25 +145,111 @@ fn team_members(db: &Database, gid: i64) -> Result<Vec<CompanionProfile>, String
         .collect())
 }
 
+/// work followup 的处理结果:新起了 intake 协作,或本轮以一条提示消息收束(已落库)。
+pub enum WorkFollowup {
+    /// 牵头者已接手,新 intake 协作 id。
+    Intake(i64),
+    /// 没起协作,直接回了一条提示(停止确认 / 互斥守卫等),文本已 push 进会话。
+    Notice(String),
+}
+
 /// work 会话的**后续消息**:不走放养群聊(那会让全员几十轮空转烧 token),交给牵头者
 /// **单 agent 有界接手**(intake:澄清 → 需要时 propose_work_plan 再派工)。chat×work 决策 B ——
-/// work 永远结构化,放养只属于纯聊天群。返回新建的 intake 协作 id。
+/// work 永远结构化,放养只属于纯聊天群。
+///
+/// R3 三道闸(按序):
+/// 1. **停止意图**:「停」不是新任务 —— 中止整个 job(否则用户根本喊不停);
+/// 2. **互斥守卫**:上一轮 intake 还在跑 → 拒绝并提示(防并发多 PM 竞态 + 重发翻倍);
+/// 3. **牵头者固化**:复用 job 记录的 lead,不重选(防 PM 漂移,省一次解析)。
 pub async fn dispatch_work_followup(
     state: &AppState,
     session_id: &str,
     message: &str,
-) -> Result<i64, String> {
+) -> Result<WorkFollowup, String> {
     let db = state.db.clone();
+
+    if crate::commands::agent::group_dispatch::is_stop_intent(message) {
+        let n = abort_work_job_impl(state, session_id)?;
+        let text = if n > 0 {
+            "✋ 已停止这项工作(运行中的任务不再继续)。要重启的话再描述一次要做什么。"
+        } else {
+            "现在没有在跑的任务。要继续推进的话直接说要做什么。"
+        };
+        let _ = db.push_message(session_id, "assistant", text);
+        return Ok(WorkFollowup::Notice(text.to_string()));
+    }
+
+    if db.has_active_work_intake(session_id) {
+        let text = "⏳ 牵头者还在处理上一条消息,稍等它回完再说(连发会让它分身乏术)。";
+        let _ = db.push_message(session_id, "assistant", text);
+        return Ok(WorkFollowup::Notice(text.to_string()));
+    }
+
     let gid = db
         .get_session_group(session_id)
         .ok_or_else(|| "工作会话未绑团队群".to_string())?;
     let members = team_members(&db, gid)?;
-    let lead = crate::engine::work::launcher::find_project_lead(&members)
-        .await
-        .ok_or_else(|| "这个团队里没有能接手的牵头者(需要 coordinator / PM 档角色)".to_string())?;
+    // 牵头者固化:优先用 job 记录的 lead;不在群里了(被踢/解散重组)→ 重选并回写。
+    let lead = match db
+        .get_work_job_lead(session_id)
+        .and_then(|id| members.iter().find(|m| m.id == id))
+    {
+        Some(l) => l,
+        None => {
+            let l = crate::engine::work::launcher::find_project_lead(&members)
+                .await
+                .ok_or_else(|| {
+                    "这个团队里没有能接手的牵头者(需要 coordinator / PM 档角色)".to_string()
+                })?;
+            db.create_work_job(session_id, message, Some(l.id))?; // 旧会话无 job 行时补建
+            l
+        }
+    };
+    // followup 重新激活:done/failed 后用户继续说话 = 工作还有下文,回到澄清态。
+    if matches!(
+        db.get_work_job_status(session_id).as_deref(),
+        Some("done") | Some("failed") | Some("aborted")
+    ) {
+        let _ = db.set_work_job_status(session_id, "clarifying");
+    }
     let cfg = resolve_llm_config(state).await?;
-    crate::engine::work::launcher::launch_intake(db.clone(), cfg, session_id, gid, lead, &members, message)
-        .await
+    let collab_id = crate::engine::work::launcher::launch_intake(
+        db.clone(),
+        cfg,
+        session_id,
+        gid,
+        lead,
+        &members,
+        message,
+    )
+    .await?;
+    Ok(WorkFollowup::Intake(collab_id))
+}
+
+/// 中止一个 work job(R3 逃生门):该会话所有非终态 work 协作置 aborted(CAS 终态守卫保证
+/// 晚到的步完成回调被忽略),job 状态机置 aborted。返回被中止的协作数。
+/// 注:已在跑的 ReAct 步不被强杀(detached task),其结果不再落库 —— v1 取舍。
+#[tauri::command]
+pub async fn abort_work_job(state: State<'_, AppState>, session_id: String) -> Result<usize, String> {
+    abort_work_job_impl(&state, &session_id)
+}
+
+pub fn abort_work_job_impl(state: &AppState, session_id: &str) -> Result<usize, String> {
+    let db = state.db.clone();
+    let active = db.list_active_work_collabs(session_id);
+    let executor = Arc::new(crate::engine::collaboration::executor::ConcreteExecutor::new(
+        crate::engine::llm_client::LLMConfig::default(),
+    ));
+    let orch = SqliteOrchestrator::new(db.clone(), executor);
+    let mut n = 0;
+    for id in &active {
+        match orch.abort_collaboration(*id) {
+            Ok(()) => n += 1,
+            Err(e) => log::warn!("abort work collab {id}: {e}"),
+        }
+    }
+    db.set_work_job_status(session_id, "aborted")?;
+    Ok(n)
 }
 
 /// 解析并构建派工 DAG(不 submit):会话 → 群 → 成员 → build。返回 (协作 plan, group_id)。
@@ -211,19 +303,20 @@ pub async fn commit_work_plan_impl(
         .and_then(|v| v.into_iter().next())
         .map(|c| c.id);
     let intent = format!("开工:派 {} 个任务", plan.tasks.len());
+    // kind=work_dispatch 经 submit_kinded 在**调度前**钉死(R3:消"步骤秒败时 finalize 已按
+    // chat_group 写群聊式终态"的竞态)。缝 5 / §7-P0-1 据此按 kind 分叉 finalize。
     let collab_id = orch
-        .submit(
+        .submit_kinded(
             session_id.to_string(),
             intent,
             cplan,
             CollaborationMode::Dispatched(0),
             parent_id,
+            Some("work_dispatch"),
         )
         .await?;
-
-    // S1 判别器:标 work_dispatch —— 让 work job 在数据层与 chat 群聊显式分流。缝 5 / §7-P0-1
-    // 据此按 kind 分叉 finalize(work 走 compose_work_summary,不复用群聊 verdict 拼接)。
-    let _ = state.db.set_collaboration_kind(collab_id, "work_dispatch");
+    // job 状态机:开工 → running(交付/失败/中止由 finalize 的 work_dispatch 分支推进)。
+    let _ = state.db.set_work_job_status(session_id, "running");
 
     // 锚点占位消息:派工协作也要在聊天流里有挂载点,前端 get_history 才会把它映射成
     // role='collaboration' → CollaborationMessageCard hydrate 该 collab → 渲染队友实时发言。

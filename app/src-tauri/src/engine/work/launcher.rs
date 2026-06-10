@@ -37,6 +37,11 @@ use crate::engine::llm_client::LLMConfig;
 /// **§7-P0-2 注**:intake 锚点的 `upsert_collaboration_message` 与 `kind=work_dispatch` 标记
 /// 由 S6 接线时收口(标 `context_type=work_job` + `set_collaboration_kind`);S4 先原样复制
 /// 结构,不接线、不改库标记。
+/// intake 注入的会话历史轮数。牵头者跨轮不失忆的关键:followup 每轮 intake 都带上
+/// 最近的对话(用户答过什么、自己问过什么/提过什么方案),与 chat 群聊的
+/// `DISPATCH_HISTORY_TURNS` 同理,但 work 澄清链更长,多带几轮。
+const INTAKE_HISTORY_TURNS: usize = 12;
+
 pub async fn launch_intake(
     db: Arc<Database>,
     cfg: LLMConfig,
@@ -63,6 +68,39 @@ pub async fn launch_intake(
         .collect::<Vec<_>>()
         .join("\n");
 
+    // R3(根治 PM 失忆):带上这个 work 会话最近的对话。没有它,每条 followup 都是孤立
+    // 消息,牵头者反复自我介绍、重复提问 —— work 续聊不可用的根因。形状与 chat 群聊的
+    // metadata["history"] 一致([{role,text}]),worker 渲染成「最近的对话」块。
+    let mut history: Vec<serde_json::Value> = db
+        .get_recent_messages(session_id, INTAKE_HISTORY_TURNS)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| m.role == "user" || m.role == "assistant")
+        .filter(|m| !m.content.trim().is_empty())
+        .map(|m| {
+            let who = if m.role == "user" { "用户" } else { "助手" };
+            serde_json::json!({ "role": who, "text": m.content })
+        })
+        .collect();
+    // 当前这条消息 prepare_chat_context 已落库 → 会出现在历史末尾,与 prompt 重复;弹掉。
+    if history
+        .last()
+        .and_then(|t| t.get("text").and_then(|v| v.as_str()))
+        == Some(user_message)
+    {
+        history.pop();
+    }
+    // 牵头者自己说过的话(澄清问题/方案)在 step output 不在 messages —— 单独取最近几条,
+    // 每条截断,让它接上自己的上文(不重复自我介绍、不重复提问)。
+    let lead_recap: Vec<serde_json::Value> = db
+        .recent_work_step_outputs(session_id, 3)
+        .into_iter()
+        .map(|(name, text)| {
+            let clipped: String = text.chars().take(600).collect();
+            serde_json::json!({ "role": name, "text": clipped })
+        })
+        .collect();
+
     let plan = CollaborationPlan {
         steps: vec![Step {
             id: 1,
@@ -72,8 +110,14 @@ pub async fn launch_intake(
             input: StepInput {
                 prompt: user_message.to_string(),
                 // mode=intake:牵头者接手步,worker 给宽裕总超时(ask_user 阻塞等答);
-                // roster=队友名单,worker 注入接口人 prompt,让它知道派工时 role 填谁。
-                metadata: serde_json::json!({ "mode": "intake", "roster": roster }),
+                // roster=队友名单,worker 注入接口人 prompt,让它知道派工时 role 填谁;
+                // history=会话最近对话,worker 渲染进 user prompt(跨轮记忆)。
+                metadata: serde_json::json!({
+                    "mode": "intake",
+                    "roster": roster,
+                    "history": history,
+                    "lead_recap": lead_recap,
+                }),
             },
             output: None,
             status: StepStatus::Pending,
@@ -88,18 +132,20 @@ pub async fn launch_intake(
         .ok()
         .and_then(|v| v.into_iter().next())
         .map(|c| c.id);
+    // R3:intake 协作标 kind=work_intake(区别于派工协作 work_dispatch)——intake done 只是
+    // "牵头者说完这轮话",不是交付;finalize 据此不写「✅ 交付完成」、不动 job 状态。
+    // kind 经 submit_kinded 在调度前钉死(消"秒败按 chat 写终态"的竞态)。
     let collab_id = orch
-        .submit(
+        .submit_kinded(
             session_id.to_string(),
             user_message.to_string(),
             plan,
             CollaborationMode::Dispatched(pm.id),
             parent_id,
+            Some("work_intake"),
         )
         .await?;
-    // S6 / §7-P0-2:这条协作是 work job → 标 kind=work_dispatch(让 finalize 走 work 结论分叉);
     // intake 锚点消息标 context_type=work_job(让前端按 work 分流渲染,而非群聊气泡)。
-    let _ = db.set_collaboration_kind(collab_id, "work_dispatch");
     let placeholder = format!("@{} {}", participant.name, user_message);
     let _ = db.upsert_collaboration_message_ctx(session_id, collab_id, &placeholder, "work_job");
     Ok(collab_id)

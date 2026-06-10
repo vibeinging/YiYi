@@ -12,16 +12,35 @@
 //! **S5 现状**:本工具**未注册进现有工具表 / 未改 dynamic.rs 档位**(S6 接线时注册到
 //! Coordinator 档 + dispatch 路由)。`#[allow(dead_code)]` 压住未接线告警。
 
-#![allow(dead_code)]
-
 use tauri::Emitter;
 
 use crate::engine::work::plan::{ProjectPlan, ProjectTask};
+
+tokio::task_local! {
+    /// 当前 work 步的 (session_id, collab_id) —— worker 执行 intake 时包一层,
+    /// 让 propose_work_plan 知道方案属于哪个工作会话(载荷带 session_id 防跨会话错派、
+    /// 方案锚点落对会话、job 状态机推进到 pending_commit)。
+    static WORK_CTX: (String, i64);
+}
+
+/// 在 fut 期间绑定当前 work 步的会话上下文(worker::run_work_step 包)。
+pub async fn with_work_ctx<F, R>(session_id: String, collab_id: i64, fut: F) -> R
+where
+    F: std::future::Future<Output = R>,
+{
+    WORK_CTX.scope((session_id, collab_id), fut).await
+}
+
+fn current_work_ctx() -> Option<(String, i64)> {
+    WORK_CTX.try_with(|c| c.clone()).ok()
+}
 
 /// 发给前端的 `work://plan_proposed` 卡片载荷。
 #[derive(Clone, serde::Serialize)]
 struct WorkPlanCard {
     request_id: String,
+    /// 方案所属的 work 会话(R3:防全局单槽跨会话错派;空串 = 旧版无上下文)。
+    session_id: String,
     /// 一句话方案概述。
     summary: String,
     /// 任务清单(角色 / 目标 / 依赖)。
@@ -98,11 +117,37 @@ pub async fn propose_work_plan_tool(args: &serde_json::Value) -> String {
         Some(h) => h,
         None => return "(当前是无界面环境,无法发开工方案。)".to_string(),
     };
+    let ctx = current_work_ctx();
+    let session_id = ctx.as_ref().map(|(s, _)| s.clone()).unwrap_or_default();
     let card = WorkPlanCard {
         request_id: uuid::Uuid::new_v4().to_string(),
+        session_id: session_id.clone(),
         summary,
         plan,
     };
+
+    // R3:方案**落库**(metadata 带完整 plan,context_type=work_plan)——开工卡不再只活在
+    // 一次性事件里:用户不在场/切页/重启不丢,前端可从消息流重渲染;job 状态机推进到
+    // 「待开工」。best-effort:落库失败不挡发卡。
+    if let Some((sid, _collab)) = &ctx {
+        if let Some(db) = super::get_database() {
+            let meta = serde_json::json!({
+                "type": "work_plan",
+                "request_id": card.request_id,
+                "summary": card.summary,
+                "plan": card.plan,
+            });
+            let _ = db.push_message_with_context(
+                sid,
+                "assistant",
+                "📋 开工方案待审阅",
+                Some(&meta.to_string()),
+                "work_plan",
+            );
+            let _ = db.set_work_job_status(sid, "pending_commit");
+        }
+    }
+
     if handle.emit("work://plan_proposed", &card).is_err() {
         return "(发开工方案失败:事件发送出错。)".to_string();
     }

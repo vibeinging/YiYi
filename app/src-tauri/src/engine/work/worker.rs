@@ -132,12 +132,31 @@ fn render_work_system_prompt(
     format!("{persona_prefix}{base}{work_note}")
 }
 
+/// 把 metadata 里的对话数组渲染成文本块([{role,text}] → "role: text\n")。空数组 → 空串。
+fn render_turns_block(step: &Step, key: &str, header: &str) -> String {
+    let Some(arr) = step.input.metadata.get(key).and_then(|v| v.as_array()) else {
+        return String::new();
+    };
+    if arr.is_empty() {
+        return String::new();
+    }
+    let mut s = format!("【{header}】\n");
+    for t in arr {
+        let role = t.get("role").and_then(|v| v.as_str()).unwrap_or("");
+        let text = t.get("text").and_then(|v| v.as_str()).unwrap_or("");
+        s.push_str(&format!("{role}: {text}\n"));
+    }
+    s.push('\n');
+    s
+}
+
 /// 构造 work 步的 user prompt。
 ///
 /// - **ProjectTask**:上游产出作为"交接"喂给下游(后端的接口契约给前端、前后端的实现给
 ///   测试…),而不是"群里的讨论"。让下游角色清楚这是在接力建造。第一棒 upstream 为空 →
 ///   只有本任务。
-/// - **Intake**:接手者直接看用户的原始诉求(step.input.prompt)。
+/// - **Intake**:会话历史 + 牵头者先前发言(R3 跨轮记忆,launcher 注入 metadata)在前,
+///   用户新消息在末 —— 没有这两块,每条 followup 都是孤立消息,牵头者反复失忆。
 fn render_work_user_prompt(
     step: &Step,
     kind: WorkStepKind,
@@ -159,7 +178,19 @@ fn render_work_user_prompt(
             s.push_str(&step.input.prompt);
             s
         }
-        WorkStepKind::Intake => step.input.prompt.clone(),
+        WorkStepKind::Intake => {
+            let history = render_turns_block(step, "history", "这个工作会话最近的对话");
+            let recap = render_turns_block(
+                step,
+                "lead_recap",
+                "你此前在本工作里的发言(别重复自我介绍、别重复已问过的问题)",
+            );
+            if history.is_empty() && recap.is_empty() {
+                step.input.prompt.clone()
+            } else {
+                format!("{history}{recap}【用户刚说】\n{}", step.input.prompt)
+            }
+        }
     }
 }
 
@@ -236,7 +267,16 @@ pub async fn run_work_step(
         role_filter,
         role_max_iter,
     ));
-    fut.await
+    // 绑 work 上下文(task-local):propose_work_plan 据此知道方案属于哪个会话
+    // (载荷带 session_id + 方案落库落对会话 + job 状态机推进)。
+    let session_id = crate::engine::tools::get_database()
+        .and_then(|db| db.collaboration_session_id(collab_id));
+    match session_id {
+        Some(sid) => {
+            crate::engine::tools::work_tools::with_work_ctx(sid, collab_id, fut).await
+        }
+        None => fut.await,
+    }
 }
 
 /// work 步的超时包装(缝 2 归位后的执行入口):按 `work_timeout_policy` 给 `run_work_step`

@@ -233,13 +233,22 @@ pub async fn chat_stream_start(
     // work 会话(source='work'):后续消息**不进放养群聊**(放养是无上限事件循环,全员会
     // 几十轮空转烧 token —— 见用户反馈 2026-06-09)。chat×work 决策 B:work 永远结构化 ——
     // 交给牵头者单 agent 有界接手(intake:澄清,需要时 propose_work_plan 再派工)。
+    // R3:停止意图 → 中止 job;上一轮 intake 没回完 → 互斥拒绝 —— 都以可见提示收束本轮。
     if state.db.get_session(&sid).ok().flatten().map(|s| s.source).as_deref() == Some("work") {
+        use crate::commands::work::WorkFollowup;
         match crate::commands::work::dispatch_work_followup(&state, &sid, &message).await {
-            Ok(collab_id) => {
+            Ok(WorkFollowup::Intake(collab_id)) => {
                 app.emit("chat://complete", serde_json::json!({
                     "text": "",
                     "session_id": sid,
                     "collaboration_id": collab_id,
+                })).ok();
+                return Ok(());
+            }
+            Ok(WorkFollowup::Notice(text)) => {
+                app.emit("chat://complete", serde_json::json!({
+                    "text": text,
+                    "session_id": sid,
                 })).ok();
                 return Ok(());
             }

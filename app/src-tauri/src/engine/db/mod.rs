@@ -879,6 +879,38 @@ impl Database {
             log::info!("Migrated messages table: added context_type column (chat/work render discriminator)");
         }
 
+        // R3(work job 一等公民):job 级状态机的薄表。一个 work 会话 = 一个 job;
+        // 协作(collaborations)只是 job 下的执行记录(intake N 条 + 派工 M 条),job 的
+        // 生命周期状态(clarifying→pending_commit→running→done/failed/aborted)记在这里,
+        // 不再从「会话最新协作的 status」倒推(那会把 intake done 错读成"已交付")。
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS work_jobs (
+                session_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                lead_companion_id INTEGER,
+                intent TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                completed_at INTEGER
+            );",
+        )
+        .map_err(|e| format!("Migration error (work_jobs): {}", e))?;
+        // 存量回填:work_jobs 表问世前已有的 work 会话(kind=work_dispatch 协作)各自补一行,
+        // 状态按其最新协作粗映射。幂等(OR IGNORE,已有行不动)。
+        conn.execute_batch(
+            "INSERT OR IGNORE INTO work_jobs (session_id, status, intent, created_at, updated_at, completed_at)
+             SELECT c.chat_session_id,
+                    CASE c.status WHEN 'running' THEN 'running' WHEN 'done' THEN 'done'
+                                  WHEN 'failed' THEN 'failed' WHEN 'aborted' THEN 'aborted'
+                                  ELSE 'clarifying' END,
+                    c.intent, c.created_at, c.created_at, c.completed_at
+             FROM collaborations c
+             JOIN (SELECT chat_session_id, MAX(id) AS mid FROM collaborations
+                   WHERE kind = 'work_dispatch' GROUP BY chat_session_id) latest
+               ON latest.mid = c.id;",
+        )
+        .map_err(|e| format!("Migration error (work_jobs backfill): {}", e))?;
+
         // Add source/source_meta to sessions table
         let has_source: bool = conn
             .prepare("SELECT source FROM sessions LIMIT 0")
@@ -1236,25 +1268,172 @@ impl Database {
             .unwrap_or_default()
     }
 
-    /// 列出所有 work job 摘要,新→旧 —— WorkPage 监控列表用(S7)。
+    /// 协作 → 所属会话 id(worker 给 work 工具绑上下文用)。
+    pub fn collaboration_session_id(&self, collab_id: i64) -> Option<String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT chat_session_id FROM collaborations WHERE id = ?1",
+            params![collab_id],
+            |r| r.get(0),
+        )
+        .ok()
+    }
+
+    // ── work_jobs(R3:job 一等公民,job 级状态机)─────────────────────────
+
+    /// 新建 work job(launch 时调)。已存在(同会话重复 launch)则只刷新 updated_at。
+    pub fn create_work_job(
+        &self,
+        session_id: &str,
+        intent: &str,
+        lead_companion_id: Option<i64>,
+    ) -> Result<(), String> {
+        let now = now_ts();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "INSERT INTO work_jobs (session_id, status, lead_companion_id, intent, created_at, updated_at)
+             VALUES (?1, 'clarifying', ?2, ?3, ?4, ?4)
+             ON CONFLICT(session_id) DO UPDATE SET updated_at = ?4",
+            params![session_id, lead_companion_id, intent, now],
+        )
+        .map_err(|e| format!("create_work_job: {e}"))?;
+        Ok(())
+    }
+
+    /// 推进 job 状态机。终态(done/failed/aborted)写 completed_at;非终态清空它
+    /// (done 后 followup 重新激活 → 回 clarifying)。
+    pub fn set_work_job_status(&self, session_id: &str, status: &str) -> Result<(), String> {
+        let now = now_ts();
+        let terminal = matches!(status, "done" | "failed" | "aborted");
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE work_jobs SET status = ?2, updated_at = ?3,
+                    completed_at = CASE WHEN ?4 THEN ?3 ELSE NULL END
+              WHERE session_id = ?1",
+            params![session_id, status, now, terminal],
+        )
+        .map_err(|e| format!("set_work_job_status: {e}"))?;
+        Ok(())
+    }
+
+    /// 读 job 当前状态。无此 job → None。
+    pub fn get_work_job_status(&self, session_id: &str) -> Option<String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT status FROM work_jobs WHERE session_id = ?1",
+            params![session_id],
+            |r| r.get(0),
+        )
+        .ok()
+    }
+
+    /// 读 job 固化的牵头者(followup 复用,不重选,防 PM 漂移)。
+    pub fn get_work_job_lead(&self, session_id: &str) -> Option<i64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT lead_companion_id FROM work_jobs WHERE session_id = ?1",
+            params![session_id],
+            |r| r.get::<_, Option<i64>>(0),
+        )
+        .ok()
+        .flatten()
+    }
+
+    /// 该 work 会话是否有**进行中的 intake 协作**(牵头者还在处理上一条)——followup 互斥
+    /// 守卫:有则拒绝新建,防并发多 PM 竞态。
+    pub fn has_active_work_intake(&self, session_id: &str) -> bool {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT COUNT(*) FROM collaborations
+              WHERE chat_session_id = ?1 AND kind = 'work_intake'
+                AND status NOT IN ('done', 'aborted', 'failed')",
+            params![session_id],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)
+        .unwrap_or(false)
+    }
+
+    /// 该 work 会话最近的**已完成 work 步产出**((发言者名, 产出文本),旧→新)——intake 跨轮
+    /// 记忆用:牵头者自己说过的话(澄清问题/方案)不在 messages 表(在 step output),光注入
+    /// 消息历史它仍不知道自己问过什么。文本截断由调用方做。
+    pub fn recent_work_step_outputs(&self, session_id: &str, limit: usize) -> Vec<(String, String)> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = match conn.prepare(
+            "SELECT s.participants_json, s.output_json
+             FROM collaboration_steps s
+             JOIN collaborations c ON c.id = s.collaboration_id
+             WHERE c.chat_session_id = ?1 AND c.kind IN ('work_intake', 'work_dispatch')
+               AND s.status = 'completed' AND s.output_json IS NOT NULL
+             ORDER BY s.finished_at DESC LIMIT ?2",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let mut rows: Vec<(String, String)> = stmt
+            .query_map(params![session_id, limit as i64], |r| {
+                let parts: String = r.get(0)?;
+                let out: String = r.get(1)?;
+                Ok((parts, out))
+            })
+            .map(|it| {
+                it.filter_map(|r| r.ok())
+                    .filter_map(|(parts, out)| {
+                        let name = serde_json::from_str::<serde_json::Value>(&parts)
+                            .ok()
+                            .and_then(|v| {
+                                v.get(0)?.get("name").and_then(|n| n.as_str()).map(String::from)
+                            })
+                            .unwrap_or_else(|| "牵头者".to_string());
+                        let text = serde_json::from_str::<serde_json::Value>(&out)
+                            .ok()
+                            .and_then(|v| {
+                                v.get("full_output").and_then(|t| t.as_str()).map(String::from)
+                            })?;
+                        if text.trim().is_empty() {
+                            return None;
+                        }
+                        Some((name, text))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        rows.reverse(); // 旧→新
+        rows
+    }
+
+    /// 列出该 work 会话所有**非终态**的 work 协作 id(intake + 派工)——abort 用。
+    pub fn list_active_work_collabs(&self, session_id: &str) -> Vec<i64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = match conn.prepare(
+            "SELECT id FROM collaborations
+              WHERE chat_session_id = ?1 AND kind IN ('work_intake', 'work_dispatch')
+                AND status NOT IN ('done', 'aborted', 'failed')",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        stmt.query_map(params![session_id], |r| r.get(0))
+            .map(|rows| rows.filter_map(|r| r.ok()).collect())
+            .unwrap_or_default()
+    }
+
+    /// 列出所有 work job 摘要,新→旧 —— WorkPage 监控列表用。
     ///
-    /// **按会话去重**:一个工作会话会产生两条 kind='work_dispatch' 协作(intake 一条、
-    /// 开工派工一条,见 launcher.rs:launch_intake 与 commands/work.rs:commit_work_plan 都标
-    /// kind),取每会话 MAX(id) 的那条作代表,避免同一工作在列表里重复出现。
-    /// **带分组字段**:LEFT JOIN sessions + companion_groups,前端按文件夹(团队工作区)分组。
+    /// R3 起读 `work_jobs` 薄表:status 是 **job 级状态机**(clarifying/pending_commit/
+    /// running/done/failed/aborted),不再从「会话最新协作的 status」倒推(那会把 intake
+    /// done 错读成"已交付")。LEFT JOIN sessions + companion_groups 取标题与分组字段。
+    /// INNER JOIN sessions:会话已删的孤儿 job 不再出现(幽灵条目)。
     pub fn list_work_jobs(&self) -> Vec<WorkJobSummary> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = match conn.prepare(
-            "SELECT c.id, c.chat_session_id, COALESCE(s.name, c.intent) AS title,
-                    c.status, c.created_at, c.completed_at,
+            "SELECT w.rowid, w.session_id, COALESCE(s.name, w.intent) AS title,
+                    w.status, w.created_at, w.completed_at,
                     s.group_id, g.name, g.emoji, g.workspace_path
-             FROM collaborations c
-             JOIN (SELECT chat_session_id, MAX(id) AS mid
-                   FROM collaborations WHERE kind = 'work_dispatch'
-                   GROUP BY chat_session_id) latest ON latest.mid = c.id
-             LEFT JOIN sessions s ON s.id = c.chat_session_id
+             FROM work_jobs w
+             JOIN sessions s ON s.id = w.session_id
              LEFT JOIN companion_groups g ON g.id = s.group_id
-             ORDER BY c.created_at DESC",
+             ORDER BY w.created_at DESC",
         ) {
             Ok(s) => s,
             Err(e) => {
@@ -1281,15 +1460,16 @@ impl Database {
     }
 }
 
-/// work job(kind=work_dispatch 的协作)摘要 —— WorkPage 监控列表项(S7)。
+/// work job 摘要 —— WorkPage 监控列表项(R3:来自 work_jobs 薄表)。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct WorkJobSummary {
+    /// work_jobs 行 id(列表 key 用;选中/跳转用 session_id)。
     pub id: i64,
-    /// 所属群聊 session(点击跳到该工作群对话看进度)。
+    /// 所属 work 会话(选中后右栏嵌入该会话看团队推进)。
     pub session_id: String,
-    /// 任务标题(优先会话名,回退协作 intent)。
+    /// 任务标题(优先会话名,回退 job intent)。
     pub intent: String,
-    /// planning / running / done / aborted / failed。
+    /// job 级状态机:clarifying / pending_commit / running / done / failed / aborted。
     pub status: String,
     pub created_at: i64,
     pub completed_at: Option<i64>,

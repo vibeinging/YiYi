@@ -545,6 +545,7 @@ pub fn run() {
             commands::work::list_work_jobs,
             commands::work::launch_work_job,
             commands::work::find_team_by_folder,
+            commands::work::abort_work_job,
             commands::agent::chat::chat_stream_state,
             commands::agent::chat::get_history,
             commands::agent::chat::read_artifact_data_uri,

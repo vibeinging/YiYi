@@ -89,18 +89,48 @@ async fn message_context_type_defaults_collab() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn list_work_jobs_returns_only_work_dispatch() {
+async fn list_work_jobs_reads_job_state_machine_not_collab_status() {
+    // R3:列表来自 work_jobs 薄表(job 级状态机),不再从协作 status 倒推 ——
+    // intake 协作 done ≠ 已交付;chat 协作与无 job 行的会话都不该出现。
     let t = TempDb::new();
-    let chat = insert_bare_collaboration(&t, "sess-wj"); // 默认 chat_group
-    let work = insert_bare_collaboration(&t, "sess-wj");
-    t.db().set_collaboration_kind(work, "work_dispatch").unwrap();
+    let db = t.db();
+    let _chat = insert_bare_collaboration(&t, "sess-wj"); // 默认 chat_group,无 job 行
+    db.create_work_job("sess-job", "做个 app", Some(7)).unwrap();
+    // sessions 行(list_work_jobs INNER JOIN sessions 过滤孤儿)。
+    {
+        let conn = db.get_conn().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "INSERT OR IGNORE INTO sessions (id, name, created_at, updated_at) VALUES ('sess-job', '做个 app', ?1, ?1)",
+            rusqlite::params![now],
+        )
+        .unwrap();
+    }
 
-    let jobs = t.db().list_work_jobs();
-    // 只列 work_dispatch 的;chat 那条不在
-    assert_eq!(jobs.len(), 1, "list_work_jobs 只列 kind=work_dispatch");
-    assert_eq!(jobs[0].id, work);
-    assert_eq!(jobs[0].intent, "做点事");
-    assert_eq!(jobs[0].status, "planning");
-    assert_eq!(jobs[0].session_id, "sess-wj");
-    assert!(!jobs.iter().any(|j| j.id == chat), "chat 协作不该出现在 work job 列表");
+    let jobs = db.list_work_jobs();
+    assert_eq!(jobs.len(), 1, "只列 work_jobs 表里的 job");
+    assert_eq!(jobs[0].session_id, "sess-job");
+    assert_eq!(jobs[0].status, "clarifying", "新 job 初始态 = 澄清中");
+
+    // 状态机推进:pending_commit → running → done(终态写 completed_at)。
+    db.set_work_job_status("sess-job", "pending_commit").unwrap();
+    assert_eq!(db.get_work_job_status("sess-job").as_deref(), Some("pending_commit"));
+    db.set_work_job_status("sess-job", "done").unwrap();
+    let jobs = db.list_work_jobs();
+    assert_eq!(jobs[0].status, "done");
+    assert!(jobs[0].completed_at.is_some(), "终态应写 completed_at");
+
+    // lead 固化可读回。
+    assert_eq!(db.get_work_job_lead("sess-job"), Some(7));
+
+    // 孤儿过滤:job 行在、session 没有 → 不出现(幽灵条目)。
+    db.create_work_job("sess-ghost-没有session行", "幽灵", None).unwrap();
+    {
+        let conn = db.get_conn().unwrap();
+        conn.execute("DELETE FROM sessions WHERE id = 'sess-ghost-没有session行'", []).unwrap();
+    }
+    assert!(
+        !db.list_work_jobs().iter().any(|j| j.session_id.contains("ghost")),
+        "无 session 的孤儿 job 不该出现",
+    );
 }

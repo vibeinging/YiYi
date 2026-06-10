@@ -587,15 +587,77 @@ async fn launch_work_job_creates_work_dispatch_collab() {
         .await
         .unwrap();
 
-    // 产出一个 work job:协作标 kind=work_dispatch、会话绑团队群、进 work job 列表。
+    // 产出一个 work job:intake 协作标 kind=work_intake(R3:intake ≠ 交付,与派工协作
+    // work_dispatch 分治)、会话绑团队群、job 入 work_jobs 状态机(clarifying)并进列表。
     assert_eq!(
         db.get_collaboration_kind(launched.collaboration_id).as_deref(),
-        Some("work_dispatch"),
-        "显式发起的协作应标 work_dispatch",
+        Some("work_intake"),
+        "显式发起的 intake 协作应标 work_intake",
     );
     assert_eq!(db.get_session_group(&launched.session_id), Some(gid), "work 会话应绑团队群");
+    let jobs = db.list_work_jobs();
+    let job = jobs
+        .iter()
+        .find(|j| j.session_id == launched.session_id)
+        .expect("应出现在 work job 列表");
+    assert_eq!(job.status, "clarifying", "新发起的 job 应在澄清态,而不是已交付");
+    // 用户任务原文应落成 user 气泡(原始请求可见、followup 历史块带得上)。
+    let msgs = db.get_recent_messages(&launched.session_id, 10).unwrap();
     assert!(
-        db.list_work_jobs().iter().any(|j| j.id == launched.collaboration_id),
-        "应出现在 work job 列表",
+        msgs.iter().any(|m| m.role == "user" && m.content.contains("todo")),
+        "任务原文应是 user 消息",
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn work_followup_stop_intent_aborts_job_instead_of_new_intake() {
+    use app_lib::commands::work::{dispatch_work_followup, launch_work_job_impl, WorkFollowup};
+    let t = build_test_app_state().await;
+    let db = t.state().db.clone();
+    let pm = db.adopt_companion(&new_pm("产品经理")).unwrap();
+    let mock = MockLlmServer::start().await;
+    mock.mock_chat_completion_response(&decision_json(&[(pm, 0.9)])).await;
+    seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
+    let gid = create_companion_group_impl(t.state(), "软件公司".into(), None, None)
+        .await
+        .unwrap();
+    add_companion_to_group_impl(t.state(), gid, pm).await.unwrap();
+    let launched = launch_work_job_impl(t.state(), gid, "做个 app", None).await.unwrap();
+
+    // 「停」是停止意图,不是新任务:中止 job,不新建 intake。
+    let out = dispatch_work_followup(t.state(), &launched.session_id, "停").await.unwrap();
+    assert!(matches!(out, WorkFollowup::Notice(_)), "停止意图应以提示收束,不起新 intake");
+    assert_eq!(
+        db.get_work_job_status(&launched.session_id).as_deref(),
+        Some("aborted"),
+        "job 应被中止",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn work_followup_rejected_while_intake_still_active() {
+    use app_lib::commands::work::{dispatch_work_followup, launch_work_job_impl, WorkFollowup};
+    let t = build_test_app_state().await;
+    let db = t.state().db.clone();
+    let pm = db.adopt_companion(&new_pm("产品经理")).unwrap();
+    let mock = MockLlmServer::start().await;
+    mock.mock_chat_completion_response(&decision_json(&[(pm, 0.9)])).await;
+    seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
+    let gid = create_companion_group_impl(t.state(), "软件公司".into(), None, None)
+        .await
+        .unwrap();
+    add_companion_to_group_impl(t.state(), gid, pm).await.unwrap();
+    let launched = launch_work_job_impl(t.state(), gid, "做个 app", None).await.unwrap();
+
+    // launch 的 intake 协作仍是 running(mock LLM 不会真收尾)→ followup 应被互斥守卫拒绝。
+    assert!(db.has_active_work_intake(&launched.session_id), "前置:intake 应在跑");
+    let out = dispatch_work_followup(t.state(), &launched.session_id, "再加个深色模式")
+        .await
+        .unwrap();
+    match out {
+        WorkFollowup::Notice(text) => assert!(text.contains("牵头者"), "应提示等待:{text}"),
+        WorkFollowup::Intake(_) => panic!("intake 在跑时不应再起新 intake(并发竞态)"),
+    }
 }
