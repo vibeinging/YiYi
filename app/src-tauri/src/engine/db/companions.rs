@@ -46,6 +46,14 @@ pub struct Companion {
     /// 定时冥想时间 "HH:MM"(本地时区)。默认 "03:00"。
     #[serde(default = "default_meditation_time")]
     pub meditation_time: String,
+    /// 伙伴/worker 判别器(2026-06-11):'companion'(默认,chat 侧的持久伙伴)/
+    /// 'worker'(work 自动组队产生的临时工 —— 不进伙伴列表/委托/冥想,只活在团队群里)。
+    #[serde(default = "default_companion_kind")]
+    pub kind: String,
+}
+
+fn default_companion_kind() -> String {
+    "companion".to_string()
 }
 
 fn default_meditation_time() -> String {
@@ -97,6 +105,7 @@ pub(super) fn map_row(row: &rusqlite::Row) -> rusqlite::Result<Companion> {
         role_label: row.get(13)?,
         meditation_enabled: row.get(14)?,
         meditation_time: row.get(15)?,
+        kind: row.get(16)?,
     })
 }
 
@@ -104,7 +113,7 @@ pub(super) const SELECT_COLS: &str =
     "id, name, agent_definition_name, avatar_emoji, color_hex, persona_md_path, \
      memory_user_id, adopted_at, retired_at, personality_stats_json, \
      invocation_count, last_used_at, metadata_json, role_label, \
-     meditation_enabled, meditation_time";
+     meditation_enabled, meditation_time, kind";
 
 impl super::Database {
     /// Adopt a new companion. Returns the newly assigned id.
@@ -131,6 +140,18 @@ impl super::Database {
         )
         .map_err(|e| format!("adopt_companion: {}", e))?;
         Ok(conn.last_insert_rowid())
+    }
+
+    /// 标记伙伴/worker 判别器。work 自动组队在 adopt 后调它把成员标成 'worker'
+    /// (NewCompanion 不加字段 —— 字面量构造遍布测试,加字段破坏面太大)。
+    pub fn set_companion_kind(&self, id: i64, kind: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE companions SET kind = ?1 WHERE id = ?2",
+            params![kind, id],
+        )
+        .map_err(|e| format!("set_companion_kind: {e}"))?;
+        Ok(())
     }
 
     pub fn get_companion(&self, id: i64) -> Option<Companion> {
@@ -161,8 +182,10 @@ impl super::Database {
     pub fn list_active_companions(&self) -> Vec<Companion> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = match conn.prepare(&format!(
+            // worker(work 自动组队的临时工)不是伙伴:不进伙伴列表/委托/系统提示/冥想。
+            // 它们只经 list_group_members(团队群成员)可见。
             "SELECT {} FROM companions
-             WHERE retired_at IS NULL
+             WHERE retired_at IS NULL AND kind != 'worker'
              ORDER BY COALESCE(last_used_at, adopted_at) DESC, id DESC",
             SELECT_COLS
         )) {
@@ -179,7 +202,7 @@ impl super::Database {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = match conn.prepare(&format!(
             "SELECT {} FROM companions
-             WHERE retired_at IS NOT NULL
+             WHERE retired_at IS NOT NULL AND kind != 'worker'
              ORDER BY retired_at DESC",
             SELECT_COLS
         )) {
@@ -299,7 +322,7 @@ impl super::Database {
         let mut stmt = conn
             .prepare(
                 "SELECT memory_user_id FROM companions
-                 WHERE retired_at IS NOT NULL AND retired_at < ?1",
+                 WHERE retired_at IS NOT NULL AND kind != 'worker' AND retired_at < ?1",
             )
             .map_err(|e| format!("gc_retired_companions(prepare): {}", e))?;
         let user_ids: Vec<String> = stmt

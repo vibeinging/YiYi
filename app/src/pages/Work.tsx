@@ -18,13 +18,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Hammer, Loader2, CheckCircle2, XCircle, Plus, X, Folder, Sparkles, Check,
-  CircleHelp, PlayCircle, OctagonX,
+  CircleHelp, PlayCircle, OctagonX, UserPlus,
 } from 'lucide-react';
 import { listWorkJobs, launchWorkJob, findTeamByFolder, abortWorkJob, type WorkJob } from '../api/work';
 import { pickFolder } from '../api/workspace';
-import { generateTeam, commitDynamicTeam, type GeneratedTeam } from '../api/companions';
+import { addCompanionToGroup } from '../api/groups';
+import { generateTeam, commitDynamicTeam, listCompanions, type GeneratedTeam, type Companion } from '../api/companions';
 import { listen } from '@tauri-apps/api/event';
-import { confirm } from '../components/Toast';
+import { confirm, toast } from '../components/Toast';
 import { useSessionStore } from '../stores/sessionStore';
 import { useWorkStore } from '../stores/workStore';
 import { CustomTeamPanel } from '../components/companions/CustomTeamPanel';
@@ -262,10 +263,17 @@ export function WorkPage() {
         </div>
       </aside>
 
-      {/* ── 右栏:选中 = 嵌入会话;否则空态 ── */}
+      {/* ── 右栏:选中 = 工具条(拉伙伴) + 嵌入会话;否则空态 ── */}
       <main className="flex-1 min-w-0">
         {selectedSessionId ? (
-          <ChatPage embedded />
+          <div className="h-full flex flex-col">
+            <WorkSessionToolbar
+              job={jobs.find((j) => j.session_id === selectedSessionId) ?? null}
+            />
+            <div className="flex-1 min-h-0">
+              <ChatPage embedded />
+            </div>
+          </div>
         ) : (
           <div className="h-full flex items-center justify-center px-6">
             <div className="max-w-[420px] flex flex-col items-center text-center gap-4">
@@ -306,6 +314,96 @@ export function WorkPage() {
           onClose={() => { setLauncherOpen(false); setLauncherPrefill(''); }}
           onLaunched={(sessionId) => { setLauncherOpen(false); setLauncherPrefill(''); selectSession(sessionId); }}
         />
+      )}
+    </div>
+  );
+}
+
+/**
+ * 选中工作的右栏工具条:团队名 + 「拉伙伴」—— work 对话中可把已有伙伴拉进团队群
+ * (2026-06-11 规则:work 派生的 worker 不进伙伴列表,但伙伴可以被拉进 work)。
+ */
+function WorkSessionToolbar({ job }: { job: WorkJob | null }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [companions, setCompanions] = useState<Companion[]>([]);
+  const [inviting, setInviting] = useState<number | null>(null);
+  if (!job || job.group_id == null) return null;
+  const gid = job.group_id;
+
+  const openPicker = async () => {
+    try {
+      setCompanions(await listCompanions());
+      setPickerOpen(true);
+    } catch (e) {
+      toast.error(`拉取伙伴失败:${e}`);
+    }
+  };
+
+  return (
+    <div
+      className="shrink-0 flex items-center gap-2 px-4 h-10 relative"
+      style={{ borderBottom: '1px solid var(--color-border)', background: 'var(--color-bg-elevated)' }}
+    >
+      <Hammer size={13} color={AMBER} />
+      <span className="text-[12.5px] font-medium truncate" style={{ color: 'var(--color-text)' }}>
+        {job.group_name || '工作团队'}
+      </span>
+      <div className="flex-1" />
+      <button
+        onClick={openPicker}
+        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11.5px] transition-colors hover:bg-[var(--color-bg-muted)]"
+        style={{ color: 'var(--color-text-secondary)' }}
+        title="把已有伙伴拉进这支团队一起干"
+      >
+        <UserPlus size={12} strokeWidth={2.2} />
+        拉伙伴
+      </button>
+
+      {pickerOpen && (
+        <>
+          {/* 点外关闭 */}
+          <div className="fixed inset-0 z-[90]" onClick={() => setPickerOpen(false)} />
+          <div
+            className="absolute right-3 top-10 z-[95] w-[260px] max-h-[320px] overflow-y-auto rounded-xl py-1.5"
+            style={{
+              background: 'var(--color-bg-elevated)',
+              border: '1px solid var(--color-border)',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.28)',
+            }}
+          >
+            {companions.length === 0 ? (
+              <div className="px-3 py-2 text-[12px]" style={{ color: 'var(--color-text-muted)' }}>
+                还没有伙伴 —— 去「对话」里创建/收养。
+              </div>
+            ) : (
+              companions.map((c) => (
+                <button
+                  key={c.id}
+                  disabled={inviting === c.id}
+                  onClick={async () => {
+                    setInviting(c.id);
+                    try {
+                      await addCompanionToGroup(gid, c.id);
+                      toast.success(`${c.name} 已加入团队`);
+                      setPickerOpen(false);
+                    } catch (e) {
+                      toast.error(`拉伙伴失败:${e}`);
+                    } finally {
+                      setInviting(null);
+                    }
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-1.5 text-left transition-colors hover:bg-[var(--color-bg-muted)] disabled:opacity-50"
+                >
+                  <span className="text-[15px]">{c.avatar_emoji || '🤖'}</span>
+                  <span className="flex-1 min-w-0 truncate text-[12.5px]" style={{ color: 'var(--color-text)' }}>
+                    {c.name}
+                  </span>
+                  {inviting === c.id && <Loader2 size={12} className="animate-spin" />}
+                </button>
+              ))
+            )}
+          </div>
+        </>
       )}
     </div>
   );
@@ -401,7 +499,7 @@ function WorkLauncher({
         const team = await generateTeam(task.trim());
         setGenTeam(team);
         setStage('committing');
-        gid = await commitDynamicTeam(team.name, '🛠️', team.roles);
+        gid = await commitDynamicTeam(team.name, '🛠️', team.roles, true); // work 临时工,不进伙伴列表
         committedGidRef.current = gid;
       } else {
         setReusedTeam(true);
@@ -453,6 +551,7 @@ function WorkLauncher({
               重试时复用该团队(不重复组队)。 */}
           <CustomTeamPanel
             goal={task.trim()}
+            ephemeral
             onClose={() => setReview(false)}
             onCommitted={async (gid) => {
               committedGidRef.current = gid;

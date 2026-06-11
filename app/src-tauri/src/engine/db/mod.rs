@@ -594,6 +594,17 @@ impl Database {
             log::info!("Migrated companions table: added role_label column");
         }
 
+        // 伙伴/worker 判别器(2026-06-11):work 自动组队产生的临时工标 'worker',
+        // 不进伙伴列表(chat×work 正交:持久伙伴 ≠ ephemeral worker)。
+        let has_kind = conn.prepare("SELECT kind FROM companions LIMIT 0").is_ok();
+        if !has_kind {
+            conn.execute_batch(
+                "ALTER TABLE companions ADD COLUMN kind TEXT NOT NULL DEFAULT 'companion';",
+            )
+            .map_err(|e| format!("Failed to add companions.kind column: {}", e))?;
+            log::info!("Migrated companions table: added kind column");
+        }
+
         // Companion groups (群) —— 多 companion 共聊 + 共享记忆桶的载体。
         // 多对多关系:companion 可同时在多个组(类比微信群)。每组对应一个
         // group_shared_<id> 记忆桶,通过 MemoryScope::Group(id) 路由。

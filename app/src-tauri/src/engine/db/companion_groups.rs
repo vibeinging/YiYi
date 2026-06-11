@@ -46,7 +46,7 @@ const COMPANION_COLS_C: &str =
     "c.id, c.name, c.agent_definition_name, c.avatar_emoji, c.color_hex, \
      c.persona_md_path, c.memory_user_id, c.adopted_at, c.retired_at, \
      c.personality_stats_json, c.invocation_count, c.last_used_at, \
-     c.metadata_json, c.role_label, c.meditation_enabled, c.meditation_time";
+     c.metadata_json, c.role_label, c.meditation_enabled, c.meditation_time, c.kind";
 
 impl super::Database {
     // ── group CRUD ────────────────────────────────────────────────────

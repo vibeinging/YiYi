@@ -89,6 +89,63 @@ async fn message_context_type_defaults_collab() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
+async fn companion_kind_worker_hidden_from_companion_lists_but_visible_in_group() {
+    // 2026-06-11 伙伴/worker 边界:work 自动组队产生的成员标 kind='worker' ——
+    // 不进伙伴列表(好友/委托/系统提示/冥想都走 list_active_companions),
+    // 但仍是团队群成员(list_group_members),执行/派工不受影响。
+    let t = TempDb::new();
+    let db = t.db();
+    let friend = db
+        .adopt_companion(&app_lib::engine::db::NewCompanion {
+            name: "阿狸".into(),
+            agent_definition_name: "code_reviewer".into(),
+            avatar_emoji: "🦊".into(),
+            color_hex: "#F97316".into(),
+            persona_md_path: None,
+            memory_user_id: "c_friend".into(),
+            metadata_json: None,
+            role_label: None,
+        })
+        .unwrap();
+    let worker = db
+        .adopt_companion(&app_lib::engine::db::NewCompanion {
+            name: "前端临时工".into(),
+            agent_definition_name: "dyn_frontend".into(),
+            avatar_emoji: "💻".into(),
+            color_hex: "#10B981".into(),
+            persona_md_path: None,
+            memory_user_id: "c_worker".into(),
+            metadata_json: None,
+            role_label: None,
+        })
+        .unwrap();
+    db.set_companion_kind(worker, "worker").unwrap();
+
+    let actives = db.list_active_companions();
+    assert!(actives.iter().any(|c| c.id == friend), "伙伴在列表里");
+    assert!(
+        !actives.iter().any(|c| c.id == worker),
+        "worker 不该出现在伙伴列表",
+    );
+
+    // worker 仍是团队群成员(work 执行面不受影响);伙伴也能被拉进同一个群。
+    let gid = db.create_companion_group("美味工坊", None, None).unwrap();
+    db.add_group_member(gid, worker).unwrap();
+    db.add_group_member(gid, friend).unwrap();
+    let members = db.list_group_members(gid);
+    assert!(members.iter().any(|c| c.id == worker), "worker 在团队群里可见");
+    assert!(members.iter().any(|c| c.id == friend), "伙伴可被拉进 work 团队");
+
+    // 退休的 worker 也不该出现在「恢复伙伴」列表。
+    db.retire_companion(worker).unwrap();
+    assert!(
+        !db.list_retired_companions().iter().any(|c| c.id == worker),
+        "退休 worker 不进恢复列表",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
 async fn list_work_jobs_reads_job_state_machine_not_collab_status() {
     // R3:列表来自 work_jobs 薄表(job 级状态机),不再从协作 status 倒推 ——
     // intake 协作 done ≠ 已交付;chat 协作与无 job 行的会话都不该出现。

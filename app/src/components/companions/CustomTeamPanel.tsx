@@ -31,11 +31,14 @@ const PROFILE_ORDER: PermissionProfile[] = ['coordinator', 'designer', 'builder'
 export function CustomTeamPanel({
   onClose,
   goal: initialGoal,
+  ephemeral,
   onCommitted,
 }: {
   onClose: () => void
   /** 预填的目标描述(如「工作页」把任务带进来,免得用户重打一遍)。 */
   goal?: string
+  /** work 入口 = true:落地的成员标 worker(临时工,不进伙伴列表)。chat 启动器缺省 false。 */
+  ephemeral?: boolean
   /**
    * 落地(commit_dynamic_team)成功后的动作覆盖。给了就**不**走默认的"新开 chat 会话进群",
    * 改由调用方处理新 gid(如工作页:用这支团队开工 launch_work_job)。不传 = 维持原 Buddy 行为。
@@ -103,7 +106,7 @@ export function CustomTeamPanel({
     setCommitting(true)
     try {
       const clean = roles.map(({ _k, ...r }) => r) // 剥离客户端 key
-      const gid = await commitDynamicTeam(nm, teamEmoji || null, clean)
+      const gid = await commitDynamicTeam(nm, teamEmoji || null, clean, !!ephemeral)
       if (onCommitted) {
         // 调用方接管落地后动作(如工作页:用这支团队开工);不开 chat 会话、不导航、不在此 toast。
         await onCommitted(gid)
