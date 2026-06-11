@@ -483,12 +483,19 @@ where
                 .map(|(id, name, arguments)| {
                     let safe_arguments = if serde_json::from_str::<serde_json::Value>(&arguments).is_ok() {
                         arguments
-                    } else if let Some(repaired) = crate::engine::tools::repair_json(&arguments) {
+                    } else if let Some(mut repaired) = crate::engine::tools::repair_json(&arguments) {
                         log::warn!(
                             "Repaired malformed JSON arguments for tool '{}': {}",
                             name,
                             arguments.chars().take(200).collect::<String>()
                         );
+                        // 标记"这份参数是修复出来的"——大参数场景几乎必是输出上限截断
+                        // (content 尾部被腰斩,修复只是补闭合,内容仍残缺)。write_file 等
+                        // 内容敏感工具据此拒绝把残缺内容写进文件(写出去 = 静默交付半个
+                        // 文件,模型发现后重写一遍又截断,死循环耗尽迭代)。
+                        if let Some(obj) = repaired.as_object_mut() {
+                            obj.insert("__yiyi_repaired".into(), serde_json::Value::Bool(true));
+                        }
                         serde_json::to_string(&repaired).unwrap_or_else(|_| "{}".to_string())
                     } else {
                         log::warn!(

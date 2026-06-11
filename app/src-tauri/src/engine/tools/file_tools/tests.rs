@@ -120,6 +120,37 @@ async fn write_file_creates_new_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
+async fn write_file_refuses_truncated_large_arguments() {
+    // 大内容 + JSON 修复标记(__yiyi_repaired,llm_client 在 repair 时注入)= 模型输出
+    // 被上限截断,content 残缺 —— 必须拒写(写出去是静默交付半个文件),并引导分段写。
+    let dir = tmpdir();
+    authorize(dir.path()).await;
+    let file = canonical_tmpdir(&dir).join("big.html");
+    let big: String = "x".repeat(3000);
+
+    let out = write_file_tool(&json!({
+        "path": file.to_string_lossy(),
+        "content": big,
+        "__yiyi_repaired": true
+    }))
+    .await;
+    assert!(out.contains("TRUNCATED"), "应拒写并点破截断,got: {out}");
+    assert!(out.contains("append_file"), "应引导分段写,got: {out}");
+    assert!(!file.exists(), "残缺内容不该落盘");
+
+    // 小内容即便带修复标记(可能只是 fence/尾逗号修复)→ 照常写入,不误伤。
+    let small = canonical_tmpdir(&dir).join("small.txt");
+    let out = write_file_tool(&json!({
+        "path": small.to_string_lossy(),
+        "content": "ok",
+        "__yiyi_repaired": true
+    }))
+    .await;
+    assert!(out.contains("created"), "小内容不该被截断守卫误伤,got: {out}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
 async fn write_file_creates_parent_directories() {
     let dir = tmpdir();
     authorize(dir.path()).await;
