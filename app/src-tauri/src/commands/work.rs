@@ -350,6 +350,9 @@ pub async fn commit_work_plan_impl(
         .await?;
     // job 状态机:开工 → running(交付/失败/中止由 finalize 的 work_dispatch 分支推进)。
     let _ = state.db.set_work_job_status(session_id, "running");
+    // 方案卡持久进入「已开工」态(metadata.committed):本地 state 会被消息重载打回,
+    // 持久标记才是真相 —— 前端据此渲染 ✅ 已开工、收起按钮。
+    let _ = state.db.mark_work_plans_committed(session_id);
 
     // 锚点占位消息:派工协作也要在聊天流里有挂载点,前端 get_history 才会把它映射成
     // role='collaboration' → CollaborationMessageCard hydrate 该 collab → 渲染队友实时发言。

@@ -211,6 +211,22 @@ impl super::Database {
 
     /// `push_message_with_metadata` 的 context_type 版本(R3):work 落库的消息要标渲染
     /// 判别器(如开工方案锚点 `work_plan`、交付摘要 `work_job`),前端按它分发渲染分支。
+    /// 把某会话**全部**开工方案消息(context_type=work_plan)标记已开工:metadata 注入
+    /// `committed: true`。用户点「开工」后,方案卡要持久地进入「✅ 已开工」态 —— 本地
+    /// state 会被消息重载打回原形(实测:点完 600ms 后重载,卡片又变回可点「开工」)。
+    /// 标**全部**而非最新:开工后旧轮方案也都过时,不该再可点。
+    pub fn mark_work_plans_committed(&self, session_id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE messages
+                SET metadata = json_set(COALESCE(metadata, '{}'), '$.committed', json('true'))
+              WHERE session_id = ?1 AND context_type = 'work_plan'",
+            params![session_id],
+        )
+        .map_err(|e| format!("mark_work_plans_committed: {e}"))?;
+        Ok(())
+    }
+
     pub fn push_message_with_context(
         &self,
         session_id: &str,

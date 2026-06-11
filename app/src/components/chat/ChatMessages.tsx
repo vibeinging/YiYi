@@ -479,6 +479,7 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                           requestId: msg.work_plan.request_id ?? `msg-${msg.id ?? idx}`,
                           summary: msg.work_plan.summary ?? '',
                           tasks: wpTasks,
+                          committed: !!msg.work_plan.committed,
                         }}
                       />
                     </div>

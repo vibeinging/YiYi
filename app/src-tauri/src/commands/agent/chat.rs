@@ -589,6 +589,8 @@ pub async fn get_history_impl(
                         "request_id": mv.get("request_id").cloned().unwrap_or_default(),
                         "summary": mv.get("summary").cloned().unwrap_or_default(),
                         "plan": mv.get("plan").cloned().unwrap_or_default(),
+                        // 已开工标记(commit_work_plan 写入):前端据此渲染 ✅ 已开工态。
+                        "committed": mv.get("committed").cloned().unwrap_or(serde_json::Value::Bool(false)),
                     })
                 })
             } else {

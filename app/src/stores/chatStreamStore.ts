@@ -110,6 +110,8 @@ export interface ProjectPlanState {
   requestId: string;
   summary: string;
   tasks: ProjectPlanTask[];
+  /** 已开工(commit_work_plan 持久标记):卡片渲染 ✅ 已开工态,收起按钮。 */
+  committed?: boolean;
 }
 
 interface ChatStreamState {

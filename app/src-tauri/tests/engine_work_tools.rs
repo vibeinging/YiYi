@@ -61,4 +61,21 @@ async fn propose_work_plan_persists_plan_and_advances_job_without_app_handle() {
         Some("pending_commit"),
         "方案发出后 job 应进入待开工态",
     );
+
+    // 开工后:方案消息标 committed(前端据此渲染 ✅ 已开工态 —— 本地 state 会被
+    // 消息重载打回,持久标记才是真相)。
+    db.mark_work_plans_committed(sid).unwrap();
+    let msgs = db.get_messages(sid, None).unwrap();
+    let plan_msg = msgs
+        .iter()
+        .find(|m| m.context_type.as_deref() == Some("work_plan"))
+        .unwrap();
+    let meta: serde_json::Value =
+        serde_json::from_str(plan_msg.metadata.as_deref().unwrap()).unwrap();
+    assert_eq!(meta["committed"], true, "开工后方案 metadata 应标 committed");
+    assert_eq!(
+        meta["plan"]["tasks"].as_array().unwrap().len(),
+        2,
+        "json_set 不应破坏原有 plan 载荷",
+    );
 }

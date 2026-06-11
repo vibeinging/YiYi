@@ -98,7 +98,7 @@ export interface ChatMessage {
   /** chat/work 渲染判别器(R4):'collab'(默认)/ 'work_job' / 'work_plan'。 */
   context_type?: string;
   /** context_type === 'work_plan' 时的方案载荷:{ request_id, summary, plan: { tasks } }。 */
-  work_plan?: { request_id?: string; summary?: string; plan?: { tasks?: WorkPlanTask[] } };
+  work_plan?: { request_id?: string; summary?: string; plan?: { tasks?: WorkPlanTask[] }; committed?: boolean };
   /** When role === 'companion_draft', the draft payload (incl. draft_state). */
   companion_draft?: CompanionDraftEnvelope;
 }

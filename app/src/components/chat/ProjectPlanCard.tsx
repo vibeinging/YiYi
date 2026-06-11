@@ -22,10 +22,13 @@ const ACCENT = 'var(--color-primary)';
 
 export function ProjectPlanCard({ plan }: { plan: ProjectPlanState }) {
   const [committing, setCommitting] = useState(false);
-  const [done, setDone] = useState(false);
+  const [localDone, setLocalDone] = useState(false);
   const [dismissed, setDismissed] = useState(false); // R4:卡片可能来自持久化消息,「算了」=本地收起
   const sessionId = useChatStreamStore((s) => s.sessionId);
   const clearProjectPlan = useChatStreamStore((s) => s.clearProjectPlan);
+  // 已开工 = 本地即时反馈 || 持久标记(metadata.committed,commit_work_plan 写入)。
+  // 不能只靠本地 state:开工触发消息重载,重建的卡片实例会被打回「开工」按钮(实测)。
+  const done = localDone || !!plan.committed;
   if (dismissed) return null;
 
   const start = async () => {
@@ -40,7 +43,7 @@ export function ProjectPlanCard({ plan }: { plan: ProjectPlanState }) {
       // 让聊天重载,把派工协作的锚点消息拉进来 → CollaborationMessageCard 渲染队友的实时发言
       // (否则开工后页面静默,看不到团队在干活)。
       window.dispatchEvent(new CustomEvent('yiyi:reload-messages'));
-      setDone(true);
+      setLocalDone(true);
       toast.success('开工!团队已按方案开干');
       setTimeout(() => clearProjectPlan(), 600);
     } catch (e) {
