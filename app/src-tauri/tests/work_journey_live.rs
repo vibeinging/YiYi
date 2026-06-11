@@ -218,27 +218,16 @@ mod live {
             panic!("PM 应在 intake 里直接派工(job → running),实际 {status:?}");
         }
 
-        // ③ 方案记录卡已持久化(生而 committed:前端渲染 ✅ 已开工,纯透明展示)。
-        eprintln!("—— ③ 验方案记录卡 ——");
+        // ③ 不展示方案卡(「就干就行了」):无 work_plan 消息,只有派工锚点。
+        eprintln!("—— ③ 验派工锚点(无方案卡)——");
         let msgs = db.get_messages(&sid, None).unwrap();
-        let plan_msg = msgs
-            .iter()
-            .rev()
-            .find(|m| m.context_type.as_deref() == Some("work_plan"))
-            .expect("方案应已落库成 work_plan 记录卡");
-        let meta: serde_json::Value =
-            serde_json::from_str(plan_msg.metadata.as_deref().unwrap()).unwrap();
-        assert_eq!(meta["committed"], true, "直接派发的记录卡应生而 committed");
-        let plan: ProjectPlan = serde_json::from_value(meta["plan"].clone()).unwrap();
-        eprintln!("  方案 {} 条任务:", plan.tasks.len());
-        for (i, t) in plan.tasks.iter().enumerate() {
-            eprintln!("    {i}. [{}] {} deps={:?}", t.role, t.objective, t.depends_on);
-        }
-        assert!(!plan.tasks.is_empty(), "方案应至少一条任务");
         assert!(
-            plan.tasks.iter().any(|t| t.role == "frontend_dev"),
-            "本任务应派给前端(roster 标识),got {:?}",
-            plan.tasks.iter().map(|t| &t.role).collect::<Vec<_>>(),
+            msgs.iter().all(|m| m.context_type.as_deref() != Some("work_plan")),
+            "直接派发不再落方案记录卡",
+        );
+        assert!(
+            msgs.iter().any(|m| m.content.contains("🛠️ 开工")),
+            "应有派工锚点消息",
         );
 
         // ④ 重复派工守卫:running 中再 commit(旧方案卡兼容路径)应被拒。

@@ -50,8 +50,8 @@ struct WorkPlanCard {
 pub fn definitions() -> Vec<super::types::ToolDefinition> {
     vec![super::types::tool_def(
         "propose_work_plan",
-        "把项目拆成任务并**立即派工给队友开干**(调用即派发,不需要用户确认;方案会作为\
-         记录卡展示给用户)。需求澄清清楚后再调它(牵头者/接口人专用)。\
+        "把项目拆成任务并**立即派工给队友开干**(调用即派发,不需要用户确认、不展示\
+         方案卡 —— 直接干)。需求澄清清楚后再调它(牵头者/接口人专用)。\
          tasks 每条:role(**填队友的标识** —— 见系统提示里给你的「队友名单」,如 frontend_dev / \
          creative_director 等,必须和名单里的 role 完全一致才派得动)、objective(这条要做什么)、\
          depends_on(依赖哪些任务的下标,0-based,无依赖留空 —— 比如前端依赖后端接口,就把后端那条的下标填进来)。",
@@ -134,35 +134,21 @@ pub async fn propose_work_plan_tool(args: &serde_json::Value) -> String {
         );
     }
 
-    // 方案落库作**记录卡**(committed 态:前端渲染 ✅ 已开工,无按钮,纯透明展示
-    // 「活是怎么拆的」)。best-effort:落库失败不影响已派出去的工。
+    // 2026-06-11 用户拍板:连「开工方案」记录卡也不要 —— 不落 work_plan 消息,
+    // 聊天流里的存在感就是 dispatch_work_plan 写的派工锚点(🛠️ 开工 —— @谁 在干,
+    // 队友实时发言挂在上面),拆解细节沉在协作步里,要看随时点开。
+    // work://plan_proposed 事件保留:前端 bridge 拿它当重载信号,派工锚点立即上屏。
     let card = WorkPlanCard {
         request_id: uuid::Uuid::new_v4().to_string(),
         session_id: sid.clone(),
         summary,
         plan,
     };
-    let meta = serde_json::json!({
-        "type": "work_plan",
-        "request_id": card.request_id,
-        "summary": card.summary,
-        "plan": card.plan,
-        "committed": true,
-    });
-    let _ = db.push_message_with_context(
-        &sid,
-        "assistant",
-        "📋 开工方案",
-        Some(&meta.to_string()),
-        "work_plan",
-    );
-
-    // 事件触发前端即时重载(方案记录卡 + 派工锚点一起进流);headless 无 handle 跳过。
     if let Some(handle) = super::APP_HANDLE.get() {
         let _ = handle.emit("work://plan_proposed", &card);
     }
     format!(
-        "✅ 已按方案直接派工(共 {task_count} 个任务),队友们开干了。\
+        "✅ 已直接派工(共 {task_count} 个任务),队友们开干了。\
          不用等用户确认;接下来等队友交付,或继续回应用户的新消息。"
     )
 }

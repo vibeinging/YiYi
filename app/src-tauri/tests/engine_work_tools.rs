@@ -91,7 +91,7 @@ async fn propose_work_plan_dispatches_immediately_without_user_confirm() {
         "tasks": [{ "role": "frontend_dev", "objective": "写界面" }]
     });
     let reply = with_work_ctx(sid.to_string(), 42, propose_work_plan_tool(&args)).await;
-    assert!(reply.contains("已按方案直接派工"), "应直接派工,got: {reply}");
+    assert!(reply.contains("已直接派工"), "应直接派工,got: {reply}");
 
     // job 状态机直入 running(跳过 pending_commit —— 不再有人工确认态)。
     assert_eq!(db.get_work_job_status(sid).as_deref(), Some("running"));
@@ -102,21 +102,16 @@ async fn propose_work_plan_dispatches_immediately_without_user_confirm() {
         "应建出 work_dispatch 派工协作",
     );
 
-    // 方案落库为 committed **记录卡**(前端渲染 ✅ 已开工,无按钮)。
+    // 不展示方案卡(2026-06-11 用户拍板「就干就行了」):不落 work_plan 消息,
+    // 聊天流里的存在感只有派工锚点(队友实时发言挂在上面)。
     let msgs = db.get_messages(sid, None).unwrap();
-    let plan_msg = msgs
-        .iter()
-        .find(|m| m.context_type.as_deref() == Some("work_plan"))
-        .expect("方案记录卡应已落库");
-    let meta: serde_json::Value =
-        serde_json::from_str(plan_msg.metadata.as_deref().unwrap()).unwrap();
-    assert_eq!(meta["committed"], true, "记录卡应生而 committed");
-    assert_eq!(meta["plan"]["tasks"].as_array().unwrap().len(), 1);
-
-    // 派工锚点消息在(前端 CollaborationMessageCard 的挂载点)。
+    assert!(
+        msgs.iter().all(|m| m.context_type.as_deref() != Some("work_plan")),
+        "直接派发不再落方案记录卡",
+    );
     assert!(
         msgs.iter().any(|m| m.content.contains("🛠️ 开工")),
-        "应有派工锚点消息",
+        "应有派工锚点消息(前端 CollaborationMessageCard 的挂载点)",
     );
 }
 
