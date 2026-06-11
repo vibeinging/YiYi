@@ -34,8 +34,8 @@ use super::audit::AuditTrail;
 use super::events;
 use super::{
     Actor, AuditKind, Collaboration, CollaborationEvent, CollaborationId, CollaborationMode,
-    CollaborationOrchestrator, CollaborationPlan, CollaborationStatus, Executor, ExecutorHandle,
-    Mutation, Participant, Step, StepId, StepKind, StepOutput, StepStatus,
+    CollaborationOrchestrator, CollaborationPlan, CollaborationStatus, CompanionProfile, Executor,
+    ExecutorHandle, Mutation, Participant, Step, StepId, StepKind, StepOutput, StepStatus,
 };
 use crate::engine::db::Database;
 
@@ -596,6 +596,100 @@ impl SqliteOrchestrator {
         self.finalize(collab_id, CollaborationStatus::Aborted)
     }
 
+    /// 插话续轮(2026-06-11,配合 followup 闸 2b「收下不拒绝」):intake 跑的时候用户
+    /// 又发了消息 → 这轮收尾后检测积压(本 intake 创建之后的 user 消息),自动续一轮
+    /// intake 消费 ——「先处理之前的,再继续处理新的」,不丢话、不打断进行中的活。
+    ///
+    /// 守卫:job 仍在澄清/待开工才续(开工 running 后的新消息由下一次 followup 正常起
+    /// intake;已交付/中止不续)。终止性:续轮 intake 的 created_at 晚于积压消息,它收尾
+    /// 时不会再把同批消息当积压。headless(无全局 providers / 无 runtime)→ 静默不续。
+    fn resume_intake_if_backlog(&self, collab_id: CollaborationId, session_id: &str) {
+        let db = self.db.clone();
+        match db.get_work_job_status(session_id).as_deref() {
+            Some("clarifying") | Some("pending_commit") => {}
+            _ => return,
+        }
+        let created_at: i64 = {
+            let Some(conn) = db.get_conn() else { return };
+            match conn.query_row(
+                "SELECT created_at FROM collaborations WHERE id = ?1",
+                params![collab_id],
+                |r| r.get(0),
+            ) {
+                Ok(ts) => ts,
+                Err(_) => return,
+            }
+        };
+        let backlog: Vec<String> = db
+            .get_recent_messages(session_id, 10)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|m| m.role == "user" && m.timestamp > created_at)
+            .map(|m| m.content)
+            .filter(|c| !c.trim().is_empty())
+            .collect();
+        if backlog.is_empty() {
+            return;
+        }
+        let Ok(rt) = tokio::runtime::Handle::try_current() else { return };
+        log::info!(
+            "work intake {collab_id} 收尾时发现 {} 条插话,自动续一轮",
+            backlog.len()
+        );
+        let session = session_id.to_string();
+        rt.spawn(async move {
+            let Some(cfg) = crate::engine::tools::resolve_llm_config_from_globals().await else {
+                log::warn!("intake 续轮:解析不到 LLM 配置,放弃");
+                return;
+            };
+            let Some(gid) = db.get_session_group(&session) else { return };
+            let members: Vec<CompanionProfile> = db
+                .list_group_members(gid)
+                .into_iter()
+                .map(|c| CompanionProfile {
+                    id: c.id,
+                    name: c.name,
+                    avatar_emoji: c.avatar_emoji,
+                    color_hex: c.color_hex,
+                    description: c.role_label.unwrap_or_else(|| c.agent_definition_name.clone()),
+                    agent_definition_name: c.agent_definition_name,
+                    last_used_at: c.last_used_at,
+                })
+                .collect();
+            if members.is_empty() {
+                return;
+            }
+            // 牵头者固化:复用 job 记录的 lead;查不到才重选(与 followup 同语义)。
+            let lead = match db
+                .get_work_job_lead(&session)
+                .and_then(|id| members.iter().find(|m| m.id == id).cloned())
+            {
+                Some(l) => l,
+                None => match crate::engine::work::launcher::find_project_lead(&members).await {
+                    Some(l) => l.clone(),
+                    None => return,
+                },
+            };
+            let combined = format!(
+                "(这是你在处理上一轮时用户发来的消息,现在轮到它了)\n{}",
+                backlog.join("\n")
+            );
+            if let Err(e) = crate::engine::work::launcher::launch_intake(
+                db.clone(),
+                cfg,
+                &session,
+                gid,
+                &lead,
+                &members,
+                &combined,
+            )
+            .await
+            {
+                log::warn!("intake 续轮失败:{e}");
+            }
+        });
+    }
+
     fn all_steps_terminal(&self, collab_id: CollaborationId) -> Result<bool, String> {
         let conn = self.db.get_conn().ok_or_else(|| "db lock".to_string())?;
         let pending: i64 = conn
@@ -716,6 +810,16 @@ impl SqliteOrchestrator {
                             )
                             .ok();
                     }
+                } else if kind == "work_intake"
+                    && matches!(
+                        status,
+                        CollaborationStatus::Done | CollaborationStatus::Failed(_)
+                    )
+                {
+                    // 插话不丢(2026-06-11):intake 跑的时候用户又发了消息(followup 闸 2b
+                    // 收下不拒绝)→ 这轮收尾后检测积压,自动续一轮 intake 消费 ——
+                    // 「先处理之前的,再继续处理新的」。
+                    self.resume_intake_if_backlog(collab_id, &session_id);
                 }
             }
         }

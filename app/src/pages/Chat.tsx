@@ -885,7 +885,8 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking', embed
         <ChatInput
           ref={inputRef}
           // 有待答 ask_user 问题时,输入框保持可用(不显示 stop)——发送即回答,
-          // 就像在群里回复那条提问。
+          // 就像在群里回复那条提问。占位文案同步明示,用户不用知道这条隐式规则。
+          placeholder={activeQuestion ? `回答 ${activeQuestion.askerName || 'YiYi'} 的提问,或点上方选项…` : undefined}
           loading={loading && !activeQuestion}
           workspaceFiles={workspaceFiles}
           onSend={handleSend}

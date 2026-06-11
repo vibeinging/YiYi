@@ -33,6 +33,8 @@ interface TaskSuggestion {
 
 interface ChatInputProps {
   loading: boolean;
+  /** 覆盖输入框占位文案(如:有待答 ask_user 提问时提示「发送即回答」)。 */
+  placeholder?: string;
   workspaceFiles: WorkspaceFile[];
   onSend: (plainText: string, mentions: MentionTag[], attachments: Attachment[]) => void;
   onStop: () => void;
@@ -77,6 +79,7 @@ const isImageMime = (mime: string) => mime.startsWith('image/');
 export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput(
   {
     loading,
+    placeholder,
     workspaceFiles,
     onSend,
     onStop,
@@ -535,7 +538,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
             <MentionInput
               ref={inputRef}
-              placeholder={t('chat.placeholder')}
+              placeholder={placeholder ?? t('chat.placeholder')}
               disabled={loading}
               onInput={handleMentionInput}
               onMentionTrigger={handleMentionTrigger}

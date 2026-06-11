@@ -427,6 +427,16 @@ pub(crate) async fn run_react_inner(
     // 因为 sink 本体随后会被 move 进 run_agent。
     let sink_for_qa = Arc::clone(&sink);
 
+    // R5(根修):协作所属会话直接写进 cfg.session_id —— run_agent 内部用它包
+    // with_session_id(run.rs),ask_user 等会话感知工具的落库/事件载荷才带得上真实
+    // session_id(pending_questions 按会话恢复、提问卡按会话路由都靠它)。
+    // **不能**在 run_agent 外面再包一层 with_session_id:run_agent 内层 scope 用
+    // cfg.session_id 覆盖外层 —— cfg 留空串等于把外层绑定抹掉(最初就栽在这里:
+    // 外包的一层从未生效,pending_questions 全落空 session_id)。
+    let collab_session = crate::engine::tools::get_database()
+        .and_then(|db| db.collaboration_session_id(collab_id))
+        .unwrap_or_default();
+
     // 走统一 run_agent:shell 全关 + working_dir=None(伙伴人设已在 system_prompt)+ persist=None
     // (产出是协作 step output,由本函数收成 StepOutput,不入 chat 会话)。
     let cfg = crate::engine::agent_runner::config::AgentRunConfig {
@@ -437,7 +447,7 @@ pub(crate) async fn run_react_inner(
         llm_history: vec![],
         max_iter: Some(role_max_iter),
         is_first_message: false,
-        session_id: String::new(),
+        session_id: collab_session,
         working_dir: None,
         shell: crate::engine::agent_runner::config::ShellOptions::default(),
     };
@@ -468,12 +478,6 @@ pub(crate) async fn run_react_inner(
             crate::engine::tools::ask_user::with_collab_qa(Arc::clone(&qa_acc), agent_fut),
         ),
     );
-    // R5:把协作所属会话绑进 task-local —— ask_user 等会话感知工具的事件载荷才带得上真实
-    // session_id(此前 collab 步的提问 session 为空,前端无从按会话路由,提问卡跨会话劫持)。
-    let collab_session = crate::engine::tools::get_database()
-        .and_then(|db| db.collaboration_session_id(collab_id))
-        .unwrap_or_default();
-    let run = crate::engine::tools::with_session_id(collab_session, run);
     let mut reply = match group_workspace {
         Some(ws) => crate::engine::tools::with_task_working_dir(ws, run).await?,
         None => run.await?,

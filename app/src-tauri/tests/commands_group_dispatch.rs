@@ -637,7 +637,7 @@ async fn work_followup_stop_intent_aborts_job_instead_of_new_intake() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn work_followup_rejected_while_intake_still_active() {
+async fn work_followup_while_intake_active_queues_message_instead_of_reject() {
     use app_lib::commands::work::{dispatch_work_followup, launch_work_job_impl, WorkFollowup};
     let t = build_test_app_state().await;
     let db = t.state().db.clone();
@@ -651,13 +651,62 @@ async fn work_followup_rejected_while_intake_still_active() {
     add_companion_to_group_impl(t.state(), gid, pm).await.unwrap();
     let launched = launch_work_job_impl(t.state(), gid, "做个 app", None).await.unwrap();
 
-    // launch 的 intake 协作仍是 running(mock LLM 不会真收尾)→ followup 应被互斥守卫拒绝。
+    // launch 的 intake 协作仍在跑(mock LLM 不会真收尾)→ 闸 2b:插话**收下**而非拒绝
+    // (消息已落库,intake 收尾后 finalize 检测积压自动续轮),且不并发起新 intake。
     assert!(db.has_active_work_intake(&launched.session_id), "前置:intake 应在跑");
     let out = dispatch_work_followup(t.state(), &launched.session_id, "再加个深色模式")
         .await
         .unwrap();
     match out {
-        WorkFollowup::Notice(text) => assert!(text.contains("牵头者"), "应提示等待:{text}"),
+        WorkFollowup::Notice(text) => assert!(text.contains("收到"), "应确认收下而非拒绝:{text}"),
         WorkFollowup::Intake(_) => panic!("intake 在跑时不应再起新 intake(并发竞态)"),
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn work_followup_answers_pending_question_while_intake_active() {
+    use app_lib::commands::work::{dispatch_work_followup, launch_work_job_impl, WorkFollowup};
+    use app_lib::engine::db::PendingQuestion;
+    let t = build_test_app_state().await;
+    let db = t.state().db.clone();
+    let pm = db.adopt_companion(&new_pm("产品经理")).unwrap();
+    let mock = MockLlmServer::start().await;
+    mock.mock_chat_completion_response(&decision_json(&[(pm, 0.9)])).await;
+    seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
+    let gid = create_companion_group_impl(t.state(), "软件公司".into(), None, None)
+        .await
+        .unwrap();
+    add_companion_to_group_impl(t.state(), gid, pm).await.unwrap();
+    let launched = launch_work_job_impl(t.state(), gid, "做个游戏", None).await.unwrap();
+    let sid = launched.session_id.clone();
+
+    // 闸 2a:牵头者阻塞在 ask_user 等答案(pending_questions 有未答行)时,用户在输入框
+    // 发的消息**就是答案** —— 后端兜底投递(前端提问卡未恢复/事件丢失时不再死锁)。
+    assert!(db.has_active_work_intake(&sid), "前置:intake 应在跑");
+    db.insert_pending_question(&PendingQuestion {
+        request_id: "q-genre".into(),
+        session_id: sid.clone(),
+        collaboration_id: Some(launched.collaboration_id),
+        step_id: None,
+        companion_id: pm,
+        asker_name: "产品经理".into(),
+        question: "做什么类型的游戏?".into(),
+        options_json: None,
+        kind: "text".into(),
+        status: "pending".into(),
+        answer: None,
+        created_at: chrono::Utc::now().timestamp_millis(),
+        answered_at: None,
+    })
+    .unwrap();
+
+    let out = dispatch_work_followup(t.state(), &sid, "模拟经营类").await.unwrap();
+    assert!(
+        matches!(out, WorkFollowup::Notice(ref text) if text.is_empty()),
+        "答案投递后静默收束(牵头者会接着说),不另发提示",
+    );
+    let q = db.get_pending_question("q-genre").expect("问题仍在库");
+    assert_eq!(q.status, "answered", "用户消息应被投递为答案");
+    assert_eq!(q.answer.as_deref(), Some("模拟经营类"));
 }

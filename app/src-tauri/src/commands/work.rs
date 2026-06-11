@@ -195,7 +195,21 @@ pub async fn dispatch_work_followup(
     }
 
     if db.has_active_work_intake(session_id) {
-        let text = "⏳ 牵头者还在处理上一条消息,稍等它回完再说(连发会让它分身乏术)。";
+        // 闸 2 改造(2026-06-11 用户反馈:被拒绝不是合理交互)——intake 在跑时不再弹回:
+        // 2a. 牵头者正阻塞在 ask_user 等答案 → 这条消息**就是答案**:直接投递,intake
+        //     原地续跑。正常路径前端已把输入路由成答案(发送即回答);这里是后端兜底 ——
+        //     提问卡尚未恢复 / 事件丢失时,用户的回答不再被互斥闸弹回(回答被拒 = 死锁)。
+        let pending = db.list_pending_questions(session_id);
+        if let Some(q) = pending.first() {
+            db.mark_question_answered(&q.request_id, message)?;
+            crate::engine::tools::ask_user::respond(&q.request_id, message.to_string()).await;
+            // 答案已投递,牵头者会接着说话(问答由执行器内联进它的气泡),无需另发提示。
+            return Ok(WorkFollowup::Notice(String::new()));
+        }
+        // 2b. 没在等答案(推理/工具执行中)→ **收下**(消息已由 prepare_chat_context 落库):
+        //     牵头者这轮收尾时,finalize 的 work_intake 分支检测到积压的新消息会自动续一轮
+        //     intake 读到它 ——「先处理之前的,再继续处理新的」,不丢话、不打断进行中的活。
+        let text = "✍️ 收到!牵头者正在忙上一轮,忙完马上看你这条。";
         let _ = db.push_message(session_id, "assistant", text);
         return Ok(WorkFollowup::Notice(text.to_string()));
     }

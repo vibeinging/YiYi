@@ -284,7 +284,12 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
   const streamLoading = useChatStreamStore((s) => s.loading);
   const streamingContent = useChatStreamStore((s) => s.streamingContent);
   // ask_user 待答问题:作为对话流末尾的一条气泡渲染(F1)。
-  const activeQuestion = useChatStreamStore((s) => s.questionQueue[0] ?? null);
+  // R5 补漏:按**当前会话**过滤 —— Chat.tsx 的 answerQuestion/handleSend 已按会话路由,
+  // 这里直接取 queue[0] 会把别的会话的提问卡渲染进当前会话(跨会话泄漏的最后一处)。
+  // 无 sessionId 的旧载荷向后兼容:跟随任意会话。
+  const activeQuestion = useChatStreamStore(
+    (s) => s.questionQueue.find((q) => !q.sessionId || q.sessionId === currentSessionId) ?? null,
+  );
   // PM 发来的开工方案:作为对话流末尾的一张卡渲染(S2③)。
   const streamingThinking = useChatStreamStore((s) => s.streamingThinking);
   const lastUsage = useChatStreamStore((s) => s.lastUsage);
