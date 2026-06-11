@@ -151,6 +151,78 @@ pub async fn launch_intake(
     Ok(collab_id)
 }
 
+/// 按牵头者的计划**直接派工**(2026-06-11 用户决策:开工确认环节多余,提完方案直接
+/// 开干)。从 commands::work::commit_work_plan_impl 下沉到 engine —— propose_work_plan
+/// 工具(intake 里 PM 调用)与 commit_work_plan 命令(旧方案卡兼容)都走这一条。
+///
+/// 做的事:重复派工守卫 → 解析群成员 build DAG → submit_kinded(work_dispatch,调度前
+/// 钉死 kind)→ job 状态机 running → 既有方案卡标 committed → 派工锚点消息(前端
+/// CollaborationMessageCard 据此渲染队友实时发言)。
+pub async fn dispatch_work_plan(
+    db: Arc<Database>,
+    cfg: LLMConfig,
+    session_id: &str,
+    plan: &crate::engine::work::plan::ProjectPlan,
+) -> Result<i64, String> {
+    // 队伍已在跑时拒绝重复派工(失败/中止后重派合法)。
+    if db.get_work_job_status(session_id).as_deref() == Some("running") {
+        return Err("团队已经在干了,别重复派工;要改方向先「停」再说新需求".into());
+    }
+    let gid = db
+        .get_session_group(session_id)
+        .ok_or_else(|| "会话未绑群,无法派工".to_string())?;
+    let members = db.list_group_members(gid);
+    let cplan = crate::engine::work::plan::build_project_collaboration_plan(plan, &members, gid)?;
+
+    // 派工成员名(去重)—— cplan 随后被 submit 消费,先取出来给锚点占位消息用。
+    let mut member_names: Vec<String> = Vec::new();
+    for s in &cplan.steps {
+        for p in &s.participants {
+            if !member_names.iter().any(|n| n == &p.name) {
+                member_names.push(p.name.clone());
+            }
+        }
+    }
+
+    let executor = Arc::new(ConcreteExecutor::new(cfg));
+    let orch = SqliteOrchestrator::new(db.clone(), executor);
+    let parent_id = orch
+        .list_recent_by_session(session_id, 1)
+        .ok()
+        .and_then(|v| v.into_iter().next())
+        .map(|c| c.id);
+    let intent = format!("开工:派 {} 个任务", plan.tasks.len());
+    let collab_id = orch
+        .submit_kinded(
+            session_id.to_string(),
+            intent,
+            cplan,
+            CollaborationMode::Dispatched(0),
+            parent_id,
+            Some("work_dispatch"),
+        )
+        .await?;
+    // job 状态机:派工 → running(交付/失败/中止由 finalize 的 work_dispatch 分支推进)。
+    let _ = db.set_work_job_status(session_id, "running");
+    // 方案卡持久进入「已开工」态(纯记录展示,按钮收起)。
+    let _ = db.mark_work_plans_committed(session_id);
+
+    // 锚点占位消息:派工协作要在聊天流里有挂载点,前端 get_history 才会把它映射成
+    // role='collaboration' → CollaborationMessageCard hydrate → 渲染队友实时发言。
+    let mention = member_names
+        .iter()
+        .map(|n| format!("@{n}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let _ = db.upsert_collaboration_message_ctx(
+        session_id,
+        collab_id,
+        &format!("🛠️ 开工 —— {mention} 按方案并行推进中…"),
+        "work_job",
+    );
+    Ok(collab_id)
+}
+
 /// 在成员的 `(slug, is_coordinator)` 中选项目牵头者下标:**PM slug 优先**(软件公司),
 /// 否则**首个 coordinator 档位成员**(自定义团队)。都没有 → None。纯函数,可测。
 fn pick_project_lead_idx(members: &[(&str, bool)]) -> Option<usize> {

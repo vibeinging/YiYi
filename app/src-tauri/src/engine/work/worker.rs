@@ -116,8 +116,11 @@ fn render_work_system_prompt(
                  让团队空转);要用 ask_user 阻塞式地问。\n\
                  2. 关键信息齐了 → 用 **propose_work_plan** 工具把活拆成任务派给队友:每条填 role\
                  (队友的标识,见下方名单)、objective(这条做什么)、depends_on(依赖哪几条,0-based 下标,\
-                 无依赖留空)。会给用户发「开工方案」卡,用户点开工后队友才真正并行开干。\n\
-                 3. 你自己(协调档)一般不写文件,产出靠派给能写的队友;别自己硬扛所有活。\n\
+                 无依赖留空)。**调用即直接派工**,队友立刻并行开干(不需要用户确认;方案会作为\
+                 记录卡展示给用户)。\n\
+                 3. **你自己不要动手干活**(写文件/写代码/做交付物),哪怕任务再小 —— 你是\
+                 协调者,你的产出不算交付,不经 propose_work_plan 派工,工作就不会被跟踪、\
+                 不会有交付状态。永远拆任务派给队友。\n\
                  4. 用户可能在你忙的时候插话(他的新消息会出现在【用户刚说】/最近对话里):\
                  与手头工作相关 → 按新信息调整;无关或是另一件事 → 先简短确认收到、说明先把\
                  手头的收尾再处理它。别因为插话把原任务丢了。\n\
@@ -229,15 +232,42 @@ pub async fn run_work_step(
     // 角色权限:工具过滤器 + ReAct 步数上限。无角色定义 → 全套工具 + 默认步数(headless
     // 测试里 registry 不可达,安全回落)。
     let (mut role_filter, role_max_iter) = resolve_companion_role(p.companion_id).await;
-    // intake 接手者兜底补 propose_work_plan —— 覆盖该工具进 Coordinator 档之前已落盘的旧
-    // 动态角色(AGENT.md 还没这工具),以及任何非协调档却来接手的 lead。idempotent;
-    // All 已含、Deny 不动。
     if kind == WorkStepKind::Intake {
+        // intake 接手者兜底补 propose_work_plan —— 覆盖该工具进 Coordinator 档之前已落盘
+        // 的旧动态角色(AGENT.md 还没这工具),以及任何非协调档却来接手的 lead。idempotent。
         if let crate::engine::react_agent::ToolFilter::Allow(v) = &mut role_filter {
             if !v.iter().any(|t| t == "propose_work_plan") {
                 v.push("propose_work_plan".to_string());
             }
         }
+        // **协调者不动手——机制化**:intake 是协调步,把"动手干活"类工具从工具面摘掉。
+        // prompt 软约束实测拦不住(模型见任务简单 + 手里有 write_file 就自己写了,活干完
+        // 但没派工,job 永远停在 clarifying 不闭环);角色档回落 All(headless / 旧动态角色)
+        // 时尤其如此。生产 Coordinator 档本就无这些工具,此处是机制兜底,与档位语义一致。
+        const HANDS_ON_TOOLS: &[&str] = &[
+            "write_file", "edit_file", "append_file", "delete_file", "undo_edit",
+            "execute_shell", "run_python",
+        ];
+        role_filter = match role_filter {
+            crate::engine::react_agent::ToolFilter::All => {
+                crate::engine::react_agent::ToolFilter::Deny(
+                    HANDS_ON_TOOLS.iter().map(|s| s.to_string()).collect(),
+                )
+            }
+            crate::engine::react_agent::ToolFilter::Allow(v) => {
+                crate::engine::react_agent::ToolFilter::Allow(
+                    v.into_iter().filter(|t| !HANDS_ON_TOOLS.contains(&t.as_str())).collect(),
+                )
+            }
+            crate::engine::react_agent::ToolFilter::Deny(mut v) => {
+                for t in HANDS_ON_TOOLS {
+                    if !v.iter().any(|x| x == t) {
+                        v.push(t.to_string());
+                    }
+                }
+                crate::engine::react_agent::ToolFilter::Deny(v)
+            }
+        };
     }
 
     // 项目工作目录注入 prompt:`with_task_working_dir`(run_react_inner)只把**工具 cwd**

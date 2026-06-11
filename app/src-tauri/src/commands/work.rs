@@ -18,11 +18,8 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::commands::agent::helpers::resolve_llm_config;
-use crate::engine::collaboration::executor::ConcreteExecutor;
 use crate::engine::collaboration::orchestrator::SqliteOrchestrator;
-use crate::engine::collaboration::{
-    CollaborationMode, CollaborationOrchestrator, CollaborationPlan, CompanionProfile,
-};
+use crate::engine::collaboration::{CollaborationPlan, CompanionProfile};
 use crate::engine::db::{Database, WorkJobSummary};
 use crate::engine::work::plan::{build_project_collaboration_plan, ProjectPlan};
 use crate::state::AppState;
@@ -311,66 +308,11 @@ pub async fn commit_work_plan_impl(
     session_id: &str,
     plan: ProjectPlan,
 ) -> Result<i64, String> {
-    // R4:开工卡持久化后可被重复点击 —— 队伍已在跑时拒绝重复派工(失败/中止后重派合法)。
-    if state.db.get_work_job_status(session_id).as_deref() == Some("running") {
-        return Err("团队已经在干了,别重复开工;要改方向先「停」再说新需求".into());
-    }
-    let (cplan, _gid) = prepare_work_dispatch(&state.db, session_id, &plan)?;
-
-    // 派工成员名(去重)—— cplan 随后被 submit 消费,先取出来给锚点占位消息用。
-    let mut member_names: Vec<String> = Vec::new();
-    for s in &cplan.steps {
-        for p in &s.participants {
-            if !member_names.iter().any(|n| n == &p.name) {
-                member_names.push(p.name.clone());
-            }
-        }
-    }
-
+    // 2026-06-11 直接派发改造后,派工主体下沉 engine(propose_work_plan 工具调用即派工);
+    // 本命令保留作旧方案卡(committed 前的历史卡)上「开工」按钮的兼容路径,逻辑同源。
     let cfg = resolve_llm_config(state).await?;
-    let executor = Arc::new(ConcreteExecutor::new(cfg));
-    let orch = SqliteOrchestrator::new(state.db.clone(), executor);
-    let parent_id = orch
-        .list_recent_by_session(session_id, 1)
-        .ok()
-        .and_then(|v| v.into_iter().next())
-        .map(|c| c.id);
-    let intent = format!("开工:派 {} 个任务", plan.tasks.len());
-    // kind=work_dispatch 经 submit_kinded 在**调度前**钉死(R3:消"步骤秒败时 finalize 已按
-    // chat_group 写群聊式终态"的竞态)。缝 5 / §7-P0-1 据此按 kind 分叉 finalize。
-    let collab_id = orch
-        .submit_kinded(
-            session_id.to_string(),
-            intent,
-            cplan,
-            CollaborationMode::Dispatched(0),
-            parent_id,
-            Some("work_dispatch"),
-        )
-        .await?;
-    // job 状态机:开工 → running(交付/失败/中止由 finalize 的 work_dispatch 分支推进)。
-    let _ = state.db.set_work_job_status(session_id, "running");
-    // 方案卡持久进入「已开工」态(metadata.committed):本地 state 会被消息重载打回,
-    // 持久标记才是真相 —— 前端据此渲染 ✅ 已开工、收起按钮。
-    let _ = state.db.mark_work_plans_committed(session_id);
-
-    // 锚点占位消息:派工协作也要在聊天流里有挂载点,前端 get_history 才会把它映射成
-    // role='collaboration' → CollaborationMessageCard hydrate 该 collab → 渲染队友实时发言。
-    // 放养/intake/私聊派发都 upsert 占位,唯独"开工"这条之前漏了 → 开工后页面静默看不到队友干活。
-    let mention = member_names
-        .iter()
-        .map(|n| format!("@{n}"))
-        .collect::<Vec<_>>()
-        .join(" ");
-    // §7-P0-2:开工锚点标 context_type=work_job(前端按 work 分流)。kind=work_dispatch 已由
-    // commit_work_plan_impl 上面的 set_collaboration_kind 标过。
-    let _ = state.db.upsert_collaboration_message_ctx(
-        session_id,
-        collab_id,
-        &format!("🛠️ 开工 —— {mention} 按方案并行推进中…"),
-        "work_job",
-    );
-    Ok(collab_id)
+    crate::engine::work::launcher::dispatch_work_plan(state.db.clone(), cfg, session_id, &plan)
+        .await
 }
 
 #[cfg(all(test, feature = "test-support"))]

@@ -130,6 +130,9 @@ mod live {
         app_lib::engine::tools::mark_ready();
         // 全权限:派工角色要真实写文件/跑命令;权限弹窗在 headless 无人可点。
         app_lib::engine::tools::set_full_access(true);
+        // 工具层全局 providers(生产由 lib.rs 初始化设置):propose_work_plan 在工具内
+        // 直接派工,经 resolve_llm_config_from_globals 解析 —— 不设它派工必败。
+        app_lib::engine::tools::set_providers(t.state().providers.clone());
 
         // 真实 provider(active_llm = deepseek-v4-pro)。
         {
@@ -172,7 +175,7 @@ mod live {
         let task = "做一个单文件的待办事项网页:index.html(HTML/CSS/JS 全部内联),\
                     用 localStorage 存数据,支持添加、删除、标记完成。不需要后端、\
                     不需要构建工具、不要安装任何依赖。需求信息已经齐全,不需要再向用户\
-                    澄清,直接出开工方案。";
+                    澄清,直接用 propose_work_plan 把任务派给前端。";
         let launched = launch_work_job_impl(
             t.state(),
             gid,
@@ -185,46 +188,47 @@ mod live {
         eprintln!("  session={sid} intake_collab={}", launched.collaboration_id);
         assert_eq!(db.get_work_job_status(&sid).as_deref(), Some("clarifying"));
 
-        // ② 等 PM intake 出方案(job → pending_commit)。PM 没出方案就催一次
-        //(dispatch_work_followup 的产品路径,顺带验 followup 互斥放行)。
-        eprintln!("—— ② 等开工方案(intake)——");
-        let mut status = wait_until(&db, &sid, "开工方案", Duration::from_secs(240), |s| {
-            s == Some("pending_commit")
+        // ② 等 PM intake **直接派工**(2026-06-11 决策:无确认环节,propose 即派发,
+        // job 直入 running)。PM 这轮没派就 followup 催一次(顺带验 followup 放行)。
+        eprintln!("—— ② 等 PM 直接派工(intake → running)——");
+        let mut status = wait_until(&db, &sid, "直接派工", Duration::from_secs(240), |s| {
+            s == Some("running")
         })
         .await;
-        if status.as_deref() != Some("pending_commit") && !db.has_active_work_intake(&sid) {
-            eprintln!("  PM 这轮没出方案,followup 催一次…");
+        if status.as_deref() != Some("running") && !db.has_active_work_intake(&sid) {
+            eprintln!("  PM 这轮没派工,followup 催一次…");
             let out = dispatch_work_followup(
                 t.state(),
                 &sid,
-                "信息已经齐了,不用再问,直接用 propose_work_plan 把开工方案发出来。",
+                "信息已经齐了,不用再问,直接用 propose_work_plan 把任务派出去。",
             )
             .await
             .expect("followup 应成功");
             assert!(matches!(out, WorkFollowup::Intake(_)), "intake 不在跑时 followup 应起新 intake");
-            status = wait_until(&db, &sid, "开工方案(第二轮)", Duration::from_secs(240), |s| {
-                s == Some("pending_commit")
+            status = wait_until(&db, &sid, "直接派工(第二轮)", Duration::from_secs(240), |s| {
+                s == Some("running")
             })
             .await;
         }
         // 失败时 dump 牵头者说了什么,便于定位。
-        if status.as_deref() != Some("pending_commit") {
+        if status.as_deref() != Some("running") {
             for (name, text) in db.recent_work_step_outputs(&sid, 3) {
                 eprintln!("  [{}] {}", name, text.chars().take(400).collect::<String>());
             }
-            panic!("PM 应在 intake 里给出开工方案(job → pending_commit),实际 {status:?}");
+            panic!("PM 应在 intake 里直接派工(job → running),实际 {status:?}");
         }
 
-        // ③ 方案已持久化(R4:卡片从消息流重渲染的依据)→ 解析出 ProjectPlan。
-        eprintln!("—— ③ 读持久化方案 ——");
+        // ③ 方案记录卡已持久化(生而 committed:前端渲染 ✅ 已开工,纯透明展示)。
+        eprintln!("—— ③ 验方案记录卡 ——");
         let msgs = db.get_messages(&sid, None).unwrap();
         let plan_msg = msgs
             .iter()
             .rev()
             .find(|m| m.context_type.as_deref() == Some("work_plan"))
-            .expect("方案应已落库成 work_plan 消息");
+            .expect("方案应已落库成 work_plan 记录卡");
         let meta: serde_json::Value =
             serde_json::from_str(plan_msg.metadata.as_deref().unwrap()).unwrap();
+        assert_eq!(meta["committed"], true, "直接派发的记录卡应生而 committed");
         let plan: ProjectPlan = serde_json::from_value(meta["plan"].clone()).unwrap();
         eprintln!("  方案 {} 条任务:", plan.tasks.len());
         for (i, t) in plan.tasks.iter().enumerate() {
@@ -237,14 +241,8 @@ mod live {
             plan.tasks.iter().map(|t| &t.role).collect::<Vec<_>>(),
         );
 
-        // ④ 开工(用户点「开工」的产品路径)→ job running,真实派工执行。
-        eprintln!("—— ④ commit_work_plan(开工)——");
-        let dispatch_id = commit_work_plan_impl(t.state(), &sid, plan)
-            .await
-            .expect("开工应成功");
-        eprintln!("  dispatch_collab={dispatch_id}");
-        assert_eq!(db.get_work_job_status(&sid).as_deref(), Some("running"));
-        // 重复开工守卫:running 时再点「开工」应被拒。
+        // ④ 重复派工守卫:running 中再 commit(旧方案卡兼容路径)应被拒。
+        eprintln!("—— ④ 重复派工守卫 ——");
         let dup = commit_work_plan_impl(
             t.state(),
             &sid,
@@ -257,7 +255,7 @@ mod live {
             },
         )
         .await;
-        assert!(dup.is_err(), "running 中重复开工应被拒,got {dup:?}");
+        assert!(dup.is_err(), "running 中重复派工应被拒,got {dup:?}");
 
         // ⑤ 等团队真实干完(finalize → job 终态)。写码任务给宽裕时间。
         eprintln!("—— ⑤ 等交付(派工执行)——");

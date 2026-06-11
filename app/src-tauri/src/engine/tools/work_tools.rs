@@ -50,8 +50,8 @@ struct WorkPlanCard {
 pub fn definitions() -> Vec<super::types::ToolDefinition> {
     vec![super::types::tool_def(
         "propose_work_plan",
-        "把项目拆成一份开工方案发给用户审阅 —— 列出每个角色要做的任务和依赖顺序。\
-         需求澄清清楚后再调它(牵头者/接口人专用)。**用户点「开工」后团队才会真正开干**,在此之前别催、别自己硬扛。\
+        "把项目拆成任务并**立即派工给队友开干**(调用即派发,不需要用户确认;方案会作为\
+         记录卡展示给用户)。需求澄清清楚后再调它(牵头者/接口人专用)。\
          tasks 每条:role(**填队友的标识** —— 见系统提示里给你的「队友名单」,如 frontend_dev / \
          creative_director 等,必须和名单里的 role 完全一致才派得动)、objective(这条要做什么)、\
          depends_on(依赖哪些任务的下标,0-based,无依赖留空 —— 比如前端依赖后端接口,就把后端那条的下标填进来)。",
@@ -114,53 +114,57 @@ pub async fn propose_work_plan_tool(args: &serde_json::Value) -> String {
     let task_count = plan.tasks.len();
 
     let ctx = current_work_ctx();
-    let session_id = ctx.as_ref().map(|(s, _)| s.clone()).unwrap_or_default();
+    let Some((sid, _collab)) = ctx else {
+        return "(没有工作上下文,无法派工 —— propose_work_plan 只在 work 任务里可用。)".into();
+    };
+    let Some(db) = super::get_database() else {
+        return "(数据库不可用,无法派工。)".into();
+    };
+    let Some(cfg) = super::resolve_llm_config_from_globals().await else {
+        return "(没有可用的模型配置,无法派工。)".into();
+    };
+
+    // 2026-06-11 用户决策:开工确认环节多余 —— **调用即直接派工**,队友立刻开干。
+    // 先派工后落卡:派工失败(role 不在群/会话没绑群)时不留假的「已开工」记录卡。
+    if let Err(e) =
+        crate::engine::work::launcher::dispatch_work_plan(db.clone(), cfg, &sid, &plan).await
+    {
+        return format!(
+            "派工失败:{e}。检查 tasks 里的 role 是否用了队友名单里的标识,修正后重试。"
+        );
+    }
+
+    // 方案落库作**记录卡**(committed 态:前端渲染 ✅ 已开工,无按钮,纯透明展示
+    // 「活是怎么拆的」)。best-effort:落库失败不影响已派出去的工。
     let card = WorkPlanCard {
         request_id: uuid::Uuid::new_v4().to_string(),
-        session_id: session_id.clone(),
+        session_id: sid.clone(),
         summary,
         plan,
     };
+    let meta = serde_json::json!({
+        "type": "work_plan",
+        "request_id": card.request_id,
+        "summary": card.summary,
+        "plan": card.plan,
+        "committed": true,
+    });
+    let _ = db.push_message_with_context(
+        &sid,
+        "assistant",
+        "📋 开工方案",
+        Some(&meta.to_string()),
+        "work_plan",
+    );
 
-    // R3:方案**落库**(metadata 带完整 plan,context_type=work_plan)——开工卡不再只活在
-    // 一次性事件里:用户不在场/切页/重启不丢,前端可从消息流重渲染;job 状态机推进到
-    // 「待开工」。best-effort:落库失败不挡发卡。
-    //
-    // 落库必须在 APP_HANDLE 检查**之前**(持久化优先):无界面环境(headless 集成测试/
-    // 跑批)没有 handle,先查 handle 会把方案整个丢掉 —— 不落库、job 卡死在 clarifying,
-    // 与"落库是 source of truth、事件只是前端重载触发器"的设计相悖。
-    if let Some((sid, _collab)) = &ctx {
-        if let Some(db) = super::get_database() {
-            let meta = serde_json::json!({
-                "type": "work_plan",
-                "request_id": card.request_id,
-                "summary": card.summary,
-                "plan": card.plan,
-            });
-            let _ = db.push_message_with_context(
-                sid,
-                "assistant",
-                "📋 开工方案待审阅",
-                Some(&meta.to_string()),
-                "work_plan",
-            );
-            let _ = db.set_work_job_status(sid, "pending_commit");
-        }
+    // 事件触发前端即时重载(方案记录卡 + 派工锚点一起进流);headless 无 handle 跳过。
+    if let Some(handle) = super::APP_HANDLE.get() {
+        let _ = handle.emit("work://plan_proposed", &card);
     }
-
-    let handle = match super::APP_HANDLE.get() {
-        Some(h) => h,
-        None => {
-            return format!(
-                "开工方案已记录(共 {task_count} 个任务;无界面环境,卡片未推送)。\
-                 等用户点「开工」后团队再开干。"
-            )
-        }
-    };
-    if handle.emit("work://plan_proposed", &card).is_err() {
-        return "(发开工方案失败:事件发送出错。)".to_string();
-    }
-    format!("开工方案已发给用户审阅(共 {task_count} 个任务),等 ta 点「开工」后团队再开干。")
+    format!(
+        "✅ 已按方案直接派工(共 {task_count} 个任务),队友们开干了。\
+         不用等用户确认;接下来等队友交付,或继续回应用户的新消息。"
+    )
 }
 
 #[cfg(test)]
