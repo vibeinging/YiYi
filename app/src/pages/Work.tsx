@@ -24,6 +24,7 @@ import { listWorkJobs, launchWorkJob, findTeamByFolder, abortWorkJob, type WorkJ
 import { pickFolder } from '../api/workspace';
 import { generateTeam, commitDynamicTeam, type GeneratedTeam } from '../api/companions';
 import { listen } from '@tauri-apps/api/event';
+import { confirm } from '../components/Toast';
 import { useSessionStore } from '../stores/sessionStore';
 import { useWorkStore } from '../stores/workStore';
 import { CustomTeamPanel } from '../components/companions/CustomTeamPanel';
@@ -240,7 +241,9 @@ export function WorkPage() {
                         <button
                           onClick={async (e) => {
                             e.stopPropagation();
-                            if (!window.confirm(`中止「${job.intent}」?运行中的任务将停止。`)) return;
+                            // Toast 的 confirm(不是 window.confirm):Tauri WKWebView 下原生
+                            // confirm 不可靠(可能不弹直接 false),全 app 统一走自定义确认框。
+                            if (!(await confirm(`中止「${job.intent}」?运行中的任务将停止。`))) return;
                             try { await abortWorkJob(job.session_id); } catch { /* 轮询会刷新真状态 */ }
                           }}
                           className="shrink-0 w-6 h-6 rounded-md hidden group-hover:flex items-center justify-center transition-colors hover:bg-[var(--color-bg-muted)]"

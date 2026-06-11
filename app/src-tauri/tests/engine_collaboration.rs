@@ -462,6 +462,101 @@ async fn retry_step_revives_failed_collaboration() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
+async fn retry_step_double_click_rejected_while_step_rerunning() {
+    // 防连点竞态:RetryStep 只对 failed/skipped 步合法(CAS)。没有这个条件时,第一次
+    // 重试把步拉回 running 后,第二次点击会把 running 步再次重置 pending → schedule 的
+    // pending→running 守卫再次放行 → 同一步 N 路并发执行体(实测用户连点 4 下 =
+    // 4 个同名成员并发互踩)。用带 delay 的 executor 让步停留在 running 复现连点窗口。
+    let t = TempDb::new();
+    ensure_session(&t, "s");
+    let executor = Arc::new(MockExecutor::with_delay(Duration::from_millis(400)));
+    let orch = SqliteOrchestrator::new(t.db(), executor.clone().handle());
+    executor.fail_step(1, "transient");
+    let plan = CollaborationPlan {
+        steps: vec![step_single(1, "x", 7)],
+    };
+    let id = orch
+        .submit("s".into(), "x".into(), plan, CollaborationMode::Manual, None)
+        .await
+        .unwrap();
+    wait_for_status(&orch, id, 3000, |s| matches!(s, CollaborationStatus::Failed(_))).await;
+
+    // 第一次重试:合法(步 failed → pending → running,delay 内停留 running)。
+    orch.mutate(id, Mutation::RetryStep { step_id: 1 })
+        .await
+        .expect("first retry");
+    // 执行体在 detached spawn 上启动 —— 等它真正拉起(invocations: 原始 1 + 重试 1)。
+    let deadline = Instant::now() + Duration::from_millis(1000);
+    while executor.invocations().len() < 2 && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(executor.invocations().len(), 2, "第一次重试应已拉起执行体");
+
+    // 连点第二次:步在 running(delay 窗口内)→ CAS 拒绝,不再拉起新执行体。
+    let err = orch
+        .mutate(id, Mutation::RetryStep { step_id: 1 })
+        .await
+        .expect_err("retry while step rerunning must be rejected");
+    assert!(err.contains("重跑") || err.contains("可重试"), "拒绝文案应可读:{err}");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(executor.invocations().len(), 2, "被拒的重试不该再拉起执行体");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn work_job_terminal_expires_pending_questions() {
+    // 失败收口一致性:work job 进终态时,该会话挂着的未答提问应被撤销(expired)——
+    // 没人会再收答案的提问卡不该留在会话里诱导用户回答。
+    let t = TempDb::new();
+    let (orch, executor) = build_orchestrator(&t);
+    let db = t.db();
+    ensure_session(&t, "sess-wjq");
+    db.create_work_job("sess-wjq", "做个东西", Some(7)).unwrap();
+    db.insert_pending_question(&app_lib::engine::db::PendingQuestion {
+        request_id: "q-orphan".into(),
+        session_id: "sess-wjq".into(),
+        collaboration_id: None,
+        step_id: None,
+        companion_id: 7,
+        asker_name: "tester".into(),
+        question: "还要继续吗?".into(),
+        options_json: None,
+        kind: "text".into(),
+        status: "pending".into(),
+        answer: None,
+        created_at: 1,
+        answered_at: None,
+    })
+    .unwrap();
+
+    executor.fail_step(1, "炸了");
+    let plan = CollaborationPlan {
+        steps: vec![step_single(1, "x", 7)],
+    };
+    let id = orch
+        .submit_kinded(
+            "sess-wjq".into(),
+            "做个东西".into(),
+            plan,
+            CollaborationMode::Dispatched(7),
+            None,
+            Some("work_dispatch"),
+        )
+        .await
+        .unwrap();
+    wait_for_status(&orch, id, 2000, |s| matches!(s, CollaborationStatus::Failed(_))).await;
+
+    assert_eq!(db.get_work_job_status("sess-wjq").as_deref(), Some("failed"));
+    assert!(
+        db.list_pending_questions("sess-wjq").is_empty(),
+        "job 终态后未答提问应被撤销",
+    );
+    let q = db.get_pending_question("q-orphan").expect("行还在");
+    assert_eq!(q.status, "expired", "撤销走 expired,不污染 answered 的去重命中");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
 async fn dag_dependency_runs_steps_in_topological_order() {
     let t = TempDb::new();
     let (orch, executor) = build_orchestrator(&t);

@@ -160,3 +160,36 @@ describe('TaskSidebar expanded mode', () => {
     }
   });
 });
+
+describe('SessionContextMenu delete flow', () => {
+  it('right-click → 删除 → 确认 calls store deleteSession', async () => {
+    const deleteSession = vi.fn().mockResolvedValue(undefined);
+    const sess = session({ id: 'del-1', name: '要删的会话' });
+    // confirm 依赖 ToastProvider 的全局句柄(_globalToast)——生产由 App.tsx 顶层提供,
+    // 这里手动包一层,否则 confirm 永远 resolve(false)、删除静默失效。
+    const { ToastProvider } = await import('./Toast');
+    useTaskSidebarStore.setState({ ...pristineTaskSidebar, sidebarCollapsed: false }, true);
+    useSessionStore.setState({
+      ...pristineSession,
+      chatSessions: [sess],
+      activeSessionId: '',
+      hasMore: false,
+      loadingMore: false,
+      searchResults: null,
+      searchQuery: '',
+      deleteSession,
+    });
+    mockInvoke({});
+    render(
+      <ToastProvider>
+        <TaskSidebar currentPage="chat" onPageChange={vi.fn()} onNavigateToSession={vi.fn()} onDragMouseDown={vi.fn()} />
+      </ToastProvider>,
+    );
+
+    fireEvent.contextMenu(screen.getByText('要删的会话'));
+    fireEvent.click(await screen.findByText('删除'));
+    // Toast 确认框出现 → 点「确认」。
+    fireEvent.click(await screen.findByText('确认'));
+    await waitFor(() => expect(deleteSession).toHaveBeenCalledWith('del-1'));
+  });
+});

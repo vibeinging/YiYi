@@ -118,6 +118,16 @@ pub(crate) async fn write_file_tool(args: &serde_json::Value) -> String {
     let path = args["path"].as_str().unwrap_or("");
     let content = args["content"].as_str().unwrap_or("");
     if path.is_empty() {
+        // 大内容场景的高频死法:整个文件塞进一次 tool call,arguments 超出模型输出上限
+        // 被截断 → JSON 修复后 path 字段丢失。泛泛的 "path is required" 模型会原样重试
+        // 再死一遍(实测连挂 4 次耗尽迭代);点破截断原因 + 给分段写法才跳得出循环。
+        if content.chars().count() > 2000 {
+            return "Error: path is missing — your tool-call arguments were almost certainly \
+                    TRUNCATED by the output limit (the content is very large). Do NOT retry \
+                    the same call. Instead: write_file the first ~100 lines, then append_file \
+                    the rest in several smaller chunks."
+                .into();
+        }
         return "Error: path is required".into();
     }
     if let Err(e) = super::super::access_check(path, true).await {

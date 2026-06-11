@@ -785,6 +785,29 @@ impl SqliteOrchestrator {
                     if let Err(e) = self.db.set_work_job_status(&session_id, job_status) {
                         log::warn!("collab {collab_id}: sync work job status: {e}");
                     }
+                    // 失败收口一致性:job 进终态 → 撤销该会话挂着的未答提问(没人会再收
+                    // 答案的提问卡不该留),并唤醒还在内存阻塞的 ask_user 等待者(免其干等
+                    // 到 1h 超时占着执行体)。
+                    if matches!(job_status, "done" | "failed" | "aborted") {
+                        let expired = self.db.expire_pending_questions(&session_id);
+                        if !expired.is_empty() {
+                            log::info!(
+                                "collab {collab_id}: job 终态,撤销 {} 条未答提问",
+                                expired.len()
+                            );
+                            if let Ok(rt) = tokio::runtime::Handle::try_current() {
+                                rt.spawn(async move {
+                                    for rid in expired {
+                                        crate::engine::tools::ask_user::respond(
+                                            &rid,
+                                            "（这项工作已结束,这个问题不用回答了。）".into(),
+                                        )
+                                        .await;
+                                    }
+                                });
+                            }
+                        }
+                    }
                     // R6(交付闭环):交付那一刻不再静默 —— 系统通知 + work://job_done 事件
                     // (NavRail 红点/列表即刷)。中止是用户自己点的,不打扰。通知 context 走
                     // 既有 notification://pending 管道(page=chat+session_id),点击跳转由
@@ -1207,17 +1230,33 @@ impl CollaborationOrchestrator for SqliteOrchestrator {
             Mutation::RetryStep { step_id } => {
                 {
                     let conn = self.db.get_conn().ok_or_else(|| "db lock".to_string())?;
-                    conn.execute(
-                        "UPDATE collaboration_steps
-                            SET status = 'pending', output_json = NULL,
-                                error_reason = NULL, started_at = NULL, finished_at = NULL
-                          WHERE collaboration_id = ?1 AND id = ?2",
-                        params![id, step_id],
-                    )
-                    .map_err(|e| format!("reset step: {e}"))?;
+                    // CAS:只有 failed/skipped 的步可重试。没有这个条件时,连点「重叫一次」
+                    // 会把已被上一次重试拉回 running 的步再次重置成 pending → schedule 的
+                    // pending→running 守卫再次放行 → 同一步 N 路并发执行体同跑(实测用户
+                    // 连点 4 下 = 4 个「交互设计师」并发互踩)。affected==0 = 已在重跑,拒绝。
+                    let affected = conn
+                        .execute(
+                            "UPDATE collaboration_steps
+                                SET status = 'pending', output_json = NULL,
+                                    error_reason = NULL, started_at = NULL, finished_at = NULL
+                              WHERE collaboration_id = ?1 AND id = ?2
+                                AND status IN ('failed', 'skipped')",
+                            params![id, step_id],
+                        )
+                        .map_err(|e| format!("reset step: {e}"))?;
+                    if affected == 0 {
+                        return Err("这一步已在重跑(或不在可重试状态),别再点了".into());
+                    }
                 }
                 if matches!(collab.status, CollaborationStatus::Failed(_)) {
                     self.set_status(id, &CollaborationStatus::Running)?;
+                    // work 派工协作:job 状态机同步回 running —— 否则 Work 列表停在
+                    // 「未完成」而团队明明在重跑,状态精神分裂。
+                    if self.db.get_collaboration_kind(id).as_deref() == Some("work_dispatch") {
+                        if let Some(sid) = self.db.collaboration_session_id(id) {
+                            let _ = self.db.set_work_job_status(&sid, "running");
+                        }
+                    }
                 }
                 self.audit.emit(
                     id,

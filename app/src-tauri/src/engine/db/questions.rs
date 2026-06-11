@@ -126,6 +126,35 @@ impl super::Database {
             .unwrap_or_default()
     }
 
+    /// 过期某会话全部未答提问(work job 进终态时调):没人会再收答案的提问不该留卡。
+    /// status 写 'expired'(不污染 'answered' 的去重命中),返回被过期的 request_id 列表
+    /// —— 调用方据此唤醒还在内存阻塞等待的 ask_user(免其干等到 1h 超时)。
+    pub fn expire_pending_questions(&self, session_id: &str) -> Vec<String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let ids: Vec<String> = conn
+            .prepare(
+                "SELECT request_id FROM pending_questions
+                  WHERE session_id = ?1 AND status = 'pending'",
+            )
+            .and_then(|mut stmt| {
+                stmt.query_map(params![session_id], |r| r.get::<_, String>(0))
+                    .map(|rows| rows.filter_map(|x| x.ok()).collect())
+            })
+            .unwrap_or_default();
+        if ids.is_empty() {
+            return ids;
+        }
+        let now = super::now_ts();
+        if let Err(e) = conn.execute(
+            "UPDATE pending_questions SET status = 'expired', answered_at = ?1
+              WHERE session_id = ?2 AND status = 'pending'",
+            params![now, session_id],
+        ) {
+            log::warn!("expire_pending_questions: {e}");
+        }
+        ids
+    }
+
     /// 标记某问题已答,写回 answer + answered_at。
     pub fn mark_question_answered(&self, request_id: &str, answer: &str) -> Result<(), String> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());

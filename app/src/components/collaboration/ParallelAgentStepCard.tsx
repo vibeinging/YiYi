@@ -16,9 +16,10 @@
  * - 执行器在 ParallelAgents 全员失败才整步 abort;UI 在 step.status=failed 显示失败。
  */
 
-import { memo } from 'react'
+import { memo, useState } from 'react'
 import { Loader2, AlertCircle } from 'lucide-react'
 import { mutateCollaboration } from '../../api/collaboration'
+import { toast } from '../Toast'
 import type { CollaborationId, Step, Participant, StepStatus } from '../../api/collaboration'
 import { selectStream, selectReasoning, selectTools, useCollaborationStore } from '../../stores/collaborationStore'
 import { ThinkingBlock, AgentMarkdown } from '../chat/markdownShared'
@@ -50,6 +51,9 @@ export function memberPersistedText(full: string, name: string, participantCount
 // 已完成的历史气泡内容不再变(status/output 固定)→ 按内容比较跳过重渲染,只新气泡 / 状态变化的
 // 重渲。流式 token 走 MemberMessageBubble 内部的 store 订阅,不受这层 memo 影响。
 export const ParallelAgentStepCard = memo(function ParallelAgentStepCard({ collaborationId, step }: Props) {
+  // 「重叫一次」防连点:点击即置 busy,等 hydrate 把 step.status 翻成 running 才消失。
+  // 后端 RetryStep 也有 CAS 兜底(仅 failed 步可重试),这里是第一道闸 + 即时反馈。
+  const [retrying, setRetrying] = useState(false)
   if (step.participants.length === 0) return null
   const persistedFull = step.output?.full_output ?? ''
   // step 级事实,算一次(派工任务的等待文案是"等上游交付")。
@@ -75,11 +79,21 @@ export const ParallelAgentStepCard = memo(function ParallelAgentStepCard({ colla
             有成员没说完整,这一轮中止了
           </span>
           <button
-            onClick={() => { void mutateCollaboration(collaborationId, { kind: 'retry_step', step_id: step.id }) }}
-            className="text-[11px] px-2 py-0.5 rounded transition-colors"
+            disabled={retrying}
+            onClick={async () => {
+              if (retrying) return
+              setRetrying(true)
+              try {
+                await mutateCollaboration(collaborationId, { kind: 'retry_step', step_id: step.id })
+              } catch (e) {
+                toast.error(`重试失败:${e}`)
+                setRetrying(false)
+              }
+            }}
+            className="text-[11px] px-2 py-0.5 rounded transition-colors disabled:opacity-50"
             style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-secondary)' }}
           >
-            重叫一次 ↺
+            {retrying ? '已重新叫人…' : '重叫一次 ↺'}
           </button>
         </div>
       )}
