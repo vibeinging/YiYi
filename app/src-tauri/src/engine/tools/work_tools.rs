@@ -113,10 +113,6 @@ pub async fn propose_work_plan_tool(args: &serde_json::Value) -> String {
     let plan = ProjectPlan { tasks };
     let task_count = plan.tasks.len();
 
-    let handle = match super::APP_HANDLE.get() {
-        Some(h) => h,
-        None => return "(当前是无界面环境,无法发开工方案。)".to_string(),
-    };
     let ctx = current_work_ctx();
     let session_id = ctx.as_ref().map(|(s, _)| s.clone()).unwrap_or_default();
     let card = WorkPlanCard {
@@ -129,6 +125,10 @@ pub async fn propose_work_plan_tool(args: &serde_json::Value) -> String {
     // R3:方案**落库**(metadata 带完整 plan,context_type=work_plan)——开工卡不再只活在
     // 一次性事件里:用户不在场/切页/重启不丢,前端可从消息流重渲染;job 状态机推进到
     // 「待开工」。best-effort:落库失败不挡发卡。
+    //
+    // 落库必须在 APP_HANDLE 检查**之前**(持久化优先):无界面环境(headless 集成测试/
+    // 跑批)没有 handle,先查 handle 会把方案整个丢掉 —— 不落库、job 卡死在 clarifying,
+    // 与"落库是 source of truth、事件只是前端重载触发器"的设计相悖。
     if let Some((sid, _collab)) = &ctx {
         if let Some(db) = super::get_database() {
             let meta = serde_json::json!({
@@ -148,6 +148,15 @@ pub async fn propose_work_plan_tool(args: &serde_json::Value) -> String {
         }
     }
 
+    let handle = match super::APP_HANDLE.get() {
+        Some(h) => h,
+        None => {
+            return format!(
+                "开工方案已记录(共 {task_count} 个任务;无界面环境,卡片未推送)。\
+                 等用户点「开工」后团队再开干。"
+            )
+        }
+    };
     if handle.emit("work://plan_proposed", &card).is_err() {
         return "(发开工方案失败:事件发送出错。)".to_string();
     }

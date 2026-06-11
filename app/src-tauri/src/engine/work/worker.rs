@@ -299,13 +299,37 @@ pub async fn run_work_step_guarded(
         .get(participant_idx)
         .map(|p| p.name.clone())
         .unwrap_or_default();
-    let run = run_work_step(config, step, participant_idx, upstream, collab_id);
+
+    // **poll 链截断**:整步 spawn 成独立 task,而不是内联 .await。work 步的 async 链极深
+    // (orchestrator 调度 task → executor 路由 → 本函数 → run_work_step 的 prompt 构造 →
+    // WORK_CTX scope → run_react_inner 的 5 层 task-local scope → run_agent ReAct 循环 →
+    // 流式解析 → 工具分发),每层 poll 帧叠在同一条 worker 线程栈上;debug build(dev 模式!)
+    // 帧肥,2MiB 的 tokio worker 栈在执行中被撑爆(实测:live 旅程测试派工 40s 时
+    // stack overflow abort)。Box::pin 只把 future 状态挪到堆,**不剪 poll 深度**;spawn
+    // 让内层链从新 task 自己的入口 poll,外层只 poll 一个 JoinHandle。
+    //
+    // task-local 安全性:run_work_step 的全部绑定(WORK_CTX / 工具过滤器 / 会话 / idle
+    // 活动)都是 `.scope(v, fut)` 组合器 —— 绑定存在 future 里、随 future 走,在哪个 task
+    // 上 poll 都有效;不存在"内层依赖 spawn 前外层环境"的绑定。
+    //
+    // 超时语义保持:Total 到点 / Idle 看门狗赢 → `handle.abort()` 显式取消(旧实现靠 drop
+    // future 断开挂起的连接读;spawn 后 task 独立存活,必须 abort 才等价)。
+    let config = config.clone();
+    let step_owned = step.clone();
+    let upstream_owned = upstream.to_vec();
 
     match work_timeout_policy(kind) {
         WorkTimeoutPolicy::Total(secs) => {
-            match tokio::time::timeout(std::time::Duration::from_secs(secs), run).await {
-                Ok(r) => r,
-                Err(_) => Err(format!("{name} 响应超时({secs}s)")),
+            let mut handle = tokio::spawn(async move {
+                run_work_step(&config, &step_owned, participant_idx, &upstream_owned, collab_id)
+                    .await
+            });
+            match tokio::time::timeout(std::time::Duration::from_secs(secs), &mut handle).await {
+                Ok(joined) => joined.unwrap_or_else(|e| Err(format!("{name} 执行中断:{e}"))),
+                Err(_) => {
+                    handle.abort();
+                    Err(format!("{name} 响应超时({secs}s)"))
+                }
             }
         }
         WorkTimeoutPolicy::Idle(idle_secs) => {
@@ -320,9 +344,21 @@ pub async fn run_work_step_guarded(
                     }
                 }
             };
+            let mut handle = tokio::spawn(crate::engine::agent_runner::with_idle_activity(
+                activity,
+                async move {
+                    run_work_step(&config, &step_owned, participant_idx, &upstream_owned, collab_id)
+                        .await
+                },
+            ));
             tokio::select! {
-                r = crate::engine::agent_runner::with_idle_activity(activity, run) => r,
-                _ = watchdog => Err(format!("{name} 卡住({idle_secs}s 无流响应)")),
+                joined = &mut handle => {
+                    joined.unwrap_or_else(|e| Err(format!("{name} 执行中断:{e}")))
+                }
+                _ = watchdog => {
+                    handle.abort();
+                    Err(format!("{name} 卡住({idle_secs}s 无流响应)"))
+                }
             }
         }
     }
