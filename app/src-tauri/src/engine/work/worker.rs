@@ -121,13 +121,20 @@ fn render_work_system_prompt(
                  4. 用户可能在你忙的时候插话(他的新消息会出现在【用户刚说】/最近对话里):\
                  与手头工作相关 → 按新信息调整;无关或是另一件事 → 先简短确认收到、说明先把\
                  手头的收尾再处理它。别因为插话把原任务丢了。\n\
+                 5. 【发言格式】你的每次发言(澄清/方案/总结)都要**结论先行、可扫读**:\
+                 第一句话给结论;文件名/路径/命令/关键标识用反引号包(如 `index.html`);\
+                 要用户拍板的事列编号选项并标(推荐);别让用户在长段落里自己找重点。\n\
                  【你的队友(propose_work_plan 的 role 填这些标识)】\n{roster}"
             )
         }
         WorkStepKind::ProjectTask => {
             "\n\n【动手能力】你能用工具(读写文件、执行命令、查资料、开浏览器等)。\
              这是在接力建造交付物,按上游给的接口 / 契约 / 设计接着做,别重复造;\
-             改完用 write_file/edit_file 落盘,说清改了哪些文件。"
+             改完用 write_file/edit_file 落盘,说清改了哪些文件。\n\
+             【汇报格式】干完后的总结要让人 10 秒读懂:① 结论先行 —— 第一句话说清\
+             成了没成、交付了什么;② 文件名/路径/命令用反引号包(如 `index.html`),\
+             关键代码或报错证据用代码块;③ 有要用户拍板的事,列编号选项并标(推荐);\
+             ④ 结尾一句话说清下一步(谁接手 / 还差什么)。别写流水账。"
                 .to_string()
         }
     };
@@ -377,6 +384,23 @@ pub async fn run_work_step_guarded(
 /// 入参 `step_outputs` 是按 step 顺序的 `(参与者名, 产出)`;空产出 / 失败步由调用方过滤。
 /// S4 先给纯函数实现(可测、无 DB 依赖);S6 接线时由 finalize 的 work 分支按 collab_id
 /// 读 step 产出后调它。
+/// work job 失败的结构化报告(对照 slock 式诊断卡:卡在哪 + 编号选项 + 推荐标注),
+/// 替代旧的一行「（工作未完成）reason」—— 失败时刻正是用户最需要被引导的时刻。
+pub fn compose_work_failure(reason: &str) -> String {
+    let mut s = String::from("⚠️ **工作没做完**\n\n");
+    let reason = reason.trim();
+    if !reason.is_empty() {
+        s.push_str(&format!("**卡在哪**:{reason}\n\n"));
+    }
+    s.push_str(
+        "**接下来可以**:\n\
+         1. 在上面失败成员的气泡下点「重叫一次 ↺」让它重试(推荐 —— 偶发失败大多重试一次就过)\n\
+         2. 直接在输入框说怎么调整(比如「文件拆小一点做」),牵头者会按新要求重新安排\n\
+         3. 不做了就在左侧列表这一行点 ⛔ 中止",
+    );
+    s
+}
+
 pub fn compose_work_summary(title: &str, step_outputs: &[(String, StepOutput)]) -> String {
     let mut s = String::new();
     s.push_str(&format!("✅ 交付完成:{}\n\n", title.trim()));
@@ -515,5 +539,33 @@ mod tests {
         let summary = compose_work_summary("空", &[("X".into(), out("   "))]);
         assert!(summary.contains("✅ 交付完成:空"));
         assert!(!summary.contains("【X】"), "空产出应跳过");
+    }
+
+    #[test]
+    fn compose_work_failure_is_structured_with_options() {
+        // slock 式失败报告:卡在哪 + 编号选项 + 推荐标注(失败时刻要引导,不制造无助感)。
+        let s = compose_work_failure("step 1: 交互设计师 没回上来");
+        assert!(s.contains("⚠️"), "应有失败标识");
+        assert!(s.contains("卡在哪"), "应说清卡点");
+        assert!(s.contains("交互设计师"), "应带原始失败原因");
+        assert!(s.contains("1.") && s.contains("2.") && s.contains("3."), "应给编号选项");
+        assert!(s.contains("推荐"), "应标推荐项");
+
+        // 空 reason:不渲染空的「卡在哪」段。
+        let s = compose_work_failure("  ");
+        assert!(!s.contains("卡在哪"));
+        assert!(s.contains("接下来可以"));
+    }
+
+    #[test]
+    fn work_prompts_inject_report_format() {
+        // 汇报规范注入两类 work 步(动态角色也经此生效,persona 白盒不动)。
+        let sys = render_work_system_prompt(&step_with_mode("project_task"), 0, WorkStepKind::ProjectTask);
+        assert!(sys.contains("汇报格式"), "执行角色应有汇报格式指令");
+        assert!(sys.contains("结论先行"));
+        let mut intake = step_with_mode("intake");
+        intake.input.metadata = serde_json::json!({ "mode": "intake", "roster": "-" });
+        let sys = render_work_system_prompt(&intake, 0, WorkStepKind::Intake);
+        assert!(sys.contains("发言格式"), "牵头者应有发言格式指令");
     }
 }

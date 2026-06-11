@@ -904,17 +904,21 @@ impl SqliteOrchestrator {
                 }
             }
             CollaborationStatus::Failed(reason) => {
-                let label = if is_intake {
-                    "牵头者这轮没接上,再发一条消息可以重新唤起"
+                if is_intake {
+                    let label = "牵头者这轮没接上,再发一条消息可以重新唤起";
+                    if reason.trim().is_empty() {
+                        format!("（{label}）")
+                    } else {
+                        format!("（{label}）{reason}")
+                    }
                 } else if is_work {
-                    "工作未完成"
+                    // 结构化失败报告(卡在哪 + 编号选项 + 推荐):失败时刻正是用户最
+                    // 需要被引导的时刻,一行「工作未完成」只制造无助感。
+                    crate::engine::work::worker::compose_work_failure(reason)
+                } else if reason.trim().is_empty() {
+                    "（群协作未完成）".to_string()
                 } else {
-                    "群协作未完成"
-                };
-                if reason.trim().is_empty() {
-                    format!("（{label}）")
-                } else {
-                    format!("（{label}）{reason}")
+                    format!("（群协作未完成）{reason}")
                 }
             }
             CollaborationStatus::Aborted => {
