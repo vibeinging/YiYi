@@ -232,11 +232,12 @@ pub async fn run_work_step(
     // 角色权限:工具过滤器 + ReAct 步数上限。无角色定义 → 全套工具 + 默认步数(headless
     // 测试里 registry 不可达,安全回落)。
     let (mut role_filter, role_max_iter) = resolve_companion_role(p.companion_id).await;
-    // work 步轮数下限:角色档默认 10 轮实测不够 —— PM 在真实项目里「读文档分析(6 轮)
-    // → ask_user 澄清 → 派工」,答完澄清只剩 3 轮就耗尽;执行角色「读上游 → 分段写大
-    // 文件(write + N×append)→ 自查 → 汇报」正常路径也要 6-8 轮。轮数是**上限**不是
-    // 消耗,放宽不增加正常成本,只救深活。
-    let role_max_iter = role_max_iter.max(24);
+    // work 步轮数 = **失控熔断**,不是预算(2026-06-11 用户拍板:work 干到交付为止,
+    // 不该被轮数卡正常工作)。角色档默认 10 轮是闲聊场景的预算,work 深活(PM 读文档
+    // 分析+澄清+派工 / 工程师分段写大文件+自查)实测 10 轮不够用。放到 100:正常活
+    // 永远碰不到,只熔断「忙而无效」的死循环 —— 这种失控每轮都有流活动,idle 看门狗
+    // (300s 无活动才砍)抓不住它,轮数是唯一熔断,不能彻底去掉。
+    let role_max_iter = role_max_iter.max(100);
     if kind == WorkStepKind::Intake {
         // intake 接手者兜底补 propose_work_plan —— 覆盖该工具进 Coordinator 档之前已落盘
         // 的旧动态角色(AGENT.md 还没这工具),以及任何非协调档却来接手的 lead。idempotent。
