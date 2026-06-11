@@ -244,7 +244,7 @@ function MainApp() {
     return null;
   }
 
-  const sidebarWidth = sidebarCollapsed ? 60 : 220;
+  const sidebarWidth = sidebarCollapsed ? 60 : 300; // 与 work 左栏(300px)对齐
 
   return (
     <ToastProvider>
