@@ -40,8 +40,23 @@ function App() {
   return <MainApp />;
 }
 
+const LAST_PAGE_KEY = 'yiyi_last_page';
+const ALL_PAGES: Page[] = [
+  'chat', 'work', 'buddy', 'skills', 'extensions', 'cronjobs', 'workspace',
+  'mcp', 'heartbeat', 'growth', 'bots', 'terminal', 'settings',
+];
+
 function MainApp() {
-  const [currentPage, setCurrentPage] = useState<Page>('chat');
+  // 启动恢复上次离开的一级页面(工作页/对话页…):重启不丢「我在哪」。
+  // 非法/缺省回 chat。
+  const [currentPage, setCurrentPage] = useState<Page>(() => {
+    try {
+      const saved = localStorage.getItem(LAST_PAGE_KEY) as Page | null;
+      return saved && ALL_PAGES.includes(saved) ? saved : 'chat';
+    } catch {
+      return 'chat';
+    }
+  });
   const [healthStatus, setHealthStatus] = useState<'ok' | 'error' | 'checking'>('checking');
   const [setupDone, setSetupDone] = useState<boolean | null>(null);
   const { appliedTheme } = useTheme();
@@ -121,6 +136,8 @@ function MainApp() {
   useEffect(() => {
     currentPageRef.current = currentPage;
     if (currentPage === 'work') useWorkStore.getState().clearUnseenDone();
+    // 持久化当前一级页面(启动恢复用)。
+    try { localStorage.setItem(LAST_PAGE_KEY, currentPage); } catch {}
   }, [currentPage]);
 
   // Tray menu navigation: jump to a specific page (and optional sub-tab).
