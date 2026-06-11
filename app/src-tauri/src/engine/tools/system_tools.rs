@@ -121,6 +121,20 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
             }),
         ),
         super::tool_def(
+            "open_for_user",
+            "Open a file or URL on the user's machine with the system default app (like macOS `open`): \
+            an HTML file opens in the browser, a folder opens in Finder, a URL opens in the browser. \
+            Use this to show the user a deliverable right away — e.g. after a prototype/page is built, \
+            open it so the user sees the result without hunting for the file.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Absolute file path, folder path, or http(s) URL to open" }
+                },
+                "required": ["path"]
+            }),
+        ),
+        super::tool_def(
             "send_file_to_user",
             "Send a file to the user. In the desktop app, this triggers a save dialog so the user can download/save the file. Use this after creating a file that the user needs.",
             serde_json::json!({
@@ -782,6 +796,40 @@ pub(super) async fn add_calendar_event_tool(args: &serde_json::Value) -> String 
                 file_path.display(), e
             )
         }
+    }
+}
+
+/// `open_for_user(path)`:用系统默认应用打开文件 / 文件夹 / URL(等价 macOS `open`)。
+/// 「把成果递到用户眼前」的服务行为 —— 所有角色可用,包括被摘掉 execute_shell 的
+/// work 协调者(实测 PM 想给用户打开原型却没有任何 open 途径,只能让用户手动开)。
+pub(super) async fn open_for_user_tool(args: &serde_json::Value) -> String {
+    let path = args["path"].as_str().unwrap_or("").trim();
+    if path.is_empty() {
+        return "Error: path is required".into();
+    }
+
+    let is_url = path.starts_with("http://") || path.starts_with("https://");
+    if !is_url {
+        let p = std::path::Path::new(path);
+        if !p.is_absolute() {
+            return format!("Error: 需要绝对路径(或 http(s) URL),got: {path}");
+        }
+        if !p.exists() {
+            return format!("Error: 文件不存在: {path}");
+        }
+        // 路径授权门禁:打开文件的泄露面与读取相当,走同一套授权检查。
+        if let Err(e) = super::access_check(path, false).await {
+            return format!("Error: {e}");
+        }
+    }
+
+    let Some(handle) = super::APP_HANDLE.get() else {
+        return "(无界面环境,无法打开 —— 已跳过。把路径告诉用户让 ta 自己打开即可。)".into();
+    };
+    use tauri_plugin_shell::ShellExt;
+    match handle.shell().open(path, None) {
+        Ok(()) => format!("✅ 已在用户机器上用默认应用打开:{path}"),
+        Err(e) => format!("Error: 打开失败:{e}"),
     }
 }
 

@@ -38,12 +38,14 @@ impl PermissionProfile {
         let names: &[&str] = match self {
             Self::Coordinator => &[
                 // 协调者的本职就是拆解派工 → 声明式给 propose_work_plan(work intake 接手后据此派工)。
-                "ask_user", "propose_work_plan", "read_file", "list_directory",
+                // open_for_user:把成果递到用户眼前(开原型/文件夹/链接)—— 协调者没有
+                // execute_shell,这是它唯一的「打开」途径。
+                "ask_user", "propose_work_plan", "open_for_user", "read_file", "list_directory",
                 "project_tree", "grep_search", "web_search", "memory_search", "memory_add",
             ],
             Self::Designer => &[
                 "ask_user", "read_file", "write_file", "edit_file", "list_directory",
-                "web_search", "browser_fetch", "memory_search", "memory_add",
+                "web_search", "browser_fetch", "open_for_user", "memory_search", "memory_add",
             ],
             Self::Builder => &[
                 "read_file", "write_file", "edit_file", "append_file", "list_directory",
@@ -318,7 +320,7 @@ mod tests {
         // 防止档位里写出 catalog 不存在的工具(那样该工具直接拿不到,等于白名单写废)。
         // 这里的"真实工具名"集合 = 软件公司 5 角色 AGENT.md 用到的并集。
         let real: &[&str] = &[
-            "ask_user", "propose_work_plan", "read_file", "write_file",
+            "ask_user", "propose_work_plan", "open_for_user", "read_file", "write_file",
             "edit_file", "append_file", "list_directory", "project_tree", "grep_search",
             "glob_search", "execute_shell", "run_python", "run_python_script", "pip_install",
             "web_search", "browser_fetch", "memory_search", "memory_add",

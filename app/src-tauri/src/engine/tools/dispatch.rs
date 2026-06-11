@@ -316,6 +316,7 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         "add_calendar_event" => system_tools::add_calendar_event_tool(&args).await,
         // "claude_code" removed — YiYi handles coding natively
         "send_file_to_user" => system_tools::send_file_to_user_tool(&args).await,
+        "open_for_user" => system_tools::open_for_user_tool(&args).await,
         "create_task" => task_tools::create_task_tool(&args).await,
         "inline_task" => task_tools::inline_task_tool(&args).await,
         "detach_to_background" => task_tools::detach_to_background_tool(&args).await,

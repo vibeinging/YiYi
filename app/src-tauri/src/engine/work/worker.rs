@@ -239,11 +239,15 @@ pub async fn run_work_step(
     // (300s 无活动才砍)抓不住它,轮数是唯一熔断,不能彻底去掉。
     let role_max_iter = role_max_iter.max(100);
     if kind == WorkStepKind::Intake {
-        // intake 接手者兜底补 propose_work_plan —— 覆盖该工具进 Coordinator 档之前已落盘
-        // 的旧动态角色(AGENT.md 还没这工具),以及任何非协调档却来接手的 lead。idempotent。
+        // intake 接手者兜底补 propose_work_plan + open_for_user —— 覆盖这两个工具进
+        // Coordinator 档之前已落盘的旧动态角色(AGENT.md 还没它们),以及任何非协调档
+        // 却来接手的 lead。idempotent。open_for_user:协调者没有 execute_shell,这是它
+        // 唯一能把成果(原型/文件夹/链接)递到用户眼前的途径。
         if let crate::engine::react_agent::ToolFilter::Allow(v) = &mut role_filter {
-            if !v.iter().any(|t| t == "propose_work_plan") {
-                v.push("propose_work_plan".to_string());
+            for t in ["propose_work_plan", "open_for_user"] {
+                if !v.iter().any(|x| x == t) {
+                    v.push(t.to_string());
+                }
             }
         }
         // **协调者不动手——机制化**:intake 是协调步,把"动手干活"类工具从工具面摘掉。

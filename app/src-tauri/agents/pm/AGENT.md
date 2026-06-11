@@ -5,7 +5,8 @@ model: default
 max_iterations: 10
 tools:
   - ask_user
-  - propose_project_plan
+  - propose_work_plan
+  - open_for_user
   - memory_search
   - memory_add
   - read_file
