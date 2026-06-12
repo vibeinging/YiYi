@@ -626,7 +626,7 @@ async fn work_followup_stop_intent_aborts_job_instead_of_new_intake() {
     let launched = launch_work_job_impl(t.state(), gid, "做个 app", None).await.unwrap();
 
     // 「停」是停止意图,不是新任务:中止 job,不新建 intake。
-    let out = dispatch_work_followup(t.state(), &launched.session_id, "停").await.unwrap();
+    let out = dispatch_work_followup(t.state(), &launched.session_id, "停", &[]).await.unwrap();
     assert!(matches!(out, WorkFollowup::Notice(_)), "停止意图应以提示收束,不起新 intake");
     assert_eq!(
         db.get_work_job_status(&launched.session_id).as_deref(),
@@ -654,13 +654,58 @@ async fn work_followup_while_intake_active_queues_message_instead_of_reject() {
     // launch 的 intake 协作仍在跑(mock LLM 不会真收尾)→ 闸 2b:插话**收下**而非拒绝
     // (消息已落库,intake 收尾后 finalize 检测积压自动续轮),且不并发起新 intake。
     assert!(db.has_active_work_intake(&launched.session_id), "前置:intake 应在跑");
-    let out = dispatch_work_followup(t.state(), &launched.session_id, "再加个深色模式")
+    let out = dispatch_work_followup(t.state(), &launched.session_id, "再加个深色模式", &[])
         .await
         .unwrap();
     match out {
         WorkFollowup::Notice(text) => assert!(text.contains("收到"), "应确认收下而非拒绝:{text}"),
         WorkFollowup::Intake(_) => panic!("intake 在跑时不应再起新 intake(并发竞态)"),
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn work_followup_mention_routes_directly_to_worker_not_lead() {
+    use app_lib::commands::work::{dispatch_work_followup, launch_work_job_impl, WorkFollowup};
+    // 2026-06-12 @ 通信规则:消息默认给牵头者;@ 某个工人 → 任务直达该成员(单步
+    // project_task 协作),不经牵头者、不受 intake 互斥闸约束。
+    let t = build_test_app_state().await;
+    let db = t.state().db.clone();
+    let pm = db.adopt_companion(&new_pm("产品经理")).unwrap();
+    let fe = db.adopt_companion(&new_companion("前端工人")).unwrap();
+    let mock = MockLlmServer::start().await;
+    mock.mock_chat_completion_response(&decision_json(&[(pm, 0.9)])).await;
+    seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
+    let gid = create_companion_group_impl(t.state(), "软件公司".into(), None, None)
+        .await
+        .unwrap();
+    add_companion_to_group_impl(t.state(), gid, pm).await.unwrap();
+    add_companion_to_group_impl(t.state(), gid, fe).await.unwrap();
+    let launched = launch_work_job_impl(t.state(), gid, "做个 app", None).await.unwrap();
+    let sid = launched.session_id.clone();
+
+    // intake 还在跑(mock 不收尾)—— @ 工人不受互斥闸拦截,直达派活。
+    assert!(db.has_active_work_intake(&sid), "前置:intake 应在跑");
+    let out = dispatch_work_followup(t.state(), &sid, "按钮改成蓝色", &[fe])
+        .await
+        .unwrap();
+    let collab_id = match out {
+        WorkFollowup::Intake(id) => id,
+        WorkFollowup::Notice(text) => panic!("@ 工人应直达派活,不该被闸拦:{text}"),
+    };
+    // 直达协作:kind=work_dispatch(完成走 work 交付分支),参与者是被 @ 的工人。
+    assert_eq!(
+        db.get_collaboration_kind(collab_id).as_deref(),
+        Some("work_dispatch"),
+        "直达任务应标 work_dispatch",
+    );
+    assert_eq!(db.get_work_job_status(&sid).as_deref(), Some("running"), "有人干活 → running");
+    // 锚点消息直达样式(🔧 @名字)。
+    let msgs = db.get_recent_messages(&sid, 10).unwrap();
+    assert!(
+        msgs.iter().any(|m| m.content.contains("🔧 @前端工人")),
+        "应有直达锚点消息",
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -701,7 +746,7 @@ async fn work_followup_answers_pending_question_while_intake_active() {
     })
     .unwrap();
 
-    let out = dispatch_work_followup(t.state(), &sid, "模拟经营类").await.unwrap();
+    let out = dispatch_work_followup(t.state(), &sid, "模拟经营类", &[]).await.unwrap();
     assert!(
         matches!(out, WorkFollowup::Notice(ref text) if text.is_empty()),
         "答案投递后静默收束(牵头者会接着说),不另发提示",

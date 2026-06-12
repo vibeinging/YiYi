@@ -45,16 +45,18 @@ impl PermissionProfile {
             ],
             Self::Designer => &[
                 "ask_user", "read_file", "write_file", "edit_file", "list_directory",
-                "web_search", "browser_fetch", "open_for_user", "memory_search", "memory_add",
+                "web_search", "browser_fetch", "open_for_user", "call_teammate",
+                "memory_search", "memory_add",
             ],
             Self::Builder => &[
                 "read_file", "write_file", "edit_file", "append_file", "list_directory",
                 "grep_search", "glob_search", "project_tree", "execute_shell", "run_python",
-                "run_python_script", "pip_install", "web_search", "memory_search", "memory_add",
+                "run_python_script", "pip_install", "web_search", "call_teammate",
+                "memory_search", "memory_add",
             ],
             Self::Reviewer => &[
                 "read_file", "list_directory", "grep_search", "glob_search", "project_tree",
-                "execute_shell", "write_file", "memory_search", "memory_add",
+                "execute_shell", "write_file", "call_teammate", "memory_search", "memory_add",
             ],
         };
         names.iter().map(|s| s.to_string()).collect()
@@ -320,7 +322,7 @@ mod tests {
         // 防止档位里写出 catalog 不存在的工具(那样该工具直接拿不到,等于白名单写废)。
         // 这里的"真实工具名"集合 = 软件公司 5 角色 AGENT.md 用到的并集。
         let real: &[&str] = &[
-            "ask_user", "propose_work_plan", "open_for_user", "read_file", "write_file",
+            "ask_user", "propose_work_plan", "open_for_user", "call_teammate", "read_file", "write_file",
             "edit_file", "append_file", "list_directory", "project_tree", "grep_search",
             "glob_search", "execute_shell", "run_python", "run_python_script", "pip_install",
             "web_search", "browser_fetch", "memory_search", "memory_add",

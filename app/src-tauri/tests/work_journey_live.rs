@@ -201,6 +201,7 @@ mod live {
                 t.state(),
                 &sid,
                 "信息已经齐了,不用再问,直接用 propose_work_plan 把任务派出去。",
+                &[],
             )
             .await
             .expect("followup 应成功");

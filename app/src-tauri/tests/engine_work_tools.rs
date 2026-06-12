@@ -70,7 +70,7 @@ async fn propose_work_plan_dispatches_immediately_without_user_confirm() {
 
     // ── 失败路径:role 不在群 → 引导错误,不落假记录卡、job 不动 ──
     let bad = serde_json::json!({ "tasks": [{ "role": "backend_dev", "objective": "写 API" }] });
-    let reply = with_work_ctx(sid.to_string(), 42, propose_work_plan_tool(&bad)).await;
+    let reply = with_work_ctx(sid.to_string(), 42, 1, propose_work_plan_tool(&bad)).await;
     assert!(reply.contains("派工失败"), "role 不在群应报派工失败,got: {reply}");
     assert_eq!(
         db.get_work_job_status(sid).as_deref(),
@@ -90,7 +90,7 @@ async fn propose_work_plan_dispatches_immediately_without_user_confirm() {
         "summary": "单条前端任务",
         "tasks": [{ "role": "frontend_dev", "objective": "写界面" }]
     });
-    let reply = with_work_ctx(sid.to_string(), 42, propose_work_plan_tool(&args)).await;
+    let reply = with_work_ctx(sid.to_string(), 42, 1, propose_work_plan_tool(&args)).await;
     assert!(reply.contains("已直接派工"), "应直接派工,got: {reply}");
 
     // job 状态机直入 running(跳过 pending_commit —— 不再有人工确认态)。

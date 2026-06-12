@@ -122,10 +122,12 @@ fn render_work_system_prompt(
                  3. **你自己不要动手干活**(写文件/写代码/做交付物),哪怕任务再小 —— 你是\
                  协调者,你的产出不算交付,不经 propose_work_plan 派工,工作就不会被跟踪、\
                  不会有交付状态。永远拆任务派给队友。\n\
-                 4. 用户可能在你忙的时候插话(他的新消息会出现在【用户刚说】/最近对话里):\
+                 4. 用户可以 @ 某位队友直接派活(不经过你)—— 看到队友在干你不知道的任务\
+                 别奇怪、别重复派;你只管自己条线的推进。\n\
+                 5. 用户可能在你忙的时候插话(他的新消息会出现在【用户刚说】/最近对话里):\
                  与手头工作相关 → 按新信息调整;无关或是另一件事 → 先简短确认收到、说明先把\
                  手头的收尾再处理它。别因为插话把原任务丢了。\n\
-                 5. 【发言格式】你的每次发言(澄清/方案/总结)都要**结论先行、可扫读**:\
+                 6. 【发言格式】你的每次发言(澄清/方案/总结)都要**结论先行、可扫读**:\
                  第一句话给结论;文件名/路径/命令/关键标识用反引号包(如 `index.html`);\
                  要用户拍板的事列编号选项并标(推荐);别让用户在长段落里自己找重点。\n\
                  【你的队友(propose_work_plan 的 role 填这些标识)】\n{roster}"
@@ -135,6 +137,9 @@ fn render_work_system_prompt(
             "\n\n【动手能力】你能用工具(读写文件、执行命令、查资料、开浏览器等)。\
              这是在接力建造交付物,按上游给的接口 / 契约 / 设计接着做,别重复造;\
              改完用 write_file/edit_file 落盘,说清改了哪些文件。\n\
+             【@ 队友】你的产出需要队友接力(设计稿要人实现 / 发现别人职责内的问题)时,\
+             用 **call_teammate** 工具(role 填队友标识,见名单):ta 会在你完成后开始、\
+             能看到你的产出。别把队友的活硬扛在自己手里。\n\
              【汇报格式】干完后的总结要让人 10 秒读懂:① 结论先行 —— 第一句话说清\
              成了没成、交付了什么;② 文件名/路径/命令用反引号包(如 `index.html`),\
              关键代码或报错证据用代码块;③ 有要用户拍板的事,列编号选项并标(推荐);\
@@ -239,6 +244,15 @@ pub async fn run_work_step(
     // 永远碰不到,只熔断「忙而无效」的死循环 —— 这种失控每轮都有流活动,idle 看门狗
     // (300s 无活动才砍)抓不住它,轮数是唯一熔断,不能彻底去掉。
     let role_max_iter = role_max_iter.max(100);
+    // 执行角色兜底补 call_teammate(agent 互相 @ 的接力机制,2026-06-12)——
+    // 覆盖该工具进档位之前已落盘的旧动态角色与内置角色 AGENT.md。
+    if kind == WorkStepKind::ProjectTask {
+        if let crate::engine::react_agent::ToolFilter::Allow(v) = &mut role_filter {
+            if !v.iter().any(|t| t == "call_teammate") {
+                v.push("call_teammate".to_string());
+            }
+        }
+    }
     if kind == WorkStepKind::Intake {
         // intake 接手者兜底补 propose_work_plan + open_for_user —— 覆盖这两个工具进
         // Coordinator 档之前已落盘的旧动态角色(AGENT.md 还没它们),以及任何非协调档
@@ -324,7 +338,7 @@ pub async fn run_work_step(
         .and_then(|db| db.collaboration_session_id(collab_id));
     match session_id {
         Some(sid) => {
-            crate::engine::tools::work_tools::with_work_ctx(sid, collab_id, fut).await
+            crate::engine::tools::work_tools::with_work_ctx(sid, collab_id, step.id, fut).await
         }
         None => fut.await,
     }

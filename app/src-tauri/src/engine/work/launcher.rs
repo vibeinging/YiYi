@@ -151,6 +151,67 @@ pub async fn launch_intake(
     Ok(collab_id)
 }
 
+/// 用户 @ 某个工人 → 任务**直达**该成员(2026-06-12 用户规则:消息默认给牵头者,
+/// @ 才直达;被 @ 的工人不经牵头者直接接活)。单步 project_task 协作,kind=work_dispatch
+/// (完成走 work 交付摘要/job 同步)。
+pub async fn launch_direct_task(
+    db: Arc<Database>,
+    cfg: LLMConfig,
+    session_id: &str,
+    gid: i64,
+    member: &CompanionProfile,
+    task: &str,
+) -> Result<i64, String> {
+    let plan = CollaborationPlan {
+        steps: vec![Step {
+            id: 1,
+            kind: StepKind::ParallelAgents,
+            participants: vec![Participant {
+                companion_id: member.id,
+                name: member.name.clone(),
+                avatar_emoji: member.avatar_emoji.clone(),
+                color_hex: member.color_hex.clone(),
+                memory_scope: MemoryScope::Group(gid),
+            }],
+            depends_on: vec![],
+            input: StepInput {
+                prompt: task.to_string(),
+                metadata: serde_json::json!({ "mode": "project_task" }),
+            },
+            output: None,
+            status: StepStatus::Pending,
+            started_at: None,
+            finished_at: None,
+        }],
+    };
+    let executor = Arc::new(ConcreteExecutor::new(cfg));
+    let orch = SqliteOrchestrator::new(db.clone(), executor);
+    let parent_id = orch
+        .list_recent_by_session(session_id, 1)
+        .ok()
+        .and_then(|v| v.into_iter().next())
+        .map(|c| c.id);
+    let collab_id = orch
+        .submit_kinded(
+            session_id.to_string(),
+            task.to_string(),
+            plan,
+            CollaborationMode::Dispatched(member.id),
+            parent_id,
+            Some("work_dispatch"),
+        )
+        .await?;
+    // 有人在干活 → job running(终态后被 @ 也重新激活;完成由 finalize 推进)。
+    let _ = db.set_work_job_status(session_id, "running");
+    let _ = db.upsert_collaboration_message_ctx(
+        session_id,
+        collab_id,
+        &format!("🔧 @{} {}", member.name, task),
+        "work_job",
+    );
+    Ok(collab_id)
+}
+
 /// 按牵头者的计划**直接派工**(2026-06-11 用户决策:开工确认环节多余,提完方案直接
 /// 开干)。从 commands::work::commit_work_plan_impl 下沉到 engine —— propose_work_plan
 /// 工具(intake 里 PM 调用)与 commit_work_plan 命令(旧方案卡兼容)都走这一条。

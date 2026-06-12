@@ -177,6 +177,7 @@ pub async fn dispatch_work_followup(
     state: &AppState,
     session_id: &str,
     message: &str,
+    mentioned: &[i64],
 ) -> Result<WorkFollowup, String> {
     let db = state.db.clone();
 
@@ -189,6 +190,32 @@ pub async fn dispatch_work_followup(
         };
         let _ = db.push_message(session_id, "assistant", text);
         return Ok(WorkFollowup::Notice(text.to_string()));
+    }
+
+    // @ 直达(2026-06-12 用户规则):消息默认给牵头者,@ 某个工人 → 任务直达该成员,
+    // 不经牵头者、也不受 intake 互斥闸约束(点名工人和牵头者忙不冲突)。@ 的是牵头者
+    // 本人 → 落到下面默认 intake(等价)。@ 多位 → 取第一位(v1)。
+    if !mentioned.is_empty() {
+        if let Some(gid) = db.get_session_group(session_id) {
+            let members = team_members(&db, gid)?;
+            if let Some(target) = mentioned
+                .iter()
+                .filter_map(|id| members.iter().find(|m| m.id == *id))
+                .find(|m| Some(m.id) != db.get_work_job_lead(session_id))
+            {
+                let cfg = resolve_llm_config(state).await?;
+                let collab_id = crate::engine::work::launcher::launch_direct_task(
+                    db.clone(),
+                    cfg,
+                    session_id,
+                    gid,
+                    target,
+                    message,
+                )
+                .await?;
+                return Ok(WorkFollowup::Intake(collab_id));
+            }
+        }
     }
 
     if db.has_active_work_intake(session_id) {

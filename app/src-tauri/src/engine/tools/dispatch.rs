@@ -339,6 +339,7 @@ pub async fn execute_tool(call: &ToolCall) -> ToolResult {
         "parallel_analyze" => flash_tools::parallel_analyze_tool(&args).await,
         "ask_user" => ask_user::ask_user_tool(&args).await,
         "propose_work_plan" => work_tools::propose_work_plan_tool(&args).await,
+        "call_teammate" => work_tools::call_teammate_tool(&args).await,
         "ask_buddy" => {
             let question = args["question"].as_str().unwrap_or("");
             let ctx = args["context"].as_str().unwrap_or("");

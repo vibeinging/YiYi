@@ -20,7 +20,7 @@ import {
   type ChatMessage,
   type Attachment,
 } from '../api/agent';
-import { setSessionGroup, getSessionGroup } from '../api/groups';
+import { setSessionGroup, getSessionGroup, listGroupMembers } from '../api/groups';
 import { listWorkspaceFiles, loadWorkspaceFile, getWorkspacePath, type WorkspaceFile } from '../api/workspace';
 import { listSkills } from '../api/skills';
 import { type MentionTag } from '../components/MentionInput';
@@ -99,6 +99,16 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking', embed
   // group_id = N     → 群聊群 N,记忆桶 family_shared_<N>,主精灵让位给群成员。
   // 旧的 family_mode 字段已退役 —— 前后端一律只认 group_id,不再读写 family_mode。
   const [familyGroupId, setFamilyGroupId] = useState<number | null>(null);
+  // 群成员(@ 候选用):work 团队的 worker 不在伙伴列表,只能从群成员进 @ 候选。
+  const [groupMembers, setGroupMembers] = useState<Companion[]>([]);
+  useEffect(() => {
+    if (familyGroupId == null) { setGroupMembers([]); return; }
+    let alive = true;
+    listGroupMembers(familyGroupId)
+      .then((m) => { if (alive) setGroupMembers(m); })
+      .catch(() => { if (alive) setGroupMembers([]); });
+    return () => { alive = false; };
+  }, [familyGroupId]);
 
   // 私聊某个伙伴时(session 绑了 companion_id 且非群聊)的当前伙伴 —— 给 ChatWelcome 换头像+介绍。
   // 草稿态(点好友落空会话、还没发消息)优先用草稿好友 —— 欢迎页/顶栏即时显示 ta;
@@ -887,6 +897,7 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking', embed
           // 有待答 ask_user 问题时,输入框保持可用(不显示 stop)——发送即回答,
           // 就像在群里回复那条提问。占位文案同步明示,用户不用知道这条隐式规则。
           placeholder={activeQuestion ? `回答 ${activeQuestion.askerName || 'YiYi'} 的提问,或点上方选项…` : undefined}
+          groupMembers={groupMembers}
           loading={loading && !activeQuestion}
           workspaceFiles={workspaceFiles}
           onSend={handleSend}

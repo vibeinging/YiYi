@@ -17,21 +17,21 @@ use tauri::Emitter;
 use crate::engine::work::plan::{ProjectPlan, ProjectTask};
 
 tokio::task_local! {
-    /// 当前 work 步的 (session_id, collab_id) —— worker 执行 intake 时包一层,
-    /// 让 propose_work_plan 知道方案属于哪个工作会话(载荷带 session_id 防跨会话错派、
-    /// 方案锚点落对会话、job 状态机推进到 pending_commit)。
-    static WORK_CTX: (String, i64);
+    /// 当前 work 步的 (session_id, collab_id, step_id) —— worker 执行 work 步时包一层:
+    /// propose_work_plan 据此知道方案属于哪个工作会话(防跨会话错派);call_teammate
+    /// 据 step_id 给动态接力步挂 depends_on(队友等我完成、拿到我的产出再开干)。
+    static WORK_CTX: (String, i64, i64);
 }
 
 /// 在 fut 期间绑定当前 work 步的会话上下文(worker::run_work_step 包)。
-pub async fn with_work_ctx<F, R>(session_id: String, collab_id: i64, fut: F) -> R
+pub async fn with_work_ctx<F, R>(session_id: String, collab_id: i64, step_id: i64, fut: F) -> R
 where
     F: std::future::Future<Output = R>,
 {
-    WORK_CTX.scope((session_id, collab_id), fut).await
+    WORK_CTX.scope((session_id, collab_id, step_id), fut).await
 }
 
-fn current_work_ctx() -> Option<(String, i64)> {
+fn current_work_ctx() -> Option<(String, i64, i64)> {
     WORK_CTX.try_with(|c| c.clone()).ok()
 }
 
@@ -48,7 +48,23 @@ struct WorkPlanCard {
 }
 
 pub fn definitions() -> Vec<super::types::ToolDefinition> {
-    vec![super::types::tool_def(
+    vec![
+    super::types::tool_def(
+        "call_teammate",
+        "@一位队友接力:把一个明确的任务交给指定队友,ta 会在**你完成本任务后**开始干,\
+         并能看到你的全部产出。用于:你的产出需要队友继续加工(出了设计稿 → 叫前端实现)、\
+         发现不属于你职责的问题(测试发现 bug → 叫开发修)。role 填队友标识(见系统提示\
+         「队友名单」);任务要具体、自包含(队友只看到你的产出和这条任务描述)。",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "role": { "type": "string", "description": "队友的标识(见系统提示「队友名单」,必须完全一致)" },
+                "task": { "type": "string", "description": "交给队友的任务(具体、自包含)" }
+            },
+            "required": ["role", "task"]
+        }),
+    ),
+    super::types::tool_def(
         "propose_work_plan",
         "把项目拆成任务并**立即派工给队友开干**(调用即派发,不需要用户确认、不展示\
          方案卡 —— 直接干)。需求澄清清楚后再调它(牵头者/接口人专用)。\
@@ -74,7 +90,92 @@ pub fn definitions() -> Vec<super::types::ToolDefinition> {
             },
             "required": ["tasks"]
         }),
-    )]
+    ),
+    ]
+}
+
+/// 工具入口:`call_teammate(role, task)` —— agent 互相 @ 的接力机制(2026-06-12 用户规则:
+/// agent 之间可以 @)。给当前协作动态加一个步(AddStep):参与者 = 被 @ 的队友,
+/// depends_on = 我这一步 —— 队友等我完成、拿到我的产出再开干。
+pub async fn call_teammate_tool(args: &serde_json::Value) -> String {
+    let role = args.get("role").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let task = args.get("task").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    if role.is_empty() || task.is_empty() {
+        return "call_teammate 需要 role(队友标识)和 task(交给 ta 的任务)。".into();
+    }
+    let Some((sid, collab_id, my_step)) = current_work_ctx() else {
+        return "(没有工作上下文,无法 @ 队友 —— call_teammate 只在 work 任务里可用。)".into();
+    };
+    let Some(db) = super::get_database() else {
+        return "(数据库不可用。)".into();
+    };
+    let Some(cfg) = super::resolve_llm_config_from_globals().await else {
+        return "(没有可用的模型配置,无法 @ 队友。)".into();
+    };
+
+    // 解析队友:本团队群成员里按 role 标识找。
+    let Some(gid) = db.get_session_group(&sid) else {
+        return "(工作会话未绑团队群。)".into();
+    };
+    let members = db.list_group_members(gid);
+    let Some(mate) = members.iter().find(|m| m.agent_definition_name == role) else {
+        let roster: Vec<&str> = members.iter().map(|m| m.agent_definition_name.as_str()).collect();
+        return format!("队友标识「{role}」不在团队里。可用的:{}", roster.join(" / "));
+    };
+
+    use crate::engine::collaboration::{
+        CollaborationOrchestrator, Mutation, Participant, Step, StepInput, StepKind, StepStatus,
+    };
+    let executor = std::sync::Arc::new(
+        crate::engine::collaboration::executor::ConcreteExecutor::new(cfg),
+    );
+    let orch = crate::engine::collaboration::orchestrator::SqliteOrchestrator::new(
+        db.clone(),
+        executor,
+    );
+
+    // 防爆链:A 叫 B、B 叫 C…动态步无限增殖会失控。单协作步数封顶。
+    match orch.get(collab_id).await {
+        Ok(Some(c)) => {
+            if c.plan.steps.len() >= 20 {
+                return "这单工作的任务步已经很多了(≥20),别再扩散 —— 把手头的收尾,\
+                        缺的让用户重新发起。"
+                    .into();
+            }
+            let next_id = c.plan.steps.iter().map(|s| s.id).max().unwrap_or(0) + 1;
+            let step = Step {
+                id: next_id,
+                kind: StepKind::ParallelAgents,
+                participants: vec![Participant {
+                    companion_id: mate.id,
+                    name: mate.name.clone(),
+                    avatar_emoji: mate.avatar_emoji.clone(),
+                    color_hex: mate.color_hex.clone(),
+                    memory_scope: crate::engine::agents::MemoryScope::Group(gid),
+                }],
+                // 接力:等我完成,拿到我的产出(executor 把上游 full_output 注入队友 prompt)。
+                depends_on: vec![my_step],
+                input: StepInput {
+                    prompt: task.clone(),
+                    metadata: serde_json::json!({ "mode": "project_task" }),
+                },
+                output: None,
+                status: StepStatus::Pending,
+                started_at: None,
+                finished_at: None,
+            };
+            match orch.mutate(collab_id, Mutation::AddStep { step }).await {
+                Ok(()) => format!(
+                    "✅ 已叫 {}(role={role})接力 —— ta 会在你完成本任务后开始,\
+                     并能看到你的全部产出。把你这边收尾即可。",
+                    mate.name
+                ),
+                Err(e) => format!("@ 队友失败:{e}"),
+            }
+        }
+        Ok(None) => "(协作不存在。)".into(),
+        Err(e) => format!("@ 队友失败:{e}"),
+    }
 }
 
 /// 工具入口:`propose_work_plan(summary?, tasks)`。
@@ -114,7 +215,7 @@ pub async fn propose_work_plan_tool(args: &serde_json::Value) -> String {
     let task_count = plan.tasks.len();
 
     let ctx = current_work_ctx();
-    let Some((sid, _collab)) = ctx else {
+    let Some((sid, _collab, _step)) = ctx else {
         return "(没有工作上下文,无法派工 —— propose_work_plan 只在 work 任务里可用。)".into();
     };
     let Some(db) = super::get_database() else {

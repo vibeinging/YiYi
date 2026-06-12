@@ -236,7 +236,8 @@ pub async fn chat_stream_start(
     // R3:停止意图 → 中止 job;上一轮 intake 没回完 → 互斥拒绝 —— 都以可见提示收束本轮。
     if state.db.get_session(&sid).ok().flatten().map(|s| s.source).as_deref() == Some("work") {
         use crate::commands::work::WorkFollowup;
-        match crate::commands::work::dispatch_work_followup(&state, &sid, &message).await {
+        let forced = mentioned_companion_ids.clone().unwrap_or_default();
+        match crate::commands::work::dispatch_work_followup(&state, &sid, &message, &forced).await {
             Ok(WorkFollowup::Intake(collab_id)) => {
                 app.emit("chat://complete", serde_json::json!({
                     "text": "",

@@ -35,6 +35,9 @@ interface ChatInputProps {
   loading: boolean;
   /** 覆盖输入框占位文案(如:有待答 ask_user 提问时提示「发送即回答」)。 */
   placeholder?: string;
+  /** 当前会话所在群的成员(含 work 团队的 worker —— 它们不在伙伴列表里,但群内
+   *  @ 候选必须有,否则 work 会话 @ 不到工人)。与伙伴列表按 id 去重合并。 */
+  groupMembers?: Companion[];
   workspaceFiles: WorkspaceFile[];
   onSend: (plainText: string, mentions: MentionTag[], attachments: Attachment[]) => void;
   onStop: () => void;
@@ -80,6 +83,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   {
     loading,
     placeholder,
+    groupMembers,
     workspaceFiles,
     onSend,
     onStop,
@@ -132,8 +136,17 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       .catch(() => { if (!cancelled) setCompanions([]); });
     return () => { cancelled = true; };
   }, []);
+  // 群成员优先(work 团队的 worker 不在伙伴列表,只能从这进候选);伙伴列表补全,按 id 去重。
+  const mentionCompanions = useMemo<Companion[]>(() => {
+    const seen = new Set<number>();
+    const out: Companion[] = [];
+    for (const c of [...(groupMembers ?? []), ...companions]) {
+      if (!seen.has(c.id)) { seen.add(c.id); out.push(c); }
+    }
+    return out;
+  }, [groupMembers, companions]);
   const companionAgents = useMemo<AgentSummary[]>(
-    () => companions.map(c => ({
+    () => mentionCompanions.map(c => ({
       name: c.name,
       description: companionRoleLabel(c),
       emoji: c.avatar_emoji,
@@ -142,13 +155,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       model: null,
       tool_count: null,
     })),
-    [companions],
+    [mentionCompanions],
   );
   const companionByName = useMemo(() => {
     const m = new Map<string, Companion>();
-    for (const c of companions) m.set(c.name, c);
+    for (const c of mentionCompanions) m.set(c.name, c);
     return m;
-  }, [companions]);
+  }, [mentionCompanions]);
   const allMentionAgents = useMemo(
     () => [...companionAgents, ...agents],
     [companionAgents, agents],
