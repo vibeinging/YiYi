@@ -41,6 +41,9 @@ pub fn core_tools() -> Vec<ToolDefinition> {
                 "read_file",
                 "write_file",
                 "edit_file",
+                // 大文件分段写的另一半:截断守卫引导「write_file 前半 + append_file
+                // 分段追加」,不进 core 的话工人看不到它,引导成空话。
+                "append_file",
                 "list_directory",
                 "grep_search",
                 "glob_search",
@@ -58,8 +61,12 @@ pub fn core_tools() -> Vec<ToolDefinition> {
                 "spawn_agents",
                 // Human-in-the-loop — ask the user an open question and wait
                 "ask_user",
-                // Work mode (chat×work 2×2 / S5+S6) — work 牵头者拆解派工,用户审阅开工
+                // Work mode(chat×work 2×2):牵头者拆解派工 / 工人互相 @ 接力 /
+                // 把成果打开到用户眼前。不进 core 列表 = LLM 工具列表里没有,
+                // prompt 引导得再好也调不到(实测 QA 看不到 call_teammate)。
                 "propose_work_plan",
+                "call_teammate",
+                "open_for_user",
             ];
 
             let mut all = Vec::new();

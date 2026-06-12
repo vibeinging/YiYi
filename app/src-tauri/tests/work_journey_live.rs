@@ -153,16 +153,20 @@ mod live {
         }
         eprintln!("══ live work 旅程(model={model}, base={base})══");
 
-        // 团队:PM(headless find_project_lead 只认 "pm" slug)+ 前端。
+        // 团队:PM(headless find_project_lead 只认 "pm" slug)+ 前端 + QA(⑧ 接力用)。
         let pm = db.adopt_companion(&companion("产品经理", "pm", "产品经理/牵头人")).unwrap();
         let fe = db
             .adopt_companion(&companion("前端", "frontend_dev", "前端工程师,写 HTML/CSS/JS"))
+            .unwrap();
+        let qa = db
+            .adopt_companion(&companion("质检", "qa_engineer", "测试工程师,检查交付质量"))
             .unwrap();
         let gid = create_companion_group_impl(t.state(), "软件公司".into(), None, None)
             .await
             .unwrap();
         add_companion_to_group_impl(t.state(), gid, pm).await.unwrap();
         add_companion_to_group_impl(t.state(), gid, fe).await.unwrap();
+        add_companion_to_group_impl(t.state(), gid, qa).await.unwrap();
 
         // 项目工作区:固定 /tmp 路径,跑完不清理,供事后 review 交付物。
         let ws_root = std::env::temp_dir().join("yiyi-work-journey-live");
@@ -288,7 +292,83 @@ mod live {
         assert!(total_bytes > 0, "工作区应有真实交付物文件");
         assert!(has_index, "任务指定单文件 index.html,工作区应有它");
 
-        eprintln!("══ 旅程贯通:launch → 方案 → 开工 → 交付 done(产物留在 {})══", ws.display());
+        // ⑦ 用户 @ 直达工人(2026-06-12 @ 通信规则):任务直达前端,不经牵头者。
+        eprintln!("—— ⑦ 用户 @ 直达前端(改标题)——");
+        let out = dispatch_work_followup(
+            t.state(),
+            &sid,
+            "把 index.html 的 <title> 改成「我的待办清单」,只改标题,别动其他。",
+            &[fe],
+        )
+        .await
+        .expect("@ 直达应成功");
+        let direct_id = match out {
+            WorkFollowup::Intake(id) => id,
+            WorkFollowup::Notice(text) => panic!("@ 工人应直达派活:{text}"),
+        };
+        assert_eq!(
+            db.get_collaboration_kind(direct_id).as_deref(),
+            Some("work_dispatch"),
+            "直达任务应标 work_dispatch",
+        );
+        assert_eq!(db.get_work_job_status(&sid).as_deref(), Some("running"));
+        let status = wait_until(&db, &sid, "@ 直达交付", Duration::from_secs(300), |s| {
+            matches!(s, Some("done") | Some("failed") | Some("aborted"))
+        })
+        .await;
+        assert_eq!(status.as_deref(), Some("done"), "@ 直达任务应交付完成");
+        let html = std::fs::read_to_string(ws.join("index.html")).unwrap_or_default();
+        assert!(
+            html.contains("我的待办清单"),
+            "前端应已把标题改成「我的待办清单」",
+        );
+
+        // ⑧ agent 互相 @(call_teammate 接力):@ QA 检查,发现不符 → 叫前端接力修。
+        eprintln!("—— ⑧ @ QA → call_teammate 接力前端 ——");
+        let out = dispatch_work_followup(
+            t.state(),
+            &sid,
+            "检查 index.html 的 <title> 是否是「我的待办清单 v2」。现在多半不是 —— \
+             你**自己不要改任何文件**,用 call_teammate 工具(role 填 frontend_dev)\
+             把「把 <title> 改成『我的待办清单 v2』」这个任务交给前端去改。",
+            &[qa],
+        )
+        .await
+        .expect("@ QA 应成功");
+        let relay_id = match out {
+            WorkFollowup::Intake(id) => id,
+            WorkFollowup::Notice(text) => panic!("@ QA 应直达派活:{text}"),
+        };
+        let status = wait_until(&db, &sid, "接力交付", Duration::from_secs(360), |s| {
+            matches!(s, Some("done") | Some("failed") | Some("aborted"))
+        })
+        .await;
+        // dump 接力协作的步,便于失败定位。
+        let step_count: i64 = {
+            let conn = db.get_conn().unwrap();
+            conn.query_row(
+                "SELECT COUNT(*) FROM collaboration_steps WHERE collaboration_id = ?1",
+                [relay_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0)
+        };
+        eprintln!("  接力协作 {relay_id} 共 {step_count} 步(≥2 = call_teammate 动态加步生效)");
+        assert_eq!(status.as_deref(), Some("done"), "接力任务应交付完成");
+        assert!(
+            step_count >= 2,
+            "QA 应经 call_teammate 给前端加了动态接力步(实际 {step_count} 步)",
+        );
+        let html = std::fs::read_to_string(ws.join("index.html")).unwrap_or_default();
+        assert!(
+            html.contains("我的待办清单 v2"),
+            "前端(接力步)应已把标题改成 v2",
+        );
+
+        eprintln!(
+            "══ 旅程贯通:launch → 直接派工 → 交付 → @ 直达 → @ 接力(产物留在 {})══",
+            ws.display()
+        );
     }
 
     /// 递归收集目录下所有文件路径(浅实现,review/断言用)。
