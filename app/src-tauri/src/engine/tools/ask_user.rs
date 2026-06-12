@@ -187,16 +187,33 @@ pub(crate) async fn register(request_id: &str) -> oneshot::Receiver<String> {
 
 /// 等待答案直到超时。拿到答案返回 `Some`;超时则清掉登记并返回 `None`
 /// (上层据此优雅降级,不无限挂)。
+///
+/// 分片等待 + 周期报活:每 30s 醒一次给 idle 看门狗 `mark_idle_activity` ——
+/// 「等用户回答」是合法等待,不是 LLM 挂起。不报活的话,work 步的 idle 看门狗
+/// (300s 无流活动即砍)会在用户思考/离开时把整步砍掉(实测:PM 问完用户没及时答
+/// → 「响应超时(600s)」失败条,用户吃个饭回来工作没了)。
 pub(crate) async fn await_answer(
     request_id: &str,
-    rx: oneshot::Receiver<String>,
+    mut rx: oneshot::Receiver<String>,
     timeout_secs: u64,
 ) -> Option<String> {
-    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), rx).await {
-        Ok(Ok(answer)) => Some(answer),
-        _ => {
-            pending().lock().await.remove(request_id);
-            None
+    let slice = std::time::Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    loop {
+        match tokio::time::timeout(slice, &mut rx).await {
+            Ok(Ok(answer)) => return Some(answer),
+            // sender 已蒸发(进程内等待者被清)→ 不会再有答案。
+            Ok(Err(_)) => {
+                pending().lock().await.remove(request_id);
+                return None;
+            }
+            Err(_) => {
+                if tokio::time::Instant::now() >= deadline {
+                    pending().lock().await.remove(request_id);
+                    return None;
+                }
+                crate::engine::agent_runner::mark_idle_activity();
+            }
         }
     }
 }

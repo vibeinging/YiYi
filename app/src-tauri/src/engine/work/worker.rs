@@ -4,7 +4,7 @@
 //! work 专属逻辑:
 //!   - intake 步的 system prompt(牵头者主导推进指令 + roster + persona 拼接思路);
 //!   - project_task 步的 user prompt(上游交付"交接"块);
-//!   - work 超时策略(`work_timeout_policy`:intake 600s total / project_task 300s idle)。
+//!   - work 超时策略(`work_timeout_policy`:intake / project_task 均为 300s idle 看门狗)。
 //!
 //! 核心 `run_work_step` 构造 work prompt → 用 `executor::resolve_companion_role` 取角色权限
 //! → 调 `executor::run_react_inner` 复用 ReAct 共享内核(ask_user 内联整条在内核里,
@@ -22,9 +22,12 @@ use crate::engine::collaboration::executor::{resolve_companion_role, run_react_i
 use crate::engine::collaboration::{CollaborationId, Step, StepId, StepOutput};
 use crate::engine::llm_client::LLMConfig;
 
-/// 牵头者接手步(intake)总超时:可能 ask_user 阻塞等用户答澄清问题(如发布日期),chat 的
-/// 150s 太短(问个日期都可能超时被砍)。给 10 分钟,让用户有从容作答的时间;答完即继续。
-pub(crate) const INTAKE_TIMEOUT_SECS: u64 = 600;
+/// 牵头者接手步(intake)idle 超时:与 project_task 同款看门狗 —— 300s 内一点流活动
+/// 都没有才判挂起。等用户答澄清**不算挂起**:ask_user 的等待循环每 30s `mark_idle_activity`
+/// 报活,用户想多久答就多久答(ask_user 自身 1h 上限后优雅降级)。
+/// 历史:曾是 Total(600s) 总超时 —— 把「用户离开 10 分钟」也当失败(实测:PM 问完用户
+/// 没及时答 → 整步「响应超时(600s)」),等用户回答不该计时,故废弃总超时改 idle。
+pub(crate) const INTAKE_IDLE_SECS: u64 = 300;
 /// 派工写码任务(project_task)**不用总超时** —— 总超时会把进展中的长程任务一刀切(一个
 /// 角色写多文件 + 跑构建/测试可能很久)。改用 **idle 超时**:300s 内一点流活动(token /
 /// 工具事件)都没有,才判 LLM 流真挂起 → 中断;有进展就重置 → 真长程任务想跑多久跑多久。
@@ -52,12 +55,10 @@ impl WorkStepKind {
 }
 
 /// work 超时策略(缝 2 归位)。chat 的短总超时(150s / 群聊 30s)留在 chat executor;
-/// work 的两套差异化策略搬来这里:
-///   - **Intake**:`Total(600s)` —— 可能 ask_user 阻塞等用户答澄清(如发布日期),
-///     150s 太短(问个日期都可能超时被砍),给 10 分钟总超时让用户从容作答。
-///   - **ProjectTask**:`Idle(300s)` —— 写码任务**不用总超时**(总超时会把进展中的长程
-///     任务一刀切)。改用 idle 超时:300s 内一点流活动都没有才判挂起 → 中断;有进展就
-///     重置 → 真长程任务想跑多久跑多久。300s 也 > 单个工具(跑构建/测试)的常见耗时。
+/// work 两类步都用 **idle 看门狗**(300s 无流活动才判挂起,有进展就重置):
+///   - 等用户答澄清不算挂起(ask_user 等待循环每 30s 报活);
+///   - 真长程任务想跑多久跑多久;只有 LLM 流真断了才砍。
+/// `Total` 变体保留作机制(当前无使用者;chat 步未来迁移可用)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkTimeoutPolicy {
     /// 总超时(秒):整步从开始算,到点即砍。
@@ -69,7 +70,7 @@ pub enum WorkTimeoutPolicy {
 /// work 步 → 超时策略。见 `WorkTimeoutPolicy` 文档。
 pub fn work_timeout_policy(kind: WorkStepKind) -> WorkTimeoutPolicy {
     match kind {
-        WorkStepKind::Intake => WorkTimeoutPolicy::Total(INTAKE_TIMEOUT_SECS),
+        WorkStepKind::Intake => WorkTimeoutPolicy::Idle(INTAKE_IDLE_SECS),
         WorkStepKind::ProjectTask => WorkTimeoutPolicy::Idle(PROJECT_TASK_IDLE_SECS),
     }
 }
@@ -523,7 +524,7 @@ mod tests {
     fn timeout_policy_intake_total_project_idle() {
         assert_eq!(
             work_timeout_policy(WorkStepKind::Intake),
-            WorkTimeoutPolicy::Total(INTAKE_TIMEOUT_SECS)
+            WorkTimeoutPolicy::Idle(INTAKE_IDLE_SECS)
         );
         assert_eq!(
             work_timeout_policy(WorkStepKind::ProjectTask),
