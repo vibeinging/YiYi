@@ -325,12 +325,13 @@ mod live {
 
         // ⑧ agent 互相 @(call_teammate 接力):@ QA 检查,发现不符 → 叫前端接力修。
         eprintln!("—— ⑧ @ QA → call_teammate 接力前端 ——");
+        // 自然语言指令:不提工具名、不提 role 标识 —— QA 要靠 prompt 里的【你的队友】
+        // 名单自己找到 frontend_dev 并自发 call_teammate(验证「材料齐了模型会不会用」)。
         let out = dispatch_work_followup(
             t.state(),
             &sid,
             "检查 index.html 的 <title> 是否是「我的待办清单 v2」。现在多半不是 —— \
-             你**自己不要改任何文件**,用 call_teammate 工具(role 填 frontend_dev)\
-             把「把 <title> 改成『我的待办清单 v2』」这个任务交给前端去改。",
+             你**自己不要改任何文件**,让前端去把标题改成「我的待办清单 v2」。",
             &[qa],
         )
         .await
