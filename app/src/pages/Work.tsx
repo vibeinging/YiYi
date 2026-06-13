@@ -385,6 +385,8 @@ function WorkSessionToolbar({ job }: { job: WorkJob | null }) {
                     try {
                       await addCompanionToGroup(gid, c.id);
                       toast.success(`${c.name} 已加入团队`);
+                      // 通知嵌入会话刷新群成员(@ 候选)—— 否则刚拉的伙伴要等重挂才 @ 得到。
+                      window.dispatchEvent(new CustomEvent('yiyi:group-members-changed', { detail: gid }));
                       setPickerOpen(false);
                     } catch (e) {
                       toast.error(`拉伙伴失败:${e}`);

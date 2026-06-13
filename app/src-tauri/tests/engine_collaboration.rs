@@ -229,6 +229,66 @@ async fn wait_for_terminal(orch: &SqliteOrchestrator, id: CollaborationId) -> Co
     wait_for_status(orch, id, 2000, |s| s.is_terminal()).await
 }
 
+/// 并发回归(2026-06-13 review BUG2):同一 work 会话同时跑多个 work_dispatch 协作
+/// (用户 @ 直达任务 + 别的协作)时,**先完成的那个不能把整个 job 误标「已交付」**。
+/// 只有最后一个活动协作收尾才推 job 终态。没有这个守卫,一个直达小任务先完成就弹
+/// 「✅ 已交付」、误撤 PM 正在等用户答的提问。
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn concurrent_work_dispatch_fast_one_finishing_keeps_job_running() {
+    let t = TempDb::new();
+    let sid = "concurrency-sess";
+    ensure_session(&t, sid);
+    let db = t.db();
+    db.create_work_job(sid, "做个东西", Some(1)).unwrap();
+    db.set_work_job_status(sid, "running").unwrap();
+
+    // 执行器全局 300ms 延迟:B(1 步,~300ms)先于 A(2 步串行,~600ms)收尾。
+    let executor = Arc::new(MockExecutor::with_delay(Duration::from_millis(300)));
+    let orch = SqliteOrchestrator::new(db.clone(), executor.handle());
+
+    // A:两步串行(step2 依赖 step1),活得久。
+    let plan_a = CollaborationPlan {
+        steps: vec![step_single(1, "A1", 10), {
+            let mut s = step_single(2, "A2", 11);
+            s.depends_on = vec![1];
+            s
+        }],
+    };
+    let a = orch
+        .submit_kinded(sid.into(), "A".into(), plan_a, CollaborationMode::Dispatched(0), None, Some("work_dispatch"))
+        .await
+        .unwrap();
+    // B:单步,先收尾。
+    let plan_b = CollaborationPlan { steps: vec![step_single(1, "B1", 12)] };
+    let b = orch
+        .submit_kinded(sid.into(), "B".into(), plan_b, CollaborationMode::Dispatched(0), None, Some("work_dispatch"))
+        .await
+        .unwrap();
+
+    // B 先到终态。等一拍让 finalize 的 job-sync 尾巴跑完。
+    wait_for_terminal(&orch, b).await;
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    // 关键断言:A 还在跑 → B 完成不该把 job 推「done」。
+    assert_eq!(
+        db.get_work_job_status(sid).as_deref(),
+        Some("running"),
+        "另一个协作还在跑时,先完成的协作不该把 job 标为已交付",
+    );
+
+    // A 收尾后(已无其它活动协作)→ job 落 done。
+    wait_for_terminal(&orch, a).await;
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while db.get_work_job_status(sid).as_deref() != Some("done") && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        db.get_work_job_status(sid).as_deref(),
+        Some("done"),
+        "最后一个协作收尾后 job 应落 done",
+    );
+}
+
 /// Insert a placeholder session so collaborations referencing it pass the
 /// FK. Idempotent — fine to call multiple times.
 fn ensure_session(t: &TempDb, session_id: &str) {

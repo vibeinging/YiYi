@@ -113,90 +113,130 @@ pub async fn call_teammate_tool(args: &serde_json::Value) -> String {
         return "(没有可用的模型配置,无法 @ 队友。)".into();
     };
 
-    // 解析队友:本团队群成员里按 role 标识找。
     let Some(gid) = db.get_session_group(&sid) else {
         return "(工作会话未绑团队群。)".into();
     };
     let members = db.list_group_members(gid);
-    let Some(mate) = members.iter().find(|m| m.agent_definition_name == role) else {
-        let roster: Vec<&str> = members.iter().map(|m| m.agent_definition_name.as_str()).collect();
-        return format!("队友标识「{role}」不在团队里。可用的:{}", roster.join(" / "));
-    };
 
     use crate::engine::collaboration::{
-        CollaborationOrchestrator, Mutation, Participant, Step, StepInput, StepKind, StepStatus,
+        CollaborationOrchestrator, CompanionProfile, Mutation, Participant, Step, StepInput,
+        StepKind, StepStatus,
     };
     let executor = std::sync::Arc::new(
-        crate::engine::collaboration::executor::ConcreteExecutor::new(cfg),
+        crate::engine::collaboration::executor::ConcreteExecutor::new(cfg.clone()),
     );
     let orch = crate::engine::collaboration::orchestrator::SqliteOrchestrator::new(
         db.clone(),
         executor,
     );
 
-    // 防爆链:A 叫 B、B 叫 C…动态步无限增殖会失控。单协作步数封顶。
-    match orch.get(collab_id).await {
-        Ok(Some(c)) => {
-            if c.plan.steps.len() >= 20 {
-                return "这单工作的任务步已经很多了(≥20),别再扩散 —— 把手头的收尾,\
-                        缺的让用户重新发起。"
-                    .into();
-            }
-            let next_id = c.plan.steps.iter().map(|s| s.id).max().unwrap_or(0) + 1;
-            // @ 的是本 job 的**牵头者**(如前端遇到需求不清,上报 PM)→ 接力步走 intake
-            // 语义:带 roster 的协调者指令(能 ask_user 问用户、能 propose_work_plan 再派工),
-            // 而不是「干活」姿态的 project_task —— 否则 PM 接到任务没有队友名单、没有
-            // 牵头者语境,角色错位。普通队友 → project_task 接力(带上游产出干活)。
-            let is_lead = db.get_work_job_lead(&sid) == Some(mate.id);
-            let metadata = if is_lead {
-                let roster = members
-                    .iter()
-                    .filter(|m| m.id != mate.id)
-                    .map(|m| {
-                        format!(
-                            "- {}(派工 role=`{}`):{}",
-                            m.name,
-                            m.agent_definition_name,
-                            m.role_label.clone().unwrap_or_else(|| m.agent_definition_name.clone()),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                serde_json::json!({ "mode": "intake", "roster": roster })
-            } else {
-                serde_json::json!({ "mode": "project_task" })
-            };
-            let step = Step {
-                id: next_id,
-                kind: StepKind::ParallelAgents,
-                participants: vec![Participant {
-                    companion_id: mate.id,
-                    name: mate.name.clone(),
-                    avatar_emoji: mate.avatar_emoji.clone(),
-                    color_hex: mate.color_hex.clone(),
-                    memory_scope: crate::engine::agents::MemoryScope::Group(gid),
-                }],
-                // 接力:等我完成,拿到我的产出(executor 把上游 full_output 注入队友 prompt)。
-                depends_on: vec![my_step],
-                input: StepInput {
-                    prompt: task.clone(),
-                    metadata,
-                },
-                output: None,
-                status: StepStatus::Pending,
-                started_at: None,
-                finished_at: None,
-            };
-            match orch.mutate(collab_id, Mutation::AddStep { step }).await {
-                Ok(()) => format!(
-                    "✅ 已叫 {}(role={role})接力 —— ta 会在你完成本任务后开始,\
-                     并能看到你的全部产出。把你这边收尾即可。",
-                    mate.name
-                ),
-                Err(e) => format!("@ 队友失败:{e}"),
-            }
-        }
-        Ok(None) => "(协作不存在。)".into(),
+    let c = match orch.get(collab_id).await {
+        Ok(Some(c)) => c,
+        Ok(None) => return "(协作不存在。)".into(),
+        Err(e) => return format!("@ 队友失败:{e}"),
+    };
+    // 调用者身份(本运行步的参与者)—— 用于自我排除 + 上报牵头者时的署名。
+    let caller = c
+        .plan
+        .steps
+        .iter()
+        .find(|s| s.id == my_step)
+        .and_then(|s| s.participants.first());
+    let caller_id = caller.map(|p| p.companion_id);
+    let caller_name = caller.map(|p| p.name.clone()).unwrap_or_else(|| "队友".into());
+
+    // 解析队友:按 role 标识找,**排除自己**(BUG 3:无自我排除时,模型填自己的 slug 会
+    // 把任务又派回自己)。重名 slug(同档多个同 role 成员)取第一个非己 —— 见下方 BUG4 注。
+    let Some(mate) = members
+        .iter()
+        .find(|m| m.agent_definition_name == role && Some(m.id) != caller_id)
+    else {
+        let roster: Vec<&str> = members
+            .iter()
+            .filter(|m| Some(m.id) != caller_id)
+            .map(|m| m.agent_definition_name.as_str())
+            .collect();
+        return format!("队友标识「{role}」不在团队里(或就是你自己)。可用的:{}", roster.join(" / "));
+    };
+    // 注(BUG4,2026-06-13 review):同一 role slug 有多个成员时 .find 取第一个,无法寻址
+    // 第二个 —— 动态团队 slug 已唯一化、内置档 slug 互异,故仅手动加重名成员才会触发,
+    // 暂以「按 role 寻址」语义接受;真要多同档成员需 role 带 id 限定,留作后续。
+
+    let to_profile = |m: &crate::engine::db::Companion| CompanionProfile {
+        id: m.id,
+        name: m.name.clone(),
+        avatar_emoji: m.avatar_emoji.clone(),
+        color_hex: m.color_hex.clone(),
+        description: m.role_label.clone().unwrap_or_else(|| m.agent_definition_name.clone()),
+        agent_definition_name: m.agent_definition_name.clone(),
+        last_used_at: m.last_used_at,
+    };
+
+    // @ 的是本 job 的**牵头者**(前端遇到需求不清/要拍板 → 上报 PM):不往 dispatch 协作
+    // AddStep(BUG5:否则牵头者的澄清轮被当成本派工协作的「交付」,误标 job done + 弹
+    // 「✅ 已交付」)—— 改起一轮独立 **intake** 协作(kind=work_intake,finalize 正确处理),
+    // 牵头者拿到完整协调语境(roster / propose_work_plan / ask_user)。上报内容作种子。
+    let is_lead = db.get_work_job_lead(&sid) == Some(mate.id);
+    if is_lead {
+        // 把上报内容作为 intake 种子,带上汇报者署名(launch_intake 会建可见锚点
+        // 「@牵头者 <seed>」,不另发消息避免重复)。
+        let seed = format!("{caller_name}(队友)反馈:{task}");
+        let members_profiles: Vec<CompanionProfile> = members.iter().map(to_profile).collect();
+        let lead_profile = to_profile(mate);
+        return match crate::engine::work::launcher::launch_intake(
+            db.clone(),
+            cfg,
+            &sid,
+            gid,
+            &lead_profile,
+            &members_profiles,
+            &seed,
+        )
+        .await
+        {
+            Ok(_) => format!(
+                "✅ 已把这事上报给牵头者 {} —— ta 会接手澄清/重新安排。你把手头的收尾即可。",
+                mate.name
+            ),
+            Err(e) => format!("上报牵头者失败:{e}"),
+        };
+    }
+
+    // 普通队友 → AddStep 接力(真正的工序交接:设计稿→实现、代码→测试)。
+    // 防爆链:A 叫 B、B 叫 C…动态步无限增殖会失控,单协作步数封顶。
+    if c.plan.steps.len() >= 20 {
+        return "这单工作的任务步已经很多了(≥20),别再扩散 —— 把手头的收尾,\
+                缺的让用户重新发起。"
+            .into();
+    }
+    let next_id = c.plan.steps.iter().map(|s| s.id).max().unwrap_or(0) + 1;
+    let step = Step {
+        id: next_id,
+        kind: StepKind::ParallelAgents,
+        participants: vec![Participant {
+            companion_id: mate.id,
+            name: mate.name.clone(),
+            avatar_emoji: mate.avatar_emoji.clone(),
+            color_hex: mate.color_hex.clone(),
+            memory_scope: crate::engine::agents::MemoryScope::Group(gid),
+        }],
+        // 接力:等我完成,拿到我的产出(executor 把上游 full_output 注入队友 prompt)。
+        depends_on: vec![my_step],
+        input: StepInput {
+            prompt: task.clone(),
+            metadata: serde_json::json!({ "mode": "project_task" }),
+        },
+        output: None,
+        status: StepStatus::Pending,
+        started_at: None,
+        finished_at: None,
+    };
+    match orch.mutate(collab_id, Mutation::AddStep { step }).await {
+        Ok(()) => format!(
+            "✅ 已叫 {}(role={role})接力 —— ta 会在你完成本任务后开始,\
+             并能看到你的全部产出。把你这边收尾即可。",
+            mate.name
+        ),
         Err(e) => format!("@ 队友失败:{e}"),
     }
 }

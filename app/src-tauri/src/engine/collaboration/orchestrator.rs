@@ -776,10 +776,19 @@ impl SqliteOrchestrator {
             drop(conn);
             if let Ok((session_id, kind, intent)) = row {
                 if kind == "work_dispatch" {
+                    // 并发安全(2026-06-13 review):同一会话可同时跑多个 work 协作 ——
+                    // PM intake + 用户 @ 直达的小任务 + call_teammate 接力。job 状态/交付
+                    // 通知/提问撤销都是**会话级**的,只有当本协作是该会话**最后一个**活动
+                    // 协作时才把 job 推终态。否则一个直达小任务先完成,会把整个 job 误标
+                    // 「已交付」、误发通知、误撤 PM 正在等用户答的提问(三个 review bug 同根)。
+                    // list_active_work_collabs 已不含本协作(上面 set_status 已置终态)。
+                    let others_active = !self.db.list_active_work_collabs(&session_id).is_empty();
                     let job_status = match &status {
-                        CollaborationStatus::Done => "done",
+                        // 中止是显式、会话级动作(abort_work_job 会中止全部协作),直接落。
                         CollaborationStatus::Aborted => "aborted",
-                        CollaborationStatus::Failed(_) => "failed",
+                        CollaborationStatus::Done if !others_active => "done",
+                        CollaborationStatus::Failed(_) if !others_active => "failed",
+                        // 还有别的协作在跑 → job 仍进行中,等最后一个收尾再落终态。
                         _ => "running",
                     };
                     if let Err(e) = self.db.set_work_job_status(&session_id, job_status) {
@@ -787,7 +796,8 @@ impl SqliteOrchestrator {
                     }
                     // 失败收口一致性:job 进终态 → 撤销该会话挂着的未答提问(没人会再收
                     // 答案的提问卡不该留),并唤醒还在内存阻塞的 ask_user 等待者(免其干等
-                    // 到 1h 超时占着执行体)。
+                    // 到 1h 超时占着执行体)。job_status 非终态(others_active)时自动跳过 ——
+                    // 这正是「直达任务完成不该撤 PM 正在等的提问」的修复点。
                     if matches!(job_status, "done" | "failed" | "aborted") {
                         let expired = self.db.expire_pending_questions(&session_id);
                         if !expired.is_empty() {
@@ -812,9 +822,11 @@ impl SqliteOrchestrator {
                     // (NavRail 红点/列表即刷)。中止是用户自己点的,不打扰。通知 context 走
                     // 既有 notification://pending 管道(page=chat+session_id),点击跳转由
                     // switchToSession 的 work- 前缀分支接到工作页(R5)。
-                    let notify = match &status {
-                        CollaborationStatus::Done => Some(("✅ 工作已交付", intent)),
-                        CollaborationStatus::Failed(_) => Some(("⚠️ 工作没做完", intent)),
+                    // 通知/红点只在 job 真正落终态时发(others_active 时 job 仍 running,
+                    // 不发 —— 否则直达小任务完成就弹「✅ 已交付」而活还没干完)。
+                    let notify = match job_status {
+                        "done" => Some(("✅ 工作已交付", intent)),
+                        "failed" => Some(("⚠️ 工作没做完", intent)),
                         _ => None,
                     };
                     if let Some((title, body)) = notify {
@@ -824,14 +836,16 @@ impl SqliteOrchestrator {
                             serde_json::json!({ "page": "chat", "session_id": session_id }),
                         );
                     }
-                    if let Some(handle) = crate::engine::tools::get_app_handle() {
-                        use tauri::Emitter;
-                        handle
-                            .emit(
-                                "work://job_done",
-                                serde_json::json!({ "session_id": session_id, "status": job_status }),
-                            )
-                            .ok();
+                    if matches!(job_status, "done" | "failed" | "aborted") {
+                        if let Some(handle) = crate::engine::tools::get_app_handle() {
+                            use tauri::Emitter;
+                            handle
+                                .emit(
+                                    "work://job_done",
+                                    serde_json::json!({ "session_id": session_id, "status": job_status }),
+                                )
+                                .ok();
+                        }
                     }
                 } else if kind == "work_intake"
                     && matches!(

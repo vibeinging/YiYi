@@ -349,7 +349,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       if (e.key === 'Escape') { e.preventDefault(); setShowTaskPicker(false); return; }
     }
     if (showFilePicker) {
-      const items = buildMentionList([], workspaceFiles, filePickerQuery, agents);
+      // BUG fix(2026-06-13 review):键盘选 @ 必须用与显示**同一份** allMentionAgents
+      // (含 companions/workers),且 companion 要 tag 成 `companion:<id>` —— 此前用
+      // builtin-only `agents` 且 tag 成 name,导致键盘 @ 工人要么选错内置 agent、要么
+      // 后端收不到 companion id → @ 工人的消息静默落到牵头者(直接打字 @ 是常用路径,
+      // 整个 @ 功能在真实输入下是坏的)。鼠标点选走 MentionPicker 自己的列表,本就对。
+      const items = buildMentionList([], workspaceFiles, filePickerQuery, allMentionAgents);
       const maxIdx = items.length - 1;
       if (e.key === 'ArrowDown') { e.preventDefault(); setFilePickerIndex(prev => Math.min(prev + 1, maxIdx)); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); setFilePickerIndex(prev => Math.max(prev - 1, 0)); return; }
@@ -358,7 +363,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         const selected = items[filePickerIndex];
         if (selected) {
           if (selected.type === 'agent') {
-            const tag: MentionTag = { type: 'agent', id: selected.agent.name, name: selected.agent.name };
+            // companion → `companion:<id>`(与鼠标点选 onSelectAgent 同源);其余 → name。
+            const companion = companionByName.get(selected.agent.name);
+            const tag: MentionTag = companion
+              ? { type: 'agent', id: `companion:${companion.id}`, name: companion.name }
+              : { type: 'agent', id: selected.agent.name, name: selected.agent.name };
             inputRef.current?.insertMention(tag);
             setShowFilePicker(false);
           } else if (selected.type === 'file') {

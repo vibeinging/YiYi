@@ -104,10 +104,18 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking', embed
   useEffect(() => {
     if (familyGroupId == null) { setGroupMembers([]); return; }
     let alive = true;
-    listGroupMembers(familyGroupId)
-      .then((m) => { if (alive) setGroupMembers(m); })
-      .catch(() => { if (alive) setGroupMembers([]); });
-    return () => { alive = false; };
+    const reload = () =>
+      listGroupMembers(familyGroupId)
+        .then((m) => { if (alive) setGroupMembers(m); })
+        .catch(() => { if (alive) setGroupMembers([]); });
+    reload();
+    // 「拉伙伴」加成员后立即刷新 @ 候选(Work.tsx 派发本会话所在群的 gid)。
+    const onChanged = (e: Event) => {
+      const gid = (e as CustomEvent).detail;
+      if (gid == null || gid === familyGroupId) reload();
+    };
+    window.addEventListener('yiyi:group-members-changed', onChanged);
+    return () => { alive = false; window.removeEventListener('yiyi:group-members-changed', onChanged); };
   }, [familyGroupId]);
 
   // 私聊某个伙伴时(session 绑了 companion_id 且非群聊)的当前伙伴 —— 给 ChatWelcome 换头像+介绍。
