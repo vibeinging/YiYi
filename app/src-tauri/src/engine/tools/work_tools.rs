@@ -143,6 +143,29 @@ pub async fn call_teammate_tool(args: &serde_json::Value) -> String {
                     .into();
             }
             let next_id = c.plan.steps.iter().map(|s| s.id).max().unwrap_or(0) + 1;
+            // @ 的是本 job 的**牵头者**(如前端遇到需求不清,上报 PM)→ 接力步走 intake
+            // 语义:带 roster 的协调者指令(能 ask_user 问用户、能 propose_work_plan 再派工),
+            // 而不是「干活」姿态的 project_task —— 否则 PM 接到任务没有队友名单、没有
+            // 牵头者语境,角色错位。普通队友 → project_task 接力(带上游产出干活)。
+            let is_lead = db.get_work_job_lead(&sid) == Some(mate.id);
+            let metadata = if is_lead {
+                let roster = members
+                    .iter()
+                    .filter(|m| m.id != mate.id)
+                    .map(|m| {
+                        format!(
+                            "- {}(派工 role=`{}`):{}",
+                            m.name,
+                            m.agent_definition_name,
+                            m.role_label.clone().unwrap_or_else(|| m.agent_definition_name.clone()),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                serde_json::json!({ "mode": "intake", "roster": roster })
+            } else {
+                serde_json::json!({ "mode": "project_task" })
+            };
             let step = Step {
                 id: next_id,
                 kind: StepKind::ParallelAgents,
@@ -157,7 +180,7 @@ pub async fn call_teammate_tool(args: &serde_json::Value) -> String {
                 depends_on: vec![my_step],
                 input: StepInput {
                     prompt: task.clone(),
-                    metadata: serde_json::json!({ "mode": "project_task" }),
+                    metadata,
                 },
                 output: None,
                 status: StepStatus::Pending,

@@ -137,7 +137,8 @@ fn render_work_system_prompt(
             "\n\n【动手能力】你能用工具(读写文件、执行命令、查资料、开浏览器等)。\
              这是在接力建造交付物,按上游给的接口 / 契约 / 设计接着做,别重复造;\
              改完用 write_file/edit_file 落盘,说清改了哪些文件。\n\
-             【@ 队友】你的产出需要队友接力(设计稿要人实现 / 发现别人职责内的问题)时,\
+             【@ 队友】你的产出需要队友接力(设计稿要人实现 / 发现别人职责内的问题)、\
+             或**需求不清/要用户拍板**(叫牵头者,ta 会去澄清再安排)时,\
              用 **call_teammate** 工具(role 填队友标识,见名单):ta 会在你完成后开始、\
              能看到你的产出。别把队友的活硬扛在自己手里。\n\
              【汇报格式】干完后的总结要让人 10 秒读懂:① 结论先行 —— 第一句话说清\
@@ -204,10 +205,21 @@ fn render_work_user_prompt(
                 "lead_recap",
                 "你此前在本工作里的发言(别重复自我介绍、别重复已问过的问题)",
             );
-            if history.is_empty() && recap.is_empty() {
+            // 队友 call_teammate 上报给牵头者的接力步:带上队友的产出(它发现的问题/
+            // 做到哪了)—— 不渲染的话牵头者看不到队友说了什么,接力变空转。
+            let mut handoff = String::new();
+            if !upstream.is_empty() {
+                handoff.push_str(
+                    "【队友的交接】队友完成了 ta 的任务并把后续交给你,产出/发现如下:\n\n",
+                );
+                for (id, out) in upstream {
+                    handoff.push_str(&format!("—— 任务 #{} 的产出 ——\n{}\n\n", id, out.full_output));
+                }
+            }
+            if history.is_empty() && recap.is_empty() && handoff.is_empty() {
                 step.input.prompt.clone()
             } else {
-                format!("{history}{recap}【用户刚说】\n{}", step.input.prompt)
+                format!("{handoff}{history}{recap}【用户刚说】\n{}", step.input.prompt)
             }
         }
     }
@@ -308,8 +320,42 @@ pub async fn run_work_step(
             )
         })
         .unwrap_or_default();
+    // 队友名单注入(仅执行步;intake 经 metadata.roster 已有):没有名单,工人不知道
+    // call_teammate 的 role 标识,「自发 @ 队友」是空话(实测只有用户在消息里点名标识
+    // 才调得动)。现查 db,与 workspace_note 同模式。
+    let roster_note = if kind == WorkStepKind::ProjectTask {
+        crate::engine::tools::get_database()
+            .and_then(|db| {
+                let sid = db.collaboration_session_id(collab_id)?;
+                let gid = db.get_session_group(&sid)?;
+                let mates: Vec<String> = db
+                    .list_group_members(gid)
+                    .into_iter()
+                    .filter(|m| m.id != p.companion_id)
+                    .map(|m| {
+                        format!(
+                            "- {}(role=`{}`):{}",
+                            m.name,
+                            m.agent_definition_name,
+                            m.role_label.unwrap_or_else(|| "队友".into()),
+                        )
+                    })
+                    .collect();
+                if mates.is_empty() {
+                    None
+                } else {
+                    Some(format!(
+                        "\n\n【你的队友(call_teammate 的 role 填这些标识)】\n{}",
+                        mates.join("\n")
+                    ))
+                }
+            })
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
     let system_prompt = format!(
-        "{}{workspace_note}",
+        "{}{workspace_note}{roster_note}",
         render_work_system_prompt(step, participant_idx, kind)
     );
     let user_message = render_work_user_prompt(step, kind, upstream);
