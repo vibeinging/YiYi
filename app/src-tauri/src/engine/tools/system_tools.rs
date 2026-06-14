@@ -8,8 +8,12 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
     vec![
         super::tool_def(
             "execute_shell",
-            "Execute a shell command and return its output. Has a timeout to prevent hanging. \
-             Set run_in_background=true for long-running commands (tests, builds, servers) — returns immediately with a task ID.",
+            "Execute a shell command and return its output. Foreground commands are KILLED at the \
+             timeout (max 240s). For anything long-lived or BLOCKING — starting a server \
+             (python -m http.server, node server.js, npm run dev …), a watch process, a long \
+             build/test — you MUST set run_in_background=true, which returns a task ID immediately. \
+             Do NOT run a server in the foreground to 'test' it: it never returns, the call hangs \
+             until it's killed, and that fails the whole task.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -223,7 +227,11 @@ fn is_screencapture_command(cmd: &str) -> bool {
 pub(super) async fn execute_shell_tool(args: &serde_json::Value) -> String {
     let command = args["command"].as_str().unwrap_or("");
     let cwd = args["cwd"].as_str();
-    let timeout_secs = args["timeout_secs"].as_u64().unwrap_or(120);
+    // #4(2026-06-14):前台命令超时**封顶 240s**,低于 work 步的 idle 看门狗(300s)——
+    // 否则模型把 timeout_secs 设很大去前台跑服务/长驻进程(python server.py 永不返回),
+    // 看门狗当成「LLM 流卡死」把整步砍了、连带整个 job 失败(实测后端写完 3 个文件却
+    // 卡在跑服务上)。封顶后前台命令必先返回「超时」,模型据此改用 run_in_background。
+    let timeout_secs = args["timeout_secs"].as_u64().unwrap_or(120).min(240);
 
     if command.is_empty() {
         return "Error: command is required".into();

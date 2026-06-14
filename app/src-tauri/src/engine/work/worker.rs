@@ -137,6 +137,10 @@ fn render_work_system_prompt(
             "\n\n【动手能力】你能用工具(读写文件、执行命令、查资料、开浏览器等)。\
              这是在接力建造交付物,按上游给的接口 / 契约 / 设计接着做,别重复造;\
              改完用 write_file/edit_file 落盘,说清改了哪些文件。\n\
+             【别卡在跑服务上】要验证服务/长驻进程(python server.py、npm run dev 等)\
+             **必须用 execute_shell 的 run_in_background=true**,否则前台调用永不返回、\
+             会把你这步卡死拖垮整个任务。其实交付物写好就行,能不亲自跑服务就别跑;\
+             非要冒烟测也只做「启动即退」的快速检查,别前台阻塞等服务。\n\
              【@ 队友】你的产出需要队友接力(设计稿要人实现 / 发现别人职责内的问题)、\
              或**需求不清/要用户拍板**(叫牵头者,ta 会去澄清再安排)时,\
              用 **call_teammate** 工具(role 填队友标识,见名单):ta 会在你完成后开始、\
@@ -425,12 +429,13 @@ pub async fn run_work_step_guarded(
     //
     // 超时语义保持:Total 到点 / Idle 看门狗赢 → `handle.abort()` 显式取消(旧实现靠 drop
     // future 断开挂起的连接读;spawn 后 task 独立存活,必须 abort 才等价)。
-    let config = config.clone();
+    let owned_config = config.clone();
     let step_owned = step.clone();
     let upstream_owned = upstream.to_vec();
 
     match work_timeout_policy(kind) {
         WorkTimeoutPolicy::Total(secs) => {
+            let config = owned_config;
             let mut handle = tokio::spawn(async move {
                 run_work_step(&config, &step_owned, participant_idx, &upstream_owned, collab_id)
                     .await
@@ -444,33 +449,55 @@ pub async fn run_work_step_guarded(
             }
         }
         WorkTimeoutPolicy::Idle(idle_secs) => {
-            let activity = std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
-            let watch = std::sync::Arc::clone(&activity);
-            let watchdog = async move {
-                loop {
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                    let idle = watch.lock().map(|t| t.elapsed()).unwrap_or_default();
-                    if idle > std::time::Duration::from_secs(idle_secs) {
-                        return;
+            // #4(2026-06-14):看门狗砍掉「卡住」的步后,**自动重试一次**再判失败。
+            // 工具层的封顶(execute_shell / python 240s)防住了大多数前台阻塞,但总有
+            // 别的让步沉默 300s 的路:deepseek 偶发流卡、某个没封顶的工具、模型一时抽风。
+            // 不可能把每个工具都堵全 —— 让被看门狗砍的步重试一次,瞬态卡顿大多一把过;
+            // 已写的文件留着(prompt 让它先看现状),重试基本幂等。两次都卡才真失败。
+            const MAX_ATTEMPTS: u32 = 2;
+            let mut last_err = String::new();
+            for attempt in 1..=MAX_ATTEMPTS {
+                let config = owned_config.clone();
+                let step_c = step_owned.clone();
+                let up_c = upstream_owned.clone();
+                let activity =
+                    std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
+                let watch = std::sync::Arc::clone(&activity);
+                let watchdog = async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        let idle = watch.lock().map(|t| t.elapsed()).unwrap_or_default();
+                        if idle > std::time::Duration::from_secs(idle_secs) {
+                            return;
+                        }
                     }
-                }
-            };
-            let mut handle = tokio::spawn(crate::engine::agent_runner::with_idle_activity(
-                activity,
-                async move {
-                    run_work_step(&config, &step_owned, participant_idx, &upstream_owned, collab_id)
-                        .await
-                },
-            ));
-            tokio::select! {
-                joined = &mut handle => {
-                    joined.unwrap_or_else(|e| Err(format!("{name} 执行中断:{e}")))
-                }
-                _ = watchdog => {
-                    handle.abort();
-                    Err(format!("{name} 卡住({idle_secs}s 无流响应)"))
+                };
+                let mut handle = tokio::spawn(crate::engine::agent_runner::with_idle_activity(
+                    activity,
+                    async move {
+                        run_work_step(&config, &step_c, participant_idx, &up_c, collab_id).await
+                    },
+                ));
+                let result = tokio::select! {
+                    joined = &mut handle => {
+                        joined.unwrap_or_else(|e| Err(format!("{name} 执行中断:{e}")))
+                    }
+                    _ = watchdog => {
+                        handle.abort();
+                        Err(format!("{name} 卡住({idle_secs}s 无流响应)"))
+                    }
+                };
+                match result {
+                    Ok(out) => return Ok(out),
+                    // 只对「卡住」(看门狗)重试;其它错误(模型真失败)直接返回。
+                    Err(e) if e.contains("卡住") && attempt < MAX_ATTEMPTS => {
+                        log::warn!("{name} 卡住,自动重试({attempt}/{MAX_ATTEMPTS})");
+                        last_err = e;
+                    }
+                    Err(e) => return Err(e),
                 }
             }
+            Err(last_err)
         }
     }
 }

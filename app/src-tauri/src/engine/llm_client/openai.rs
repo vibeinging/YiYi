@@ -351,42 +351,73 @@ where
         config.model, url, messages.len()
     );
 
-    let resp = send_request(client, &url, config, &body, 300).await?;
+    // 首响应(headers)超时(#4 2026-06-14):send_request 的总超时本是 300s == work 步
+    // idle 看门狗 → deepseek 偶发不回 response headers 时,请求挂满 300s、看门狗先把整步砍了、
+    // 连带整个 job 失败(实测:请求发出后 307s 零日志、零 token —— 流根本没开始)。封顶首响应
+    // 90s:headers 没在 90s 内到 = 请求卡住 → 走非流式兜底(重新发一次)。body 流起来后由
+    // process_sse_stream 的 60s 逐块 idle 超时管,不卡正经的长流。
+    let resp = match tokio::time::timeout(
+        std::time::Duration::from_secs(90),
+        send_request(client, &url, config, &body, 300),
+    )
+    .await
+    {
+        Ok(r) => r?,
+        Err(_) => {
+            log::warn!("LLM stream request stalled (no response headers in 90s) — non-streaming fallback");
+            on_event(StreamEvent::Fallback);
+            return non_streaming_fallback(client, &url, config, messages_value, tools, native_tools, &on_event).await;
+        }
+    };
 
     // --- Try streaming first ---
     match try_stream_openai(resp, cancelled, &on_event).await {
         Ok(response) => Ok(response),
         Err(StreamError::Cancelled) => Err("cancelled".to_string()),
         Err(e) if e.is_fallback_eligible() => {
-            // Stream died — fall back to non-streaming
+            // Stream died (mid-stream idle / connection reset) — fall back to non-streaming.
             log::warn!("OpenAI stream failed ({}), falling back to non-streaming", e);
             on_event(StreamEvent::Fallback);
-
-            let mut ns_body = build_body(config, messages_value, false);
-            apply_native_tools(&mut ns_body, tools, native_tools);
-            let ns_resp = send_request(client, &url, config, &ns_body, 120).await?;
-            let json: serde_json::Value = ns_resp.json().await.map_err(|e| e.to_string())?;
-
-            let choice = &json["choices"][0];
-            let msg = &choice["message"];
-            let content_text = msg["content"].as_str().unwrap_or("").to_string();
-            let tool_calls = parse_tool_calls(&msg["tool_calls"]);
-            let usage = parse_openai_usage(&json["usage"]);
-            let reasoning = msg["reasoning_content"]
-                .as_str()
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string());
-            // Replay reasoning chunk(s) to the UI so the frontend stays consistent
-            // even on the non-stream fallback path.
-            if let Some(ref r) = reasoning {
-                on_event(StreamEvent::ReasoningDelta(r.clone()));
-            }
-            let response = build_stream_response(content_text, tool_calls, usage, reasoning);
-            emit_fallback_content(&response, &on_event);
-            Ok(response)
+            non_streaming_fallback(client, &url, config, messages_value, tools, native_tools, &on_event).await
         }
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// 非流式兜底:流式拿不到响应(首响应卡住 / 中途流死)时,重发一次普通(非流式)请求,
+/// 一次性拿完整回复并补发给 UI。非流式请求自带 120s 总超时(< work 看门狗 300s)。
+async fn non_streaming_fallback<F>(
+    client: &reqwest::Client,
+    url: &str,
+    config: &LLMConfig,
+    messages_value: serde_json::Value,
+    tools: &[ToolDefinition],
+    native_tools: &[NativeToolInjection],
+    on_event: &F,
+) -> Result<LLMResponse, String>
+where
+    F: Fn(StreamEvent) + Send + 'static,
+{
+    let mut ns_body = build_body(config, messages_value, false);
+    apply_native_tools(&mut ns_body, tools, native_tools);
+    let ns_resp = send_request(client, url, config, &ns_body, 120).await?;
+    let json: serde_json::Value = ns_resp.json().await.map_err(|e| e.to_string())?;
+
+    let choice = &json["choices"][0];
+    let msg = &choice["message"];
+    let content_text = msg["content"].as_str().unwrap_or("").to_string();
+    let tool_calls = parse_tool_calls(&msg["tool_calls"]);
+    let usage = parse_openai_usage(&json["usage"]);
+    let reasoning = msg["reasoning_content"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    if let Some(ref r) = reasoning {
+        on_event(StreamEvent::ReasoningDelta(r.clone()));
+    }
+    let response = build_stream_response(content_text, tool_calls, usage, reasoning);
+    emit_fallback_content(&response, on_event);
+    Ok(response)
 }
 
 /// Attempt to consume an OpenAI SSE stream, returning the assembled response.

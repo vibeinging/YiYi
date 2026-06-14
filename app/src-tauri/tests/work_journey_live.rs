@@ -372,6 +372,150 @@ mod live {
         );
     }
 
+    /// #4 深度验证(2026-06-14):多文件、多角色、真交接的全栈旅程 —— 不再是单 HTML 玩具。
+    /// 团队 = PM + 后端 + 前端 + QA。任务:Python 后端定接口 → 前端按接口实现 → QA 验。
+    /// 走完整产品管线(launch → PM intake → propose 多任务 → dispatch + #2 验证门),
+    /// 验:多文件落盘(server.py + index.html)、派工步 ≥3(含 QA)、交付 done。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+    #[serial]
+    async fn live_work_journey_multifile_fullstack() {
+        let Some((key, base, model)) = live_env() else { return };
+        // 捕获 app 日志(诊断 300s 卡住的真因:工具调用序列 + LLM 流请求时刻)。
+        // RUST_LOG 控制级别,如 RUST_LOG=app_lib::engine=info。
+        let _ = env_logger::builder().is_test(false).format_timestamp_millis().try_init();
+        let t = build_test_app_state().await;
+        let db = t.state().db.clone();
+        app_lib::engine::tools::set_database(db.clone());
+        app_lib::engine::tools::mark_ready();
+        app_lib::engine::tools::set_full_access(true);
+        app_lib::engine::tools::set_providers(t.state().providers.clone());
+        {
+            use app_lib::state::providers::{ModelSlotConfig, ProviderSettings};
+            let mut providers = t.state().providers.write().await;
+            providers.providers.insert(
+                "deepseek".into(),
+                ProviderSettings { base_url: Some(base.clone()), api_key: Some(key), extra_models: vec![] },
+            );
+            providers.active_llm = Some(ModelSlotConfig { provider_id: "deepseek".into(), model: model.clone() });
+        }
+        eprintln!("══ #4 全栈深度旅程(model={model})══");
+
+        let pm = db.adopt_companion(&companion("产品经理", "pm", "产品经理/牵头人")).unwrap();
+        let be = db.adopt_companion(&companion("后端", "backend_dev", "后端工程师,写 Python")).unwrap();
+        let fe = db.adopt_companion(&companion("前端", "frontend_dev", "前端工程师,写 HTML/JS")).unwrap();
+        let qa = db.adopt_companion(&companion("质检", "qa_engineer", "测试工程师")).unwrap();
+        let gid = create_companion_group_impl(t.state(), "软件公司".into(), None, None).await.unwrap();
+        for c in [pm, be, fe, qa] {
+            add_companion_to_group_impl(t.state(), gid, c).await.unwrap();
+        }
+
+        let ws_root = std::env::temp_dir().join("yiyi-work-fullstack-live");
+        let _ = std::fs::remove_dir_all(&ws_root);
+        std::fs::create_dir_all(&ws_root).unwrap();
+        let ws = ws_root.canonicalize().unwrap();
+
+        eprintln!("—— launch ——");
+        let task = "做一个待办事项小应用,分两部分:\
+                    ① 后端 server.py:用 Python 标准库 http.server,提供 REST 接口 \
+                    GET /todos 和 POST /todos,数据存到 todos.json;并写一份 contract.md 说明接口。\
+                    ② 前端 index.html:单文件,用 fetch 调上面的接口,能列出和新增待办。\
+                    前端要按后端的 contract.md 来。需求已齐全,不用再问,直接派工。";
+        let launched = launch_work_job_impl(t.state(), gid, task, Some(ws.to_string_lossy().to_string()))
+            .await
+            .expect("launch");
+        let sid = launched.session_id.clone();
+
+        eprintln!("—— 等 PM 派工(intake → running)——");
+        let mut status = wait_until(&db, &sid, "派工", Duration::from_secs(300), |s| s == Some("running")).await;
+        if status.as_deref() != Some("running") && !db.has_active_work_intake(&sid) {
+            eprintln!("  催一次派工…");
+            let _ = dispatch_work_followup(t.state(), &sid, "信息齐了,直接 propose_work_plan 把后端和前端派出去。", &[]).await;
+            status = wait_until(&db, &sid, "派工(二轮)", Duration::from_secs(300), |s| s == Some("running")).await;
+        }
+        if status.as_deref() != Some("running") {
+            for (n, txt) in db.recent_work_step_outputs(&sid, 4) {
+                eprintln!("  [{n}] {}", txt.chars().take(300).collect::<String>());
+            }
+            panic!("PM 应派工(job → running),实际 {status:?}");
+        }
+
+        // 派工协作步数:后端 + 前端(+ #2 自动追加或 PM 排的 QA 验证)≥ 2,期望含 QA → ≥3。
+        let dispatch_id = db
+            .list_collaborations_by_kind("work_dispatch")
+            .into_iter()
+            .max()
+            .expect("应有派工协作");
+        let step_count: i64 = {
+            let conn = db.get_conn().unwrap();
+            conn.query_row(
+                "SELECT COUNT(*) FROM collaboration_steps WHERE collaboration_id = ?1",
+                [dispatch_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0)
+        };
+        eprintln!("  派工协作 {dispatch_id} 共 {step_count} 步");
+        assert!(step_count >= 2, "全栈任务至少后端+前端两步,got {step_count}");
+
+        eprintln!("—— 等交付(多文件构建,给足时间)——");
+        let status = wait_until(&db, &sid, "交付", Duration::from_secs(1500), |s| {
+            matches!(s, Some("done") | Some("failed") | Some("aborted"))
+        })
+        .await;
+
+        print_tree(&ws);
+        let files: Vec<String> = walkdir(&ws)
+            .iter()
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+            .collect();
+        eprintln!("  产出文件:{files:?}");
+
+        // 诊断:逐步 dump 状态/失败原因/产出片段 —— 失败时定位是哪一步、为什么。
+        eprintln!("—— 派工各步状态 ——");
+        {
+            let conn = db.get_conn().unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT position, status, COALESCE(error_reason,''), COALESCE(participants_json,''), COALESCE(output_json,'')
+                     FROM collaboration_steps WHERE collaboration_id = ?1 ORDER BY position",
+                )
+                .unwrap();
+            let rows = stmt
+                .query_map([dispatch_id], |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                    ))
+                })
+                .unwrap();
+            for row in rows.flatten() {
+                let (pos, st, err, pj, oj) = row;
+                let who = pj.split("\"name\":\"").nth(1).and_then(|s| s.split('"').next()).unwrap_or("?");
+                eprintln!("  步{pos} [{who}] status={st} err={}", err.chars().take(120).collect::<String>());
+                if !oj.is_empty() {
+                    let out_snip = oj.split("\"full_output\":").nth(1).map(|s| s.chars().take(220).collect::<String>()).unwrap_or_default();
+                    eprintln!("        out: {out_snip}");
+                }
+            }
+        }
+
+        // 真实多文件交付:后端 server.py + 前端 index.html 都该落盘(真交接的硬证据)。
+        assert_eq!(status.as_deref(), Some("done"), "全栈 job 应交付完成");
+        assert!(files.iter().any(|f| f == "server.py"), "后端应写出 server.py");
+        assert!(files.iter().any(|f| f == "index.html"), "前端应写出 index.html");
+        // 交付摘要存在。
+        let msgs = db.get_messages(&sid, None).unwrap();
+        assert!(
+            msgs.iter().any(|m| m.context_type.as_deref() == Some("work_job")
+                && m.content.contains("✅ 交付完成")),
+            "应有交付摘要",
+        );
+        eprintln!("══ 全栈旅程贯通(产物留在 {})══", ws.display());
+    }
+
     /// 递归收集目录下所有文件路径(浅实现,review/断言用)。
     fn walkdir(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
         let mut out = Vec::new();
