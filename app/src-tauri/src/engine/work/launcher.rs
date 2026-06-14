@@ -233,7 +233,52 @@ pub async fn dispatch_work_plan(
         .get_session_group(session_id)
         .ok_or_else(|| "会话未绑群,无法派工".to_string())?;
     let members = db.list_group_members(gid);
-    let cplan = crate::engine::work::plan::build_project_collaboration_plan(plan, &members, gid)?;
+    let mut cplan = crate::engine::work::plan::build_project_collaboration_plan(plan, &members, gid)?;
+
+    // #2 验证门(2026-06-14):团队里有测试/评审角色,但方案没派到 ta → 自动追加一个
+    // 「验证」步,依赖所有现有步(最后跑),让交付前必过一道检查。PM 忘了排 QA 也兜得住。
+    // 已经派了评审角色(方案含 ta)→ 不重复加。无评审角色 → 不加门(交付摘要会标未验证)。
+    {
+        use crate::engine::agents::MemoryScope;
+        use crate::engine::collaboration::{Participant, Step, StepInput, StepKind, StepStatus};
+        let already_targets: std::collections::HashSet<i64> = cplan
+            .steps
+            .iter()
+            .flat_map(|s| s.participants.iter().map(|p| p.companion_id))
+            .collect();
+        let reviewer = members.iter().find(|m| {
+            crate::engine::work::plan::is_reviewer_slug(&m.agent_definition_name)
+                && !already_targets.contains(&m.id)
+        });
+        if let Some(rev) = reviewer {
+            let next_id = cplan.steps.iter().map(|s| s.id).max().unwrap_or(0) + 1;
+            let deps: Vec<i64> = cplan.steps.iter().map(|s| s.id).collect();
+            cplan.steps.push(Step {
+                id: next_id,
+                kind: StepKind::ParallelAgents,
+                participants: vec![Participant {
+                    companion_id: rev.id,
+                    name: rev.name.clone(),
+                    avatar_emoji: rev.avatar_emoji.clone(),
+                    color_hex: rev.color_hex.clone(),
+                    memory_scope: MemoryScope::Group(gid),
+                }],
+                depends_on: deps,
+                input: StepInput {
+                    prompt: "【交付前验证】上面队友的交付物都给你了。检查:是否满足需求?\
+                             能不能跑/打开?有没有明显缺漏或坏掉的地方?\
+                             发现问题 → 用 call_teammate 叫对应角色修(role 见队友名单);\
+                             没问题 → 明确说「验证通过」并简述检查了什么。"
+                        .into(),
+                    metadata: serde_json::json!({ "mode": "project_task" }),
+                },
+                output: None,
+                status: StepStatus::Pending,
+                started_at: None,
+                finished_at: None,
+            });
+        }
+    }
 
     // 派工成员名(去重)—— cplan 随后被 submit 消费,先取出来给锚点占位消息用。
     let mut member_names: Vec<String> = Vec::new();

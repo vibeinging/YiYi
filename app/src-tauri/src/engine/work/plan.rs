@@ -37,6 +37,30 @@ pub struct ProjectPlan {
     pub tasks: Vec<ProjectTask>,
 }
 
+/// 这个角色 slug 是不是测试/评审型(#2 验证门:据此决定要不要自动追加验证步、
+/// 以及交付摘要要不要标「未验证」)。覆盖软件公司预设(qa_engineer)+ 动态团队
+/// 常见 slug(slug 由角色名派生,多含 qa/test/review)。headless 无 registry 时的
+/// 主判据;有 registry 时调用方可叠加 permission_profile=="reviewer" 判定。
+pub fn is_reviewer_slug(slug: &str) -> bool {
+    let s = slug.to_lowercase();
+    ["qa", "review", "test", "verif"].iter().any(|k| s.contains(k))
+}
+
+#[cfg(test)]
+mod reviewer_slug_tests {
+    use super::is_reviewer_slug;
+    #[test]
+    fn detects_reviewer_roles() {
+        assert!(is_reviewer_slug("qa_engineer"));
+        assert!(is_reviewer_slug("code_reviewer"));
+        assert!(is_reviewer_slug("tester"));
+        assert!(is_reviewer_slug("QA")); // 大小写无关
+        assert!(!is_reviewer_slug("frontend_dev"));
+        assert!(!is_reviewer_slug("pm"));
+        assert!(!is_reviewer_slug("backend_dev"));
+    }
+}
+
 /// 把 PM 的计划转成协作 DAG。
 ///
 /// - 每条任务 → 一个 `StepKind::ParallelAgents` 且 1 个 participant 的 step(与现有派发

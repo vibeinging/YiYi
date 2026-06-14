@@ -755,3 +755,95 @@ async fn work_followup_answers_pending_question_while_intake_active() {
     assert_eq!(q.status, "answered", "用户消息应被投递为答案");
     assert_eq!(q.answer.as_deref(), Some("模拟经营类"));
 }
+
+fn new_role(name: &str, slug: &str) -> NewCompanion {
+    NewCompanion {
+        name: name.into(),
+        agent_definition_name: slug.into(),
+        avatar_emoji: "🤖".into(),
+        color_hex: "#10B981".into(),
+        persona_md_path: None,
+        memory_user_id: format!("{slug}_{name}"),
+        metadata_json: None,
+        role_label: Some(slug.into()),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn dispatch_auto_appends_verify_step_when_team_has_qa() {
+    use app_lib::engine::work::launcher::dispatch_work_plan;
+    use app_lib::engine::work::plan::{ProjectPlan, ProjectTask};
+    // #2 验证门:方案只派了前端、没排 QA,但团队里有 QA → dispatch 自动追加一个验证步,
+    // 依赖前端步(最后跑)。PM 忘了排 QA 也兜得住。
+    let t = build_test_app_state().await;
+    let db = t.state().db.clone();
+    let fe = db.adopt_companion(&new_role("前端", "frontend_dev")).unwrap();
+    let qa = db.adopt_companion(&new_role("质检", "qa_engineer")).unwrap();
+    let mock = MockLlmServer::start().await;
+    mock.mock_chat_completion_response(&decision_json(&[(fe, 0.9)])).await;
+    seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
+    let cfg = resolve_llm_config(t.state()).await.unwrap();
+    let gid = create_companion_group_impl(t.state(), "软件公司".into(), None, None)
+        .await
+        .unwrap();
+    add_companion_to_group_impl(t.state(), gid, fe).await.unwrap();
+    add_companion_to_group_impl(t.state(), gid, qa).await.unwrap();
+    let sid = "work-verify-gate";
+    db.ensure_session(sid, "做个 app", "work", None).unwrap();
+    db.set_session_group(sid, Some(gid)).unwrap();
+    db.create_work_job(sid, "做个 app", None).unwrap();
+
+    let plan = ProjectPlan {
+        tasks: vec![ProjectTask { role: "frontend_dev".into(), objective: "写界面".into(), depends_on: vec![] }],
+    };
+    let collab_id = dispatch_work_plan(db.clone(), cfg.clone(), sid, &plan).await.unwrap();
+
+    let orch = SqliteOrchestrator::new(db.clone(), Arc::new(ConcreteExecutor::new(cfg)));
+    let c = orch
+        .list_recent_by_session(sid, 5)
+        .unwrap()
+        .into_iter()
+        .find(|c| c.id == collab_id)
+        .expect("派工协作应落库");
+    // 1 个前端步 + 1 个自动追加的 QA 验证步。
+    assert_eq!(c.plan.steps.len(), 2, "应自动追加 QA 验证步,got {} 步", c.plan.steps.len());
+    let verify = &c.plan.steps[1];
+    assert_eq!(verify.participants[0].companion_id, qa, "验证步应派给 QA");
+    assert_eq!(verify.depends_on, vec![c.plan.steps[0].id], "验证步应依赖前面所有步");
+    assert!(verify.input.prompt.contains("验证"), "验证步 prompt 应是检查交付");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn dispatch_no_verify_step_when_qa_already_in_plan() {
+    use app_lib::engine::work::launcher::dispatch_work_plan;
+    use app_lib::engine::work::plan::{ProjectPlan, ProjectTask};
+    // PM 已经把 QA 排进方案 → 不重复追加。
+    let t = build_test_app_state().await;
+    let db = t.state().db.clone();
+    let fe = db.adopt_companion(&new_role("前端", "frontend_dev")).unwrap();
+    let qa = db.adopt_companion(&new_role("质检", "qa_engineer")).unwrap();
+    let mock = MockLlmServer::start().await;
+    mock.mock_chat_completion_response(&decision_json(&[(fe, 0.9)])).await;
+    seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
+    let cfg = resolve_llm_config(t.state()).await.unwrap();
+    let gid = create_companion_group_impl(t.state(), "软件公司".into(), None, None).await.unwrap();
+    add_companion_to_group_impl(t.state(), gid, fe).await.unwrap();
+    add_companion_to_group_impl(t.state(), gid, qa).await.unwrap();
+    let sid = "work-verify-already";
+    db.ensure_session(sid, "x", "work", None).unwrap();
+    db.set_session_group(sid, Some(gid)).unwrap();
+    db.create_work_job(sid, "x", None).unwrap();
+
+    let plan = ProjectPlan {
+        tasks: vec![
+            ProjectTask { role: "frontend_dev".into(), objective: "写界面".into(), depends_on: vec![] },
+            ProjectTask { role: "qa_engineer".into(), objective: "测".into(), depends_on: vec![0] },
+        ],
+    };
+    let collab_id = dispatch_work_plan(db.clone(), cfg.clone(), sid, &plan).await.unwrap();
+    let orch = SqliteOrchestrator::new(db.clone(), Arc::new(ConcreteExecutor::new(cfg)));
+    let c = orch.list_recent_by_session(sid, 5).unwrap().into_iter().find(|c| c.id == collab_id).unwrap();
+    assert_eq!(c.plan.steps.len(), 2, "QA 已在方案里,不该再追加,got {} 步", c.plan.steps.len());
+}

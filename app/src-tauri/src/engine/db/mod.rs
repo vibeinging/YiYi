@@ -748,17 +748,55 @@ impl Database {
     /// 的 detached 执行任务直接消失,留下 status='running' 的孤儿 —— 它永不恢复,
     /// 前端却一直显示骨骼屏。开机把这些孤儿(及其 running step)标记为 aborted/failed,
     /// 让前端清掉。只动非终态行,幂等。
-    fn reap_stale_collaborations(&self) {
+    ///
+    /// #1(2026-06-14):同步收口 **work_jobs** —— 否则重启后 job 在 Work 列表仍显示
+    /// 「进行中」而协作已死(状态撒谎)。把受影响 work 会话的 job 标 failed,并写一条
+    /// 「被重启中断,可重发」的可见消息;用户再发一条消息即经 followup 重新激活续做。
+    pub fn reap_stale_collaborations(&self) {
         let conn = match self.get_conn() {
             Some(c) => c,
             None => return,
         };
+        // 先捞出即将被 reap 的 **work** 会话(intake/dispatch 且非终态),用于随后同步 job。
+        let stale_work_sessions: Vec<String> = conn
+            .prepare(
+                "SELECT DISTINCT chat_session_id FROM collaborations
+                  WHERE kind IN ('work_intake','work_dispatch')
+                    AND status IN ('running','planning','awaiting_confirm')",
+            )
+            .and_then(|mut stmt| {
+                stmt.query_map([], |r| r.get::<_, String>(0))
+                    .map(|rows| rows.filter_map(|x| x.ok()).collect())
+            })
+            .unwrap_or_default();
+
         let _ = conn.execute_batch(
             "UPDATE collaboration_steps SET status='failed', error_reason='app 重启,执行中断' \
                  WHERE status='running';
              UPDATE collaborations SET status='aborted', status_reason='app 重启,执行中断' \
                  WHERE status IN ('running','planning','awaiting_confirm');",
         );
+
+        // work_jobs 同步 + 可见提示。job 已是终态的不动(幂等)。
+        let now = now_ts();
+        for sid in &stale_work_sessions {
+            let _ = conn.execute(
+                "UPDATE work_jobs SET status='failed', completed_at=?2
+                  WHERE session_id=?1 AND status NOT IN ('done','failed','aborted')",
+                rusqlite::params![sid, now],
+            );
+            // 一条诚实的中断消息(context_type=work_job,前端按 work 渲染)。followup
+            // 重新激活(failed → clarifying)已存在,用户再发消息即可让团队接着做。
+            let _ = conn.execute(
+                "INSERT INTO messages (session_id, role, content, timestamp, metadata, context_type)
+                 VALUES (?1, 'assistant', ?2, ?3, NULL, 'work_job')",
+                rusqlite::params![
+                    sid,
+                    "⚠️ 这项工作在 app 重启时被中断了。再发一条消息(说要继续做什么),团队就接着干。",
+                    now
+                ],
+            );
+        }
     }
 
     fn migrate_tables(&self) -> Result<(), String> {
@@ -1437,10 +1475,27 @@ impl Database {
     /// INNER JOIN sessions:会话已删的孤儿 job 不再出现(幽灵条目)。
     pub fn list_work_jobs(&self) -> Vec<WorkJobSummary> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        // #3(2026-06-14):带上派工步进度 + token 成本。来源 = 本会话派工协作(work_dispatch)
+        // 的 collaboration_steps —— 进度按终态步/总步,成本用 json_extract 从 output_json 的
+        // tokens_used 汇总(token_usage 表对 work 步未必落,步产出 JSON 是确定有的)。
+        // 相关子查询逐行算,列表小(监控用)无虑。
         let mut stmt = match conn.prepare(
             "SELECT w.rowid, w.session_id, COALESCE(s.name, w.intent) AS title,
                     w.status, w.created_at, w.completed_at,
-                    s.group_id, g.name, g.emoji, g.workspace_path
+                    s.group_id, g.name, g.emoji, g.workspace_path,
+                    (SELECT COUNT(*) FROM collaboration_steps cs JOIN collaborations c
+                       ON c.id = cs.collaboration_id
+                      WHERE c.chat_session_id = w.session_id AND c.kind = 'work_dispatch') AS steps_total,
+                    (SELECT COUNT(*) FROM collaboration_steps cs JOIN collaborations c
+                       ON c.id = cs.collaboration_id
+                      WHERE c.chat_session_id = w.session_id AND c.kind = 'work_dispatch'
+                        AND cs.status IN ('completed','failed','skipped')) AS steps_done,
+                    (SELECT COALESCE(SUM(
+                         COALESCE(json_extract(cs.output_json,'$.tokens_used.input'),0)
+                       + COALESCE(json_extract(cs.output_json,'$.tokens_used.output'),0)),0)
+                       FROM collaboration_steps cs JOIN collaborations c
+                       ON c.id = cs.collaboration_id
+                      WHERE c.chat_session_id = w.session_id AND c.kind = 'work_dispatch') AS tokens
              FROM work_jobs w
              JOIN sessions s ON s.id = w.session_id
              LEFT JOIN companion_groups g ON g.id = s.group_id
@@ -1464,6 +1519,9 @@ impl Database {
                 group_name: r.get(7)?,
                 group_emoji: r.get(8)?,
                 workspace_path: r.get(9)?,
+                steps_total: r.get(10)?,
+                steps_done: r.get(11)?,
+                tokens: r.get(12)?,
             })
         })
         .map(|rows| rows.filter_map(|r| r.ok()).collect())
@@ -1493,6 +1551,13 @@ pub struct WorkJobSummary {
     pub group_emoji: Option<String>,
     /// 团队项目工作区绝对路径(团队在里面干活的文件夹)。
     pub workspace_path: Option<String>,
+    // ── #3 监控字段:派工步进度 + token 成本 ──
+    /// 派工总步数(work_dispatch 协作的步;含自动追加的验证步)。
+    pub steps_total: i64,
+    /// 已完成/失败/跳过的步数(进度分子)。
+    pub steps_done: i64,
+    /// 累计 token(input+output,从步产出汇总;监控成本用)。
+    pub tokens: i64,
 }
 
 #[cfg(test)]

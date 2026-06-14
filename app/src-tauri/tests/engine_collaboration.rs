@@ -1089,3 +1089,45 @@ async fn watch_receives_audit_events() {
     }
     assert!(got_submitted && got_step_started, "missed audit events");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn skip_failed_step_revives_work_collab_and_unblocks_downstream() {
+    // #3(2026-06-14):一个步失败 → 协作 Failed、job failed。用户跳过卡住的失败步 →
+    // 协作回 Running、job running,下游(依赖该步)照常跑(skipped 视为依赖满足)→ 交付。
+    let t = TempDb::new();
+    let sid = "skip-revive";
+    ensure_session(&t, sid);
+    let db = t.db();
+    db.create_work_job(sid, "做个东西", Some(1)).unwrap();
+    db.set_work_job_status(sid, "running").unwrap();
+
+    let executor = Arc::new(MockExecutor::new());
+    executor.fail_step(1, "step1 炸了");
+    let orch = SqliteOrchestrator::new(db.clone(), executor.clone().handle());
+
+    let plan = CollaborationPlan {
+        steps: vec![step_single(1, "S1", 10), {
+            let mut s = step_single(2, "S2", 11);
+            s.depends_on = vec![1];
+            s
+        }],
+    };
+    let id = orch
+        .submit_kinded(sid.into(), "做个东西".into(), plan, CollaborationMode::Dispatched(0), None, Some("work_dispatch"))
+        .await
+        .unwrap();
+    wait_for_status(&orch, id, 2000, |s| matches!(s, CollaborationStatus::Failed(_))).await;
+    assert_eq!(db.get_work_job_status(sid).as_deref(), Some("failed"), "失败步 → job failed");
+
+    // 跳过失败的 step1 —— 协作复活,下游 step2 跑完 → 交付。
+    orch.mutate(id, Mutation::SkipStep { step_id: 1 }).await.expect("skip failed step");
+    wait_for_terminal(&orch, id).await;
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while db.get_work_job_status(sid).as_deref() != Some("done") && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(db.get_work_job_status(sid).as_deref(), Some("done"), "跳过卡住步后下游跑完 → job done");
+    // step2 确实跑了(skipped 依赖视为满足)。
+    assert!(executor.invocations().contains(&2), "下游 step2 应在跳过后执行");
+}

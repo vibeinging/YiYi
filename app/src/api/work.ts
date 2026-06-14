@@ -30,6 +30,13 @@ export interface WorkJob {
   group_emoji: string | null;
   /** 团队项目工作区绝对路径(团队在里面干活的文件夹)。 */
   workspace_path: string | null;
+  // ── #3 监控:派工步进度 + token 成本 ──
+  /** 派工总步数(含自动追加的验证步)。 */
+  steps_total: number;
+  /** 已完成/失败/跳过的步数(进度分子)。 */
+  steps_done: number;
+  /** 累计 token(input+output)。 */
+  tokens: number;
 }
 
 /** 列出所有 work job(新→旧),WorkPage 监控列表用。 */

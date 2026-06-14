@@ -977,6 +977,7 @@ impl SqliteOrchestrator {
             })
             .map_err(|e| format!("query work verdict steps: {e}"))?;
         let mut outputs: Vec<(String, StepOutput)> = Vec::new();
+        let mut completed_ids: Vec<i64> = Vec::new();
         for r in rows {
             let (p_json, o_json, status) = r.map_err(|e| format!("work verdict row: {e}"))?;
             if status != "completed" {
@@ -987,13 +988,34 @@ impl SqliteOrchestrator {
                 serde_json::from_str(&out_raw).map_err(|e| format!("decode output: {e}"))?;
             let participants: Vec<Participant> =
                 serde_json::from_str(&p_json).map_err(|e| format!("decode participants: {e}"))?;
+            if let Some(p0) = participants.first() {
+                completed_ids.push(p0.companion_id);
+            }
             let name = participants
                 .first()
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| "成员".into());
             outputs.push((name, output));
         }
-        Ok(crate::engine::work::worker::compose_work_summary(&title, &outputs))
+        let mut summary = crate::engine::work::worker::compose_work_summary(&title, &outputs);
+        // #2 验证门:完成步里有没有测试/评审角色把关过?没有 → 交付摘要诚实标「未验证」
+        //(团队没 QA 时 dispatch 不会自动追加验证步,这里如实告诉用户没人验过)。
+        let verified = completed_ids.iter().any(|&id| {
+            conn.query_row(
+                "SELECT agent_definition_name FROM companions WHERE id = ?1",
+                params![id],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+            .map(|slug| crate::engine::work::plan::is_reviewer_slug(&slug))
+            .unwrap_or(false)
+        });
+        if !verified {
+            summary.push_str(
+                "\n\n> ⚠️ 未经测试/评审把关 —— 团队里没有 QA 角色,交付物没人验证过,请自行确认。",
+            );
+        }
+        Ok(summary)
     }
 
     /// 把一个已完成协作的可见产出拼成 verdict 文本 —— 写回 chat stream,主精灵
@@ -1220,7 +1242,11 @@ impl CollaborationOrchestrator for SqliteOrchestrator {
         // the canonical "revive" path. Done / Aborted remain truly terminal.
         let mutate_allowed = match &collab.status {
             CollaborationStatus::Done | CollaborationStatus::Aborted => false,
-            CollaborationStatus::Failed(_) => matches!(mutation, Mutation::RetryStep { .. }),
+            // Failed 协作:重试或**跳过**失败步都是合法的「复活」操作(#3:跳过卡住的步
+            // 让下游继续)。Done / Aborted 仍真终态。
+            CollaborationStatus::Failed(_) => {
+                matches!(mutation, Mutation::RetryStep { .. } | Mutation::SkipStep { .. })
+            }
             _ => true,
         };
         if !mutate_allowed {
@@ -1302,11 +1328,19 @@ impl CollaborationOrchestrator for SqliteOrchestrator {
                     AuditKind::StepSkipped,
                     serde_json::json!({ "step_id": step_id }),
                 )?;
-                // If we were paused at a UserConfirmation gate, skipping that
-                // gate is the equivalent of "user 拍板" — release back to
-                // Running so the rest of the DAG can flow.
-                if matches!(collab.status, CollaborationStatus::AwaitingConfirm) {
+                // 跳过让协作回到 Running:① UserConfirmation 闸被跳过 = "user 拍板";
+                // ② Failed 协作跳过卡住的失败步 = 让下游 DAG 继续(#3)。两种都从非 Running
+                // 态放回 Running,并同步 work job(否则 Work 列表停在「未完成」却在跑)。
+                if matches!(
+                    collab.status,
+                    CollaborationStatus::AwaitingConfirm | CollaborationStatus::Failed(_)
+                ) {
                     self.set_status(id, &CollaborationStatus::Running)?;
+                    if self.db.get_collaboration_kind(id).as_deref() == Some("work_dispatch") {
+                        if let Some(sid) = self.db.collaboration_session_id(id) {
+                            let _ = self.db.set_work_job_status(&sid, "running");
+                        }
+                    }
                 }
                 if self.all_steps_terminal(id)? {
                     self.finalize(id, CollaborationStatus::Done)?;

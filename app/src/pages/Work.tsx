@@ -53,6 +53,11 @@ function statusMeta(status: string): { label: string; color: string; Icon: typeo
   }
 }
 
+/** token 数 → 紧凑显示(1.2k / 340)。监控成本用,不求精确。 */
+function fmtTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
 function fmtTime(ms: number): string {
   const d = new Date(ms);
   const p = (n: number) => String(n).padStart(2, '0');
@@ -234,6 +239,13 @@ export function WorkPage() {
                         </div>
                         <div className="text-[10.5px] mt-0.5 truncate" style={{ color: 'var(--color-text-muted)' }}>
                           <span style={{ color: m.color }}>{m.label}</span>
+                          {/* #3 监控:派工步进度 + token 成本(有派工步才显示)。 */}
+                          {job.steps_total > 0 && (
+                            <span> · {job.steps_done}/{job.steps_total} 步</span>
+                          )}
+                          {job.tokens > 0 && (
+                            <span> · {fmtTokens(job.tokens)} tokens</span>
+                          )}
                           <span> · {fmtTime(job.created_at)}</span>
                         </div>
                       </div>

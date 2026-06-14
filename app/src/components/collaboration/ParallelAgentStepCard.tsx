@@ -54,6 +54,7 @@ export const ParallelAgentStepCard = memo(function ParallelAgentStepCard({ colla
   // 「重叫一次」防连点:点击即置 busy,等 hydrate 把 step.status 翻成 running 才消失。
   // 后端 RetryStep 也有 CAS 兜底(仅 failed 步可重试),这里是第一道闸 + 即时反馈。
   const [retrying, setRetrying] = useState(false)
+  const [skipping, setSkipping] = useState(false)
   if (step.participants.length === 0) return null
   const persistedFull = step.output?.full_output ?? ''
   // step 级事实,算一次(派工任务的等待文案是"等上游交付")。
@@ -94,6 +95,25 @@ export const ParallelAgentStepCard = memo(function ParallelAgentStepCard({ colla
             style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-secondary)' }}
           >
             {retrying ? '已重新叫人…' : '重叫一次 ↺'}
+          </button>
+          {/* #3:跳过这步 —— 卡住的步不想重试时,跳过让下游接着跑(SkipStep)。 */}
+          <button
+            disabled={retrying || skipping}
+            onClick={async () => {
+              if (retrying || skipping) return
+              setSkipping(true)
+              try {
+                await mutateCollaboration(collaborationId, { kind: 'skip_step', step_id: step.id })
+              } catch (e) {
+                toast.error(`跳过失败:${e}`)
+                setSkipping(false)
+              }
+            }}
+            className="text-[11px] px-2 py-0.5 rounded transition-colors disabled:opacity-50"
+            style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-muted)' }}
+            title="跳过这步,让后面的任务继续"
+          >
+            {skipping ? '已跳过…' : '跳过 ⤳'}
           </button>
         </div>
       )}

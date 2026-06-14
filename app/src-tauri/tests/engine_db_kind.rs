@@ -191,3 +191,69 @@ async fn list_work_jobs_reads_job_state_machine_not_collab_status() {
         "无 session 的孤儿 job 不该出现",
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn reap_stale_work_collab_syncs_job_to_failed_with_resume_hint() {
+    // #1(2026-06-14):app 重启把在途 work 协作 reap 成 aborted —— 但必须同步 work_jobs,
+    // 否则 job 在 Work 列表仍撒谎「进行中」。验:reap 后 job=failed + 一条可见中断消息。
+    let t = TempDb::new();
+    let db = t.db();
+    let sid = "work-reaped";
+    {
+        let conn = db.get_conn().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "INSERT INTO sessions (id, name, created_at, updated_at) VALUES (?1, 'w', ?2, ?2)",
+            rusqlite::params![sid, now],
+        )
+        .unwrap();
+        // 一条 running 的 work_dispatch 协作(重启遗留的孤儿)。
+        conn.execute(
+            "INSERT INTO collaborations (chat_session_id, intent, mode_json, status, plan_json, created_at, kind)
+             VALUES (?1, '做个 app', '\"Manual\"', 'running', '{\"steps\":[]}', ?2, 'work_dispatch')",
+            rusqlite::params![sid, now],
+        )
+        .unwrap();
+    }
+    db.create_work_job(sid, "做个 app", Some(1)).unwrap();
+    db.set_work_job_status(sid, "running").unwrap();
+
+    db.reap_stale_collaborations();
+
+    // job 不再撒谎「running」,落 failed(可由 followup 重新激活续做)。
+    assert_eq!(
+        db.get_work_job_status(sid).as_deref(),
+        Some("failed"),
+        "reap 后 work_jobs 应同步成 failed,不再显示进行中",
+    );
+    // 一条诚实的中断提示消息(work_job 上下文)。
+    let msgs = db.get_messages(sid, None).unwrap();
+    assert!(
+        msgs.iter().any(|m| m.context_type.as_deref() == Some("work_job")
+            && m.content.contains("重启时被中断")),
+        "应写一条可见的中断/可重发消息",
+    );
+
+    // 已是终态的 job 不被 reap 改动(幂等)。
+    let sid2 = "work-already-done";
+    {
+        let conn = db.get_conn().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "INSERT INTO sessions (id, name, created_at, updated_at) VALUES (?1, 'w2', ?2, ?2)",
+            rusqlite::params![sid2, now],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collaborations (chat_session_id, intent, mode_json, status, plan_json, created_at, kind)
+             VALUES (?1, 'x', '\"Manual\"', 'done', '{\"steps\":[]}', ?2, 'work_dispatch')",
+            rusqlite::params![sid2, now],
+        )
+        .unwrap();
+    }
+    db.create_work_job(sid2, "x", None).unwrap();
+    db.set_work_job_status(sid2, "done").unwrap();
+    db.reap_stale_collaborations();
+    assert_eq!(db.get_work_job_status(sid2).as_deref(), Some("done"), "终态 job 不被 reap 动");
+}
