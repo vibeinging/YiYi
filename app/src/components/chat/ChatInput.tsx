@@ -5,7 +5,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  Send, X, Paperclip, FileText, Square, Loader2, Sparkles, FolderOpen,
+  X, Paperclip, FileText, Loader2, Sparkles, FolderOpen,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { QuickActionsOverlay } from './QuickActionsOverlay';
@@ -101,6 +101,15 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const [message, setMessage] = useState('');
   const [pendingImages, setPendingImages] = useState<Attachment[]>([]);
   const [shaking, setShaking] = useState(false);
+
+  // 发送/停止按钮已移除(被裁切,用户反馈)。停止改全局 Esc —— 流进行中输入框 disabled
+  // 收不到键盘事件,所以挂 window 监听;只在 loading 时生效,不干扰其它 Esc(关弹层等)。
+  useEffect(() => {
+    if (!loading) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onStop(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [loading, onStop]);
 
   // Pickers
   const [showQuickActions, setShowQuickActions] = useState(false);
@@ -558,9 +567,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
             {/* VoiceButton hidden — requires OpenAI Realtime API key, will enable in future */}
 
+            {/* 发送/停止按钮已移除(2026-06-15,用户反馈被裁切):Enter 发送、Esc 停止;
+                流进行中输入框禁用并显示停止提示,见占位符。 */}
             <MentionInput
               ref={inputRef}
-              placeholder={placeholder ?? t('chat.placeholder')}
+              placeholder={loading ? t('chat.stopHint', '回复中… 按 Esc 停止') : (placeholder ?? t('chat.placeholder'))}
               disabled={loading}
               onInput={handleMentionInput}
               onMentionTrigger={handleMentionTrigger}
@@ -568,25 +579,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
             />
-
-            {loading ? (
-              <button type="button" onClick={onStop} onMouseDown={preventFocusSteal}
-                className="w-9 h-9 flex items-center justify-center rounded-xl shrink-0 transition-all"
-                style={{ background: 'var(--color-error)', color: 'var(--color-bg)' }}
-                title={t('chat.stop', '停止')}>
-                <Square size={14} fill="currentColor" />
-              </button>
-            ) : (
-              <button type="submit" onMouseDown={preventFocusSteal}
-                disabled={!message.trim() && pendingImages.length === 0}
-                className="w-9 h-9 flex items-center justify-center rounded-xl shrink-0 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-                style={{
-                  background: (message.trim() || pendingImages.length > 0) ? 'var(--color-primary)' : 'transparent',
-                  color: (message.trim() || pendingImages.length > 0) ? '#FFFFFF' : 'var(--color-text-muted)',
-                }}>
-                <Send size={16} />
-              </button>
-            )}
           </div>
         </div>
       </form>
