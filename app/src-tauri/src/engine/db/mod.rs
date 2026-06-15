@@ -107,6 +107,7 @@ impl Database {
         db.migrate_from_json(working_dir)?;
         db.migrate_sandbox_to_authorized_folders();
         db.migrate_group_scope_tag();
+        db.retire_chat_group_sessions();
         db.reap_stale_collaborations();
         Ok(db)
     }
@@ -752,6 +753,26 @@ impl Database {
     /// #1(2026-06-14):同步收口 **work_jobs** —— 否则重启后 job 在 Work 列表仍显示
     /// 「进行中」而协作已死(状态撒谎)。把受影响 work 会话的 job 标 failed,并写一条
     /// 「被重启中断,可重发」的可见消息;用户再发一条消息即经 followup 重新激活续做。
+    /// 退役 chat 多分身群聊(2026-06-15,用户拍板「直接删除」):删掉所有
+    /// **source='chat' 且绑了群**的会话 —— 它们就是已退役的群聊/家族对话。messages /
+    /// collaborations / tasks 经 FK ON DELETE CASCADE 一并清掉。**只动 chat 群聊会话**:
+    /// work 会话是 source='work'(不命中),companion_groups 表本身留着(work 团队用)。
+    /// 幂等:删完就没了,下次开机命中 0 行。
+    pub fn retire_chat_group_sessions(&self) {
+        let conn = match self.get_conn() {
+            Some(c) => c,
+            None => return,
+        };
+        match conn.execute(
+            "DELETE FROM sessions WHERE source='chat' AND group_id IS NOT NULL",
+            [],
+        ) {
+            Ok(n) if n > 0 => log::info!("退役 chat 群聊:删除 {n} 个群聊会话(及其消息/协作)"),
+            Ok(_) => {}
+            Err(e) => log::warn!("retire_chat_group_sessions: {e}"),
+        }
+    }
+
     pub fn reap_stale_collaborations(&self) {
         let conn = match self.get_conn() {
             Some(c) => c,

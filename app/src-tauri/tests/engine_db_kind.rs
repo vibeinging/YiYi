@@ -257,3 +257,41 @@ async fn reap_stale_work_collab_syncs_job_to_failed_with_resume_hint() {
     db.reap_stale_collaborations();
     assert_eq!(db.get_work_job_status(sid2).as_deref(), Some("done"), "终态 job 不被 reap 动");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn retire_chat_group_sessions_deletes_chat_groups_keeps_work_and_solo() {
+    // 2026-06-15:chat 多分身群聊退役 —— 启动清理删 source='chat'+group 的会话,
+    // 不动 work 会话(source='work')和单聊(无 group)。
+    let t = TempDb::new();
+    let db = t.db();
+    let now = chrono::Utc::now().timestamp_millis();
+    let mk = |id: &str, source: &str, gid: Option<i64>| {
+        // 先在 block 里建 session 再放锁 —— get_conn() 是单连接 Mutex 守卫,
+        // 持锁时调 push_message(内部又 get_conn)会自死锁。
+        {
+            let conn = db.get_conn().unwrap();
+            conn.execute(
+                "INSERT INTO sessions (id, name, created_at, updated_at, source, group_id) VALUES (?1, ?1, ?2, ?2, ?3, ?4)",
+                rusqlite::params![id, now, source, gid],
+            )
+            .unwrap();
+        }
+        // 一条消息,验 cascade。
+        db.push_message(id, "user", "hi").unwrap();
+    };
+    mk("chat-group", "chat", Some(1)); // 群聊 —— 该删
+    mk("chat-solo", "chat", None);     // 单聊 —— 留
+    mk("work-job", "work", Some(2));   // work 团队 —— 留
+
+    db.retire_chat_group_sessions();
+
+    let ids: std::collections::HashSet<String> =
+        db.list_sessions().unwrap().into_iter().map(|s| s.id).collect();
+    assert!(!ids.contains("chat-group"), "chat 群聊会话应被删除");
+    assert!(ids.contains("chat-solo"), "单聊应保留");
+    assert!(ids.contains("work-job"), "work 会话应保留");
+    // 群聊会话的消息也随 FK cascade 清掉。
+    assert!(db.get_messages("chat-group", None).unwrap().is_empty(), "群聊消息应随会话删除");
+    assert!(!db.get_messages("chat-solo", None).unwrap().is_empty(), "单聊消息应保留");
+}

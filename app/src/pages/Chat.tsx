@@ -40,7 +40,6 @@ import { toast } from '../components/Toast';
 import { ChatWelcome } from '../components/chat/ChatWelcome';
 import { ChatMessages, type ChatMessagesHandle } from '../components/chat/ChatMessages';
 import { ChatInput, type ChatInputHandle } from '../components/chat/ChatInput';
-import { FamilyHeader } from '../components/chat/FamilyHeader';
 import { SessionThinkingControl } from '../components/ThinkingModeControl';
 import { PermissionCard } from '../components/chat/PermissionCard';
 import { VoiceOverlay } from '../components/voice/VoiceOverlay';
@@ -444,8 +443,9 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking', embed
       return;
     }
 
-    // R6:群聊里像"要建造交付物"的话 → 出一条路标横幅(不拦消息,照常进群聊)。
-    if (!embedded && familyGroupId != null && looksLikeBuildIntent(plainText)) {
+    // 像"要建造交付物"的话 → 出一条路标横幅引导去工作页(不拦消息,照常聊)。
+    // 2026-06-15:群聊退役后,这条 chat→work 桥在 1:1 / 主精灵聊里同样适用,去掉群 gate。
+    if (!embedded && looksLikeBuildIntent(plainText)) {
       setWorkHint(plainText);
     }
 
@@ -781,9 +781,8 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking', embed
         </div>
       )}
 
-      {/* 顶栏:私聊 = 显示"和 X 私聊"条;群/单聊 = FamilyHeader(管理群/邀请入口)。
-          嵌入态(Work 右栏)不渲染:群管理(改名/踢人/删群)不属于 work 监控面 ——
-          删群会直接废掉整个 work job;Work 页自带 header,也消除双层头。 */}
+      {/* 顶栏:有 companion = "和 X 私聊"条;否则 = 主精灵 YiYi 简洁头。
+          嵌入态(Work 右栏)不渲染:Work 页自带 header,消除双层头。 */}
       {!embedded && activeSessionId && !isTaskSession && !isCronSession && (
         (() => {
           const sess = chatSessions.find(s => s.id === activeSessionId);
@@ -814,12 +813,26 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking', embed
               </div>
             );
           }
+          // 非私聊 = 和主精灵 YiYi 单聊(2026-06-15:多分身群聊已退役)。简洁头 + 思考开关。
           return (
-            <FamilyHeader
-              sessionId={activeSessionId}
-              familyGroupId={familyGroupId}
-              onSetFamily={handleSetFamily}
-            />
+            <div
+              className="shrink-0 flex items-center gap-2.5 px-3 py-2"
+              style={{ background: 'var(--color-bg)', borderBottom: '1px solid var(--color-border)' }}
+            >
+              <div className="w-7 h-7 rounded-lg overflow-hidden flex items-center justify-center shrink-0" style={{ background: 'var(--color-bg-muted)' }}>
+                <img src={logoImg} alt="YiYi" style={{ width: '82%', height: '82%', objectFit: 'contain' }} />
+              </div>
+              <div className="min-w-0">
+                <div className="text-[13px] font-medium leading-tight truncate" style={{ color: 'var(--color-text)' }}>
+                  {aiName}
+                </div>
+                <div className="text-[11px] leading-tight truncate" style={{ color: 'var(--color-text-muted)' }}>
+                  主精灵
+                </div>
+              </div>
+              <div className="flex-1" />
+              <SessionThinkingControl sessionId={activeSessionId} lang={lang} />
+            </div>
           );
         })()
       )}

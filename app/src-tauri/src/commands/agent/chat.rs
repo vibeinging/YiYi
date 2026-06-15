@@ -267,73 +267,12 @@ pub async fn chat_stream_start(
         }
     }
 
-    // 群会话(群聊):session 绑定了具名 group 时,主精灵 L1+L2 调度,
-    // 命中成员 → ParallelAgents 同框;否则回落主精灵自答。
-    // group_id == None 直接当单聊(family_mode 字段已退役,只读 group_id)。
-    if state.db.get_session_group(&sid).is_some() {
-        use crate::commands::agent::group_dispatch::{
-            is_stop_intent, try_group_dispatch, GroupDispatchOutcome,
-        };
-        // 用户喊停:放养群聊里任何消息都会起新一轮,所以"停"必须最先拦截 —— 只取消当前循环、
-        // 不再 dispatch(否则"停"被当成新话题又点燃,用户根本喊不停)。见用户反馈 2026-06-02。
-        if is_stop_intent(&message) {
-            let stopped =
-                crate::engine::collaboration::conversation_driver::stop_group_loop(&sid);
-            log::info!("group stop intent → stop_group_loop({}) = {}", sid, stopped);
-            let hint = if stopped { "好,先安静一下 🤫" } else { "群里现在没人在聊哦～" };
-            let _ = state.db.push_message(&sid, "assistant", hint);
-            app.emit(
-                "chat://complete",
-                serde_json::json!({ "text": hint, "session_id": sid }),
-            )
-            .ok();
-            return Ok(());
-        }
-        let forced = mentioned_companion_ids.clone().unwrap_or_default();
-        match try_group_dispatch(state.db.clone(), ctx.config.clone(), &sid, &message, &forced).await {
-            Ok(GroupDispatchOutcome::Dispatched {
-                collaboration_id,
-                members,
-            }) => {
-                log::info!(
-                    "group_dispatch → ParallelAgents collab {} with {} 成员: {}",
-                    collaboration_id,
-                    members.len(),
-                    members.iter().map(|m| m.name.as_str()).collect::<Vec<_>>().join(", ")
-                );
-                // 没有路由卡 —— UI 直接渲染多个成员气泡(同框群聊感)。
-                // collaboration_id 让前端 chat://complete 后 loadMessages 拉到协作消息行。
-                app.emit("chat://complete", serde_json::json!({
-                    "text": "",
-                    "session_id": sid,
-                    "collaboration_id": collaboration_id,
-                })).ok();
-                return Ok(());
-            }
-            Ok(GroupDispatchOutcome::SelfAnswer { reason }) => {
-                // 主精灵自答 —— 不显示任何"亲自回"提示(用户决策:路由卡不要),
-                // 直接走主 agent 流程(下面 spawn 处)。reason 只走日志。
-                // 注:assistant 消息在前端恒以 YiYi 头像渲染,所以群里自答已正确
-                // 署名为 YiYi,不会被误当成群成员发言。
-                log::info!("group_dispatch → self-answer: {reason}");
-            }
-            Ok(GroupDispatchOutcome::EmptyGroup) => {
-                // 空群:不能无声让主精灵冒充群成员。给一条可见系统提示并结束本轮,
-                // 引导用户去群管理拉人。见 P0-2 修复。
-                log::info!("group_dispatch → empty group, prompting user to add members");
-                let hint = "这个群还没有成员 —— 点群聊顶栏的「管理」拉几位伙伴进来,大家才能开聊。";
-                let _ = state.db.push_message(&sid, "assistant", hint);
-                app.emit("chat://complete", serde_json::json!({
-                    "text": hint,
-                    "session_id": sid,
-                })).ok();
-                return Ok(());
-            }
-            Err(e) => {
-                log::warn!("group_dispatch 失败,回落主精灵自答:{e}");
-            }
-        }
-    } else if let Some(cid) = state.db.get_session_companion(&sid) {
+    // 单聊好友(私聊):session 绑定了单个 companion → 这一轮直接派遣给它(必答、流式,
+    // private scope)。失败回落主精灵自答。
+    // 2026-06-15:chat **多分身群聊/家族已退役**(与 work 多 agent 重叠、易造成产品混乱)——
+    // chat 侧只剩 YiYi 单聊 + 1:1 分身私聊。work 团队(source='work')走更上面的
+    // dispatch_work_followup,不经此路,不受影响。
+    if let Some(cid) = state.db.get_session_companion(&sid) {
         // 好友私聊:session 绑定了单个 companion → 这一轮直接派遣给它(它必答、流式,
         // private scope)。失败则回落主精灵自答。
         use crate::commands::agent::group_dispatch::dispatch_to_companion;

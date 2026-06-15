@@ -23,8 +23,6 @@ import { timeAgo } from '../utils/taskStatus';
 import type { Page } from '../App';
 import type { ChatSession } from '../api/agent';
 import { listCompanions, retireCompanion, COMPANIONS_CHANGED_EVENT, type Companion } from '../api/companions';
-import { GroupsManagerModal } from './companions/GroupsManagerModal';
-import { GroupCreateModal } from './companions/GroupCreateModal';
 import { CompanionEditDrawer } from './companions/CompanionEditDrawer';
 import { confirm, toast } from './Toast';
 import logoFaceRight from '../assets/yiyi-logo-face-right.png';
@@ -52,10 +50,10 @@ function sessionBucket(ts: number): string {
 // FriendStrip(横排好友头像)已并入 FriendGroupPanel —— 好友列表从横排左右滑改成弹出面板里的
 // 纵向列表(用户反馈:横排不便)。
 
-// --- 「好友 + 群」弹出面板 ——点 Users 按钮弹出:好友纵向列表(可上下滚,取代原横排左右滑)
-//     + 发起群聊 / 管理群。整合自原 FriendStrip + GroupQuickMenu(用户反馈:横排不便)。 ---
+// --- 好友弹出面板 ——点 Users 按钮弹出:好友纵向列表(可上下滚,取代原横排左右滑)。
+//     2026-06-15:多分身群聊已退役,只保留 1:1 好友列表 + YiYi 主精灵。 ---
 function FriendGroupPanel({
-  x, y, companions, activeCompanionId, onOpenYiYi, onOpenFriend, onEditCompanion, onClose, onCreate, onManage,
+  x, y, companions, activeCompanionId, onOpenYiYi, onOpenFriend, onEditCompanion, onClose,
 }: {
   x: number; y: number;
   companions: Companion[];
@@ -64,8 +62,6 @@ function FriendGroupPanel({
   onOpenFriend: (id: number) => void;
   onEditCompanion: (c: Companion) => void;
   onClose: () => void;
-  onCreate: () => void;
-  onManage: () => void;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
   const [ctx, setCtx] = useState<{ companion: Companion; x: number; y: number } | null>(null);
@@ -152,27 +148,6 @@ function FriendGroupPanel({
             还没有伙伴 —— 去「小精灵」收养
           </div>
         )}
-      </div>
-
-      {/* 分隔 + 群操作(固定底部) */}
-      <div className="mx-3 my-1.5 shrink-0" style={{ borderTop: '1px solid var(--color-border)' }} />
-      <div className="px-1.5 shrink-0">
-        <button onClick={() => { onCreate(); onClose(); }} className={row}
-          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
-          <div className="shrink-0 w-8 h-8 rounded-[10px] flex items-center justify-center" style={{ background: 'var(--color-primary)1a' }}>
-            <Users size={15} style={{ color: 'var(--color-primary)' }} />
-          </div>
-          <span className="text-[13px] font-medium" style={{ color: 'var(--color-text)' }}>发起群聊</span>
-        </button>
-        <button onClick={() => { onManage(); onClose(); }} className={row}
-          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
-          <div className="shrink-0 w-8 h-8 rounded-[10px] flex items-center justify-center" style={{ background: 'var(--color-bg-subtle)' }}>
-            <Settings size={15} style={{ color: 'var(--color-text-muted)' }} />
-          </div>
-          <span className="text-[13px] font-medium" style={{ color: 'var(--color-text)' }}>管理群</span>
-        </button>
       </div>
     </div>
     {/* 右键菜单放在 panel 外 —— panel 的 backdrop-filter 会成为内部 fixed 的定位基准,放里面会把
@@ -639,9 +614,6 @@ export const TaskSidebar = memo(function TaskSidebar({
   const [moreOpen, setMoreOpen] = useState(false);
   const [groupMenu, setGroupMenu] = useState<{ x: number; y: number } | null>(null);
   const [editingCompanion, setEditingCompanion] = useState<Companion | null>(null);
-  const [groupCreateOpen, setGroupCreateOpen] = useState(false);
-  const [groupsManagerOpen, setGroupsManagerOpen] = useState(false);
-
   const isMorePage = moreNavItems.some(n => n.id === currentPage);
 
   const chatSessions = useSessionStore((s) => s.chatSessions);
@@ -802,12 +774,8 @@ export const TaskSidebar = memo(function TaskSidebar({
         onOpenFriend={openFriend}
         onEditCompanion={setEditingCompanion}
         onClose={() => setGroupMenu(null)}
-        onCreate={() => setGroupCreateOpen(true)}
-        onManage={() => setGroupsManagerOpen(true)}
       />
     )}
-    {groupCreateOpen && <GroupCreateModal onClose={() => setGroupCreateOpen(false)} />}
-    {groupsManagerOpen && <GroupsManagerModal onClose={() => setGroupsManagerOpen(false)} />}
     {editingCompanion && (
       <CompanionEditDrawer
         companion={editingCompanion}
@@ -1018,12 +986,8 @@ export const TaskSidebar = memo(function TaskSidebar({
         onOpenFriend={openFriend}
         onEditCompanion={setEditingCompanion}
         onClose={() => setGroupMenu(null)}
-        onCreate={() => setGroupCreateOpen(true)}
-        onManage={() => setGroupsManagerOpen(true)}
       />
     )}
-    {groupCreateOpen && <GroupCreateModal onClose={() => setGroupCreateOpen(false)} />}
-    {groupsManagerOpen && <GroupsManagerModal onClose={() => setGroupsManagerOpen(false)} />}
     {editingCompanion && (
       <CompanionEditDrawer
         companion={editingCompanion}
