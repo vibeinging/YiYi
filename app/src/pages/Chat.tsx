@@ -5,7 +5,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X, Clock } from 'lucide-react';
+import { X, Clock, Hammer } from 'lucide-react';
 import { TimelinePanel } from '../components/TimelinePanel';
 import {
   chatStreamStart,
@@ -20,7 +20,7 @@ import {
   type ChatMessage,
   type Attachment,
 } from '../api/agent';
-import { setSessionGroup, getSessionGroup } from '../api/groups';
+import { setSessionGroup, getSessionGroup, listGroupMembers } from '../api/groups';
 import { listWorkspaceFiles, loadWorkspaceFile, getWorkspacePath, type WorkspaceFile } from '../api/workspace';
 import { listSkills } from '../api/skills';
 import { type MentionTag } from '../components/MentionInput';
@@ -32,13 +32,14 @@ import { useChatStreamStore } from '../stores/chatStreamStore';
 import { useTaskSidebarStore } from '../stores/taskSidebarStore';
 import { useTaskStore } from '../stores/taskStore';
 import { useSessionStore } from '../stores/sessionStore';
+import { useWorkStore } from '../stores/workStore';
+import { looksLikeBuildIntent } from '../utils/buildIntent';
 import { useDragRegion } from '../hooks/useDragRegion';
 import { toast } from '../components/Toast';
 
 import { ChatWelcome } from '../components/chat/ChatWelcome';
 import { ChatMessages, type ChatMessagesHandle } from '../components/chat/ChatMessages';
 import { ChatInput, type ChatInputHandle } from '../components/chat/ChatInput';
-import { FamilyHeader } from '../components/chat/FamilyHeader';
 import { SessionThinkingControl } from '../components/ThinkingModeControl';
 import { PermissionCard } from '../components/chat/PermissionCard';
 import { VoiceOverlay } from '../components/voice/VoiceOverlay';
@@ -59,13 +60,19 @@ import logoImg from '../assets/yiyi-logo.png';
 interface ChatPageProps {
   consumeNotifContext?: () => Record<string, unknown> | null;
   healthStatus?: 'ok' | 'error' | 'checking';
+  /**
+   * 嵌入模式:作为工作页右栏挂载(非整页)。会话仍由全局 `activeSessionId` 驱动,
+   * 交互逻辑全部复用;只关掉整页装饰/副作用 —— 顶部拖动区、欢迎页、notif/侧栏跳转、
+   * 托盘新会话监听 —— 这些是"整页聊天"语义,嵌入右栏时不该响应。
+   */
+  embedded?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
 /*  ChatPage Component                                                 */
 /* ------------------------------------------------------------------ */
 
-export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: ChatPageProps) {
+export function ChatPage({ consumeNotifContext, healthStatus = 'checking', embedded = false }: ChatPageProps) {
   const { t, i18n } = useTranslation();
   const lang: 'zh' | 'en' = i18n.language?.startsWith('zh') ? 'zh' : 'en';
   const drag = useDragRegion();
@@ -91,6 +98,24 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   // group_id = N     → 群聊群 N,记忆桶 family_shared_<N>,主精灵让位给群成员。
   // 旧的 family_mode 字段已退役 —— 前后端一律只认 group_id,不再读写 family_mode。
   const [familyGroupId, setFamilyGroupId] = useState<number | null>(null);
+  // 群成员(@ 候选用):work 团队的 worker 不在伙伴列表,只能从群成员进 @ 候选。
+  const [groupMembers, setGroupMembers] = useState<Companion[]>([]);
+  useEffect(() => {
+    if (familyGroupId == null) { setGroupMembers([]); return; }
+    let alive = true;
+    const reload = () =>
+      listGroupMembers(familyGroupId)
+        .then((m) => { if (alive) setGroupMembers(m); })
+        .catch(() => { if (alive) setGroupMembers([]); });
+    reload();
+    // 「拉伙伴」加成员后立即刷新 @ 候选(Work.tsx 派发本会话所在群的 gid)。
+    const onChanged = (e: Event) => {
+      const gid = (e as CustomEvent).detail;
+      if (gid == null || gid === familyGroupId) reload();
+    };
+    window.addEventListener('yiyi:group-members-changed', onChanged);
+    return () => { alive = false; window.removeEventListener('yiyi:group-members-changed', onChanged); };
+  }, [familyGroupId]);
 
   // 私聊某个伙伴时(session 绑了 companion_id 且非群聊)的当前伙伴 —— 给 ChatWelcome 换头像+介绍。
   // 草稿态(点好友落空会话、还没发消息)优先用草稿好友 —— 欢迎页/顶栏即时显示 ta;
@@ -185,6 +210,9 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   useEffect(() => {
     (async () => {
       await useSessionStore.getState().initialize();
+      // 嵌入态(工作页右栏):活跃会话由左栏选中的 work job 驱动,不消费 notif/pending 跳转
+      // (那是整页聊天的语义),否则会抢走 Work 选中的会话。
+      if (embedded) return;
       const ctx = consumeNotifContext?.();
       if (ctx?.page === 'chat' && ctx?.session_id) {
         useSessionStore.getState().switchToSession(ctx.session_id as string);
@@ -195,11 +223,22 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     })();
   }, []);
 
+  // R5(防幽灵会话):整页 chat 挂载/会话变化时,若活跃会话是 work 会话(work- 前缀,
+  // 不在 chat 列表里),回落到最近的 chat 会话 —— 从 Work 页切回「聊天」不再带着 work
+  // 会话进 chat 表面(侧栏无高亮、顶栏错乱的精神分裂态)。
   useEffect(() => {
-    if (!pendingSessionId || !initialized) return;
+    if (embedded || !initialized) return;
+    if (activeSessionId.startsWith('work-')) {
+      const fallback = useSessionStore.getState().chatSessions[0]?.id ?? '';
+      useSessionStore.getState().switchToSession(fallback);
+    }
+  }, [embedded, initialized, activeSessionId]);
+
+  useEffect(() => {
+    if (embedded || !pendingSessionId || !initialized) return; // 嵌入态不抢跳转
     useTaskSidebarStore.getState().consumePendingSession();
     navigateToSession(pendingSessionId);
-  }, [pendingSessionId, navigateToSession, initialized]);
+  }, [pendingSessionId, navigateToSession, initialized, embedded]);
 
   // Consume pending new tab: add task session tab without switching away
   const pendingNewTab = useTaskSidebarStore((s) => s.pendingNewTab);
@@ -295,16 +334,18 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   };
 
   useEffect(() => {
+    if (embedded) return; // 嵌入态不响应托盘"新会话"(那会切走 Work 选中的工作会话)
     const unlisten = listen('tray://new-session', () => handleNewSession());
     return () => { unlisten.then(fn => fn()); };
-  }, []);
+  }, [embedded]);
 
   // Sidebar "聊天" click → switch to most recent chat session
   useEffect(() => {
+    if (embedded) return; // 嵌入态不响应侧栏"聊天"跳转
     const handler = () => handleGoToRecentChat();
     window.addEventListener('chat:go-main', handler);
     return () => window.removeEventListener('chat:go-main', handler);
-  }, [handleGoToRecentChat]);
+  }, [handleGoToRecentChat, embedded]);
 
   // Spawn complete
   useEffect(() => {
@@ -314,7 +355,7 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     return () => { unlisten.then(fn => fn()); };
   }, [activeSessionId]);
 
-  // 开工(commit_project_plan)后重载,把派工协作的锚点消息拉进来 → 渲染队友实时发言。
+  // 开工(commit_work_plan)后重载,把派工协作的锚点消息拉进来 → 渲染队友实时发言。
   useEffect(() => {
     const onReload = () => { if (activeSessionId) loadMessages(activeSessionId); };
     window.addEventListener('yiyi:reload-messages', onReload);
@@ -328,7 +369,12 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   const activePermission = permissionQueue[0] ?? null;
   const isPermissionPending = activePermission?.status === 'pending';
   const questionQueue = useChatStreamStore((s) => s.questionQueue);
-  const activeQuestion = questionQueue[0] ?? null;
+  // R5:提问卡按**会话**路由 —— 只渲染/消费属于当前会话的问题(work PM 在后台提问时,
+  // 用户在别的会话打的字不再被劫持为答案)。无 sessionId 的旧载荷向后兼容:跟随任意会话。
+  const sessionQuestions = questionQueue.filter(
+    (q) => !q.sessionId || q.sessionId === activeSessionId,
+  );
+  const activeQuestion = sessionQuestions[0] ?? null;
   const spawnRunning = spawnAgents.some((a) => a.status === 'running');
   const loading = streamLoading || spawnRunning;
 
@@ -356,9 +402,10 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   const answerQuestion = async (requestId: string, answer: string) => {
     const value = answer.trim();
     if (!value) return;
+    const all = useChatStreamStore.getState().questionQueue;
     const pendingQ =
-      useChatStreamStore.getState().questionQueue.find((q) => q.requestId === requestId) ??
-      useChatStreamStore.getState().questionQueue[0];
+      all.find((q) => q.requestId === requestId) ??
+      all.find((q) => !q.sessionId || q.sessionId === activeSessionId);
     // 协作里分身提问(companionId>0):问答已内联进它自己的群聊气泡(后端追进 step 产出 +
     // 实时流),这里**不**单开消息,免得重复。单聊 YiYi(companionId 0/空)才把「问题 +
     // 你的选择」合成一条消息(选择落在原问题块内,不单开用户气泡),与后端固化的一条一致。
@@ -374,7 +421,7 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
         role: 'user' as const, content: value, timestamp: Date.now(), attachments: undefined,
       }]);
     }
-    useChatStreamStore.getState().dequeueQuestion();
+    useChatStreamStore.getState().removeQuestion(pendingQ?.requestId ?? requestId);
     try {
       await invoke('answer_user_question', { requestId, answer: value });
     } catch {
@@ -387,10 +434,19 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     messagesRef.current?.scrollToBottom();
 
     // 有待答 ask_user 问题时,这条消息就是回答:路由给等待中的 agent,不开启新一轮对话。
-    const pendingQ = useChatStreamStore.getState().questionQueue[0];
+    // R5:只认**当前会话**的问题 —— 别的会话(如 work PM)在等答案时,这里的消息照常聊天。
+    const pendingQ = useChatStreamStore
+      .getState()
+      .questionQueue.find((q) => !q.sessionId || q.sessionId === activeSessionId);
     if (pendingQ) {
       await answerQuestion(pendingQ.requestId, plainText);
       return;
+    }
+
+    // 像"要建造交付物"的话 → 出一条路标横幅引导去工作页(不拦消息,照常聊)。
+    // 2026-06-15:群聊退役后,这条 chat→work 桥在 1:1 / 主精灵聊里同样适用,去掉群 gate。
+    if (!embedded && looksLikeBuildIntent(plainText)) {
+      setWorkHint(plainText);
     }
 
     // 草稿态(点好友进来、零会话 activeSessionId='')发首条消息 → 这时才建一段全新私聊会话并切过去。
@@ -648,6 +704,11 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
     return <>{parts}</>;
   }, []);
 
+  // --- work 引导卡(R6):群聊里说了像"建造交付物"的话 → 轻提示去工作页发起 ---
+  // 措辞检测已从路由退役(决策 X:不猜,显式发起);这里只是**不挡路的路标**,
+  // 消息照常进群聊,横幅可一键带文本去工作页、也可无视。
+  const [workHint, setWorkHint] = useState<string | null>(null);
+
   // --- Lightbox ---
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const [timelineOpen, setTimelineOpen] = useState(false);
@@ -692,32 +753,37 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
   // 群会话从创建起就是对话页面 —— 不走欢迎页(欢迎页只给私聊/YiYi 的草稿空态)。
   // 用同步的 session.group_id 判断,不等异步的 familyGroupId,避免切群瞬间闪一下 YiYi 欢迎页。
   const activeGroupId = chatSessions.find(s => s.id === activeSessionId)?.group_id ?? null;
-  const showWelcome = isChatSession && messages.length === 0 && !loading && activeGroupId == null;
+  // 嵌入态(工作页右栏)永不走欢迎页:work 会话 source='work' 不在 chatSessions(列表仅
+  // source='chat'),同步 activeGroupId 取不到 group_id 会误判空态;且 work 详情不需要欢迎页。
+  const showWelcome = !embedded && isChatSession && messages.length === 0 && !loading && activeGroupId == null;
 
   // --- Render ---
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden">
-      {/* Drag region — replaces the tab bar */}
-      <div
-        data-tauri-drag-region
-        className="shrink-0 app-drag-region relative"
-        style={{ background: 'var(--color-bg)', height: '38px' }}
-      >
-        {activeSessionId && (
-          <button
-            className="absolute right-3 top-1.5 w-7 h-7 rounded-md flex items-center justify-center hover:bg-[var(--color-hover)]"
-            style={{ color: 'var(--color-text-secondary)' }}
-            onClick={() => setTimelineOpen(true)}
-            aria-label="时间线"
-            title="时间线"
-          >
-            <Clock size={15} />
-          </button>
-        )}
-      </div>
+      {/* Drag region — replaces the tab bar(嵌入态由工作页自带 header,不要这条拖动区) */}
+      {!embedded && (
+        <div
+          data-tauri-drag-region
+          className="shrink-0 app-drag-region relative"
+          style={{ background: 'var(--color-bg)', height: '38px' }}
+        >
+          {activeSessionId && (
+            <button
+              className="absolute right-3 top-1.5 w-7 h-7 rounded-md flex items-center justify-center hover:bg-[var(--color-hover)]"
+              style={{ color: 'var(--color-text-secondary)' }}
+              onClick={() => setTimelineOpen(true)}
+              aria-label="时间线"
+              title="时间线"
+            >
+              <Clock size={15} />
+            </button>
+          )}
+        </div>
+      )}
 
-      {/* 顶栏:私聊 = 显示"和 X 私聊"条;群/单聊 = FamilyHeader(管理群/邀请入口) */}
-      {activeSessionId && !isTaskSession && !isCronSession && (
+      {/* 顶栏:有 companion = "和 X 私聊"条;否则 = 主精灵 YiYi 简洁头。
+          嵌入态(Work 右栏)不渲染:Work 页自带 header,消除双层头。 */}
+      {!embedded && activeSessionId && !isTaskSession && !isCronSession && (
         (() => {
           const sess = chatSessions.find(s => s.id === activeSessionId);
           const companionId = draftCompanionId ?? (sess?.companion_id ?? null);
@@ -747,12 +813,26 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
               </div>
             );
           }
+          // 非私聊 = 和主精灵 YiYi 单聊(2026-06-15:多分身群聊已退役)。简洁头 + 思考开关。
           return (
-            <FamilyHeader
-              sessionId={activeSessionId}
-              familyGroupId={familyGroupId}
-              onSetFamily={handleSetFamily}
-            />
+            <div
+              className="shrink-0 flex items-center gap-2.5 px-3 py-2"
+              style={{ background: 'var(--color-bg)', borderBottom: '1px solid var(--color-border)' }}
+            >
+              <div className="w-7 h-7 rounded-lg overflow-hidden flex items-center justify-center shrink-0" style={{ background: 'var(--color-bg-muted)' }}>
+                <img src={logoImg} alt="YiYi" style={{ width: '82%', height: '82%', objectFit: 'contain' }} />
+              </div>
+              <div className="min-w-0">
+                <div className="text-[13px] font-medium leading-tight truncate" style={{ color: 'var(--color-text)' }}>
+                  {aiName}
+                </div>
+                <div className="text-[11px] leading-tight truncate" style={{ color: 'var(--color-text-muted)' }}>
+                  主精灵
+                </div>
+              </div>
+              <div className="flex-1" />
+              <SessionThinkingControl sessionId={activeSessionId} lang={lang} />
+            </div>
           );
         })()
       )}
@@ -800,10 +880,45 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
           <PermissionCard request={activePermission!} />
         </div>
       ) : (
+        <>
+        {workHint && (
+          <div
+            className="mx-4 mb-1.5 px-3 py-2 rounded-xl flex items-center gap-2 text-[12.5px] animate-in fade-in slide-in-from-bottom-1"
+            style={{
+              background: 'color-mix(in srgb, var(--color-warning) 10%, var(--color-bg-elevated))',
+              border: '1px solid color-mix(in srgb, var(--color-warning) 30%, var(--color-border))',
+              color: 'var(--color-text)',
+            }}
+          >
+            <Hammer size={14} style={{ color: 'var(--color-warning)', flexShrink: 0 }} />
+            <span className="flex-1 min-w-0 truncate">这像是个工程活 —— 要去工作页让一支团队接手吗?</span>
+            <button
+              className="shrink-0 px-2.5 py-1 rounded-lg text-[12px] font-medium"
+              style={{ background: 'var(--color-warning)', color: '#1a1206' }}
+              onClick={() => {
+                useWorkStore.getState().setPendingLauncherTask(workHint);
+                setWorkHint(null);
+                window.dispatchEvent(new CustomEvent('navigate', { detail: 'work' }));
+              }}
+            >
+              去发起
+            </button>
+            <button
+              className="shrink-0 p-1 rounded-md"
+              style={{ color: 'var(--color-text-muted)' }}
+              onClick={() => setWorkHint(null)}
+              title="就在这聊"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        )}
         <ChatInput
           ref={inputRef}
           // 有待答 ask_user 问题时,输入框保持可用(不显示 stop)——发送即回答,
-          // 就像在群里回复那条提问。
+          // 就像在群里回复那条提问。占位文案同步明示,用户不用知道这条隐式规则。
+          placeholder={activeQuestion ? `回答 ${activeQuestion.askerName || 'YiYi'} 的提问,或点上方选项…` : undefined}
+          groupMembers={groupMembers}
           loading={loading && !activeQuestion}
           workspaceFiles={workspaceFiles}
           onSend={handleSend}
@@ -813,6 +928,7 @@ export function ChatPage({ consumeNotifContext, healthStatus = 'checking' }: Cha
           onFileSelect={() => {}}
           onFetchWorkspaceFiles={fetchWorkspaceFiles}
         />
+        </>
       )}
 
       <TimelinePanel

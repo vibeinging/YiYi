@@ -111,8 +111,10 @@ export async function commitDynamicTeam(
   groupName: string,
   emoji: string | null,
   roles: RoleSpec[],
+  /** work 入口组队 = true:成员标 worker(临时工,不进伙伴列表);chat 启动器建的是真伙伴。 */
+  ephemeral = false,
 ): Promise<number> {
-  const groupId = await invoke<number>('commit_dynamic_team', { groupName, emoji, roles })
+  const groupId = await invoke<number>('commit_dynamic_team', { groupName, emoji, roles, ephemeral })
   notifyCompanionsChanged()
   return groupId
 }

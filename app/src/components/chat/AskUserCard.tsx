@@ -50,24 +50,30 @@ export function AskUserCard({
           </div>
 
           {hasOptions ? (
-            <div className="flex flex-wrap gap-2 mt-2">
-              {question.options.map((opt, i) => (
-                <button
-                  key={i}
-                  onClick={() => onAnswer(opt)}
-                  className="px-3 py-1 rounded-full text-[12px] font-medium transition-colors"
-                  style={{
-                    background: `color-mix(in srgb, ${ACCENT} 12%, var(--color-bg-elevated))`,
-                    color: ACCENT,
-                    border: `1px solid color-mix(in srgb, ${ACCENT} 40%, transparent)`,
-                  }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = ACCENT; e.currentTarget.style.color = '#FFFFFF'; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = `color-mix(in srgb, ${ACCENT} 12%, var(--color-bg-elevated))`; e.currentTarget.style.color = ACCENT; }}
-                >
-                  {opt}
-                </button>
-              ))}
-            </div>
+            <>
+              <div className="flex flex-wrap gap-2 mt-2">
+                {question.options.map((opt, i) => (
+                  <button
+                    key={i}
+                    onClick={() => onAnswer(opt)}
+                    className="px-3 py-1 rounded-full text-[12px] font-medium transition-colors"
+                    style={{
+                      background: `color-mix(in srgb, ${ACCENT} 12%, var(--color-bg-elevated))`,
+                      color: ACCENT,
+                      border: `1px solid color-mix(in srgb, ${ACCENT} 40%, transparent)`,
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = ACCENT; e.currentTarget.style.color = '#FFFFFF'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = `color-mix(in srgb, ${ACCENT} 12%, var(--color-bg-elevated))`; e.currentTarget.style.color = ACCENT; }}
+                  >
+                    {opt}
+                  </button>
+                ))}
+              </div>
+              {/* 选项之外永远可以自由作答 —— 主输入框就是回答框(发送即回答),明示出来。 */}
+              <div className="text-[11px] mt-1.5" style={{ color: 'var(--color-text-muted)' }}>
+                点选项,或直接在下方输入框用自己的话回答
+              </div>
+            </>
           ) : (
             <div className="text-[11px] mt-1.5" style={{ color: 'var(--color-text-muted)' }}>
               在下方输入框回复…

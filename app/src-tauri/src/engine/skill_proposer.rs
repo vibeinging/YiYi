@@ -471,6 +471,7 @@ mod tests {
             collaboration_id: None,
             step_id: None,
             companion_id: None,
+            context_type: None,
         }];
         let tools = extract_tool_names(&msgs);
         assert_eq!(tools, vec!["shell", "read_file"]);

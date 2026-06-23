@@ -5,7 +5,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  Send, X, Paperclip, FileText, Square, Loader2, Sparkles, FolderOpen,
+  X, Paperclip, FileText, Loader2, Sparkles, FolderOpen,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { QuickActionsOverlay } from './QuickActionsOverlay';
@@ -33,6 +33,11 @@ interface TaskSuggestion {
 
 interface ChatInputProps {
   loading: boolean;
+  /** 覆盖输入框占位文案(如:有待答 ask_user 提问时提示「发送即回答」)。 */
+  placeholder?: string;
+  /** 当前会话所在群的成员(含 work 团队的 worker —— 它们不在伙伴列表里,但群内
+   *  @ 候选必须有,否则 work 会话 @ 不到工人)。与伙伴列表按 id 去重合并。 */
+  groupMembers?: Companion[];
   workspaceFiles: WorkspaceFile[];
   onSend: (plainText: string, mentions: MentionTag[], attachments: Attachment[]) => void;
   onStop: () => void;
@@ -77,6 +82,8 @@ const isImageMime = (mime: string) => mime.startsWith('image/');
 export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput(
   {
     loading,
+    placeholder,
+    groupMembers,
     workspaceFiles,
     onSend,
     onStop,
@@ -94,6 +101,15 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const [message, setMessage] = useState('');
   const [pendingImages, setPendingImages] = useState<Attachment[]>([]);
   const [shaking, setShaking] = useState(false);
+
+  // 发送/停止按钮已移除(被裁切,用户反馈)。停止改全局 Esc —— 流进行中输入框 disabled
+  // 收不到键盘事件,所以挂 window 监听;只在 loading 时生效,不干扰其它 Esc(关弹层等)。
+  useEffect(() => {
+    if (!loading) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onStop(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [loading, onStop]);
 
   // Pickers
   const [showQuickActions, setShowQuickActions] = useState(false);
@@ -129,8 +145,17 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       .catch(() => { if (!cancelled) setCompanions([]); });
     return () => { cancelled = true; };
   }, []);
+  // 群成员优先(work 团队的 worker 不在伙伴列表,只能从这进候选);伙伴列表补全,按 id 去重。
+  const mentionCompanions = useMemo<Companion[]>(() => {
+    const seen = new Set<number>();
+    const out: Companion[] = [];
+    for (const c of [...(groupMembers ?? []), ...companions]) {
+      if (!seen.has(c.id)) { seen.add(c.id); out.push(c); }
+    }
+    return out;
+  }, [groupMembers, companions]);
   const companionAgents = useMemo<AgentSummary[]>(
-    () => companions.map(c => ({
+    () => mentionCompanions.map(c => ({
       name: c.name,
       description: companionRoleLabel(c),
       emoji: c.avatar_emoji,
@@ -139,13 +164,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       model: null,
       tool_count: null,
     })),
-    [companions],
+    [mentionCompanions],
   );
   const companionByName = useMemo(() => {
     const m = new Map<string, Companion>();
-    for (const c of companions) m.set(c.name, c);
+    for (const c of mentionCompanions) m.set(c.name, c);
     return m;
-  }, [companions]);
+  }, [mentionCompanions]);
   const allMentionAgents = useMemo(
     () => [...companionAgents, ...agents],
     [companionAgents, agents],
@@ -333,7 +358,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       if (e.key === 'Escape') { e.preventDefault(); setShowTaskPicker(false); return; }
     }
     if (showFilePicker) {
-      const items = buildMentionList([], workspaceFiles, filePickerQuery, agents);
+      // BUG fix(2026-06-13 review):键盘选 @ 必须用与显示**同一份** allMentionAgents
+      // (含 companions/workers),且 companion 要 tag 成 `companion:<id>` —— 此前用
+      // builtin-only `agents` 且 tag 成 name,导致键盘 @ 工人要么选错内置 agent、要么
+      // 后端收不到 companion id → @ 工人的消息静默落到牵头者(直接打字 @ 是常用路径,
+      // 整个 @ 功能在真实输入下是坏的)。鼠标点选走 MentionPicker 自己的列表,本就对。
+      const items = buildMentionList([], workspaceFiles, filePickerQuery, allMentionAgents);
       const maxIdx = items.length - 1;
       if (e.key === 'ArrowDown') { e.preventDefault(); setFilePickerIndex(prev => Math.min(prev + 1, maxIdx)); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); setFilePickerIndex(prev => Math.max(prev - 1, 0)); return; }
@@ -342,7 +372,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         const selected = items[filePickerIndex];
         if (selected) {
           if (selected.type === 'agent') {
-            const tag: MentionTag = { type: 'agent', id: selected.agent.name, name: selected.agent.name };
+            // companion → `companion:<id>`(与鼠标点选 onSelectAgent 同源);其余 → name。
+            const companion = companionByName.get(selected.agent.name);
+            const tag: MentionTag = companion
+              ? { type: 'agent', id: `companion:${companion.id}`, name: companion.name }
+              : { type: 'agent', id: selected.agent.name, name: selected.agent.name };
             inputRef.current?.insertMention(tag);
             setShowFilePicker(false);
           } else if (selected.type === 'file') {
@@ -533,9 +567,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
             {/* VoiceButton hidden — requires OpenAI Realtime API key, will enable in future */}
 
+            {/* 发送/停止按钮已移除(2026-06-15,用户反馈被裁切):Enter 发送、Esc 停止;
+                流进行中输入框禁用并显示停止提示,见占位符。 */}
             <MentionInput
               ref={inputRef}
-              placeholder={t('chat.placeholder')}
+              placeholder={loading ? t('chat.stopHint', '回复中… 按 Esc 停止') : (placeholder ?? t('chat.placeholder'))}
               disabled={loading}
               onInput={handleMentionInput}
               onMentionTrigger={handleMentionTrigger}
@@ -543,25 +579,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
             />
-
-            {loading ? (
-              <button type="button" onClick={onStop} onMouseDown={preventFocusSteal}
-                className="w-9 h-9 flex items-center justify-center rounded-xl shrink-0 transition-all"
-                style={{ background: 'var(--color-error)', color: 'var(--color-bg)' }}
-                title={t('chat.stop', '停止')}>
-                <Square size={14} fill="currentColor" />
-              </button>
-            ) : (
-              <button type="submit" onMouseDown={preventFocusSteal}
-                disabled={!message.trim() && pendingImages.length === 0}
-                className="w-9 h-9 flex items-center justify-center rounded-xl shrink-0 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-                style={{
-                  background: (message.trim() || pendingImages.length > 0) ? 'var(--color-primary)' : 'transparent',
-                  color: (message.trim() || pendingImages.length > 0) ? '#FFFFFF' : 'var(--color-text-muted)',
-                }}>
-                <Send size={16} />
-              </button>
-            )}
           </div>
         </div>
       </form>

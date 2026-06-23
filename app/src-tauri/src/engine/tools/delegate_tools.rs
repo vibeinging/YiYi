@@ -197,6 +197,7 @@ mod tests {
             role_label: None,
             meditation_enabled: false,
             meditation_time: "03:00".into(),
+            kind: "companion".into(),
         }
     }
 

@@ -29,7 +29,7 @@ mod types;
 mod bot_tools;
 pub(crate) mod ask_user;
 mod browser_tools;
-pub(crate) mod project_tools;
+pub(crate) mod work_tools;
 mod canvas_tools;
 mod cheap_browser;
 mod companion_tools;
@@ -64,6 +64,9 @@ pub(super) use cheap_browser::chrome_available;
 
 // ── Re-exports: 全权限模式(-p)────────────────────────────────────
 pub use permission_gate::{is_full_access, set_full_access};
+
+// ── Re-exports: work 工具(集成测试驱动 propose 持久化契约用)──────
+pub use work_tools::{propose_work_plan_tool, with_work_ctx};
 
 // ── Re-exports: types ──────────────────────────────────────────────
 pub use types::{FunctionCall, FunctionDef, ToolCall, ToolDefinition, ToolResult};

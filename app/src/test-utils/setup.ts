@@ -11,6 +11,27 @@ if (typeof globalThis.ResizeObserver === "undefined") {
   } as any;
 }
 
+// Node 26 + jsdom 25 组合下 window 在而 window.localStorage 缺失(2026-06-11 npm
+// 重装后出现,致 sessionStore 等用 localStorage 的测试整批 TypeError)。内存实现
+// 兜底 —— 业务代码只用 get/set/remove/clear,语义等价。
+if (typeof globalThis.localStorage === "undefined") {
+  const store = new Map<string, string>();
+  (globalThis as any).localStorage = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      store.set(String(k), String(v));
+    },
+    removeItem: (k: string) => {
+      store.delete(k);
+    },
+    clear: () => store.clear(),
+    key: (i: number) => [...store.keys()][i] ?? null,
+    get length() {
+      return store.size;
+    },
+  } as Storage;
+}
+
 // Default: any invoke() call that isn't explicitly mocked throws loudly so
 // tests can't silently get `undefined` and miss assertion gaps. Tests opt in
 // with mockInvoke({ command: handler }).

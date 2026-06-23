@@ -53,10 +53,33 @@ impl ConcreteExecutor {
 /// trim 后等于它即视为"没接话":不进 verdict、前端不渲染气泡。
 pub const PASS_SENTINEL: &str = "<pass>";
 
-/// 读 step 的对话模式标记(Driver 写进 metadata)。
-/// `group_round` = 群聊一轮(全员 reply-or-pass);`yiyi_fallback` = 全让兜底位。
-fn step_mode(step: &Step) -> Option<&str> {
-    step.input.metadata.get("mode").and_then(|v| v.as_str())
+/// step 的语义模式(**纯 chat**)。metadata["mode"] 字符串在此**翻译一次**,
+/// 调用点用穷尽 match / enum 比较,编译器兜底——取代散落各处的 `== Some("...")` 魔法字符串。
+/// work 模式(intake/project_task)不在此:run_one_guarded 入口已按
+/// `work::worker::WorkStepKind::from_step` 早路由出去,chat 路径永远见不到 work 步。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StepMode {
+    /// 放养群聊:点名转让一轮,全员 reply-or-pass(chat)
+    GroupRound,
+    /// 放养群聊:自由热聊事件循环(chat)
+    GroupLoop,
+    /// 群聊全冷场,YiYi 兜底位接住(chat)
+    YiyiFallback,
+    /// 群聊显式要结论,YiYi 收口(chat)
+    YiyiSummary,
+    /// 无 mode / 未知:普通单/多 agent step
+    Plain,
+}
+
+/// 读 step 的语义模式(Driver 写进 metadata["mode"])。
+fn step_mode(step: &Step) -> StepMode {
+    match step.input.metadata.get("mode").and_then(|v| v.as_str()) {
+        Some("group_round") => StepMode::GroupRound,
+        Some("group_loop") => StepMode::GroupLoop,
+        Some("yiyi_fallback") => StepMode::YiyiFallback,
+        Some("yiyi_summary") => StepMode::YiyiSummary,
+        _ => StepMode::Plain,
+    }
 }
 
 /// 把 metadata 里的群历史渲染成 append-only 块。**缓存纪律**:历史在前(只增),
@@ -83,7 +106,7 @@ fn render_system_prompt(step: &Step, participant_idx: usize) -> String {
     match step_mode(step) {
         // 群聊一轮:每位成员自决发言或 <pass>。人设 + 静态规则进 system(稳定前缀,可缓存)。
         // 规则强偏向"让"——群里抢话比冷场更伤体验(见用户反馈:点名了别人,其他成员还硬插话)。
-        Some("group_round") => format!(
+        StepMode::GroupRound => format!(
             "你是 {} {}。这是用户的群聊,群里还有其他 AI 伙伴。\n\n\
              【发言规则 —— 群里别抢话】\n\
              - 用户**点名或明显在问某一位**(直接喊名字、或\"你\"指向某人)→ 那是 TA 的话,\
@@ -97,7 +120,7 @@ fn render_system_prompt(step: &Step, participant_idx: usize) -> String {
         ),
         // 群事件循环(v2,放养模式):像在群里熬夜热聊一样自然接茬,基调偏"积极往下聊",
         // 但仍允许真没料时 pass(防尬聊/复读)。
-        Some("group_loop") => format!(
+        StepMode::GroupLoop => format!(
             "你是 {} {}。这是用户的群聊,你能看到群里刚刚的对话。大家在热聊,你也在群里。\n\n\
              【接话规则】\n\
              - 默认积极接话:顺着刚才的话往下聊——追问、补个新角度/例子、调侃一句、@ 谁请教,\
@@ -109,13 +132,13 @@ fn render_system_prompt(step: &Step, participant_idx: usize) -> String {
             p.avatar_emoji, p.name
         ),
         // 全让兜底位:群里没人接,YiYi 群管家接住。
-        Some("yiyi_fallback") => format!(
+        StepMode::YiyiFallback => format!(
             "你是群管家 {}。群里这条消息暂时没有成员接话,由你接住它:简短自然地回答用户;\
              若确实不是你擅长的领域,就坦诚点一句并把方向轻轻递出去,别生硬推托。",
             p.name
         ),
         // 要结论出口:群聊完一轮,用户明确要个结论 → YiYi 收口。
-        Some("yiyi_summary") => format!(
+        StepMode::YiyiSummary => format!(
             "你是群管家 {}。群里刚聊完一轮,用户想要一个结论。看完上面的对话,直接给出:\
              先一句话核心结论,再简述大家的共识 / 分歧(如有),最后一条可落地建议。\
              别复述每个人说了啥、别开新话题。",
@@ -139,27 +162,10 @@ fn render_system_prompt(step: &Step, participant_idx: usize) -> String {
 /// Render the user prompt fed to a single participant. Includes the
 /// step's input prompt plus, for HostSummarize, the upstream summaries.
 fn render_user_prompt(step: &Step, upstream: &[(StepId, StepOutput)]) -> String {
-    // S2④:项目派工 task —— 上游产出作为"交接"喂给下游(后端的接口契约给前端、
-    // 前后端的实现给测试…),而不是"群里的讨论"。让下游角色清楚这是在接力建造。
-    if step_mode(step) == Some("project_task") {
-        let mut s = String::new();
-        if !upstream.is_empty() {
-            s.push_str(
-                "【上游交付】队友已完成前置任务,产出如下。请在此基础上接着做 —— \
-                 别重复造,按上游给的接口 / 契约 / 设计来:\n\n",
-            );
-            for (id, out) in upstream {
-                s.push_str(&format!("—— 任务 #{} 的产出 ——\n{}\n\n", id, out.full_output));
-            }
-        }
-        s.push_str("【你这条任务】\n");
-        s.push_str(&step.input.prompt);
-        return s;
-    }
     // 对话循环的轮 step:历史 append-only 在前,用户新消息在最末(缓存纪律)。
     if matches!(
         step_mode(step),
-        Some("group_round") | Some("yiyi_fallback") | Some("group_loop") | Some("yiyi_summary")
+        StepMode::GroupRound | StepMode::YiyiFallback | StepMode::GroupLoop | StepMode::YiyiSummary
     ) {
         return format!("{}【用户刚说】\n{}", history_block(step), step.input.prompt);
     }
@@ -205,16 +211,11 @@ const PARTICIPANT_TIMEOUT_SECS: u64 = 150;
 /// 群事件循环里,一句闲聊不需要 150s 长推理;砍到 30s,既兜住挂起流,又把"被抢占后
 /// 仍在跑的那条"的成本/占槽时长压到 ≤ 群墙钟量级(中途取消的实用兜底)。
 const GROUP_LOOP_TIMEOUT_SECS: u64 = 30;
-/// 牵头者接手步(intake):可能 ask_user 阻塞等用户答澄清问题(如发布日期),150s 太短
-/// (问个日期都可能超时被砍)。给 10 分钟总超时,让用户有从容作答的时间;答完即继续。
-const INTAKE_TIMEOUT_SECS: u64 = 600;
-/// 项目派工的写码任务(S2③ project_task)**不用总超时** —— 总超时会把进展中的长程任务
-/// 一刀切(一个角色写多文件 + 跑构建/测试可能很久)。改用 **idle 超时**:300s 内一点流
-/// 活动(token / 工具事件)都没有,才判 LLM 流真挂起 → 中断;有进展就重置 → 真长程任务
-/// 想跑多久跑多久。300s 也 > 单个工具(跑构建/测试)的常见耗时,避免长工具被误判。
-const PROJECT_TASK_IDLE_SECS: u64 = 300;
 
 /// run_one 的超时包装 —— 见 PARTICIPANT_TIMEOUT_SECS。
+/// **chat×work 路由点(R2/S8)**:work 步(intake/project_task)在此早路由到
+/// `work::worker::run_work_step_guarded`(work prompt + work 超时策略都在 work 表面);
+/// 本函数往下只剩纯 chat —— 群聊 30s / 普通 150s 总超时。
 async fn run_one_guarded(
     config: &LLMConfig,
     step: &Step,
@@ -223,6 +224,12 @@ async fn run_one_guarded(
     collab_id: CollaborationId,
     usage_source: UsageSource,
 ) -> Result<StepOutput, String> {
+    if crate::engine::work::worker::WorkStepKind::from_step(step).is_some() {
+        return crate::engine::work::worker::run_work_step_guarded(
+            config, step, participant_idx, upstream, collab_id,
+        )
+        .await;
+    }
     let name = step
         .participants
         .get(participant_idx)
@@ -230,35 +237,13 @@ async fn run_one_guarded(
         .unwrap_or_default();
     let run = run_one(config, step, participant_idx, upstream, collab_id, usage_source);
 
-    // project_task:idle 超时(有进展不切,真长程任务想跑多久跑多久)。看门狗在 idle
-    // 超过阈值时赢得 select! → run 被 drop → 断开挂起的连接读(cancelled 旗标在流读卡住
-    // 时不会被检查,所以靠 drop)。其余(群聊 30s / 普通 150s):保持总超时。
-    if step_mode(step) == Some("project_task") {
-        let activity = Arc::new(std::sync::Mutex::new(Instant::now()));
-        let watch = Arc::clone(&activity);
-        let watchdog = async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                let idle = watch.lock().map(|t| t.elapsed()).unwrap_or_default();
-                if idle > std::time::Duration::from_secs(PROJECT_TASK_IDLE_SECS) {
-                    return;
-                }
-            }
-        };
-        tokio::select! {
-            r = crate::engine::agent_runner::with_idle_activity(activity, run) => r,
-            _ = watchdog => Err(format!("{name} 卡住({PROJECT_TASK_IDLE_SECS}s 无流响应)")),
-        }
-    } else {
-        let secs = match step_mode(step) {
-            Some("group_loop") => GROUP_LOOP_TIMEOUT_SECS,
-            Some("intake") => INTAKE_TIMEOUT_SECS,
-            _ => PARTICIPANT_TIMEOUT_SECS,
-        };
-        match tokio::time::timeout(std::time::Duration::from_secs(secs), run).await {
-            Ok(r) => r,
-            Err(_) => Err(format!("{name} 响应超时({secs}s)")),
-        }
+    let secs = match step_mode(step) {
+        StepMode::GroupLoop => GROUP_LOOP_TIMEOUT_SECS,
+        _ => PARTICIPANT_TIMEOUT_SECS,
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(secs), run).await {
+        Ok(r) => r,
+        Err(_) => Err(format!("{name} 响应超时({secs}s)")),
     }
 }
 
@@ -314,7 +299,7 @@ async fn run_one(
         &messages,
         &[],
         move |evt| {
-            crate::engine::agent_runner::mark_idle_activity(); // YiYi 若在 project_task 步里也算流活动
+            crate::engine::agent_runner::mark_idle_activity(); // 流活动上报(idle 看门狗场景的通用埋点)
             let (delta, reasoning) = match evt {
                 StreamEvent::ContentDelta(d) => (d, false),
                 StreamEvent::ReasoningDelta(d) => (d, true),
@@ -384,7 +369,7 @@ fn role_run_params(def: Option<&crate::engine::agents::AgentDefinition>) -> (Too
 /// companion → `agent_definition_name` slug → `AppState.agent_registry`。
 /// registry / DB 不可达(headless 测试 / 未初始化)→ 回落全套工具 + 6 步——
 /// 因此本函数在测试里安全降级,不破坏现有行为。
-async fn resolve_companion_role(companion_id: CompanionId) -> (ToolFilter, usize) {
+pub(crate) async fn resolve_companion_role(companion_id: CompanionId) -> (ToolFilter, usize) {
     let slug = match crate::engine::tools::get_database()
         .and_then(|db| db.get_companion(companion_id))
     {
@@ -406,86 +391,35 @@ async fn resolve_companion_role(companion_id: CompanionId) -> (ToolFilter, usize
 /// (`resolve_companion_role`):读写/执行类工具只给角色允许的,步数上限随角色,
 /// 让"分工"真生效、能干活的角色跑更长。区别仍在 system prompt 的 persona 前缀。
 /// 流事件转成 `CollaborationEvent::Token` 喂前端;工具开始/结束注入思考块。
-async fn run_one_react(
+/// 纯 ReAct 执行内核(chat×work 共享):给定**已构造好的** system/user prompt + 角色权限
+/// 过滤 + 步数上限,跑统一 run_agent,收尾把本步内 ask_user 的问答内联进该成员气泡。
+/// **不含任何 mode 判断**——调用方(chat 的 run_one_react / 未来 work 的 worker)各自按
+/// 象限构造 prompt 后复用本内核。S3:从 run_one_react 抽出,ask_user 内联整条进内核。
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_react_inner(
     config: &LLMConfig,
-    step: &Step,
-    participant_idx: usize,
-    upstream: &[(StepId, StepOutput)],
     collab_id: CollaborationId,
+    step_id: StepId,
+    companion_id: CompanionId,
+    companion_name: &str,
+    system_prompt: String,
+    user_message: String,
+    role_filter: ToolFilter,
+    role_max_iter: usize,
 ) -> Result<StepOutput, String> {
-    let p = &step.participants[participant_idx];
-
-    // F2:按角色注入工具过滤器 + ReAct 步数上限。无角色定义 → 全套工具 + 6 步(保持
-    // 现状);有角色 → 只给角色允许的工具、用角色自己的步数上限,让"分工"真生效、
-    // 能干活的角色跑更长的任务。headless 测试里 registry 不可达,安全回落。
-    let (mut role_filter, role_max_iter) = resolve_companion_role(p.companion_id).await;
-    // intake 接手者(接口人)兜底获得 propose_project_plan。它现已声明在 Coordinator 档位
-    // (dynamic.rs),这里是**向后兼容垫片**:覆盖该工具进档位之前已落盘的旧动态角色(AGENT.md
-    // 还没这工具),以及任何非协调档却来接手的 lead。idempotent;All 已含、Deny 不动。
-    if step_mode(step) == Some("intake") {
-        if let ToolFilter::Allow(v) = &mut role_filter {
-            if !v.iter().any(|t| t == "propose_project_plan") {
-                v.push("propose_project_plan".to_string());
-            }
-        }
-    }
-
-    // system prompt = persona 前缀 + 群聊规则 + 动手能力说明(三段拼接)。
-    // persona 前缀:载 companions/<id>/persona.md;文件不存在 → 空串。
-    let persona_prefix = crate::engine::tools::WORKING_DIR
-        .get()
-        .map(|wd| {
-            wd.join("companions")
-                .join(p.companion_id.to_string())
-                .join("persona.md")
-        })
-        .and_then(|path| persona_loader::load_companion_persona(&path))
-        .map(|persona| persona.render_prefix())
-        .unwrap_or_default();
-
-    let group_rules = render_system_prompt(step, participant_idx);
-    // intake 步(工作群牵头者接手)给"主导推进"指令,而非放养的"以对话为主"——这是把工作群
-    // 从七嘴八舌空转、拉回有组织推进的关键(配合路由:工作群默认牵头者接手)。
-    let tools_note = if step_mode(step) == Some("intake") {
-        let roster = step
-            .input
-            .metadata
-            .get("roster")
-            .and_then(|v| v.as_str())
-            .unwrap_or("(暂无队友信息)");
-        format!(
-            "\n\n【你是这个工作群的牵头者/接口人】用户只跟你对接,你来主导推进,别只是闲聊:\n\
-             1. 先看有没有**阻塞性的关键未知**(日期/预算/范围/受众等)——有就用 ask_user 工具\
-             **一次性问清**(可给选项),等用户答了再往下。别空喊「@用户 请告诉我 X」(不阻塞、易漏、\
-             让团队空转);要用 ask_user 阻塞式地问。\n\
-             2. 关键信息齐了 → 用 **propose_project_plan** 工具把活拆成任务派给队友:每条填 role\
-             (队友的标识,见下方名单)、objective(这条做什么)、depends_on(依赖哪几条,0-based 下标,\
-             无依赖留空)。会给用户发「开工方案」卡,用户点开工后队友才真正并行开干。\n\
-             3. 你自己(协调档)一般不写文件,产出靠派给能写的队友;别自己硬扛所有活。\n\
-             【你的队友(propose_project_plan 的 role 填这些标识)】\n{roster}"
-        )
-    } else {
-        "\n\n【动手能力】你能用工具(读写文件、执行命令、查资料、开浏览器等)。\
-         但这是群聊,以对话为主——只在用户的需求确实需要你动手查/做时才调工具;\
-         平时顺着聊就行,别为用而用。用完工具,用你自己的口吻把结果说出来,别贴原始输出。"
-            .to_string()
-    };
-    let system_prompt = format!("{persona_prefix}{group_rules}{tools_note}");
-    let user_message = render_user_prompt(step, upstream);
-
     let started = Instant::now();
 
-    // token 用量累加交给 CollabEventSink 的 on_usage;executor 收尾时读回。
+    // token 用量累加交给 CollabEventSink 的 on_usage;收尾时读回。
     let in_tokens = Arc::new(AtomicU32::new(0));
     let out_tokens = Arc::new(AtomicU32::new(0));
 
     // 伙伴的流事件统一经 AgentEventSink 翻译:正文 / 思考 → Token{reasoning},
-    // 工具开始 / 结束 → 结构化 ToolStart / ToolEnd(不再降级成 🔧 文本注入思考块)。
+    // 工具开始 / 结束 → 结构化 ToolStart / ToolEnd。
     let sink: Arc<dyn crate::engine::agent_runner::AgentEventSink> =
         Arc::new(crate::engine::agent_runner::collab_sink::CollabEventSink::new(
             collab_id,
-            step.id,
-            p.companion_id,
+            step_id,
+            companion_id,
             Arc::clone(&in_tokens),
             Arc::clone(&out_tokens),
         ));
@@ -493,8 +427,17 @@ async fn run_one_react(
     // 因为 sink 本体随后会被 move 进 run_agent。
     let sink_for_qa = Arc::clone(&sink);
 
-    // 走统一 run_agent:shell 全关(单轮 ReAct)+ working_dir=None(不注入 YiYi 的
-    // SOUL.md/AGENTS.md persona —— 伙伴自己的人设已在 system_prompt 里)+ persist=None
+    // R5(根修):协作所属会话直接写进 cfg.session_id —— run_agent 内部用它包
+    // with_session_id(run.rs),ask_user 等会话感知工具的落库/事件载荷才带得上真实
+    // session_id(pending_questions 按会话恢复、提问卡按会话路由都靠它)。
+    // **不能**在 run_agent 外面再包一层 with_session_id:run_agent 内层 scope 用
+    // cfg.session_id 覆盖外层 —— cfg 留空串等于把外层绑定抹掉(最初就栽在这里:
+    // 外包的一层从未生效,pending_questions 全落空 session_id)。
+    let collab_session = crate::engine::tools::get_database()
+        .and_then(|db| db.collaboration_session_id(collab_id))
+        .unwrap_or_default();
+
+    // 走统一 run_agent:shell 全关 + working_dir=None(伙伴人设已在 system_prompt)+ persist=None
     // (产出是协作 step output,由本函数收成 StepOutput,不入 chat 会话)。
     let cfg = crate::engine::agent_runner::config::AgentRunConfig {
         llm: config.clone(),
@@ -504,38 +447,34 @@ async fn run_one_react(
         llm_history: vec![],
         max_iter: Some(role_max_iter),
         is_first_message: false,
-        session_id: String::new(),
+        session_id: collab_session,
         working_dir: None,
         shell: crate::engine::agent_runner::config::ShellOptions::default(),
     };
     let dummy_cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-    // S2 步骤①:若这次协作属于一个有隔离项目工作区的群(软件公司团队),把成员的
-    // 文件 / shell 工具 scope 到该工作区;普通群 / 单聊 / headless(registry 不可达)
-    // → None,不 scope,落回用户默认工作区(不影响闲聊群)。与 persona 注入门解耦。
+    // 若这次协作属于有隔离项目工作区的群(软件公司团队),把成员的文件 / shell 工具 scope
+    // 到该工作区;普通群 / 单聊 / headless → None,不 scope。
     let group_workspace = crate::engine::tools::get_database()
         .and_then(|db| db.group_workspace_for_collaboration(collab_id))
         .map(std::path::PathBuf::from);
 
-    // 两层 task-local 包裹(都不依赖 working_dir,与 persona 注入门解耦):
-    //  ① with_tool_filter:角色权限真生效——ReAct core 据此裁剪给 LLM 的工具集(F2)。
-    //  ② with_ask_asker:分身调 ask_user 时提问气泡显示它自己的角色名/头像(F1)。
-    // run_agent 的 future 很大(整个 ReAct 循环 + 流式 + 工具分发)。Box::pin 把它的
-    // 状态机移到堆上,避免叠加三层 task-local scope 后在 debug 构建的 tokio worker 栈
-    // (2MB)上把帧撑爆(stack overflow)。
+    // 三层 task-local 包裹:① with_tool_filter 角色权限真生效(F2);② with_ask_asker
+    // 提问气泡显示分身自己的角色名/头像(F1);③ with_collab_qa 收集本步 ask_user 问答。
+    // run_agent 的 future 很大(整个 ReAct 循环 + 流式 + 工具分发),Box::pin 移到堆上,
+    // 避免叠加三层 task-local scope 后在 debug 的 tokio worker 栈上把帧撑爆(stack overflow)。
     let agent_fut = Box::pin(crate::engine::agent_runner::run::run_agent(
         cfg,
         None,
         sink,
         dummy_cancel,
     ));
-    // 本步内成员调 ask_user 的问答收进累加器(收尾时内联进它的气泡 + 持久化进产出)。
     let qa_acc = Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
     let run = crate::engine::tools::with_tool_filter(
         role_filter,
         crate::engine::tools::ask_user::with_ask_asker(
-            p.companion_id,
-            p.name.clone(),
+            companion_id,
+            companion_name.to_string(),
             crate::engine::tools::ask_user::with_collab_qa(Arc::clone(&qa_acc), agent_fut),
         ),
     );
@@ -544,9 +483,9 @@ async fn run_one_react(
         None => run.await?,
     };
 
-    // 本步内向用户确认过的问答 → 拼成块,既推进实时气泡流(用户立刻看到问答内联在
-    // 「{name}」自己的气泡末尾,不再单开一条 YiYi 消息),又追进 full_output(重开
-    // hydrate 时从持久化产出还原)。两条路同源,内容一致、不双渲染。
+    // 本步内向用户确认过的问答 → 拼成块,既推进实时气泡流(用户立刻看到问答内联在该成员
+    // 气泡末尾,不再单开一条 YiYi 消息),又追进 full_output(重开 hydrate 从持久化产出还原)。
+    // 两条路同源,内容一致、不双渲染。
     let qa = qa_acc.lock().map(|v| v.clone()).unwrap_or_default();
     if !qa.is_empty() {
         let mut block = String::new();
@@ -569,6 +508,62 @@ async fn run_one_react(
         tokens_used,
         duration_ms,
     })
+}
+
+async fn run_one_react(
+    config: &LLMConfig,
+    step: &Step,
+    participant_idx: usize,
+    upstream: &[(StepId, StepOutput)],
+    collab_id: CollaborationId,
+) -> Result<StepOutput, String> {
+    let p = &step.participants[participant_idx];
+
+    // F2:按角色注入工具过滤器 + ReAct 步数上限。无角色定义 → 全套工具 + 6 步(保持
+    // 现状);有角色 → 只给角色允许的工具、用角色自己的步数上限,让"分工"真生效、
+    // 能干活的角色跑更长的任务。headless 测试里 registry 不可达,安全回落。
+    let (role_filter, role_max_iter) = resolve_companion_role(p.companion_id).await;
+
+    // system prompt = persona 前缀 + 群聊规则 + 动手能力说明(三段拼接)。
+    // persona 前缀:载 companions/<id>/persona.md;文件不存在 → 空串。
+    let persona_prefix = crate::engine::tools::WORKING_DIR
+        .get()
+        .map(|wd| {
+            wd.join("companions")
+                .join(p.companion_id.to_string())
+                .join("persona.md")
+        })
+        .and_then(|path| persona_loader::load_companion_persona(&path))
+        .map(|persona| persona.render_prefix())
+        .unwrap_or_default();
+
+    let group_rules = render_system_prompt(step, participant_idx);
+    let tools_note = "\n\n【动手能力】你能用工具(读写文件、执行命令、查资料、开浏览器等)。\
+         但这是群聊,以对话为主——只在用户的需求确实需要你动手查/做时才调工具;\
+         平时顺着聊就行,别为用而用。用完工具,用你自己的口吻把结果说出来,别贴原始输出。";
+    let system_prompt = format!("{persona_prefix}{group_rules}{tools_note}");
+    let user_message = render_user_prompt(step, upstream);
+
+    // 构造完(mode-aware:prompt / 权限 / 步数)→ 交给共享 ReAct 内核执行(S3 抽出)。
+    // 内核不含 mode 判断;ask_user 内联收尾在内核里,chat/work 复用同一条。
+    //
+    // 类型擦除成 boxed trait object:抽出内核后 async fn 链多一层,`run_step` 的 Send
+    // 自动 trait 求值沿链深递归会撞 E0275(overflow evaluating ... : Send)。在内核边界
+    // 装成 `dyn Future + Send` 截断这条递归(内核本就是 Send,只是不让编译器递归展开它)。
+    let fut: std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<StepOutput, String>> + Send>,
+    > = Box::pin(run_react_inner(
+        config,
+        collab_id,
+        step.id,
+        p.companion_id,
+        &p.name,
+        system_prompt,
+        user_message,
+        role_filter,
+        role_max_iter,
+    ));
+    fut.await
 }
 
 fn summarize(text: &str) -> String {
@@ -827,43 +822,4 @@ mod role_tests {
         assert!(!names_after_readonly.contains(&"execute_shell".to_string()));
     }
 
-    // S2④:项目 task 的上游产出按"交接"语义注入,而非"群里的讨论"。
-    #[test]
-    fn project_task_prompt_frames_upstream_as_handoff() {
-        use super::super::{StepInput, StepStatus};
-        let step = Step {
-            id: 2,
-            kind: StepKind::ParallelAgents,
-            participants: vec![],
-            depends_on: vec![1],
-            input: StepInput {
-                prompt: "写前端界面".into(),
-                metadata: serde_json::json!({ "mode": "project_task" }),
-            },
-            output: None,
-            status: StepStatus::Pending,
-            started_at: None,
-            finished_at: None,
-        };
-        let upstream = vec![(
-            1i64,
-            StepOutput {
-                summary: "后端 API".into(),
-                full_output: "GET /todos 返回 [{id,title,done}]".into(),
-                tokens_used: TokenUsage::default(),
-                duration_ms: 0,
-            },
-        )];
-        let prompt = render_user_prompt(&step, &upstream);
-        assert!(prompt.contains("上游交付"), "应是交接语义: {prompt}");
-        assert!(prompt.contains("GET /todos"), "应注入上游产出");
-        assert!(prompt.contains("写前端界面"), "应含本任务");
-        assert!(!prompt.contains("群里目前的讨论"), "不该是讨论语义");
-
-        // 无上游(第一棒)→ 只有任务,无交接块。
-        let first = Step { depends_on: vec![], ..step.clone() };
-        let p0 = render_user_prompt(&first, &[]);
-        assert!(!p0.contains("上游交付"));
-        assert!(p0.contains("写前端界面"));
-    }
 }

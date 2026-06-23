@@ -229,6 +229,66 @@ async fn wait_for_terminal(orch: &SqliteOrchestrator, id: CollaborationId) -> Co
     wait_for_status(orch, id, 2000, |s| s.is_terminal()).await
 }
 
+/// 并发回归(2026-06-13 review BUG2):同一 work 会话同时跑多个 work_dispatch 协作
+/// (用户 @ 直达任务 + 别的协作)时,**先完成的那个不能把整个 job 误标「已交付」**。
+/// 只有最后一个活动协作收尾才推 job 终态。没有这个守卫,一个直达小任务先完成就弹
+/// 「✅ 已交付」、误撤 PM 正在等用户答的提问。
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn concurrent_work_dispatch_fast_one_finishing_keeps_job_running() {
+    let t = TempDb::new();
+    let sid = "concurrency-sess";
+    ensure_session(&t, sid);
+    let db = t.db();
+    db.create_work_job(sid, "做个东西", Some(1)).unwrap();
+    db.set_work_job_status(sid, "running").unwrap();
+
+    // 执行器全局 300ms 延迟:B(1 步,~300ms)先于 A(2 步串行,~600ms)收尾。
+    let executor = Arc::new(MockExecutor::with_delay(Duration::from_millis(300)));
+    let orch = SqliteOrchestrator::new(db.clone(), executor.handle());
+
+    // A:两步串行(step2 依赖 step1),活得久。
+    let plan_a = CollaborationPlan {
+        steps: vec![step_single(1, "A1", 10), {
+            let mut s = step_single(2, "A2", 11);
+            s.depends_on = vec![1];
+            s
+        }],
+    };
+    let a = orch
+        .submit_kinded(sid.into(), "A".into(), plan_a, CollaborationMode::Dispatched(0), None, Some("work_dispatch"))
+        .await
+        .unwrap();
+    // B:单步,先收尾。
+    let plan_b = CollaborationPlan { steps: vec![step_single(1, "B1", 12)] };
+    let b = orch
+        .submit_kinded(sid.into(), "B".into(), plan_b, CollaborationMode::Dispatched(0), None, Some("work_dispatch"))
+        .await
+        .unwrap();
+
+    // B 先到终态。等一拍让 finalize 的 job-sync 尾巴跑完。
+    wait_for_terminal(&orch, b).await;
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    // 关键断言:A 还在跑 → B 完成不该把 job 推「done」。
+    assert_eq!(
+        db.get_work_job_status(sid).as_deref(),
+        Some("running"),
+        "另一个协作还在跑时,先完成的协作不该把 job 标为已交付",
+    );
+
+    // A 收尾后(已无其它活动协作)→ job 落 done。
+    wait_for_terminal(&orch, a).await;
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while db.get_work_job_status(sid).as_deref() != Some("done") && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        db.get_work_job_status(sid).as_deref(),
+        Some("done"),
+        "最后一个协作收尾后 job 应落 done",
+    );
+}
+
 /// Insert a placeholder session so collaborations referencing it pass the
 /// FK. Idempotent — fine to call multiple times.
 fn ensure_session(t: &TempDb, session_id: &str) {
@@ -458,6 +518,101 @@ async fn retry_step_revives_failed_collaboration() {
     assert!(matches!(status, CollaborationStatus::Done));
     // Executor saw step 1 twice (original + retry).
     assert_eq!(executor.invocations().len(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn retry_step_double_click_rejected_while_step_rerunning() {
+    // 防连点竞态:RetryStep 只对 failed/skipped 步合法(CAS)。没有这个条件时,第一次
+    // 重试把步拉回 running 后,第二次点击会把 running 步再次重置 pending → schedule 的
+    // pending→running 守卫再次放行 → 同一步 N 路并发执行体(实测用户连点 4 下 =
+    // 4 个同名成员并发互踩)。用带 delay 的 executor 让步停留在 running 复现连点窗口。
+    let t = TempDb::new();
+    ensure_session(&t, "s");
+    let executor = Arc::new(MockExecutor::with_delay(Duration::from_millis(400)));
+    let orch = SqliteOrchestrator::new(t.db(), executor.clone().handle());
+    executor.fail_step(1, "transient");
+    let plan = CollaborationPlan {
+        steps: vec![step_single(1, "x", 7)],
+    };
+    let id = orch
+        .submit("s".into(), "x".into(), plan, CollaborationMode::Manual, None)
+        .await
+        .unwrap();
+    wait_for_status(&orch, id, 3000, |s| matches!(s, CollaborationStatus::Failed(_))).await;
+
+    // 第一次重试:合法(步 failed → pending → running,delay 内停留 running)。
+    orch.mutate(id, Mutation::RetryStep { step_id: 1 })
+        .await
+        .expect("first retry");
+    // 执行体在 detached spawn 上启动 —— 等它真正拉起(invocations: 原始 1 + 重试 1)。
+    let deadline = Instant::now() + Duration::from_millis(1000);
+    while executor.invocations().len() < 2 && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(executor.invocations().len(), 2, "第一次重试应已拉起执行体");
+
+    // 连点第二次:步在 running(delay 窗口内)→ CAS 拒绝,不再拉起新执行体。
+    let err = orch
+        .mutate(id, Mutation::RetryStep { step_id: 1 })
+        .await
+        .expect_err("retry while step rerunning must be rejected");
+    assert!(err.contains("重跑") || err.contains("可重试"), "拒绝文案应可读:{err}");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(executor.invocations().len(), 2, "被拒的重试不该再拉起执行体");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn work_job_terminal_expires_pending_questions() {
+    // 失败收口一致性:work job 进终态时,该会话挂着的未答提问应被撤销(expired)——
+    // 没人会再收答案的提问卡不该留在会话里诱导用户回答。
+    let t = TempDb::new();
+    let (orch, executor) = build_orchestrator(&t);
+    let db = t.db();
+    ensure_session(&t, "sess-wjq");
+    db.create_work_job("sess-wjq", "做个东西", Some(7)).unwrap();
+    db.insert_pending_question(&app_lib::engine::db::PendingQuestion {
+        request_id: "q-orphan".into(),
+        session_id: "sess-wjq".into(),
+        collaboration_id: None,
+        step_id: None,
+        companion_id: 7,
+        asker_name: "tester".into(),
+        question: "还要继续吗?".into(),
+        options_json: None,
+        kind: "text".into(),
+        status: "pending".into(),
+        answer: None,
+        created_at: 1,
+        answered_at: None,
+    })
+    .unwrap();
+
+    executor.fail_step(1, "炸了");
+    let plan = CollaborationPlan {
+        steps: vec![step_single(1, "x", 7)],
+    };
+    let id = orch
+        .submit_kinded(
+            "sess-wjq".into(),
+            "做个东西".into(),
+            plan,
+            CollaborationMode::Dispatched(7),
+            None,
+            Some("work_dispatch"),
+        )
+        .await
+        .unwrap();
+    wait_for_status(&orch, id, 2000, |s| matches!(s, CollaborationStatus::Failed(_))).await;
+
+    assert_eq!(db.get_work_job_status("sess-wjq").as_deref(), Some("failed"));
+    assert!(
+        db.list_pending_questions("sess-wjq").is_empty(),
+        "job 终态后未答提问应被撤销",
+    );
+    let q = db.get_pending_question("q-orphan").expect("行还在");
+    assert_eq!(q.status, "expired", "撤销走 expired,不污染 answered 的去重命中");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -933,4 +1088,46 @@ async fn watch_receives_audit_events() {
         }
     }
     assert!(got_submitted && got_step_started, "missed audit events");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn skip_failed_step_revives_work_collab_and_unblocks_downstream() {
+    // #3(2026-06-14):一个步失败 → 协作 Failed、job failed。用户跳过卡住的失败步 →
+    // 协作回 Running、job running,下游(依赖该步)照常跑(skipped 视为依赖满足)→ 交付。
+    let t = TempDb::new();
+    let sid = "skip-revive";
+    ensure_session(&t, sid);
+    let db = t.db();
+    db.create_work_job(sid, "做个东西", Some(1)).unwrap();
+    db.set_work_job_status(sid, "running").unwrap();
+
+    let executor = Arc::new(MockExecutor::new());
+    executor.fail_step(1, "step1 炸了");
+    let orch = SqliteOrchestrator::new(db.clone(), executor.clone().handle());
+
+    let plan = CollaborationPlan {
+        steps: vec![step_single(1, "S1", 10), {
+            let mut s = step_single(2, "S2", 11);
+            s.depends_on = vec![1];
+            s
+        }],
+    };
+    let id = orch
+        .submit_kinded(sid.into(), "做个东西".into(), plan, CollaborationMode::Dispatched(0), None, Some("work_dispatch"))
+        .await
+        .unwrap();
+    wait_for_status(&orch, id, 2000, |s| matches!(s, CollaborationStatus::Failed(_))).await;
+    assert_eq!(db.get_work_job_status(sid).as_deref(), Some("failed"), "失败步 → job failed");
+
+    // 跳过失败的 step1 —— 协作复活,下游 step2 跑完 → 交付。
+    orch.mutate(id, Mutation::SkipStep { step_id: 1 }).await.expect("skip failed step");
+    wait_for_terminal(&orch, id).await;
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while db.get_work_job_status(sid).as_deref() != Some("done") && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(db.get_work_job_status(sid).as_deref(), Some("done"), "跳过卡住步后下游跑完 → job done");
+    // step2 确实跑了(skipped 依赖视为满足)。
+    assert!(executor.invocations().contains(&2), "下游 step2 应在跳过后执行");
 }

@@ -177,6 +177,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   switchToSession: (id: string) => {
+    // R5(防幽灵会话):work 会话(id 以 work- 开头)不属于 chat 表面 —— 任何入口
+    // (通知跳转/搜索/Work 页选中)切到它,都同步 Work 页选中态并把导航指到工作页。
+    // chat 列表(只含 source='chat')里没有它,留在 chat 页会进「我在哪」精神分裂态。
+    if (id.startsWith('work-')) {
+      import('../stores/workStore').then(({ useWorkStore }) => {
+        useWorkStore.getState().setSelectedSessionId(id);
+      });
+      window.dispatchEvent(new CustomEvent('navigate', { detail: 'work' }));
+      // activeSessionId 仍要设:Work 页右栏的嵌入会话当前由它驱动。
+      // 不持久化(localStorage 留给 chat 会话,重启回到 chat 侧)。
+      set({ activeSessionId: id, draftCompanionId: null });
+      return;
+    }
     // 切到真会话 → 草稿作废(草稿好友只对空草稿台有效)。
     set({ activeSessionId: id, draftCompanionId: null });
     get()._persistActive();
@@ -188,19 +201,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   deleteSession: async (id: string) => {
     try {
       await apiDeleteSession(id);
-      const { chatSessions, activeSessionId } = get();
+      const { chatSessions, activeSessionId, searchResults } = get();
       const newSessions = chatSessions.filter(s => s.id !== id);
+      // 搜索态同步剔除:侧边栏在搜索时渲染 searchResults —— 只过滤 chatSessions 的话,
+      // 删除明明成功了,搜索列表里它还杵着,看起来就是「点删除没反应」。
+      const newSearch = searchResults ? searchResults.filter(s => s.id !== id) : null;
 
       if (activeSessionId === id) {
         if (newSessions.length > 0) {
           // Switch to most recent remaining session
-          set({ chatSessions: newSessions, activeSessionId: newSessions[0].id });
+          set({ chatSessions: newSessions, searchResults: newSearch, activeSessionId: newSessions[0].id });
         } else {
           // 删光了 → 落到空草稿态(不自动补 New Chat)。发消息才建,列表保持空。
-          set({ chatSessions: [], activeSessionId: '', draftCompanionId: null });
+          set({ chatSessions: [], searchResults: newSearch, activeSessionId: '', draftCompanionId: null });
         }
       } else {
-        set({ chatSessions: newSessions });
+        set({ chatSessions: newSessions, searchResults: newSearch });
       }
       get()._persistActive();
     } catch (err) {

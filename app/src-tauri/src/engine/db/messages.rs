@@ -12,6 +12,8 @@ pub struct ChatMessage {
     pub collaboration_id: Option<i64>,
     pub step_id: Option<i64>,
     pub companion_id: Option<i64>,
+    /// chat/work 渲染判别器(R4):collab(默认)/ work_job / work_plan。
+    pub context_type: Option<String>,
 }
 
 impl super::Database {
@@ -28,7 +30,7 @@ impl super::Database {
         let mut stmt = conn
             .prepare(
                 "SELECT id, session_id, role, content, timestamp, metadata,
-                        collaboration_id, step_id, companion_id FROM messages
+                        collaboration_id, step_id, companion_id, context_type FROM messages
                  WHERE session_id = ?1 ORDER BY timestamp ASC LIMIT ?2",
             )
             .map_err(|e| format!("Query error: {}", e))?;
@@ -45,6 +47,7 @@ impl super::Database {
                     collaboration_id: row.get(6)?,
                     step_id: row.get(7)?,
                     companion_id: row.get(8)?,
+                    context_type: row.get(9).ok(),
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?
@@ -65,7 +68,7 @@ impl super::Database {
         let mut stmt = conn
             .prepare(
                 "SELECT id, session_id, role, content, timestamp, metadata,
-                        collaboration_id, step_id, companion_id FROM messages
+                        collaboration_id, step_id, companion_id, context_type FROM messages
                  WHERE companion_id = ?1 ORDER BY timestamp DESC, id DESC LIMIT ?2",
             )
             .map_err(|e| format!("Query error: {}", e))?;
@@ -82,6 +85,7 @@ impl super::Database {
                     collaboration_id: row.get(6)?,
                     step_id: row.get(7)?,
                     companion_id: row.get(8)?,
+                    context_type: row.get(9).ok(),
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?
@@ -104,7 +108,7 @@ impl super::Database {
         let mut stmt = conn
             .prepare(
                 "SELECT id, session_id, role, content, timestamp, metadata,
-                        collaboration_id, step_id, companion_id FROM messages
+                        collaboration_id, step_id, companion_id, context_type FROM messages
                  WHERE session_id = ?1 ORDER BY timestamp DESC LIMIT ?2",
             )
             .map_err(|e| format!("Query error: {}", e))?;
@@ -122,6 +126,7 @@ impl super::Database {
                     collaboration_id: row.get(6)?,
                     step_id: row.get(7)?,
                     companion_id: row.get(8)?,
+                    context_type: row.get(9).ok(),
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?
@@ -151,7 +156,7 @@ impl super::Database {
         let mut stmt = conn
             .prepare(
                 "SELECT id, session_id, role, content, timestamp, metadata,
-                        collaboration_id, step_id, companion_id FROM messages
+                        collaboration_id, step_id, companion_id, context_type FROM messages
                  WHERE session_id = ?1 ORDER BY timestamp DESC",
             )
             .map_err(|e| format!("Query error: {}", e))?;
@@ -167,6 +172,7 @@ impl super::Database {
                     collaboration_id: row.get(6)?,
                     step_id: row.get(7)?,
                     companion_id: row.get(8)?,
+                    context_type: row.get(9).ok(),
                 })
             })
             .map_err(|e| format!("Query error: {}", e))?
@@ -200,6 +206,35 @@ impl super::Database {
         content: &str,
         metadata: Option<&str>,
     ) -> Result<i64, String> {
+        self.push_message_with_context(session_id, role, content, metadata, "collab")
+    }
+
+    /// `push_message_with_metadata` 的 context_type 版本(R3):work 落库的消息要标渲染
+    /// 判别器(如开工方案锚点 `work_plan`、交付摘要 `work_job`),前端按它分发渲染分支。
+    /// 把某会话**全部**开工方案消息(context_type=work_plan)标记已开工:metadata 注入
+    /// `committed: true`。用户点「开工」后,方案卡要持久地进入「✅ 已开工」态 —— 本地
+    /// state 会被消息重载打回原形(实测:点完 600ms 后重载,卡片又变回可点「开工」)。
+    /// 标**全部**而非最新:开工后旧轮方案也都过时,不该再可点。
+    pub fn mark_work_plans_committed(&self, session_id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE messages
+                SET metadata = json_set(COALESCE(metadata, '{}'), '$.committed', json('true'))
+              WHERE session_id = ?1 AND context_type = 'work_plan'",
+            params![session_id],
+        )
+        .map_err(|e| format!("mark_work_plans_committed: {e}"))?;
+        Ok(())
+    }
+
+    pub fn push_message_with_context(
+        &self,
+        session_id: &str,
+        role: &str,
+        content: &str,
+        metadata: Option<&str>,
+        context_type: &str,
+    ) -> Result<i64, String> {
         let now = super::now_ts();
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let tx = conn.unchecked_transaction()
@@ -213,8 +248,8 @@ impl super::Database {
         .map_err(|e| format!("Failed to ensure session: {}", e))?;
 
         tx.execute(
-            "INSERT INTO messages (session_id, role, content, timestamp, metadata) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![session_id, role, content, now, metadata],
+            "INSERT INTO messages (session_id, role, content, timestamp, metadata, context_type) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![session_id, role, content, now, metadata, context_type],
         )
         .map_err(|e| format!("Failed to insert message: {}", e))?;
 
@@ -254,6 +289,19 @@ impl super::Database {
         collaboration_id: i64,
         content: &str,
     ) -> Result<i64, String> {
+        self.upsert_collaboration_message_ctx(session_id, collaboration_id, content, "collab")
+    }
+
+    /// 同 `upsert_collaboration_message`,但显式标 `context_type`:chat 群聊用 'collab',
+    /// work job 的 intake / 开工 / 结论锚点用 'work_job'(S6 / §7-P0-2:让前端按 context_type
+    /// 分流 chat 群聊渲染 vs work 结果渲染)。
+    pub fn upsert_collaboration_message_ctx(
+        &self,
+        session_id: &str,
+        collaboration_id: i64,
+        content: &str,
+        context_type: &str,
+    ) -> Result<i64, String> {
         let now = super::now_ts();
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -271,8 +319,8 @@ impl super::Database {
 
         let msg_id = if let Some(id) = existing {
             tx.execute(
-                "UPDATE messages SET content = ?1, timestamp = ?2 WHERE id = ?3",
-                params![content, now, id],
+                "UPDATE messages SET content = ?1, timestamp = ?2, context_type = ?3 WHERE id = ?4",
+                params![content, now, context_type, id],
             )
             .map_err(|e| format!("Failed to update collaboration message: {}", e))?;
             id
@@ -283,9 +331,9 @@ impl super::Database {
             )
             .map_err(|e| format!("Failed to ensure session: {}", e))?;
             tx.execute(
-                "INSERT INTO messages (session_id, role, content, timestamp, collaboration_id)
-                 VALUES (?1, 'assistant', ?2, ?3, ?4)",
-                params![session_id, content, now, collaboration_id],
+                "INSERT INTO messages (session_id, role, content, timestamp, collaboration_id, context_type)
+                 VALUES (?1, 'assistant', ?2, ?3, ?4, ?5)",
+                params![session_id, content, now, collaboration_id, context_type],
             )
             .map_err(|e| format!("Failed to insert collaboration message: {}", e))?;
             tx.last_insert_rowid()

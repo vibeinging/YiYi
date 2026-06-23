@@ -114,10 +114,43 @@ pub(crate) async fn read_file_tool(args: &serde_json::Value) -> String {
     }
 }
 
+/// 大内容 + 参数经过 JSON 修复(`__yiyi_repaired`,llm_client 注入)= 几乎必是模型输出
+/// 上限截断:content 尾部被腰斩,修复只是补闭合。此时**不能执行写入**(写出去 = 静默
+/// 交付残缺文件,模型发现后整个重写又截断,死循环耗尽迭代),返回引导让它分段写。
+fn truncated_args_guard(args: &serde_json::Value, content: &str) -> Option<String> {
+    let repaired = args
+        .get("__yiyi_repaired")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if repaired && content.chars().count() > 2000 {
+        return Some(
+            "Error: your tool-call arguments arrived TRUNCATED by the output limit (the JSON \
+             had to be repaired, so the content is almost certainly incomplete). Refused to \
+             write a broken file. Do NOT retry the same single call — write the file in parts: \
+             write_file the first ~100 lines, then append_file the rest in several chunks."
+                .into(),
+        );
+    }
+    None
+}
+
 pub(crate) async fn write_file_tool(args: &serde_json::Value) -> String {
     let path = args["path"].as_str().unwrap_or("");
     let content = args["content"].as_str().unwrap_or("");
+    if let Some(err) = truncated_args_guard(args, content) {
+        return err;
+    }
     if path.is_empty() {
+        // 大内容场景的高频死法:整个文件塞进一次 tool call,arguments 超出模型输出上限
+        // 被截断 → JSON 修复后 path 字段丢失。泛泛的 "path is required" 模型会原样重试
+        // 再死一遍(实测连挂 4 次耗尽迭代);点破截断原因 + 给分段写法才跳得出循环。
+        if content.chars().count() > 2000 {
+            return "Error: path is missing — your tool-call arguments were almost certainly \
+                    TRUNCATED by the output limit (the content is very large). Do NOT retry \
+                    the same call. Instead: write_file the first ~100 lines, then append_file \
+                    the rest in several smaller chunks."
+                .into();
+        }
         return "Error: path is required".into();
     }
     if let Err(e) = super::super::access_check(path, true).await {
@@ -295,7 +328,9 @@ pub(crate) async fn edit_file_tool(args: &serde_json::Value) -> String {
 pub(crate) async fn append_file_tool(args: &serde_json::Value) -> String {
     let path = args["path"].as_str().unwrap_or("");
     let content = args["content"].as_str().unwrap_or("");
-
+    if let Some(err) = truncated_args_guard(args, content) {
+        return err;
+    }
     if path.is_empty() {
         return "Error: path is required".into();
     }

@@ -29,3 +29,4 @@ pub mod inbox;
 pub mod companions;
 pub mod companion_groups;
 pub mod collaboration;
+pub mod work;

@@ -4,6 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { healthCheck, isSetupComplete } from './api/system';
 import { SetupWizard } from './pages/SetupWizard';
 import { ChatPage } from './pages/Chat';
+import { WorkPage } from './pages/Work';
 import { BuddyPage } from './pages/Buddy';
 import { SkillsPage } from './pages/Skills';
 import { ExtensionsPage } from './pages/Extensions';
@@ -32,14 +33,30 @@ import { TaskSidebar, NavRail } from './components/TaskSidebar';
 import { TaskDetailOverlay } from './components/TaskDetailOverlay';
 import { useTaskSidebarStore } from './stores/taskSidebarStore';
 import { useTaskStore } from './stores/taskStore';
-export type Page = 'chat' | 'buddy' | 'skills' | 'extensions' | 'cronjobs' | 'workspace' | 'mcp' | 'heartbeat' | 'growth' | 'bots' | 'terminal' | 'settings';
+import { useWorkStore } from './stores/workStore';
+export type Page = 'chat' | 'work' | 'buddy' | 'skills' | 'extensions' | 'cronjobs' | 'workspace' | 'mcp' | 'heartbeat' | 'growth' | 'bots' | 'terminal' | 'settings';
 
 function App() {
   return <MainApp />;
 }
 
+const LAST_PAGE_KEY = 'yiyi_last_page';
+const ALL_PAGES: Page[] = [
+  'chat', 'work', 'buddy', 'skills', 'extensions', 'cronjobs', 'workspace',
+  'mcp', 'heartbeat', 'growth', 'bots', 'terminal', 'settings',
+];
+
 function MainApp() {
-  const [currentPage, setCurrentPage] = useState<Page>('chat');
+  // 启动恢复上次离开的一级页面(工作页/对话页…):重启不丢「我在哪」。
+  // 非法/缺省回 chat。
+  const [currentPage, setCurrentPage] = useState<Page>(() => {
+    try {
+      const saved = localStorage.getItem(LAST_PAGE_KEY) as Page | null;
+      return saved && ALL_PAGES.includes(saved) ? saved : 'chat';
+    } catch {
+      return 'chat';
+    }
+  });
   const [healthStatus, setHealthStatus] = useState<'ok' | 'error' | 'checking'>('checking');
   const [setupDone, setSetupDone] = useState<boolean | null>(null);
   const { appliedTheme } = useTheme();
@@ -107,6 +124,21 @@ function MainApp() {
     window.addEventListener('navigate', handler);
     return () => window.removeEventListener('navigate', handler);
   }, []);
+
+  // R6(交付闭环):job 完成时不在工作页 → NavRail「工作」入口红点;进工作页即清。
+  useEffect(() => {
+    const unlisten = listen<{ session_id: string; status: string }>('work://job_done', () => {
+      if (currentPageRef.current !== 'work') useWorkStore.getState().bumpUnseenDone();
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, []);
+  const currentPageRef = useRef(currentPage);
+  useEffect(() => {
+    currentPageRef.current = currentPage;
+    if (currentPage === 'work') useWorkStore.getState().clearUnseenDone();
+    // 持久化当前一级页面(启动恢复用)。
+    try { localStorage.setItem(LAST_PAGE_KEY, currentPage); } catch {}
+  }, [currentPage]);
 
   // Tray menu navigation: jump to a specific page (and optional sub-tab).
   useEffect(() => {
@@ -180,6 +212,7 @@ function MainApp() {
   const renderPage = () => {
     switch (currentPage) {
       case 'chat': return <ChatPage consumeNotifContext={consumeNotifContext} healthStatus={healthStatus} />;
+      case 'work': return <WorkPage />;
       case 'buddy': return <BuddyPage />;
       case 'skills': return <SkillsPage />;
       case 'extensions': return <ExtensionsPage />;
@@ -211,7 +244,7 @@ function MainApp() {
     return null;
   }
 
-  const sidebarWidth = sidebarCollapsed ? 60 : 220;
+  const sidebarWidth = sidebarCollapsed ? 60 : 300; // 与 work 左栏(300px)对齐
 
   return (
     <ToastProvider>

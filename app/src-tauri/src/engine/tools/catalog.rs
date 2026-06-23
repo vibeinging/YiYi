@@ -16,8 +16,8 @@
 use super::types::{tool_def, ToolDefinition};
 use super::{
     ask_user, bot_tools, canvas_tools, cheap_browser, companion_tools, cron_tools, delegate_tools,
-    file_tools, flash_tools, git_tools, lsp_tools, memory_tools, project_tools, skill_tools,
-    snapshot_tools, spawn_tools, system_tools, task_tools, web_tools,
+    file_tools, flash_tools, git_tools, lsp_tools, memory_tools, skill_tools,
+    snapshot_tools, spawn_tools, system_tools, task_tools, web_tools, work_tools,
 };
 
 /// Tools whose only purpose is to feed image data BACK INTO the model.
@@ -41,6 +41,9 @@ pub fn core_tools() -> Vec<ToolDefinition> {
                 "read_file",
                 "write_file",
                 "edit_file",
+                // 大文件分段写的另一半:截断守卫引导「write_file 前半 + append_file
+                // 分段追加」,不进 core 的话工人看不到它,引导成空话。
+                "append_file",
                 "list_directory",
                 "grep_search",
                 "glob_search",
@@ -58,8 +61,12 @@ pub fn core_tools() -> Vec<ToolDefinition> {
                 "spawn_agents",
                 // Human-in-the-loop — ask the user an open question and wait
                 "ask_user",
-                // Project mode — PM proposes a work plan for user approval (S2③)
-                "propose_project_plan",
+                // Work mode(chat×work 2×2):牵头者拆解派工 / 工人互相 @ 接力 /
+                // 把成果打开到用户眼前。不进 core 列表 = LLM 工具列表里没有,
+                // prompt 引导得再好也调不到(实测 QA 看不到 call_teammate)。
+                "propose_work_plan",
+                "call_teammate",
+                "open_for_user",
             ];
 
             let mut all = Vec::new();
@@ -74,7 +81,7 @@ pub fn core_tools() -> Vec<ToolDefinition> {
             all.extend(skill_tools::definitions());
             all.extend(spawn_tools::definitions());
             all.extend(ask_user::definitions());
-            all.extend(project_tools::definitions());
+            all.extend(work_tools::definitions());
 
             all.into_iter()
                 .filter(|t| core_names.contains(&t.function.name.as_str()))

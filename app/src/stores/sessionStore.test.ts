@@ -344,22 +344,21 @@ describe("sessionStore", () => {
       expect(s.activeSessionId).toBe("b");
     });
 
-    it("when the last session is deleted, creates a new one", async () => {
+    it("when the last session is deleted, falls to empty draft state", async () => {
+      // 现行为:删光了 → 空草稿态(不自动补 New Chat),发消息才建。
       const lone = makeSession({ id: "solo" });
       useSessionStore.setState({
         chatSessions: [lone],
         activeSessionId: "solo",
       });
-      const fresh = makeSession({ id: "fresh" });
       mockInvoke({
         delete_session: () => undefined,
-        create_session: () => fresh,
       });
 
       await useSessionStore.getState().deleteSession("solo");
       const s = useSessionStore.getState();
-      expect(s.chatSessions).toEqual([fresh]);
-      expect(s.activeSessionId).toBe("fresh");
+      expect(s.chatSessions).toEqual([]);
+      expect(s.activeSessionId).toBe("");
     });
 
     it("surfaces a toast on backend failure and does not mutate sessions list", async () => {
@@ -451,17 +450,17 @@ describe("sessionStore", () => {
       expect(useSessionStore.getState().activeSessionId).toBe("a");
     });
 
-    it("creates a new chat when no sessions exist at all", async () => {
-      const fresh = makeSession({ id: "new-id" });
+    it("falls to empty draft state when no sessions exist at all", async () => {
+      // 现行为:没有任何会话 → 停在空草稿态(欢迎页),不预建 New Chat ——
+      // 发首条消息时才建会话,列表只留真正聊过的。
       mockInvoke({
         list_chat_sessions: () => [],
-        create_session: () => fresh,
       });
       await useSessionStore.getState().initialize();
       const s = useSessionStore.getState();
       expect(s.initialized).toBe(true);
-      expect(s.chatSessions).toEqual([fresh]);
-      expect(s.activeSessionId).toBe("new-id");
+      expect(s.chatSessions).toEqual([]);
+      expect(s.activeSessionId).toBe("");
     });
 
     it("is idempotent: a second call short-circuits on initialized=true", async () => {

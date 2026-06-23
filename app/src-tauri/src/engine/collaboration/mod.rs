@@ -12,12 +12,10 @@
 use serde::{Deserialize, Serialize};
 
 pub mod audit;
-pub mod conversation_driver;
 pub mod events;
 pub mod executor;
 pub mod learning;
 pub mod orchestrator;
-pub mod project;
 
 use std::sync::{Arc, OnceLock};
 use tokio::sync::{broadcast, Semaphore};
@@ -248,14 +246,7 @@ pub enum AuditKind {
     UserVerdictReaction,
 }
 
-// ── 成员/对话快照类型(供 group_dispatch / conversation_driver 组装)──
-
-#[derive(Debug, Clone)]
-pub struct ChatTurnSummary {
-    pub role: String,
-    pub text: String,
-    pub timestamp: i64,
-}
+// ── 成员快照类型(供 group_dispatch 的 1:1 派遣组装)──
 
 #[derive(Debug, Clone)]
 pub struct CompanionProfile {

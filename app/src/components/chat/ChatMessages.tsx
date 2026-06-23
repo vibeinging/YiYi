@@ -284,9 +284,13 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
   const streamLoading = useChatStreamStore((s) => s.loading);
   const streamingContent = useChatStreamStore((s) => s.streamingContent);
   // ask_user 待答问题:作为对话流末尾的一条气泡渲染(F1)。
-  const activeQuestion = useChatStreamStore((s) => s.questionQueue[0] ?? null);
+  // R5 补漏:按**当前会话**过滤 —— Chat.tsx 的 answerQuestion/handleSend 已按会话路由,
+  // 这里直接取 queue[0] 会把别的会话的提问卡渲染进当前会话(跨会话泄漏的最后一处)。
+  // 无 sessionId 的旧载荷向后兼容:跟随任意会话。
+  const activeQuestion = useChatStreamStore(
+    (s) => s.questionQueue.find((q) => !q.sessionId || q.sessionId === currentSessionId) ?? null,
+  );
   // PM 发来的开工方案:作为对话流末尾的一张卡渲染(S2③)。
-  const projectPlan = useChatStreamStore((s) => s.projectPlan);
   const streamingThinking = useChatStreamStore((s) => s.streamingThinking);
   const lastUsage = useChatStreamStore((s) => s.lastUsage);
   const streamingArtifacts = useChatStreamStore((s) => s.streamingArtifacts);
@@ -459,12 +463,58 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
                   </div>
                 );
               }
+              // R4:开工方案锚点(context_type=work_plan,propose_work_plan 落库)→
+              // **持久化**开工卡:不在场/切页/重启不丢,替代易失的一次性事件单槽。
+              if (msg.context_type === 'work_plan' && msg.work_plan) {
+                const wpTasks = (msg.work_plan.plan?.tasks ?? []).map((t) => ({
+                  role: t.role,
+                  objective: t.objective,
+                  depends_on: t.depends_on ?? [],
+                }));
+                if (wpTasks.length > 0) {
+                  return (
+                    <div key={idx} className="w-full">
+                      <ProjectPlanCard
+                        plan={{
+                          requestId: msg.work_plan.request_id ?? `msg-${msg.id ?? idx}`,
+                          summary: msg.work_plan.summary ?? '',
+                          tasks: wpTasks,
+                          committed: !!msg.work_plan.committed,
+                        }}
+                      />
+                    </div>
+                  );
+                }
+              }
               if (msg.role === 'collaboration' && msg.collaboration_id !== undefined) {
                 // 协作消息(家族会话 / @召唤)直接铺整宽,不外贴 YiYi 头像 ——
                 // 头像由 Step 卡片里每位 participant 自己出(群里 N 个独立账号
                 // 的感觉)。L1 多成员同框靠 ParallelAgentStepCard。
+                // R4:work 终态(✅ 交付完成 / 失败 / 中止,context_type=work_job)在协作卡
+                // 上方加一条**交付横幅** —— 终态文本此前被渲染器丢弃,交付时刻不可见。
+                const workVerdict =
+                  msg.context_type === 'work_job' &&
+                  (msg.content.startsWith('✅') || msg.content.startsWith('（工作'))
+                    ? msg.content
+                    : null;
                 return (
                   <div key={idx} className="w-full">
+                    {workVerdict && (
+                      <div
+                        className="my-2 rounded-xl px-3.5 py-2.5 text-[12.5px] leading-relaxed whitespace-pre-wrap border"
+                        style={{
+                          background: workVerdict.startsWith('✅')
+                            ? 'color-mix(in srgb, var(--color-success) 8%, var(--color-bg-elevated))'
+                            : 'var(--color-bg-subtle)',
+                          borderColor: workVerdict.startsWith('✅')
+                            ? 'color-mix(in srgb, var(--color-success) 30%, var(--color-border))'
+                            : 'var(--color-border)',
+                          color: 'var(--color-text)',
+                        }}
+                      >
+                        {workVerdict.length > 800 ? `${workVerdict.slice(0, 800)}…` : workVerdict}
+                      </div>
+                    )}
                     <CollaborationMessageCard collaborationId={msg.collaboration_id} />
                   </div>
                 );
@@ -905,7 +955,6 @@ export const ChatMessages = forwardRef<ChatMessagesHandle, ChatMessagesProps>(fu
               />
             )}
 
-            {projectPlan && <ProjectPlanCard plan={projectPlan} />}
 
             <div ref={messagesEndRef} />
           </div>

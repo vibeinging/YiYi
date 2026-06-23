@@ -23,9 +23,9 @@ export function useChatEventBridge() {
         store().startStream();
       }),
 
-      listen<{ session_id: string }>('chat://bot_stream_end', (event) => {
+      listen<{ session_id: string }>('chat://bot_stream_end', () => {
         if (cancelled) return;
-        if (event.payload.session_id !== store().sessionId) return;
+        // 终态事件**始终**释放全局 loading —— 不按 session 过滤(见下方 chat://complete 注释)。
         store().endStream();
       }),
 
@@ -55,15 +55,29 @@ export function useChatEventBridge() {
         },
       ),
 
-      listen<{ text: string; session_id: string }>('chat://complete', (event) => {
+      listen<{ text: string; session_id: string; collaboration_id?: number }>('chat://complete', (event) => {
         if (cancelled) return;
-        if (event.payload.session_id !== store().sessionId) return;
+        // 终态事件**始终**释放全局 loading(解锁输入框),不按 session 过滤。
+        // 一次只会有一条 chat 流置 loading(loading 时输入框禁用、发不出第二条),所以无论用户
+        // 是否已切走会话,这条流的完成都该解锁;否则切走再回来会发现输入框永久点不动、发送键卡成
+        // 红色停止方块(2026-06-15 实测 bug:store().sessionId 随活动会话变,完成事件被 guard 拦掉)。
         store().endStream();
+        // 下面是**当前会话**的 UI 更新(重载出协作卡),只对活动会话做。
+        if (event.payload.session_id !== store().sessionId) return;
+        // work followup:后端已起 intake 协作(载荷带 collaboration_id),立即重载消息
+        // 把牵头者接手的协作卡拉出来 —— 消「发出去没下文」的零反馈空窗(R6)。
+        if (event.payload.collaboration_id != null) {
+          window.dispatchEvent(new CustomEvent('yiyi:reload-messages'));
+        }
       }),
 
       listen<{ text: string; session_id: string }>('chat://error', (event) => {
         if (cancelled) return;
-        if (event.payload.session_id !== store().sessionId) return;
+        // 非活动会话:**只释放锁**,不在当前会话弹它的错误(避免错配会话弹错误)。
+        if (event.payload.session_id !== store().sessionId) {
+          store().endStream();
+          return;
+        }
         store().endStreamWithError(event.payload.text);
       }),
 

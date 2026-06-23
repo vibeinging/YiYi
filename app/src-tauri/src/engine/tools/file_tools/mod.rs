@@ -54,7 +54,10 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
         super::tool_def(
             "write_file",
             "Write content to a file (full overwrite). Creates the file if it doesn't exist. \
-            Prefer edit_file for modifying existing files. Only use write_file for new files or complete rewrites.",
+            Prefer edit_file for modifying existing files. Only use write_file for new files or complete rewrites. \
+            IMPORTANT for LARGE files (> ~150 lines): do NOT write everything in one call — your tool-call \
+            arguments get truncated by the output limit and the call fails with broken JSON. Instead, \
+            write_file the first part, then call append_file several times for the rest.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -82,7 +85,9 @@ pub(super) fn definitions() -> Vec<super::ToolDefinition> {
         ),
         super::tool_def(
             "append_file",
-            "Append content to the end of a file.",
+            "Append content to the end of a file. Use this to build large files incrementally: \
+            write_file the first chunk, then append_file the remaining chunks (keeps each tool \
+            call small enough to avoid output-limit truncation).",
             serde_json::json!({
                 "type": "object",
                 "properties": {

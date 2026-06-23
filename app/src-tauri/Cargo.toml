@@ -17,6 +17,7 @@ test-support = [
     "dep:tokio-test",
     "dep:wiremock",
     "dep:proptest",
+    "dep:env_logger",
     "tokio/test-util",
     "tauri/test",
 ]
@@ -129,6 +130,10 @@ optional = true
 
 [dependencies.wiremock]
 version = "0.6"
+optional = true
+
+[dependencies.env_logger]
+version = "0.11"
 optional = true
 
 [dependencies.proptest]

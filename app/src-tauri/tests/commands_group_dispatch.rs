@@ -1,21 +1,13 @@
-//! 群会话路由的集成测试 —— `commands/agent/group_dispatch.rs`。
+//! work 发起 / followup 路由的集成测试 —— `commands/work.rs` + `engine/work/launcher.rs`。
 //!
-//! IM 心智:session 1:1 绑 group。未绑 group → 单聊主精灵自答;空群 → EmptyGroup。
+//! 2026-06-15:chat 群聊(放养 / conversation_driver)已退役,本文件只保留 **work**
+//! 侧契约:
+//! - `launch_work_job_impl`:从「工作」入口显式发起 → 牵头者 intake(work_intake)、
+//!   会话绑团队群、job 入状态机(clarifying)。
+//! - `dispatch_work_followup`:停止意图中止 job、intake 在跑时插话收下、@ 工人直达派活、
+//!   pending question 兜底投递。
+//! - `dispatch_work_plan`:团队有 QA 但方案漏排 → 自动追加验证步;已排则不重复。
 //!
-//! 路由(v2 对话循环引擎 = conversation_driver::dispatch_group_loop):
-//! - **全员 + YiYi 入轮**:participants = 全部群成员(按成员顺序)+ 末尾追加 YiYi
-//!   (companion_id=0,name "YiYi",emoji 🦊,color #6366F1;群里已有 id=0 则不重复加)。
-//!   @点名与非点名走的是**同一条**路径,都把全员拉进第 1 波。
-//! - **forced 只决定谁先开口,不过滤成员**:被 @ 点名的成员 wave-1 立即回(delay=0)、
-//!   其余变速。forced **不再排他** —— 点 1 个人,其余成员和 YiYi 照样入轮。@ 一个
-//!   不在群里的 id 也**不再触发自答兜底**:群照常派遣,只是没有对应成员立即开口。
-//! - **wave-1 结构**:N+1 个**各含 1 个 participant** 的独立 step(每成员一个,id 1..N),
-//!   而不是一个 ParallelAgents step 含 N 个 participant。mode = Dispatched(0),
-//!   所有 participant 的 memory_scope = Group(gid)。
-//!
-//! 本文件验**同步契约**:try_group_dispatch 的返回(SelfAnswer / EmptyGroup /
-//! Dispatched)+ 协作落库形态(plan / mode / parent_id / 成员 scope)。Driver 的
-//! 运行时收口(谁发言 / 谁 `<pass>` / 冷场收口)需内容感知 mock,留待集成测试。
 //! Mock 固定响应即可(同步路径不依赖 LLM 内容),TempDb 隔离,#[serial]。
 
 mod common;
@@ -25,15 +17,10 @@ use common::*;
 
 use std::sync::Arc;
 
-use app_lib::commands::agent::group_dispatch::{try_group_dispatch, GroupDispatchOutcome};
 use app_lib::commands::agent::resolve_llm_config;
-use app_lib::commands::companion_groups::{
-    add_companion_to_group_impl, create_companion_group_impl, set_session_group_impl,
-};
-use app_lib::engine::agents::MemoryScope;
+use app_lib::commands::companion_groups::{add_companion_to_group_impl, create_companion_group_impl};
 use app_lib::engine::collaboration::executor::ConcreteExecutor;
 use app_lib::engine::collaboration::orchestrator::SqliteOrchestrator;
-use app_lib::engine::collaboration::{group_bucket, CollaborationMode};
 use app_lib::engine::db::NewCompanion;
 use serial_test::serial;
 
@@ -50,463 +37,310 @@ fn new_companion(name: &str) -> NewCompanion {
     }
 }
 
-/// Mock LLM 返回的 JSON,兼容 judge + claim:
-/// - judge 读顶层 `members: [{id, confidence, reason}]`
-/// - claim 读顶层 `claim: bool` + `reason: string`(默认 true,所有候选都接)
-///
-/// `accept_all_claims=false` 时把 claim 翻成 false,用来测 L2 沉默兜底。
-fn dispatch_and_claim_json(members: &[(i64, f64)], accept_all_claims: bool) -> String {
+/// Mock LLM 返回的 judge JSON:顶层 `members: [{id, confidence, reason}]`。
+/// work intake / 派工的牵头者选择读这个。
+fn decision_json(members: &[(i64, f64)]) -> String {
     let parts: Vec<String> = members
         .iter()
         .map(|(id, conf)| {
-            format!(r#"{{"id": {id}, "confidence": {conf}, "reason": "代码评审交给它"}}"#)
+            format!(r#"{{"id": {id}, "confidence": {conf}, "reason": "交给它"}}"#)
         })
         .collect();
-    format!(
-        r#"{{"members": [{}], "claim": {}, "reason": "{}"}}"#,
-        parts.join(","),
-        accept_all_claims,
-        if accept_all_claims { "我能帮上" } else { "话题别人更合适" },
-    )
+    format!(r#"{{"members": [{}]}}"#, parts.join(","))
 }
 
-/// 兼容旧用法:默认 claim 全接(L1 行为等价)。
-fn decision_json(members: &[(i64, f64)]) -> String {
-    dispatch_and_claim_json(members, true)
+fn new_pm(name: &str) -> NewCompanion {
+    NewCompanion {
+        name: name.into(),
+        agent_definition_name: "pm".into(),
+        avatar_emoji: "🧭".into(),
+        color_hex: "#6366F1".into(),
+        persona_md_path: None,
+        memory_user_id: format!("pm_{name}"),
+        metadata_json: None,
+        role_label: Some("产品经理".into()),
+    }
 }
 
-// === 未绑 group → 主精灵自答(单聊心智的核心边界)===
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn try_group_dispatch_without_group_self_answers() {
-    // IM 心智:session 未绑 group_id → 这是单聊,group_dispatch 直接 SelfAnswer。
-    // 哪怕群里有 N 个 active companion 也不该被拉过来(那是 Phase A 的"全员"
-    // 路径,已废弃)。
+async fn launch_work_job_creates_work_dispatch_collab() {
+    use app_lib::commands::work::launch_work_job_impl;
+    // 「工作」入口的「新建工作」走这条:显式发起 → 牵头者接手 intake。
     let t = build_test_app_state().await;
     let db = t.state().db.clone();
-    db.adopt_companion(&new_companion("阿狸")).unwrap();
-    db.adopt_companion(&new_companion("小冰")).unwrap();
+    let pm = db.adopt_companion(&new_pm("产品经理")).unwrap();
     let mock = MockLlmServer::start().await;
-    mock.mock_chat_completion_response(&decision_json(&[(1, 0.9)])).await;
+    mock.mock_chat_completion_response(&decision_json(&[(pm, 0.9)])).await;
     seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
-    let cfg = resolve_llm_config(t.state()).await.unwrap();
-    let sid = "solo-no-group";
-    db.ensure_session(sid, "单聊", "chat", None).ok();
-
-    let outcome = try_group_dispatch(db, cfg, sid, "随便说几句", &[])
+    let gid = create_companion_group_impl(t.state(), "软件公司".into(), None, None)
         .await
         .unwrap();
-    assert!(
-        matches!(outcome, GroupDispatchOutcome::SelfAnswer { .. }),
-        "未绑 group 的 session 应永远走单聊自答,got {outcome:?}"
-    );
-}
+    db.set_group_workspace(gid, "/tmp/yiyi_ws_launch").unwrap();
+    add_companion_to_group_impl(t.state(), gid, pm).await.unwrap();
 
-// === 绑了 group 但 group 内成员为空 → 主精灵自答 ===
-
-#[tokio::test(flavor = "multi_thread")]
-#[serial]
-async fn try_group_dispatch_with_empty_group_returns_empty_group() {
-    let mock = MockLlmServer::start().await;
-    let t = build_test_app_state().await;
-    seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
-    let cfg = resolve_llm_config(t.state()).await.unwrap();
-    let db = t.state().db.clone();
-    let sid = "fam-empty";
-    db.ensure_session(sid, "群聊测试", "chat", None).ok();
-    // 建一个空 group 并把 session 绑上 —— group 里没成员,family 列表为空。
-    let gid = create_companion_group_impl(t.state(), "空群".into(), Some("🪐".into()), None)
-        .await
-        .unwrap();
-    set_session_group_impl(t.state(), sid.into(), Some(gid)).await.unwrap();
-
-    let outcome = try_group_dispatch(db, cfg, sid, "帮我写点东西", &[])
-        .await
-        .unwrap();
-    // 空群不再无声让主精灵冒充群成员,而是返回 EmptyGroup,由 chat.rs 给可见提示。
-    assert!(
-        matches!(outcome, GroupDispatchOutcome::EmptyGroup),
-        "空 group 应返回 EmptyGroup,got {outcome:?}"
-    );
-}
-
-// === 非点名:单群成员 → 全员(含 YiYi 兜底)入轮 ===
-
-#[tokio::test(flavor = "multi_thread")]
-#[serial]
-async fn try_group_dispatch_high_confidence_single_member_dispatches() {
-    let t = build_test_app_state().await;
-    let cid = t.state().db.adopt_companion(&new_companion("阿狸")).unwrap();
-
-    let mock = MockLlmServer::start().await;
-    mock.mock_chat_completion_response(&decision_json(&[(cid, 0.9)])).await;
-    seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
-    let cfg = resolve_llm_config(t.state()).await.unwrap();
-    let db = t.state().db.clone();
-    let sid = "fam-dispatch";
-    db.ensure_session(sid, "群测试", "chat", None).ok();
-    // IM 心智:派遣测试必须先把 session 绑到一个 group。
-    let gid = create_companion_group_impl(t.state(), "小阿狸群".into(), Some("🦊".into()), None)
-        .await
-        .unwrap();
-    add_companion_to_group_impl(t.state(), gid, cid).await.unwrap();
-    set_session_group_impl(t.state(), sid.into(), Some(gid)).await.unwrap();
-
-    let outcome = try_group_dispatch(db.clone(), cfg.clone(), sid, "帮我看看这段代码", &[])
+    let launched = launch_work_job_impl(t.state(), gid, "做个 todo 网页应用", None)
         .await
         .unwrap();
 
-    let collab_id = match outcome {
-        GroupDispatchOutcome::Dispatched {
-            collaboration_id,
-            members,
-        } => {
-            // v2:全员入轮 + 末尾追加 YiYi 兜底 → [阿狸, YiYi]。
-            assert_eq!(members.len(), 2, "非点名:全员(含 YiYi 兜底)入轮");
-            assert_eq!(members[0].companion_id, cid, "群成员排在前");
-            assert_eq!(members[0].name, "阿狸");
-            assert_eq!(members[1].companion_id, 0, "YiYi(id=0)追加在末尾");
-            collaboration_id
-        }
-        other => panic!("高置信应派遣，got {other:?}"),
-    };
-
-    // 协作已落库,mode = Dispatched(0)（主精灵派遣）,首轮无 parent。
-    let orch = SqliteOrchestrator::new(db.clone(), Arc::new(ConcreteExecutor::new(cfg)));
-    let collabs = orch.list_recent_by_session(sid, 5).unwrap();
-    let c = collabs
-        .iter()
-        .find(|c| c.id == collab_id)
-        .expect("collaboration 应已持久化");
-    assert_eq!(c.mode, CollaborationMode::Dispatched(0));
-    assert_eq!(c.parent_id, None);
-
-    // 对话循环引擎:非 @点名路径不再前置 judge/claim,"谁该说话"是发言本身(fused
-    // reply-or-<pass>)。因此不再写 DispatchJudged audit —— Driver 用 Submitted
-    // (driven:true)记录。这里只验派遣 + 落库 + scope。
-
-    // 记忆 scope 升级 Group(gid):group_dispatch 在 submit 前把
-    // participant.memory_scope 从 build_plan 默认的 Private 翻成本 group 的
-    // Group,所有群内成员共享 group_shared_{gid} 桶。
-    let participant = c
-        .plan
-        .steps
-        .first()
-        .and_then(|s| s.participants.first())
-        .expect("step 应含 participant");
+    // 产出一个 work job:intake 协作标 kind=work_intake(R3:intake ≠ 交付,与派工协作
+    // work_dispatch 分治)、会话绑团队群、job 入 work_jobs 状态机(clarifying)并进列表。
     assert_eq!(
-        participant.memory_scope,
-        MemoryScope::Group(gid),
-        "派遣成员 memory_scope 应升级到本 group 的 Group,got {:?}",
-        participant.memory_scope,
+        db.get_collaboration_kind(launched.collaboration_id).as_deref(),
+        Some("work_intake"),
+        "显式发起的 intake 协作应标 work_intake",
+    );
+    assert_eq!(db.get_session_group(&launched.session_id), Some(gid), "work 会话应绑团队群");
+    let jobs = db.list_work_jobs();
+    let job = jobs
+        .iter()
+        .find(|j| j.session_id == launched.session_id)
+        .expect("应出现在 work job 列表");
+    assert_eq!(job.status, "clarifying", "新发起的 job 应在澄清态,而不是已交付");
+    // 用户任务原文应落成 user 气泡(原始请求可见、followup 历史块带得上)。
+    let msgs = db.get_recent_messages(&launched.session_id, 10).unwrap();
+    assert!(
+        msgs.iter().any(|m| m.role == "user" && m.content.contains("todo")),
+        "任务原文应是 user 消息",
     );
 }
 
-// === v2:@点名只让被点的先开口,不排他;全员 + YiYi 照样入轮 ===
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn work_followup_stop_intent_aborts_job_instead_of_new_intake() {
+    use app_lib::commands::work::{dispatch_work_followup, launch_work_job_impl, WorkFollowup};
+    let t = build_test_app_state().await;
+    let db = t.state().db.clone();
+    let pm = db.adopt_companion(&new_pm("产品经理")).unwrap();
+    let mock = MockLlmServer::start().await;
+    mock.mock_chat_completion_response(&decision_json(&[(pm, 0.9)])).await;
+    seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
+    let gid = create_companion_group_impl(t.state(), "软件公司".into(), None, None)
+        .await
+        .unwrap();
+    add_companion_to_group_impl(t.state(), gid, pm).await.unwrap();
+    let launched = launch_work_job_impl(t.state(), gid, "做个 app", None).await.unwrap();
+
+    // 「停」是停止意图,不是新任务:中止 job,不新建 intake。
+    let out = dispatch_work_followup(t.state(), &launched.session_id, "停", &[]).await.unwrap();
+    assert!(matches!(out, WorkFollowup::Notice(_)), "停止意图应以提示收束,不起新 intake");
+    assert_eq!(
+        db.get_work_job_status(&launched.session_id).as_deref(),
+        Some("aborted"),
+        "job 应被中止",
+    );
+}
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn try_group_dispatch_forced_mention_dispatches_named_members() {
+async fn work_followup_while_intake_active_queues_message_instead_of_reject() {
+    use app_lib::commands::work::{dispatch_work_followup, launch_work_job_impl, WorkFollowup};
     let t = build_test_app_state().await;
-    let cid_a = t.state().db.adopt_companion(&new_companion("阿狸")).unwrap();
-    let cid_b = t.state().db.adopt_companion(&new_companion("小冰")).unwrap();
-    // forced 路径不调 judge LLM,但需 provider 让 resolve_llm_config 通过 + 给 detached
-    // executor 一个响应(不影响本测试断言的同步 outcome)。
-    let mock = MockLlmServer::start().await;
-    mock.mock_chat_completion_response(&decision_json(&[(cid_a, 0.9)])).await;
-    seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
-    let cfg = resolve_llm_config(t.state()).await.unwrap();
     let db = t.state().db.clone();
-    let sid = "fam-forced";
-    db.ensure_session(sid, "群", "chat", None).ok();
-    let gid = create_companion_group_impl(t.state(), "群".into(), Some("👪".into()), None)
+    let pm = db.adopt_companion(&new_pm("产品经理")).unwrap();
+    let mock = MockLlmServer::start().await;
+    mock.mock_chat_completion_response(&decision_json(&[(pm, 0.9)])).await;
+    seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
+    let gid = create_companion_group_impl(t.state(), "软件公司".into(), None, None)
         .await
         .unwrap();
-    add_companion_to_group_impl(t.state(), gid, cid_a).await.unwrap();
-    add_companion_to_group_impl(t.state(), gid, cid_b).await.unwrap();
-    set_session_group_impl(t.state(), sid.into(), Some(gid)).await.unwrap();
+    add_companion_to_group_impl(t.state(), gid, pm).await.unwrap();
+    let launched = launch_work_job_impl(t.state(), gid, "做个 app", None).await.unwrap();
 
-    // 只点名阿狸(cid_a)→ v2 forced **不排他**:阿狸 wave-1 立即开口,小冰 + YiYi
-    // 照样入轮(变速接话)。members = [阿狸, 小冰, YiYi]。
-    let outcome = try_group_dispatch(db, cfg, sid, "@阿狸 帮我看下", &[cid_a])
+    // launch 的 intake 协作仍在跑(mock LLM 不会真收尾)→ 闸 2b:插话**收下**而非拒绝
+    // (消息已落库,intake 收尾后 finalize 检测积压自动续轮),且不并发起新 intake。
+    assert!(db.has_active_work_intake(&launched.session_id), "前置:intake 应在跑");
+    let out = dispatch_work_followup(t.state(), &launched.session_id, "再加个深色模式", &[])
         .await
         .unwrap();
-    match outcome {
-        GroupDispatchOutcome::Dispatched { members, .. } => {
-            let ids: Vec<i64> = members.iter().map(|m| m.companion_id).collect();
-            assert_eq!(ids.len(), 3, "@点名不排他:全员 + YiYi 入轮,got {ids:?}");
-            assert!(ids.contains(&cid_a), "被点名的阿狸在轮里(且 delay=0 先开口)");
-            assert!(ids.contains(&cid_b), "未被点名的小冰照样入轮(forced 不排他)");
-            assert!(ids.contains(&0), "YiYi(id=0)兜底入轮");
-        }
-        other => panic!("@点名应派遣(全员入轮), got {other:?}"),
+    match out {
+        WorkFollowup::Notice(text) => assert!(text.contains("收到"), "应确认收下而非拒绝:{text}"),
+        WorkFollowup::Intake(_) => panic!("intake 在跑时不应再起新 intake(并发竞态)"),
     }
 }
 
-// === 多成员:全员 + YiYi 入轮,wave-1 = N+1 个各 1-participant 的独立 step ===
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn work_followup_mention_routes_directly_to_worker_not_lead() {
+    use app_lib::commands::work::{dispatch_work_followup, launch_work_job_impl, WorkFollowup};
+    // 2026-06-12 @ 通信规则:消息默认给牵头者;@ 某个工人 → 任务直达该成员(单步
+    // project_task 协作),不经牵头者、不受 intake 互斥闸约束。
+    let t = build_test_app_state().await;
+    let db = t.state().db.clone();
+    let pm = db.adopt_companion(&new_pm("产品经理")).unwrap();
+    let fe = db.adopt_companion(&new_companion("前端工人")).unwrap();
+    let mock = MockLlmServer::start().await;
+    mock.mock_chat_completion_response(&decision_json(&[(pm, 0.9)])).await;
+    seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
+    let gid = create_companion_group_impl(t.state(), "软件公司".into(), None, None)
+        .await
+        .unwrap();
+    add_companion_to_group_impl(t.state(), gid, pm).await.unwrap();
+    add_companion_to_group_impl(t.state(), gid, fe).await.unwrap();
+    let launched = launch_work_job_impl(t.state(), gid, "做个 app", None).await.unwrap();
+    let sid = launched.session_id.clone();
+
+    // intake 还在跑(mock 不收尾)—— @ 工人不受互斥闸拦截,直达派活。
+    assert!(db.has_active_work_intake(&sid), "前置:intake 应在跑");
+    let out = dispatch_work_followup(t.state(), &sid, "按钮改成蓝色", &[fe])
+        .await
+        .unwrap();
+    let collab_id = match out {
+        WorkFollowup::Intake(id) => id,
+        WorkFollowup::Notice(text) => panic!("@ 工人应直达派活,不该被闸拦:{text}"),
+    };
+    // 直达协作:kind=work_dispatch(完成走 work 交付分支),参与者是被 @ 的工人。
+    assert_eq!(
+        db.get_collaboration_kind(collab_id).as_deref(),
+        Some("work_dispatch"),
+        "直达任务应标 work_dispatch",
+    );
+    assert_eq!(db.get_work_job_status(&sid).as_deref(), Some("running"), "有人干活 → running");
+    // 锚点消息直达样式(🔧 @名字)。
+    let msgs = db.get_recent_messages(&sid, 10).unwrap();
+    assert!(
+        msgs.iter().any(|m| m.content.contains("🔧 @前端工人")),
+        "应有直达锚点消息",
+    );
+}
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn try_group_dispatch_multi_member_dispatches_in_one_step() {
+async fn work_followup_answers_pending_question_while_intake_active() {
+    use app_lib::commands::work::{dispatch_work_followup, launch_work_job_impl, WorkFollowup};
+    use app_lib::engine::db::PendingQuestion;
     let t = build_test_app_state().await;
     let db = t.state().db.clone();
-    let cid_a = db.adopt_companion(&new_companion("阿狸")).unwrap();
-    let cid_b = db.adopt_companion(&new_companion("小冰")).unwrap();
-    let cid_c = db.adopt_companion(&new_companion("九尾")).unwrap();
-
-    // 去中心化:无 judge/无置信度过滤。三人都在群里,claim 全接 → 三人都上场。
+    let pm = db.adopt_companion(&new_pm("产品经理")).unwrap();
     let mock = MockLlmServer::start().await;
-    mock.mock_chat_completion_response(&decision_json(&[
-        (cid_a, 0.85),
-        (cid_b, 0.7),
-        (cid_c, 0.3),
-    ]))
-    .await;
+    mock.mock_chat_completion_response(&decision_json(&[(pm, 0.9)])).await;
+    seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
+    let gid = create_companion_group_impl(t.state(), "软件公司".into(), None, None)
+        .await
+        .unwrap();
+    add_companion_to_group_impl(t.state(), gid, pm).await.unwrap();
+    let launched = launch_work_job_impl(t.state(), gid, "做个游戏", None).await.unwrap();
+    let sid = launched.session_id.clone();
+
+    // 闸 2a:牵头者阻塞在 ask_user 等答案(pending_questions 有未答行)时,用户在输入框
+    // 发的消息**就是答案** —— 后端兜底投递(前端提问卡未恢复/事件丢失时不再死锁)。
+    assert!(db.has_active_work_intake(&sid), "前置:intake 应在跑");
+    db.insert_pending_question(&PendingQuestion {
+        request_id: "q-genre".into(),
+        session_id: sid.clone(),
+        collaboration_id: Some(launched.collaboration_id),
+        step_id: None,
+        companion_id: pm,
+        asker_name: "产品经理".into(),
+        question: "做什么类型的游戏?".into(),
+        options_json: None,
+        kind: "text".into(),
+        status: "pending".into(),
+        answer: None,
+        created_at: chrono::Utc::now().timestamp_millis(),
+        answered_at: None,
+    })
+    .unwrap();
+
+    let out = dispatch_work_followup(t.state(), &sid, "模拟经营类", &[]).await.unwrap();
+    assert!(
+        matches!(out, WorkFollowup::Notice(ref text) if text.is_empty()),
+        "答案投递后静默收束(牵头者会接着说),不另发提示",
+    );
+    let q = db.get_pending_question("q-genre").expect("问题仍在库");
+    assert_eq!(q.status, "answered", "用户消息应被投递为答案");
+    assert_eq!(q.answer.as_deref(), Some("模拟经营类"));
+}
+
+fn new_role(name: &str, slug: &str) -> NewCompanion {
+    NewCompanion {
+        name: name.into(),
+        agent_definition_name: slug.into(),
+        avatar_emoji: "🤖".into(),
+        color_hex: "#10B981".into(),
+        persona_md_path: None,
+        memory_user_id: format!("{slug}_{name}"),
+        metadata_json: None,
+        role_label: Some(slug.into()),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn dispatch_auto_appends_verify_step_when_team_has_qa() {
+    use app_lib::engine::work::launcher::dispatch_work_plan;
+    use app_lib::engine::work::plan::{ProjectPlan, ProjectTask};
+    // #2 验证门:方案只派了前端、没排 QA,但团队里有 QA → dispatch 自动追加一个验证步,
+    // 依赖前端步(最后跑)。PM 忘了排 QA 也兜得住。
+    let t = build_test_app_state().await;
+    let db = t.state().db.clone();
+    let fe = db.adopt_companion(&new_role("前端", "frontend_dev")).unwrap();
+    let qa = db.adopt_companion(&new_role("质检", "qa_engineer")).unwrap();
+    let mock = MockLlmServer::start().await;
+    mock.mock_chat_completion_response(&decision_json(&[(fe, 0.9)])).await;
     seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
     let cfg = resolve_llm_config(t.state()).await.unwrap();
-
-    let sid = "fam-multi";
-    db.ensure_session(sid, "群测试", "chat", None).ok();
-    // IM 心智:绑 group 才能走派遣路径。三人都加进 group。
-    let gid = create_companion_group_impl(t.state(), "三人群".into(), Some("👨‍👩‍👧".into()), None)
+    let gid = create_companion_group_impl(t.state(), "软件公司".into(), None, None)
         .await
         .unwrap();
-    for c in [cid_a, cid_b, cid_c] {
-        add_companion_to_group_impl(t.state(), gid, c).await.unwrap();
-    }
-    set_session_group_impl(t.state(), sid.into(), Some(gid)).await.unwrap();
+    add_companion_to_group_impl(t.state(), gid, fe).await.unwrap();
+    add_companion_to_group_impl(t.state(), gid, qa).await.unwrap();
+    let sid = "work-verify-gate";
+    db.ensure_session(sid, "做个 app", "work", None).unwrap();
+    db.set_session_group(sid, Some(gid)).unwrap();
+    db.create_work_job(sid, "做个 app", None).unwrap();
 
-    let outcome = try_group_dispatch(db.clone(), cfg.clone(), sid, "聊聊设计 + 写点文案", &[])
-        .await
-        .unwrap();
-    let (collab_id, member_ids) = match outcome {
-        GroupDispatchOutcome::Dispatched {
-            collaboration_id,
-            members,
-        } => {
-            let ids: Vec<i64> = members.iter().map(|m| m.companion_id).collect();
-            (collaboration_id, ids)
-        }
-        other => panic!("多成员高置信应派遣,got {other:?}"),
+    let plan = ProjectPlan {
+        tasks: vec![ProjectTask { role: "frontend_dev".into(), objective: "写界面".into(), depends_on: vec![] }],
     };
+    let collab_id = dispatch_work_plan(db.clone(), cfg.clone(), sid, &plan).await.unwrap();
 
-    // v2:全员入轮 + 末尾追加 YiYi → 三人 + YiYi = 4 位。
-    assert_eq!(member_ids.len(), 4, "三人 + YiYi 都入轮,got {member_ids:?}");
-    assert!(member_ids.contains(&cid_a));
-    assert!(member_ids.contains(&cid_b));
-    assert!(member_ids.contains(&cid_c));
-
-    // v2 wave-1 结构:N+1 个**各含 1 个 participant** 的独立 step(每成员一个),
-    // 而非一个 ParallelAgents step 含 N 个 participant。所有 participant scope = Group(gid)。
     let orch = SqliteOrchestrator::new(db.clone(), Arc::new(ConcreteExecutor::new(cfg)));
     let c = orch
         .list_recent_by_session(sid, 5)
         .unwrap()
         .into_iter()
         .find(|c| c.id == collab_id)
-        .expect("协作已落库");
-    assert_eq!(c.plan.steps.len(), 4, "wave-1 应是 4 个独立 step(三人 + YiYi)");
-    for step in &c.plan.steps {
-        assert_eq!(step.participants.len(), 1, "每个 step 只含 1 个 participant");
-        for p in &step.participants {
-            assert_eq!(
-                p.memory_scope,
-                MemoryScope::Group(gid),
-                "成员都该升级到本 group 的 Group scope,got {:?}",
-                p.memory_scope,
-            );
-        }
-    }
-    // 对话循环引擎:不再有 DispatchJudged(无前置 judge/claim)。全员入第 1 轮,
-    // 谁发言谁 <pass> 在运行时由 fused prompt 自决。
+        .expect("派工协作应落库");
+    // 1 个前端步 + 1 个自动追加的 QA 验证步。
+    assert_eq!(c.plan.steps.len(), 2, "应自动追加 QA 验证步,got {} 步", c.plan.steps.len());
+    let verify = &c.plan.steps[1];
+    assert_eq!(verify.participants[0].companion_id, qa, "验证步应派给 QA");
+    assert_eq!(verify.depends_on, vec![c.plan.steps[0].id], "验证步应依赖前面所有步");
+    assert!(verify.input.prompt.contains("验证"), "验证步 prompt 应是检查交付");
 }
-
-// === 对话循环引擎:非 @点名 = 全员进第 1 轮(不再前置 claim 过滤 / 同步兜底)===
-// 旧行为(全员 claim=no → 同步 SelfAnswer)已退役:"接不接"现在是发言本身
-// (fused reply-or-`<pass>`)。全员 `<pass>` → YiYi 兜底是 Driver 运行时的下一步
-// (异步,需内容感知 mock 才能确定性验证,留待集成测试)。这里验同步契约:返回
-// Dispatched 且全员入轮。
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn try_group_dispatch_non_forced_puts_all_members_in_round() {
+async fn dispatch_no_verify_step_when_qa_already_in_plan() {
+    use app_lib::engine::work::launcher::dispatch_work_plan;
+    use app_lib::engine::work::plan::{ProjectPlan, ProjectTask};
+    // PM 已经把 QA 排进方案 → 不重复追加。
     let t = build_test_app_state().await;
     let db = t.state().db.clone();
-    let cid_a = db.adopt_companion(&new_companion("阿狸")).unwrap();
-    let cid_b = db.adopt_companion(&new_companion("小冰")).unwrap();
-
+    let fe = db.adopt_companion(&new_role("前端", "frontend_dev")).unwrap();
+    let qa = db.adopt_companion(&new_role("质检", "qa_engineer")).unwrap();
     let mock = MockLlmServer::start().await;
-    mock.mock_chat_completion_response(&decision_json(&[(cid_a, 0.85), (cid_b, 0.7)]))
-        .await;
+    mock.mock_chat_completion_response(&decision_json(&[(fe, 0.9)])).await;
     seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
     let cfg = resolve_llm_config(t.state()).await.unwrap();
+    let gid = create_companion_group_impl(t.state(), "软件公司".into(), None, None).await.unwrap();
+    add_companion_to_group_impl(t.state(), gid, fe).await.unwrap();
+    add_companion_to_group_impl(t.state(), gid, qa).await.unwrap();
+    let sid = "work-verify-already";
+    db.ensure_session(sid, "x", "work", None).unwrap();
+    db.set_session_group(sid, Some(gid)).unwrap();
+    db.create_work_job(sid, "x", None).unwrap();
 
-    let sid = "fam-allin";
-    db.ensure_session(sid, "群测试", "chat", None).ok();
-    let gid = create_companion_group_impl(t.state(), "全员群".into(), Some("🛟".into()), None)
-        .await
-        .unwrap();
-    for c in [cid_a, cid_b] {
-        add_companion_to_group_impl(t.state(), gid, c).await.unwrap();
-    }
-    set_session_group_impl(t.state(), sid.into(), Some(gid)).await.unwrap();
-
-    let outcome = try_group_dispatch(db.clone(), cfg.clone(), sid, "随便聊聊", &[])
-        .await
-        .unwrap();
-    match outcome {
-        GroupDispatchOutcome::Dispatched { members, .. } => {
-            let ids: Vec<i64> = members.iter().map(|m| m.companion_id).collect();
-            // v2:两位群成员 + 末尾追加 YiYi = 3 位入轮。
-            assert_eq!(ids.len(), 3, "非点名应把全员 + YiYi 放进第 1 轮,got {ids:?}");
-            assert!(ids.contains(&cid_a) && ids.contains(&cid_b));
-            assert!(ids.contains(&0), "YiYi(id=0)兜底入轮");
-        }
-        other => panic!("非点名应派遣(全员入轮),got {other:?}"),
-    }
-}
-
-// === v2:@ 一个不在群的 id 不再触发自答兜底,群照常派遣 ===
-
-#[tokio::test(flavor = "multi_thread")]
-#[serial]
-async fn try_group_dispatch_forced_member_not_in_group_self_answers() {
-    let t = build_test_app_state().await;
-    let cid = t.state().db.adopt_companion(&new_companion("小冰")).unwrap();
-
-    let mock = MockLlmServer::start().await;
-    mock.mock_chat_completion_response(&decision_json(&[(cid, 0.9)])).await;
-    seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
-    let cfg = resolve_llm_config(t.state()).await.unwrap();
-    let db = t.state().db.clone();
-    let sid = "fam-forced-absent";
-    db.ensure_session(sid, "群测试", "chat", None).ok();
-    let gid = create_companion_group_impl(t.state(), "群".into(), Some("👪".into()), None)
-        .await
-        .unwrap();
-    add_companion_to_group_impl(t.state(), gid, cid).await.unwrap();
-    set_session_group_impl(t.state(), sid.into(), Some(gid)).await.unwrap();
-
-    // 点名一个不在群里的 id(99999)。v2 **没有** "@非成员 → SelfAnswer 兜底" 了 ——
-    // 照样进 dispatch_group_loop:全员 + YiYi 入轮。forced 仅影响开口顺序,99999 无对应
-    // 成员即无人立即开口,但群照常派遣。members = [小冰, YiYi]。
-    let outcome = try_group_dispatch(db, cfg, sid, "随便聊聊", &[99999])
-        .await
-        .unwrap();
-    match outcome {
-        GroupDispatchOutcome::Dispatched { members, .. } => {
-            let ids: Vec<i64> = members.iter().map(|m| m.companion_id).collect();
-            assert_eq!(ids.len(), 2, "群照常派遣:小冰 + YiYi,got {ids:?}");
-            assert!(ids.contains(&cid), "在群的成员照常入轮");
-            assert!(ids.contains(&0), "YiYi(id=0)兜底入轮");
-        }
-        other => panic!("@非成员不再自答兜底,应照常派遣,got {other:?}"),
-    }
-}
-
-// === 多轮接力 → parent_id 链 ===
-
-#[tokio::test(flavor = "multi_thread")]
-#[serial]
-async fn try_group_dispatch_chains_parent_id_across_turns() {
-    let t = build_test_app_state().await;
-    let cid = t.state().db.adopt_companion(&new_companion("九尾")).unwrap();
-
-    let mock = MockLlmServer::start().await;
-    mock.mock_chat_completion_response(&decision_json(&[(cid, 0.95)])).await;
-    seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
-    let cfg = resolve_llm_config(t.state()).await.unwrap();
-    let db = t.state().db.clone();
-    let sid = "fam-chain";
-    db.ensure_session(sid, "群测试", "chat", None).ok();
-    let gid = create_companion_group_impl(t.state(), "九尾群".into(), Some("🦊".into()), None)
-        .await
-        .unwrap();
-    add_companion_to_group_impl(t.state(), gid, cid).await.unwrap();
-    set_session_group_impl(t.state(), sid.into(), Some(gid)).await.unwrap();
-
-    let first = match try_group_dispatch(db.clone(), cfg.clone(), sid, "第一轮", &[]).await.unwrap() {
-        GroupDispatchOutcome::Dispatched { collaboration_id, .. } => collaboration_id,
-        other => panic!("第一轮应派遣，got {other:?}"),
+    let plan = ProjectPlan {
+        tasks: vec![
+            ProjectTask { role: "frontend_dev".into(), objective: "写界面".into(), depends_on: vec![] },
+            ProjectTask { role: "qa_engineer".into(), objective: "测".into(), depends_on: vec![0] },
+        ],
     };
-    let second = match try_group_dispatch(db.clone(), cfg.clone(), sid, "第二轮接着说", &[]).await.unwrap() {
-        GroupDispatchOutcome::Dispatched { collaboration_id, .. } => collaboration_id,
-        other => panic!("第二轮应派遣，got {other:?}"),
-    };
-    assert_ne!(first, second, "两轮应是独立协作");
-
+    let collab_id = dispatch_work_plan(db.clone(), cfg.clone(), sid, &plan).await.unwrap();
     let orch = SqliteOrchestrator::new(db.clone(), Arc::new(ConcreteExecutor::new(cfg)));
-    let collabs = orch.list_recent_by_session(sid, 5).unwrap();
-    let c2 = collabs.iter().find(|c| c.id == second).expect("第二轮协作应已持久化");
-    assert_eq!(c2.parent_id, Some(first), "第二轮应以 parent_id 串到第一轮");
-}
-
-// === 多 group 桶隔离:不同 group 写不同 group_shared_<id> 桶,组外成员不进 roster ===
-
-#[tokio::test(flavor = "multi_thread")]
-#[serial]
-async fn try_group_dispatch_uses_group_roster_and_isolates_buckets() {
-    let t = build_test_app_state().await;
-    let db = t.state().db.clone();
-
-    // Setup:adopt 3 个 companion, 把其中 2 个加进"创作小队" group,session 绑这个组。
-    let cid_in_a = db.adopt_companion(&new_companion("阿狸")).unwrap();
-    let cid_in_b = db.adopt_companion(&new_companion("小冰")).unwrap();
-    let cid_other = db.adopt_companion(&new_companion("九尾")).unwrap();
-    let gid = create_companion_group_impl(t.state(), "创作小队".into(), Some("📝".into()), None)
-        .await
-        .unwrap();
-    add_companion_to_group_impl(t.state(), gid, cid_in_a).await.unwrap();
-    add_companion_to_group_impl(t.state(), gid, cid_in_b).await.unwrap();
-    // cid_other 故意不加 —— 验证它**不会**出现在 dispatch 候选里。
-
-    let sid = "fam-group-binding";
-    db.ensure_session(sid, "群测试", "chat", None).unwrap();
-    set_session_group_impl(t.state(), sid.into(), Some(gid)).await.unwrap();
-
-    // mock claim:全员接(decision_json 默认 claim:true)。
-    let mock = MockLlmServer::start().await;
-    mock.mock_chat_completion_response(&decision_json(&[(cid_in_a, 0.9)])).await;
-    seed_mock_llm_provider(t.state(), &mock, "mock-model").await;
-    let cfg = resolve_llm_config(t.state()).await.unwrap();
-
-    let outcome = try_group_dispatch(db.clone(), cfg.clone(), sid, "帮我想个文案", &[])
-        .await
-        .unwrap();
-    let (collab_id, member_ids) = match outcome {
-        GroupDispatchOutcome::Dispatched { collaboration_id, members } => {
-            let ids: Vec<i64> = members.iter().map(|m| m.companion_id).collect();
-            (collaboration_id, ids)
-        }
-        other => panic!("应派遣,got {other:?}"),
-    };
-    // v2:组内两位 + 末尾追加 YiYi = 3 位上场;组外 cid_other **不在 roster**,永不出现
-    //(roster 隔离:dispatch_group_loop 只拿到本 group 的成员)。
-    assert_eq!(member_ids.len(), 3, "组内两位 + YiYi 上场,got {member_ids:?}");
-    assert!(member_ids.contains(&cid_in_a));
-    assert!(member_ids.contains(&cid_in_b));
-    assert!(member_ids.contains(&0), "YiYi(id=0)兜底入轮");
-    assert!(!member_ids.contains(&cid_other), "组外成员不该被拉进来(roster 隔离)");
-
-    // 协作落库的 plan participant.memory_scope 是 Group(gid) —— 桶名
-    // 是 group_shared_<gid>,与其他 group 的桶完全隔离。
-    let orch = SqliteOrchestrator::new(db.clone(), Arc::new(ConcreteExecutor::new(cfg)));
-    let collabs = orch.list_recent_by_session(sid, 5).unwrap();
-    let c = collabs.iter().find(|c| c.id == collab_id).expect("协作已落库");
-    let participant = c
-        .plan
-        .steps
-        .first()
-        .and_then(|s| s.participants.first())
-        .expect("step 应含 participant");
-    assert_eq!(
-        participant.memory_scope,
-        MemoryScope::Group(gid),
-        "scope 应升级为该组的 Group",
-    );
-    // 桶命名约定:每个 group 独占 group_shared_<gid>。两个不同 group 的桶
-    // 名一定不同 —— 桶隔离的核心保证。
-    assert_eq!(group_bucket(gid), format!("group_shared_{}", gid));
-    assert_ne!(group_bucket(gid), group_bucket(gid + 1));
+    let c = orch.list_recent_by_session(sid, 5).unwrap().into_iter().find(|c| c.id == collab_id).unwrap();
+    assert_eq!(c.plan.steps.len(), 2, "QA 已在方案里,不该再追加,got {} 步", c.plan.steps.len());
 }

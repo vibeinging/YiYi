@@ -34,8 +34,8 @@ use super::audit::AuditTrail;
 use super::events;
 use super::{
     Actor, AuditKind, Collaboration, CollaborationEvent, CollaborationId, CollaborationMode,
-    CollaborationOrchestrator, CollaborationPlan, CollaborationStatus, Executor, ExecutorHandle,
-    Mutation, Participant, Step, StepId, StepKind, StepOutput, StepStatus,
+    CollaborationOrchestrator, CollaborationPlan, CollaborationStatus, CompanionProfile, Executor,
+    ExecutorHandle, Mutation, Participant, Step, StepId, StepKind, StepOutput, StepStatus,
 };
 use crate::engine::db::Database;
 
@@ -589,6 +589,107 @@ impl SqliteOrchestrator {
         self.finalize(collab_id, status)
     }
 
+    /// 显式中止一条协作(R3:work job 逃生门)。复用 `finalize` 的 CAS 终态守卫:已终态则
+    /// 幂等 no-op;在跑的步任务收尾时撞守卫,完成回调被静默忽略(不会翻回 Done)。
+    /// 注:已在跑的 ReAct 步不被强杀(detached task),只是其结果不再落库 —— v1 取舍。
+    pub fn abort_collaboration(&self, collab_id: CollaborationId) -> Result<(), String> {
+        self.finalize(collab_id, CollaborationStatus::Aborted)
+    }
+
+    /// 插话续轮(2026-06-11,配合 followup 闸 2b「收下不拒绝」):intake 跑的时候用户
+    /// 又发了消息 → 这轮收尾后检测积压(本 intake 创建之后的 user 消息),自动续一轮
+    /// intake 消费 ——「先处理之前的,再继续处理新的」,不丢话、不打断进行中的活。
+    ///
+    /// 守卫:job 仍在澄清/待开工才续(开工 running 后的新消息由下一次 followup 正常起
+    /// intake;已交付/中止不续)。终止性:续轮 intake 的 created_at 晚于积压消息,它收尾
+    /// 时不会再把同批消息当积压。headless(无全局 providers / 无 runtime)→ 静默不续。
+    fn resume_intake_if_backlog(&self, collab_id: CollaborationId, session_id: &str) {
+        let db = self.db.clone();
+        match db.get_work_job_status(session_id).as_deref() {
+            Some("clarifying") | Some("pending_commit") => {}
+            _ => return,
+        }
+        let created_at: i64 = {
+            let Some(conn) = db.get_conn() else { return };
+            match conn.query_row(
+                "SELECT created_at FROM collaborations WHERE id = ?1",
+                params![collab_id],
+                |r| r.get(0),
+            ) {
+                Ok(ts) => ts,
+                Err(_) => return,
+            }
+        };
+        let backlog: Vec<String> = db
+            .get_recent_messages(session_id, 10)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|m| m.role == "user" && m.timestamp > created_at)
+            .map(|m| m.content)
+            .filter(|c| !c.trim().is_empty())
+            .collect();
+        if backlog.is_empty() {
+            return;
+        }
+        let Ok(rt) = tokio::runtime::Handle::try_current() else { return };
+        log::info!(
+            "work intake {collab_id} 收尾时发现 {} 条插话,自动续一轮",
+            backlog.len()
+        );
+        let session = session_id.to_string();
+        rt.spawn(async move {
+            let Some(cfg) = crate::engine::tools::resolve_llm_config_from_globals().await else {
+                log::warn!("intake 续轮:解析不到 LLM 配置,放弃");
+                return;
+            };
+            let Some(gid) = db.get_session_group(&session) else { return };
+            let members: Vec<CompanionProfile> = db
+                .list_group_members(gid)
+                .into_iter()
+                .map(|c| CompanionProfile {
+                    id: c.id,
+                    name: c.name,
+                    avatar_emoji: c.avatar_emoji,
+                    color_hex: c.color_hex,
+                    description: c.role_label.unwrap_or_else(|| c.agent_definition_name.clone()),
+                    agent_definition_name: c.agent_definition_name,
+                    last_used_at: c.last_used_at,
+                })
+                .collect();
+            if members.is_empty() {
+                return;
+            }
+            // 牵头者固化:复用 job 记录的 lead;查不到才重选(与 followup 同语义)。
+            let lead = match db
+                .get_work_job_lead(&session)
+                .and_then(|id| members.iter().find(|m| m.id == id).cloned())
+            {
+                Some(l) => l,
+                None => match crate::engine::work::launcher::find_project_lead(&members).await {
+                    Some(l) => l.clone(),
+                    None => return,
+                },
+            };
+            let combined = format!(
+                "(这是你在处理上一轮时用户发来的消息,现在轮到它了)\n{}",
+                backlog.join("\n")
+            );
+            if let Err(e) = crate::engine::work::launcher::launch_intake(
+                db.clone(),
+                cfg,
+                &session,
+                gid,
+                &lead,
+                &members,
+                &combined,
+            )
+            .await
+            {
+                log::warn!("intake 续轮失败:{e}");
+            }
+        });
+    }
+
     fn all_steps_terminal(&self, collab_id: CollaborationId) -> Result<bool, String> {
         let conn = self.db.get_conn().ok_or_else(|| "db lock".to_string())?;
         let pending: i64 = conn
@@ -662,6 +763,104 @@ impl SqliteOrchestrator {
             log::warn!("collab {collab_id}: failed to write verdict message: {e}");
         }
 
+        // R3:派工协作终态 → 同步 job 级状态机(work_jobs)。intake 协作终态**不**动 job
+        // 状态(intake done 只是"牵头者说完这轮话",job 仍在 clarifying/pending_commit —— 把
+        // intake done 当"已交付"正是旧 MAX(id) 倒推的 P0 错乱)。best-effort,不阻塞 finalize。
+        if let Ok(conn) = self.db.get_conn().ok_or(()) {
+            let row: Result<(String, String, String), _> = conn
+                .query_row(
+                    "SELECT chat_session_id, kind, intent FROM collaborations WHERE id = ?1",
+                    params![collab_id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                );
+            drop(conn);
+            if let Ok((session_id, kind, intent)) = row {
+                if kind == "work_dispatch" {
+                    // 并发安全(2026-06-13 review):同一会话可同时跑多个 work 协作 ——
+                    // PM intake + 用户 @ 直达的小任务 + call_teammate 接力。job 状态/交付
+                    // 通知/提问撤销都是**会话级**的,只有当本协作是该会话**最后一个**活动
+                    // 协作时才把 job 推终态。否则一个直达小任务先完成,会把整个 job 误标
+                    // 「已交付」、误发通知、误撤 PM 正在等用户答的提问(三个 review bug 同根)。
+                    // list_active_work_collabs 已不含本协作(上面 set_status 已置终态)。
+                    let others_active = !self.db.list_active_work_collabs(&session_id).is_empty();
+                    let job_status = match &status {
+                        // 中止是显式、会话级动作(abort_work_job 会中止全部协作),直接落。
+                        CollaborationStatus::Aborted => "aborted",
+                        CollaborationStatus::Done if !others_active => "done",
+                        CollaborationStatus::Failed(_) if !others_active => "failed",
+                        // 还有别的协作在跑 → job 仍进行中,等最后一个收尾再落终态。
+                        _ => "running",
+                    };
+                    if let Err(e) = self.db.set_work_job_status(&session_id, job_status) {
+                        log::warn!("collab {collab_id}: sync work job status: {e}");
+                    }
+                    // 失败收口一致性:job 进终态 → 撤销该会话挂着的未答提问(没人会再收
+                    // 答案的提问卡不该留),并唤醒还在内存阻塞的 ask_user 等待者(免其干等
+                    // 到 1h 超时占着执行体)。job_status 非终态(others_active)时自动跳过 ——
+                    // 这正是「直达任务完成不该撤 PM 正在等的提问」的修复点。
+                    if matches!(job_status, "done" | "failed" | "aborted") {
+                        let expired = self.db.expire_pending_questions(&session_id);
+                        if !expired.is_empty() {
+                            log::info!(
+                                "collab {collab_id}: job 终态,撤销 {} 条未答提问",
+                                expired.len()
+                            );
+                            if let Ok(rt) = tokio::runtime::Handle::try_current() {
+                                rt.spawn(async move {
+                                    for rid in expired {
+                                        crate::engine::tools::ask_user::respond(
+                                            &rid,
+                                            "（这项工作已结束,这个问题不用回答了。）".into(),
+                                        )
+                                        .await;
+                                    }
+                                });
+                            }
+                        }
+                    }
+                    // R6(交付闭环):交付那一刻不再静默 —— 系统通知 + work://job_done 事件
+                    // (NavRail 红点/列表即刷)。中止是用户自己点的,不打扰。通知 context 走
+                    // 既有 notification://pending 管道(page=chat+session_id),点击跳转由
+                    // switchToSession 的 work- 前缀分支接到工作页(R5)。
+                    // 通知/红点只在 job 真正落终态时发(others_active 时 job 仍 running,
+                    // 不发 —— 否则直达小任务完成就弹「✅ 已交付」而活还没干完)。
+                    let notify = match job_status {
+                        "done" => Some(("✅ 工作已交付", intent)),
+                        "failed" => Some(("⚠️ 工作没做完", intent)),
+                        _ => None,
+                    };
+                    if let Some((title, body)) = notify {
+                        crate::engine::scheduler::send_notification_with_context(
+                            title,
+                            &body,
+                            serde_json::json!({ "page": "chat", "session_id": session_id }),
+                        );
+                    }
+                    if matches!(job_status, "done" | "failed" | "aborted") {
+                        if let Some(handle) = crate::engine::tools::get_app_handle() {
+                            use tauri::Emitter;
+                            handle
+                                .emit(
+                                    "work://job_done",
+                                    serde_json::json!({ "session_id": session_id, "status": job_status }),
+                                )
+                                .ok();
+                        }
+                    }
+                } else if kind == "work_intake"
+                    && matches!(
+                        status,
+                        CollaborationStatus::Done | CollaborationStatus::Failed(_)
+                    )
+                {
+                    // 插话不丢(2026-06-11):intake 跑的时候用户又发了消息(followup 闸 2b
+                    // 收下不拒绝)→ 这轮收尾后检测积压,自动续一轮 intake 消费 ——
+                    // 「先处理之前的,再继续处理新的」。
+                    self.resume_intake_if_backlog(collab_id, &session_id);
+                }
+            }
+        }
+
         let kind = match &status {
             CollaborationStatus::Done => AuditKind::CollaborationCompleted,
             CollaborationStatus::Aborted => AuditKind::Aborted,
@@ -690,31 +889,133 @@ impl SqliteOrchestrator {
         status: &CollaborationStatus,
     ) -> Result<(), String> {
         let conn = self.db.get_conn().ok_or_else(|| "db lock".to_string())?;
-        let chat_session_id: String = conn
+        let (chat_session_id, kind): (String, String) = conn
             .query_row(
-                "SELECT chat_session_id FROM collaborations WHERE id = ?1",
+                "SELECT chat_session_id, kind FROM collaborations WHERE id = ?1",
                 params![collab_id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .map_err(|e| format!("read chat_session_id: {e}"))?;
+            .map_err(|e| format!("read chat_session_id/kind: {e}"))?;
 
-        let text = match status {
-            CollaborationStatus::Done => Self::compose_done_verdict(&conn, collab_id)?,
+        // §7-P0-1:work job 完成走 **work 交付摘要**(不写群聊「【名字】…」格式),并标
+        // context_type=work_job —— 否则 work 完成时仍以群聊身份写回聊天流 = chat 引擎仍在
+        // 替 work 写结论(对抗校验抓的"假解耦",decoupled:false 的根)。
+        //
+        // R3:intake 协作(kind=work_intake)与派工协作(work_dispatch)分治 ——
+        // intake done 只是"牵头者说完这轮话"(澄清/提案),**不是交付**:不写「✅ 交付完成」、
+        // 不覆盖锚点(否则用户的原始请求被假交付摘要吃掉,且 Work 列表错标"已交付")。
+        // 「✅ 交付完成」只属于派工协作 Done。
+        let is_work = kind == "work_dispatch" || kind == "work_intake";
+        let is_intake = kind == "work_intake";
+        let text = match &status {
+            CollaborationStatus::Done => {
+                if is_intake {
+                    return Ok(()); // 牵头者的话已是协作消息本体,无需 verdict、不动锚点
+                } else if is_work {
+                    Self::compose_work_verdict(&conn, collab_id)?
+                } else {
+                    Self::compose_done_verdict(&conn, collab_id)?
+                }
+            }
             CollaborationStatus::Failed(reason) => {
-                if reason.trim().is_empty() {
+                if is_intake {
+                    let label = "牵头者这轮没接上,再发一条消息可以重新唤起";
+                    if reason.trim().is_empty() {
+                        format!("（{label}）")
+                    } else {
+                        format!("（{label}）{reason}")
+                    }
+                } else if is_work {
+                    // 结构化失败报告(卡在哪 + 编号选项 + 推荐):失败时刻正是用户最
+                    // 需要被引导的时刻,一行「工作未完成」只制造无助感。
+                    crate::engine::work::worker::compose_work_failure(reason)
+                } else if reason.trim().is_empty() {
                     "（群协作未完成）".to_string()
                 } else {
                     format!("（群协作未完成）{reason}")
                 }
             }
-            CollaborationStatus::Aborted => "（群协作已中止）".to_string(),
+            CollaborationStatus::Aborted => {
+                (if is_work { "（工作已中止）" } else { "（群协作已中止）" }).to_string()
+            }
             _ => return Ok(()),
         };
         drop(conn);
 
+        let ctx = if is_work { "work_job" } else { "collab" };
         self.db
-            .upsert_collaboration_message(&chat_session_id, collab_id, &text)?;
+            .upsert_collaboration_message_ctx(&chat_session_id, collab_id, &text, ctx)?;
         Ok(())
+    }
+
+    /// §7-P0-1:work job 完成的交付摘要(对照 `compose_done_verdict` 的 chat 群聊版)。
+    /// 读 collab 的 intent 当标题 + 各**完成步**的 (牵头者/队友名, StepOutput),交给
+    /// `work::worker::compose_work_summary` 拼成"✅ 交付完成"结构,而非群聊气泡拼接。
+    fn compose_work_verdict(
+        conn: &rusqlite::Connection,
+        collab_id: CollaborationId,
+    ) -> Result<String, String> {
+        let title: String = conn
+            .query_row(
+                "SELECT intent FROM collaborations WHERE id = ?1",
+                params![collab_id],
+                |r| r.get(0),
+            )
+            .unwrap_or_default();
+        let mut stmt = conn
+            .prepare(
+                "SELECT participants_json, output_json, status FROM collaboration_steps
+                 WHERE collaboration_id = ?1 ORDER BY position ASC",
+            )
+            .map_err(|e| format!("prep work verdict query: {e}"))?;
+        let rows = stmt
+            .query_map(params![collab_id], |row| {
+                let p: String = row.get(0)?;
+                let o: Option<String> = row.get(1)?;
+                let s: String = row.get(2)?;
+                Ok((p, o, s))
+            })
+            .map_err(|e| format!("query work verdict steps: {e}"))?;
+        let mut outputs: Vec<(String, StepOutput)> = Vec::new();
+        let mut completed_ids: Vec<i64> = Vec::new();
+        for r in rows {
+            let (p_json, o_json, status) = r.map_err(|e| format!("work verdict row: {e}"))?;
+            if status != "completed" {
+                continue;
+            }
+            let Some(out_raw) = o_json else { continue };
+            let output: StepOutput =
+                serde_json::from_str(&out_raw).map_err(|e| format!("decode output: {e}"))?;
+            let participants: Vec<Participant> =
+                serde_json::from_str(&p_json).map_err(|e| format!("decode participants: {e}"))?;
+            if let Some(p0) = participants.first() {
+                completed_ids.push(p0.companion_id);
+            }
+            let name = participants
+                .first()
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| "成员".into());
+            outputs.push((name, output));
+        }
+        let mut summary = crate::engine::work::worker::compose_work_summary(&title, &outputs);
+        // #2 验证门:完成步里有没有测试/评审角色把关过?没有 → 交付摘要诚实标「未验证」
+        //(团队没 QA 时 dispatch 不会自动追加验证步,这里如实告诉用户没人验过)。
+        let verified = completed_ids.iter().any(|&id| {
+            conn.query_row(
+                "SELECT agent_definition_name FROM companions WHERE id = ?1",
+                params![id],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+            .map(|slug| crate::engine::work::plan::is_reviewer_slug(&slug))
+            .unwrap_or(false)
+        });
+        if !verified {
+            summary.push_str(
+                "\n\n> ⚠️ 未经测试/评审把关 —— 团队里没有 QA 角色,交付物没人验证过,请自行确认。",
+            );
+        }
+        Ok(summary)
     }
 
     /// 把一个已完成协作的可见产出拼成 verdict 文本 —— 写回 chat stream,主精灵
@@ -804,15 +1105,19 @@ impl SqliteOrchestrator {
     }
 }
 
-#[async_trait::async_trait]
-impl CollaborationOrchestrator for SqliteOrchestrator {
-    async fn submit(
+impl SqliteOrchestrator {
+    /// submit 的 kinded 版本(R3):`collaborations.kind` 在**调度前**钉死。旧流程
+    /// (submit 后补 `set_collaboration_kind`)有竞态 —— 步骤秒败时 finalize 已按默认
+    /// chat_group 写了群聊式终态。work 调用方(launch_intake / commit_work_plan)用本方法;
+    /// trait 的 `submit` 委托到这里(kind=None → 默认 'chat_group')。
+    pub async fn submit_kinded(
         &self,
         chat_session_id: String,
         intent: String,
         plan: CollaborationPlan,
         mode: CollaborationMode,
         parent_id: Option<CollaborationId>,
+        kind: Option<&str>,
     ) -> Result<CollaborationId, String> {
         if plan.steps.is_empty() {
             return Err("plan must contain at least one step".into());
@@ -840,6 +1145,9 @@ impl CollaborationOrchestrator for SqliteOrchestrator {
             &initial_status,
             parent_id,
         )?;
+        if let Some(k) = kind {
+            self.db.set_collaboration_kind(collab_id, k)?;
+        }
 
         self.audit.emit(
             collab_id,
@@ -857,6 +1165,21 @@ impl CollaborationOrchestrator for SqliteOrchestrator {
             self.schedule_ready_steps(collab_id).await?;
         }
         Ok(collab_id)
+    }
+}
+
+#[async_trait::async_trait]
+impl CollaborationOrchestrator for SqliteOrchestrator {
+    async fn submit(
+        &self,
+        chat_session_id: String,
+        intent: String,
+        plan: CollaborationPlan,
+        mode: CollaborationMode,
+        parent_id: Option<CollaborationId>,
+    ) -> Result<CollaborationId, String> {
+        self.submit_kinded(chat_session_id, intent, plan, mode, parent_id, None)
+            .await
     }
 
     /// 释放一个 `AwaitingConfirm` 协作。注意:产品砍掉 jury 拍板卡后,`AwaitingConfirm`
@@ -919,7 +1242,11 @@ impl CollaborationOrchestrator for SqliteOrchestrator {
         // the canonical "revive" path. Done / Aborted remain truly terminal.
         let mutate_allowed = match &collab.status {
             CollaborationStatus::Done | CollaborationStatus::Aborted => false,
-            CollaborationStatus::Failed(_) => matches!(mutation, Mutation::RetryStep { .. }),
+            // Failed 协作:重试或**跳过**失败步都是合法的「复活」操作(#3:跳过卡住的步
+            // 让下游继续)。Done / Aborted 仍真终态。
+            CollaborationStatus::Failed(_) => {
+                matches!(mutation, Mutation::RetryStep { .. } | Mutation::SkipStep { .. })
+            }
             _ => true,
         };
         if !mutate_allowed {
@@ -947,17 +1274,33 @@ impl CollaborationOrchestrator for SqliteOrchestrator {
             Mutation::RetryStep { step_id } => {
                 {
                     let conn = self.db.get_conn().ok_or_else(|| "db lock".to_string())?;
-                    conn.execute(
-                        "UPDATE collaboration_steps
-                            SET status = 'pending', output_json = NULL,
-                                error_reason = NULL, started_at = NULL, finished_at = NULL
-                          WHERE collaboration_id = ?1 AND id = ?2",
-                        params![id, step_id],
-                    )
-                    .map_err(|e| format!("reset step: {e}"))?;
+                    // CAS:只有 failed/skipped 的步可重试。没有这个条件时,连点「重叫一次」
+                    // 会把已被上一次重试拉回 running 的步再次重置成 pending → schedule 的
+                    // pending→running 守卫再次放行 → 同一步 N 路并发执行体同跑(实测用户
+                    // 连点 4 下 = 4 个「交互设计师」并发互踩)。affected==0 = 已在重跑,拒绝。
+                    let affected = conn
+                        .execute(
+                            "UPDATE collaboration_steps
+                                SET status = 'pending', output_json = NULL,
+                                    error_reason = NULL, started_at = NULL, finished_at = NULL
+                              WHERE collaboration_id = ?1 AND id = ?2
+                                AND status IN ('failed', 'skipped')",
+                            params![id, step_id],
+                        )
+                        .map_err(|e| format!("reset step: {e}"))?;
+                    if affected == 0 {
+                        return Err("这一步已在重跑(或不在可重试状态),别再点了".into());
+                    }
                 }
                 if matches!(collab.status, CollaborationStatus::Failed(_)) {
                     self.set_status(id, &CollaborationStatus::Running)?;
+                    // work 派工协作:job 状态机同步回 running —— 否则 Work 列表停在
+                    // 「未完成」而团队明明在重跑,状态精神分裂。
+                    if self.db.get_collaboration_kind(id).as_deref() == Some("work_dispatch") {
+                        if let Some(sid) = self.db.collaboration_session_id(id) {
+                            let _ = self.db.set_work_job_status(&sid, "running");
+                        }
+                    }
                 }
                 self.audit.emit(
                     id,
@@ -985,11 +1328,19 @@ impl CollaborationOrchestrator for SqliteOrchestrator {
                     AuditKind::StepSkipped,
                     serde_json::json!({ "step_id": step_id }),
                 )?;
-                // If we were paused at a UserConfirmation gate, skipping that
-                // gate is the equivalent of "user 拍板" — release back to
-                // Running so the rest of the DAG can flow.
-                if matches!(collab.status, CollaborationStatus::AwaitingConfirm) {
+                // 跳过让协作回到 Running:① UserConfirmation 闸被跳过 = "user 拍板";
+                // ② Failed 协作跳过卡住的失败步 = 让下游 DAG 继续(#3)。两种都从非 Running
+                // 态放回 Running,并同步 work job(否则 Work 列表停在「未完成」却在跑)。
+                if matches!(
+                    collab.status,
+                    CollaborationStatus::AwaitingConfirm | CollaborationStatus::Failed(_)
+                ) {
                     self.set_status(id, &CollaborationStatus::Running)?;
+                    if self.db.get_collaboration_kind(id).as_deref() == Some("work_dispatch") {
+                        if let Some(sid) = self.db.collaboration_session_id(id) {
+                            let _ = self.db.set_work_job_status(&sid, "running");
+                        }
+                    }
                 }
                 if self.all_steps_terminal(id)? {
                     self.finalize(id, CollaborationStatus::Done)?;

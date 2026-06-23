@@ -110,6 +110,8 @@ export interface ProjectPlanState {
   requestId: string;
   summary: string;
   tasks: ProjectPlanTask[];
+  /** 已开工(commit_work_plan 持久标记):卡片渲染 ✅ 已开工态,收起按钮。 */
+  committed?: boolean;
 }
 
 interface ChatStreamState {
@@ -209,6 +211,8 @@ interface ChatStreamState {
   // ask_user actions (F1)
   showQuestion: (q: PendingQuestionState) => void;
   setQuestions: (qs: PendingQuestionState[]) => void;
+  /** 按 requestId 移除一个提问(R5:按会话路由后不再恒删队头)。 */
+  removeQuestion: (requestId: string) => void;
   dequeueQuestion: () => void;
 
   // 开工方案 actions (S2③)
@@ -612,6 +616,8 @@ export const useChatStreamStore = create<ChatStreamState>((set, _get) => ({
         : { questionQueue: [...state.questionQueue, q] }
     ),
   setQuestions: (qs) => set({ questionQueue: qs }),
+  removeQuestion: (requestId) =>
+    set((state) => ({ questionQueue: state.questionQueue.filter((q) => q.requestId !== requestId) })),
   dequeueQuestion: () =>
     set((state) => ({ questionQueue: state.questionQueue.slice(1) })),
 

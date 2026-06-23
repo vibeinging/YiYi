@@ -1,15 +1,22 @@
-//! Project mode(S2③):PM 的结构化计划 → 协作 DAG。
+//! work/plan(缝 6 归位):PM 的结构化计划 → 协作 DAG。
 //!
-//! PM 把目标拆成任务(每条:角色 + 目标 + 依赖),本模块把它转成 `CollaborationPlan`
-//! —— 每条任务一个 1-participant step(participant = 该角色在群里的 companion),
-//! `depends_on` 表交接顺序,交给 orchestrator 调度(无依赖并行、有依赖串行)。
-//! 角色的工具权限 / 步数由 F2 在执行时按 agent_definition_name 解析,文件落项目工作区
-//! (S2①)。这是"派工"的核心数据变换,纯函数、可测透。
+//! 从 `engine/collaboration/project.rs` **复制**(S4:复制不删,原件 S8 删)。模块位置从
+//! `collaboration` 平移到 `work` —— "派工"不是 collaboration 的变种,是 work 表面的核心
+//! 数据变换。PM 把目标拆成任务(每条:角色 + 目标 + 依赖),本模块把它转成
+//! `CollaborationPlan`(本轮仍复用 orchestrator)—— 每条任务一个 1-participant step
+//! (participant = 该角色在群里的 companion),`depends_on` 表交接顺序,交给 orchestrator
+//! 调度(无依赖并行、有依赖串行)。纯函数、可测透。
+//!
+//! S4:整模块未接线(`build_*` 由 work/launcher 与 commands/work 在 S5/S6 调用),
+
+
 
 use serde::{Deserialize, Serialize};
 
-use super::{CollaborationPlan, Participant, Step, StepId, StepInput, StepKind, StepStatus};
 use crate::engine::agents::MemoryScope;
+use crate::engine::collaboration::{
+    CollaborationPlan, Participant, Step, StepId, StepInput, StepKind, StepStatus,
+};
 use crate::engine::db::Companion;
 
 /// PM 拆出的一条任务。
@@ -30,6 +37,30 @@ pub struct ProjectPlan {
     pub tasks: Vec<ProjectTask>,
 }
 
+/// 这个角色 slug 是不是测试/评审型(#2 验证门:据此决定要不要自动追加验证步、
+/// 以及交付摘要要不要标「未验证」)。覆盖软件公司预设(qa_engineer)+ 动态团队
+/// 常见 slug(slug 由角色名派生,多含 qa/test/review)。headless 无 registry 时的
+/// 主判据;有 registry 时调用方可叠加 permission_profile=="reviewer" 判定。
+pub fn is_reviewer_slug(slug: &str) -> bool {
+    let s = slug.to_lowercase();
+    ["qa", "review", "test", "verif"].iter().any(|k| s.contains(k))
+}
+
+#[cfg(test)]
+mod reviewer_slug_tests {
+    use super::is_reviewer_slug;
+    #[test]
+    fn detects_reviewer_roles() {
+        assert!(is_reviewer_slug("qa_engineer"));
+        assert!(is_reviewer_slug("code_reviewer"));
+        assert!(is_reviewer_slug("tester"));
+        assert!(is_reviewer_slug("QA")); // 大小写无关
+        assert!(!is_reviewer_slug("frontend_dev"));
+        assert!(!is_reviewer_slug("pm"));
+        assert!(!is_reviewer_slug("backend_dev"));
+    }
+}
+
 /// 把 PM 的计划转成协作 DAG。
 ///
 /// - 每条任务 → 一个 `StepKind::ParallelAgents` 且 1 个 participant 的 step(与现有派发
@@ -48,7 +79,7 @@ pub fn build_project_collaboration_plan(
 }
 
 /// 把任务列表转成 step 列表。step id 从 `id_offset + 1` 开始 —— 初始计划 `id_offset=0`
-/// (→ 1..n);**S2⑤ 动态追加任务时 `id_offset = 已有 step 数`,续号不撞**。
+/// (→ 1..n);**动态追加任务时 `id_offset = 已有 step 数`,续号不撞**。
 /// `depends_on` 是本批任务内的 0-based 下标,同样按 `id_offset` 偏移映射成 step id
 /// (所以追加批次内部的交接顺序也对)。
 pub fn build_steps(
@@ -95,8 +126,8 @@ pub fn build_steps(
             depends_on,
             input: StepInput {
                 prompt: task.objective.clone(),
-                // S2④:标 project_task,让 render_user_prompt 把上游产出按"交接"语义喂下游
-                // (后端的接口给前端…),而非"群里的讨论"。
+                // 标 project_task,让 worker 把上游产出按"交接"语义喂下游(后端的接口给前端…),
+                // 而非"群里的讨论"。
                 metadata: serde_json::json!({ "mode": "project_task" }),
             },
             output: None,
@@ -108,7 +139,7 @@ pub fn build_steps(
     Ok(steps)
 }
 
-/// S2⑤:QA 测出 bug → 生成"修复 + 重新验证"两条追加任务。修复派给出 bug 的角色,
+/// QA 测出 bug → 生成"修复 + 重新验证"两条追加任务。修复派给出 bug 的角色,
 /// 重新验证派回 QA(依赖修复完成)。`qa_role` 通常是 "qa_engineer"。
 pub fn build_bug_fix_followup(target_role: &str, qa_role: &str, bug: &str) -> Vec<ProjectTask> {
     vec![
@@ -147,6 +178,7 @@ mod tests {
             role_label: None,
             meditation_enabled: false,
             meditation_time: "03:00".into(),
+            kind: "companion".into(),
         }
     }
 
@@ -228,7 +260,7 @@ mod tests {
         assert!(build_project_collaboration_plan(&plan, &members, 1).is_err());
     }
 
-    // S2⑤:动态追加任务时,step id 从 offset 续号,本批内依赖也按 offset 映射。
+    // 动态追加任务时,step id 从 offset 续号,本批内依赖也按 offset 映射。
     #[test]
     fn build_steps_continues_ids_from_offset() {
         let members = vec![companion(10, "frontend_dev"), companion(30, "qa_engineer")];
@@ -242,7 +274,7 @@ mod tests {
         assert_eq!(steps[1].depends_on, vec![6]);
     }
 
-    // S2⑤:bug 修复回路 = 修复(派给出 bug 的角色)→ 重新验证(派回 QA,依赖修复)。
+    // bug 修复回路 = 修复(派给出 bug 的角色)→ 重新验证(派回 QA,依赖修复)。
     #[test]
     fn bug_fix_followup_is_fix_then_requalify() {
         let f = build_bug_fix_followup("frontend_dev", "qa_engineer", "删除按钮点不动");

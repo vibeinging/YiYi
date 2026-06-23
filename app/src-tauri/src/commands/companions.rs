@@ -185,11 +185,14 @@ fn sanitize_team_folder(name: &str) -> String {
 /// 每个角色走 `register_dynamic_role_impl` 的安全路径(撞名拒绝 + adopt-first 防幽灵);
 /// slug 先经 `unique_role_slug` 兜底,避免与既有 agent / 批内成员撞名导致整团失败。
 #[tauri::command]
+/// `ephemeral`:work 入口组队 = true → 成员标 'worker'(临时工,不进伙伴列表);
+/// chat 启动器建团队 = false/缺省 → 成员是真伙伴。
 pub async fn commit_dynamic_team(
     state: State<'_, AppState>,
     group_name: String,
     emoji: Option<String>,
     roles: Vec<crate::engine::agents::dynamic::RoleSpec>,
+    ephemeral: Option<bool>,
 ) -> Result<i64, String> {
     let group_name = group_name.trim();
     if group_name.is_empty() {
@@ -224,6 +227,14 @@ pub async fn commit_dynamic_team(
                 }
                 return Err(e);
             }
+        }
+    }
+
+    // work 入口的组队是**临时工**(ephemeral worker):标 kind='worker',不进伙伴
+    // 列表/委托/冥想 —— chat×work 正交:持久伙伴 ≠ 耗材。chat 启动器建的仍是伙伴。
+    if ephemeral.unwrap_or(false) {
+        for cid in &member_ids {
+            let _ = state.db.set_companion_kind(*cid, "worker");
         }
     }
 

@@ -1,7 +1,6 @@
 pub mod chat;
 pub mod group_dispatch;
 pub mod helpers;
-pub mod project;
 pub mod session;
 
 use serde::{Deserialize, Serialize};
@@ -85,6 +84,14 @@ pub struct ChatMessage {
     pub id: Option<i64>,
     pub role: String,
     pub content: String,
+    /// chat/work 渲染判别器(R4):collab(默认)/ work_job(work 锚点与交付)/
+    /// work_plan(开工方案锚点)。前端 ChatMessages 按它分发渲染分支。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_type: Option<String>,
+    /// context_type=work_plan 时的方案载荷(从消息 metadata 提取):
+    /// { request_id, summary, tasks }。前端据此渲染持久化的开工方案卡。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_plan: Option<serde_json::Value>,
     #[serde(default)]
     pub timestamp: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -9,21 +9,20 @@
 import { memo, useState, useEffect, useRef, useCallback } from 'react';
 import {
   Settings, Puzzle, Bot, Zap, FolderOpen, Sprout, Sparkles,
-  Trash2, MessageCircle, Clock,
+  Trash2, MessageCircle, Clock, Hammer,
   PanelLeftClose, PanelLeft, Grid3X3,
-  Plus, Pencil, Search, X, Users,
+  Plus, Pencil, Search, X, Users, MoreHorizontal,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useTaskSidebarStore } from '../stores/taskSidebarStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useGroupsStore } from '../stores/groupsStore';
+import { useWorkStore } from '../stores/workStore';
 import { AvatarGrid } from './AvatarGrid';
 import { timeAgo } from '../utils/taskStatus';
 import type { Page } from '../App';
 import type { ChatSession } from '../api/agent';
 import { listCompanions, retireCompanion, COMPANIONS_CHANGED_EVENT, type Companion } from '../api/companions';
-import { GroupsManagerModal } from './companions/GroupsManagerModal';
-import { GroupCreateModal } from './companions/GroupCreateModal';
 import { CompanionEditDrawer } from './companions/CompanionEditDrawer';
 import { confirm, toast } from './Toast';
 import logoFaceRight from '../assets/yiyi-logo-face-right.png';
@@ -51,10 +50,10 @@ function sessionBucket(ts: number): string {
 // FriendStrip(横排好友头像)已并入 FriendGroupPanel —— 好友列表从横排左右滑改成弹出面板里的
 // 纵向列表(用户反馈:横排不便)。
 
-// --- 「好友 + 群」弹出面板 ——点 Users 按钮弹出:好友纵向列表(可上下滚,取代原横排左右滑)
-//     + 发起群聊 / 管理群。整合自原 FriendStrip + GroupQuickMenu(用户反馈:横排不便)。 ---
+// --- 好友弹出面板 ——点 Users 按钮弹出:好友纵向列表(可上下滚,取代原横排左右滑)。
+//     2026-06-15:多分身群聊已退役,只保留 1:1 好友列表 + YiYi 主精灵。 ---
 function FriendGroupPanel({
-  x, y, companions, activeCompanionId, onOpenYiYi, onOpenFriend, onEditCompanion, onClose, onCreate, onManage,
+  x, y, companions, activeCompanionId, onOpenYiYi, onOpenFriend, onEditCompanion, onClose,
 }: {
   x: number; y: number;
   companions: Companion[];
@@ -63,8 +62,6 @@ function FriendGroupPanel({
   onOpenFriend: (id: number) => void;
   onEditCompanion: (c: Companion) => void;
   onClose: () => void;
-  onCreate: () => void;
-  onManage: () => void;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
   const [ctx, setCtx] = useState<{ companion: Companion; x: number; y: number } | null>(null);
@@ -151,27 +148,6 @@ function FriendGroupPanel({
             还没有伙伴 —— 去「小精灵」收养
           </div>
         )}
-      </div>
-
-      {/* 分隔 + 群操作(固定底部) */}
-      <div className="mx-3 my-1.5 shrink-0" style={{ borderTop: '1px solid var(--color-border)' }} />
-      <div className="px-1.5 shrink-0">
-        <button onClick={() => { onCreate(); onClose(); }} className={row}
-          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
-          <div className="shrink-0 w-8 h-8 rounded-[10px] flex items-center justify-center" style={{ background: 'var(--color-primary)1a' }}>
-            <Users size={15} style={{ color: 'var(--color-primary)' }} />
-          </div>
-          <span className="text-[13px] font-medium" style={{ color: 'var(--color-text)' }}>发起群聊</span>
-        </button>
-        <button onClick={() => { onManage(); onClose(); }} className={row}
-          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
-          <div className="shrink-0 w-8 h-8 rounded-[10px] flex items-center justify-center" style={{ background: 'var(--color-bg-subtle)' }}>
-            <Settings size={15} style={{ color: 'var(--color-text-muted)' }} />
-          </div>
-          <span className="text-[13px] font-medium" style={{ color: 'var(--color-text)' }}>管理群</span>
-        </button>
       </div>
     </div>
     {/* 右键菜单放在 panel 外 —— panel 的 backdrop-filter 会成为内部 fixed 的定位基准,放里面会把
@@ -352,8 +328,8 @@ function SidebarSessionCard({ session, isActive, onPageChange, companion }: {
         onClick={() => { if (!isRenaming) { switchToSession(session.id); onPageChange('chat'); } }}
         onContextMenu={(e) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY }); }}
         className="group flex items-center gap-2.5 cursor-pointer transition-colors duration-150 px-2.5 mx-1.5 my-[3px] rounded-xl"
-        style={{ minHeight: '42px', background: isActive ? 'var(--sidebar-active)' : 'transparent' }}
-        onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
+        style={{ minHeight: '42px', background: isActive ? 'var(--color-bg-subtle)' : 'transparent' }}
+        onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
         onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
       >
         {/* 头像:私聊 = companion emoji, 群 = 成员拼图, 单聊 = YiYi。统一 32px 圆角方块。 */}
@@ -382,18 +358,31 @@ function SidebarSessionCard({ session, isActive, onPageChange, companion }: {
               }}
               onClick={(e) => e.stopPropagation()}
               className="w-full text-[13px] font-medium bg-transparent border-none outline-none rounded px-0.5"
-              style={{ color: 'var(--sidebar-text-active)', boxShadow: '0 0 0 1px var(--color-border)' }}
+              style={{ color: 'var(--color-text)', boxShadow: '0 0 0 1px var(--color-border)' }}
               autoFocus
             />
           ) : (
             <>
-              {/* 单行:标题(常亮高对比)+ 右侧相对时间。预览已去除,降噪。 */}
-              <span className="flex-1 truncate text-[13px] font-medium" style={{ color: 'var(--sidebar-text-active)' }}>
+              {/* 单行:标题(常亮高对比)+ 右侧相对时间(hover 时让位给 ··· 菜单)。预览已去除,降噪。 */}
+              <span className="flex-1 truncate text-[13px] font-medium" style={{ color: 'var(--color-text)' }}>
                 {title}
               </span>
-              <span className="shrink-0 text-[10px] tabular-nums" style={{ color: 'var(--sidebar-section)' }}>
+              <span className="shrink-0 text-[10px] tabular-nums group-hover:hidden" style={{ color: 'var(--color-text-muted)' }}>
                 {timeAgo(session.updated_at)}
               </span>
+              {/* hover 快捷菜单(对齐 work 行的 hover 操作):与右键同一个菜单,可发现性入口。 */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const r = e.currentTarget.getBoundingClientRect();
+                  setContextMenu({ x: r.right - 4, y: r.bottom + 2 });
+                }}
+                className="shrink-0 w-5 h-5 rounded-md hidden group-hover:flex items-center justify-center transition-colors hover:bg-[var(--color-bg-muted)]"
+                style={{ color: 'var(--color-text-muted)' }}
+                title="重命名 / 删除"
+              >
+                <MoreHorizontal size={13} />
+              </button>
             </>
           )}
         </div>
@@ -483,6 +472,7 @@ export function NavRail({
   sidebarCollapsed: boolean;
   onDragMouseDown: (e: React.MouseEvent) => void;
 }) {
+  const workUnseen = useWorkStore((s) => s.unseenDone); // R6:job 完成红点
   const { t } = useTranslation();
   const chatActive = currentPage === 'chat';
   const cell = (active: boolean) =>
@@ -511,6 +501,37 @@ export function NavRail({
         </div>
         <span className="text-[9px] font-medium leading-none">对话</span>
       </button>
+
+      {/* 工作(chat×work 2×2 的 work 象限)—— 与「对话」并列的对等入口,琥珀 Hammer
+          一眼区别于对话的 YiYi 紫(关系 vs 交付)。点进 work 页(多 agent 派工监控)。 */}
+      {(() => {
+        const workActive = currentPage === 'work';
+        return (
+          <button
+            onClick={() => onPageChange('work')}
+            title="工作 · 团队交付"
+            className={cell(workActive)}
+            style={{
+              color: workActive ? 'var(--sidebar-text-active)' : 'var(--sidebar-text)',
+              background: workActive ? 'var(--sidebar-active)' : 'transparent',
+            }}
+            onMouseEnter={(e) => { if (!workActive) e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
+            onMouseLeave={(e) => { if (!workActive) e.currentTarget.style.background = 'transparent'; }}
+          >
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center relative">
+              <Hammer size={18} color="var(--color-warning)" strokeWidth={workActive ? 2.3 : 2} />
+              {workUnseen > 0 && (
+                <span
+                  className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full"
+                  style={{ background: 'var(--color-success)' }}
+                  title="有工作完成了"
+                />
+              )}
+            </div>
+            <span className="text-[9px] font-medium leading-none">工作</span>
+          </button>
+        );
+      })()}
 
       {/* 主导航(设置除外)—— 顶部 */}
       <div className="mt-0.5 flex flex-col items-center gap-0.5">
@@ -593,9 +614,6 @@ export const TaskSidebar = memo(function TaskSidebar({
   const [moreOpen, setMoreOpen] = useState(false);
   const [groupMenu, setGroupMenu] = useState<{ x: number; y: number } | null>(null);
   const [editingCompanion, setEditingCompanion] = useState<Companion | null>(null);
-  const [groupCreateOpen, setGroupCreateOpen] = useState(false);
-  const [groupsManagerOpen, setGroupsManagerOpen] = useState(false);
-
   const isMorePage = moreNavItems.some(n => n.id === currentPage);
 
   const chatSessions = useSessionStore((s) => s.chatSessions);
@@ -756,12 +774,8 @@ export const TaskSidebar = memo(function TaskSidebar({
         onOpenFriend={openFriend}
         onEditCompanion={setEditingCompanion}
         onClose={() => setGroupMenu(null)}
-        onCreate={() => setGroupCreateOpen(true)}
-        onManage={() => setGroupsManagerOpen(true)}
       />
     )}
-    {groupCreateOpen && <GroupCreateModal onClose={() => setGroupCreateOpen(false)} />}
-    {groupsManagerOpen && <GroupsManagerModal onClose={() => setGroupsManagerOpen(false)} />}
     {editingCompanion && (
       <CompanionEditDrawer
         companion={editingCompanion}
@@ -806,19 +820,70 @@ export const TaskSidebar = memo(function TaskSidebar({
     <aside
       className="flex flex-col shrink-0 relative z-40"
       style={{
-        width: '220px',
-        background: 'var(--sidebar-bg)',
-        borderRight: '1px solid var(--sidebar-border)',
+        width: '300px',
+        background: 'var(--color-bg)',
+        borderRight: '1px solid var(--color-border)',
       }}
     >
       {/* ── Drag region ── */}
       <div className="h-10 shrink-0 app-drag-region" onMouseDown={onDragMouseDown} />
 
-      {/* ── 顶部入口:新对话 / 搜索 / 群聊。搜索展开时整行变输入框。 ── */}
-      <div className="shrink-0 px-2 pb-1 flex items-center gap-1">
-        {searchOpen || isSearching ? (
-          <div className="flex-1 min-w-0 overflow-hidden flex items-center gap-1.5 px-3 py-[7px] rounded-[10px]" style={{ background: 'var(--sidebar-hover)' }}>
-            <Search size={13} style={{ color: 'var(--sidebar-text-active)', opacity: 0.7, flexShrink: 0 }} />
+      {/* ── 头部身份区(与工作页头部同构:h-14 + 底边框,切页不跳动)── */}
+      <header
+        className="shrink-0 flex items-center gap-2 px-3 h-14"
+        style={{ borderBottom: '1px solid var(--color-border)' }}
+      >
+        <div
+          className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 overflow-hidden"
+          style={{ background: 'var(--color-bg-muted)' }}
+        >
+          <img src={logoFaceRight} alt="YiYi" style={{ width: '80%', height: '80%', objectFit: 'contain' }} />
+        </div>
+        <div className="flex flex-col min-w-0 flex-1">
+          <span className="text-[14px] font-semibold leading-tight" style={{ color: 'var(--color-text)' }}>
+            对话
+          </span>
+          <span className="text-[11px] leading-tight truncate" style={{ color: 'var(--color-text-muted)' }}>
+            伙伴 · 群聊 · 陪伴
+          </span>
+        </div>
+        <button
+          onClick={() => setSearchOpen(true)}
+          className="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg transition-colors"
+          style={{ color: 'var(--color-text)' }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+          title="搜索对话"
+        >
+          <Search size={15} style={{ opacity: 0.75 }} />
+        </button>
+        <button
+          onClick={(e) => setGroupMenu({ x: e.clientX, y: e.clientY })}
+          className="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg transition-colors"
+          style={{ color: 'var(--color-text)' }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+          title="群聊 — 建群 / 管理成员 / 共享记忆"
+        >
+          <Users size={15} style={{ opacity: 0.75 }} />
+        </button>
+        <button
+          onClick={handleNewChatClick}
+          className="shrink-0 inline-flex items-center justify-center w-8 h-8 rounded-lg transition-opacity"
+          style={{ background: 'var(--color-primary)', color: '#fff' }}
+          title="新对话"
+          onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.88'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.opacity = '1'; }}
+        >
+          <Plus size={16} strokeWidth={2.4} />
+        </button>
+      </header>
+
+      {/* ── 搜索条(展开时出现在头部下方,不挤掉身份区)── */}
+      {(searchOpen || isSearching) && (
+        <div className="shrink-0 px-2 pb-1.5">
+          <div className="flex items-center gap-1.5 px-3 py-[7px] rounded-[10px]" style={{ background: 'var(--color-bg-muted)' }}>
+            <Search size={13} style={{ color: 'var(--color-text)', opacity: 0.7, flexShrink: 0 }} />
             <input
               ref={searchInputRef}
               autoFocus
@@ -829,57 +894,24 @@ export const TaskSidebar = memo(function TaskSidebar({
               onBlur={() => { if (!isSearching) setSearchOpen(false); }}
               onKeyDown={(e) => { if (e.key === 'Escape') { clearSearch(); if (searchInputRef.current) searchInputRef.current.value = ''; setSearchOpen(false); } }}
               className="flex-1 min-w-0 py-0 bg-transparent text-[12px] outline-none placeholder:opacity-50"
-              style={{ color: 'var(--sidebar-text-active)' }}
+              style={{ color: 'var(--color-text)' }}
             />
             <button
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => { clearSearch(); if (searchInputRef.current) searchInputRef.current.value = ''; setSearchOpen(false); }}
               className="p-0.5 rounded transition-opacity opacity-60 hover:opacity-100"
-              style={{ color: 'var(--sidebar-text-active)' }}
+              style={{ color: 'var(--color-text)' }}
             >
               <X size={12} />
             </button>
           </div>
-        ) : (
-          <>
-            <button
-              onClick={handleNewChatClick}
-              className="flex-1 flex items-center gap-2 px-3 py-[7px] rounded-[10px] transition-colors text-[12.5px] font-medium"
-              style={{ color: 'var(--sidebar-text-active)' }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-            >
-              <Plus size={14} style={{ opacity: 0.7 }} />
-              新对话
-            </button>
-            <button
-              onClick={() => setSearchOpen(true)}
-              className="shrink-0 w-8 h-8 flex items-center justify-center rounded-[10px] transition-colors"
-              style={{ color: 'var(--sidebar-text-active)' }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-              title="搜索对话"
-            >
-              <Search size={15} style={{ opacity: 0.75 }} />
-            </button>
-            <button
-              onClick={(e) => setGroupMenu({ x: e.clientX, y: e.clientY })}
-              className="shrink-0 w-8 h-8 flex items-center justify-center rounded-[10px] transition-colors"
-              style={{ color: 'var(--sidebar-text-active)' }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--sidebar-hover)'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-              title="群聊 — 建群 / 管理成员 / 共享记忆"
-            >
-              <Users size={15} style={{ opacity: 0.75 }} />
-            </button>
-          </>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* 好友列表已移入「群聊」按钮的弹出面板(FriendGroupPanel)—— 横排改纵向,见用户反馈。 */}
 
       {/* ── Session List(下部分:聊天历史,按最近活跃分组)── */}
-      <div className="flex-1 overflow-y-auto py-0.5" style={{ scrollbarWidth: 'thin' }}>
+      <div className="flex-1 overflow-y-auto py-1.5" style={{ scrollbarWidth: 'thin' }}>
         {displaySessions.length > 0 && (
           <div className="mb-1 pt-1.5">
             {(() => {
@@ -902,7 +934,7 @@ export const TaskSidebar = memo(function TaskSidebar({
                 if (b !== lastBucket) {
                   lastBucket = b;
                   out.push(
-                    <div key={`h-${b}`} className="text-[10px] font-semibold tracking-[0.08em] uppercase px-3.5 pt-3 pb-1" style={{ color: 'var(--sidebar-section)' }}>
+                    <div key={`h-${b}`} className="text-[10px] font-semibold tracking-[0.08em] uppercase px-3.5 pt-3 pb-1" style={{ color: 'var(--color-text-muted)' }}>
                       {b}
                     </div>,
                   );
@@ -914,7 +946,7 @@ export const TaskSidebar = memo(function TaskSidebar({
             {!isSearching && hasMore && (
               <div ref={sentinelRef} className="flex items-center justify-center py-2">
                 {loadingMore && (
-                  <span className="text-[10px]" style={{ color: 'var(--sidebar-text)', opacity: 0.4 }}>
+                  <span className="text-[10px]" style={{ color: 'var(--color-text-secondary)', opacity: 0.4 }}>
                     加载中...
                   </span>
                 )}
@@ -925,7 +957,7 @@ export const TaskSidebar = memo(function TaskSidebar({
 
         {isSearching && displaySessions.length === 0 && (
           <div className="px-4 py-6 text-center">
-            <p className="text-[11px]" style={{ color: 'var(--sidebar-text)', opacity: 0.4 }}>
+            <p className="text-[11px]" style={{ color: 'var(--color-text-secondary)', opacity: 0.4 }}>
               没有找到匹配的对话
             </p>
           </div>
@@ -934,9 +966,9 @@ export const TaskSidebar = memo(function TaskSidebar({
         {!isSearching && chatSessions.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full px-6 text-center">
             <div className="w-10 h-10 rounded-2xl flex items-center justify-center mb-3" style={{ background: 'rgba(255,255,255,0.04)' }}>
-              <Plus size={20} style={{ color: 'var(--sidebar-text)', opacity: 0.4 }} />
+              <Plus size={20} style={{ color: 'var(--color-text-secondary)', opacity: 0.4 }} />
             </div>
-            <p className="text-[12px] font-medium leading-relaxed" style={{ color: 'var(--sidebar-text)', opacity: 0.4 }}>
+            <p className="text-[12px] font-medium leading-relaxed" style={{ color: 'var(--color-text-secondary)', opacity: 0.4 }}>
               点击上方按钮开始新对话
             </p>
           </div>
@@ -954,12 +986,8 @@ export const TaskSidebar = memo(function TaskSidebar({
         onOpenFriend={openFriend}
         onEditCompanion={setEditingCompanion}
         onClose={() => setGroupMenu(null)}
-        onCreate={() => setGroupCreateOpen(true)}
-        onManage={() => setGroupsManagerOpen(true)}
       />
     )}
-    {groupCreateOpen && <GroupCreateModal onClose={() => setGroupCreateOpen(false)} />}
-    {groupsManagerOpen && <GroupsManagerModal onClose={() => setGroupsManagerOpen(false)} />}
     {editingCompanion && (
       <CompanionEditDrawer
         companion={editingCompanion}

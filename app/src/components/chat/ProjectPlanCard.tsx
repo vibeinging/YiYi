@@ -1,6 +1,6 @@
 /**
  * 开工方案卡(S2③)—— PM 拆好的计划在聊天流里渲染成可审阅的卡片:任务清单
- * (角色 + 要做什么 + 依赖)+「开工 / 算了」。点「开工」调 commit_project_plan
+ * (角色 + 要做什么 + 依赖)+「开工 / 算了」。点「开工」调 commit_work_plan
  * 把任务派给各角色(白盒:用户拍板一次,团队才真正开干)。
  */
 
@@ -22,23 +22,28 @@ const ACCENT = 'var(--color-primary)';
 
 export function ProjectPlanCard({ plan }: { plan: ProjectPlanState }) {
   const [committing, setCommitting] = useState(false);
-  const [done, setDone] = useState(false);
+  const [localDone, setLocalDone] = useState(false);
+  const [dismissed, setDismissed] = useState(false); // R4:卡片可能来自持久化消息,「算了」=本地收起
   const sessionId = useChatStreamStore((s) => s.sessionId);
   const clearProjectPlan = useChatStreamStore((s) => s.clearProjectPlan);
+  // 已开工 = 本地即时反馈 || 持久标记(metadata.committed,commit_work_plan 写入)。
+  // 不能只靠本地 state:开工触发消息重载,重建的卡片实例会被打回「开工」按钮(实测)。
+  const done = localDone || !!plan.committed;
+  if (dismissed) return null;
 
   const start = async () => {
     if (committing || done) return;
     if (!sessionId) { toast.error('没有会话,无法开工'); return; }
     setCommitting(true);
     try {
-      await invoke('commit_project_plan', {
+      await invoke('commit_work_plan', {
         sessionId,
         plan: { tasks: plan.tasks },
       });
       // 让聊天重载,把派工协作的锚点消息拉进来 → CollaborationMessageCard 渲染队友的实时发言
       // (否则开工后页面静默,看不到团队在干活)。
       window.dispatchEvent(new CustomEvent('yiyi:reload-messages'));
-      setDone(true);
+      setLocalDone(true);
       toast.success('开工!团队已按方案开干');
       setTimeout(() => clearProjectPlan(), 600);
     } catch (e) {
@@ -90,9 +95,9 @@ export function ProjectPlanCard({ plan }: { plan: ProjectPlanState }) {
               <div className="min-w-0 flex-1">
                 <div className="text-[12px] font-medium" style={{ color: meta.color }}>
                   {meta.name}
-                  {t.depends_on.length > 0 && (
+                  {(t.depends_on?.length ?? 0) > 0 && (
                     <span className="ml-1.5 text-[10.5px] font-normal" style={{ color: 'var(--color-text-muted)' }}>
-                      <ArrowRight size={9} className="inline -mt-0.5" /> 接 {t.depends_on.map((d) => `#${d + 1}`).join('、')}
+                      <ArrowRight size={9} className="inline -mt-0.5" /> 接 {(t.depends_on ?? []).map((d) => `#${d + 1}`).join('、')}
                     </span>
                   )}
                 </div>
@@ -126,7 +131,7 @@ export function ProjectPlanCard({ plan }: { plan: ProjectPlanState }) {
               开工
             </button>
             <button
-              onClick={() => clearProjectPlan()}
+              onClick={() => { setDismissed(true); clearProjectPlan(); }}
               disabled={committing}
               className="flex items-center gap-1 py-1.5 px-3 rounded-xl text-[12.5px] transition-colors disabled:opacity-50"
               style={{ background: 'var(--color-bg-subtle)', color: 'var(--color-text-secondary)' }}
