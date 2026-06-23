@@ -49,6 +49,28 @@ export async function findTeamByFolder(folder: string): Promise<number | null> {
   return await invoke<number | null>('find_team_by_folder', { folder });
 }
 
+/** 项目团队摘要 ——「新建工作」弹窗「项目」下拉的数据源(只含绑了 workspace 的项目群)。 */
+export interface ProjectGroup {
+  /** 团队群 id。 */
+  id: number;
+  /** 团队群名。 */
+  name: string;
+  /** 团队群 emoji(可能为空)。 */
+  emoji: string | null;
+  /** 项目工作区绝对路径(团队在里面干活的文件夹)。 */
+  workspace_path: string;
+  /** 最近一次 work job 的创建时间(ms);没跑过则 null。下拉据此把最近项目置顶。 */
+  last_used_at: number | null;
+}
+
+/**
+ * 列出所有项目团队(绑了 workspace 的群),按最近一次 work job 降序。
+ * 「新建工作」弹窗的「项目」下拉数据源 —— 历史 work 项目置顶。
+ */
+export async function listProjectGroups(): Promise<ProjectGroup[]> {
+  return await invoke<ProjectGroup[]>('list_project_groups');
+}
+
 export interface LaunchedWork {
   session_id: string;
   collaboration_id: number;

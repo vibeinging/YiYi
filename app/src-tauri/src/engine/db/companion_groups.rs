@@ -26,6 +26,17 @@ pub struct CompanionGroup {
     pub workspace_path: Option<String>,
 }
 
+/// 项目团队摘要 —— 新建工作弹窗「项目」下拉的数据源(只有绑了 workspace_path 的群)。
+/// `last_used_at` = 该群最近一次 work job 的创建时间,用于"最近项目置顶"排序;没跑过则 None。
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectGroupSummary {
+    pub id: i64,
+    pub name: String,
+    pub emoji: Option<String>,
+    pub workspace_path: String,
+    pub last_used_at: Option<i64>,
+}
+
 fn map_group_row(row: &rusqlite::Row) -> rusqlite::Result<CompanionGroup> {
     Ok(CompanionGroup {
         id: row.get(0)?,
@@ -109,6 +120,42 @@ impl super::Database {
             |row| row.get(0),
         )
         .ok()
+    }
+
+    /// 列出所有"项目团队"(绑了 workspace_path 的群),按最近一次 work job 的时间降序 ——
+    /// 新建工作弹窗的「项目」下拉数据源。没跑过 job 的项目群排最后(按群更新时间)。
+    ///
+    /// 注:与 `list_companion_groups` 不同,这里只返回项目群(普通闲聊群不在下拉里),
+    /// 并带上 last_used_at(最近 job 创建时间)用于"最近项目置顶"排序。
+    pub fn list_project_groups(&self) -> Vec<ProjectGroupSummary> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = match conn.prepare(
+            "SELECT g.id, g.name, g.emoji, g.workspace_path, \
+                    MAX(w.created_at) AS last_used_at \
+             FROM companion_groups g \
+             LEFT JOIN sessions s ON s.group_id = g.id \
+             LEFT JOIN work_jobs w ON w.session_id = s.id \
+             WHERE g.workspace_path IS NOT NULL \
+             GROUP BY g.id \
+             ORDER BY last_used_at DESC NULLS LAST, g.updated_at DESC",
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("list_project_groups prepare: {}", e);
+                return Vec::new();
+            }
+        };
+        stmt.query_map([], |row| {
+            Ok(ProjectGroupSummary {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                emoji: row.get(2)?,
+                workspace_path: row.get(3)?,
+                last_used_at: row.get(4)?,
+            })
+        })
+        .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
     }
 
     pub fn list_companion_groups(&self) -> Vec<CompanionGroup> {
@@ -287,6 +334,18 @@ mod tests {
         conn.last_insert_rowid()
     }
 
+    /// 给某会话插一行 work_job,返回其 session_id(== PK)。created_at 递增方便排序断言。
+    fn insert_work_job(db: &crate::engine::db::Database, session_id: &str, created_at: i64) -> String {
+        let conn = db.get_conn().unwrap();
+        conn.execute(
+            "INSERT INTO work_jobs (session_id, status, intent, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?4)",
+            rusqlite::params![session_id, "running", "改 bug", created_at],
+        )
+        .unwrap();
+        session_id.to_string()
+    }
+
     #[test]
     #[serial]
     fn workspace_path_round_trips_through_set_and_get() {
@@ -332,5 +391,39 @@ mod tests {
         db.push_message("sess-solo", "user", "你好").unwrap();
         let c3 = insert_collab(&db, "sess-solo");
         assert_eq!(db.group_workspace_for_collaboration(c3), None, "单聊不应有工作区");
+    }
+
+    #[test]
+    #[serial]
+    fn list_project_groups_filters_and_orders_by_last_used() {
+        let t = TempDb::new();
+        let db = t.db();
+
+        // 两个项目群(都有工作区)+ 一个普通闲聊群(无工作区,不应出现)。
+        let g_recent = db.create_companion_group("新项目", Some("🆕"), None).unwrap();
+        db.set_group_workspace(g_recent, "/tmp/proj-new").unwrap();
+        let g_old = db.create_companion_group("老项目", Some("📦"), None).unwrap();
+        db.set_group_workspace(g_old, "/tmp/proj-old").unwrap();
+        let g_casual = db.create_companion_group("创作小队", None, None).unwrap(); // 无工作区
+        let _ = g_casual;
+
+        // 给两个项目群各绑一个 session + work_job。老项目 job 早(1000)、新项目 job 晚(2000)。
+        db.push_message("sess-old", "user", "go").unwrap();
+        db.set_session_group("sess-old", Some(g_old)).unwrap();
+        insert_work_job(&db, "sess-old", 1000);
+        db.push_message("sess-new", "user", "go").unwrap();
+        db.set_session_group("sess-new", Some(g_recent)).unwrap();
+        insert_work_job(&db, "sess-new", 2000);
+
+        let list = db.list_project_groups();
+
+        // 普通群被过滤掉,只剩两个项目群。
+        assert_eq!(list.len(), 2, "只应有 2 个项目群,普通群被过滤");
+        // 按最近 job 降序:新项目(2000)在前,老项目(1000)在后。
+        assert_eq!(list[0].id, g_recent, "最近用的项目应置顶");
+        assert_eq!(list[0].last_used_at, Some(2000));
+        assert_eq!(list[1].id, g_old);
+        assert_eq!(list[1].last_used_at, Some(1000));
+        assert_eq!(list[1].workspace_path, "/tmp/proj-old");
     }
 }

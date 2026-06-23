@@ -20,7 +20,7 @@ use tauri::State;
 use crate::commands::agent::helpers::resolve_llm_config;
 use crate::engine::collaboration::orchestrator::SqliteOrchestrator;
 use crate::engine::collaboration::{CollaborationPlan, CompanionProfile};
-use crate::engine::db::{Database, WorkJobSummary};
+use crate::engine::db::{Database, ProjectGroupSummary, WorkJobSummary};
 use crate::engine::work::plan::{build_project_collaboration_plan, ProjectPlan};
 use crate::state::AppState;
 
@@ -28,6 +28,13 @@ use crate::state::AppState;
 #[tauri::command]
 pub fn list_work_jobs(state: State<'_, AppState>) -> Vec<WorkJobSummary> {
     state.db.list_work_jobs()
+}
+
+/// 「新建工作」弹窗的「项目」下拉数据源:列出所有绑了 workspace 的项目团队,
+/// 按最近一次 work job 降序(最近用的项目置顶)。只返回项目群,普通闲聊群不在下拉里。
+#[tauri::command]
+pub fn list_project_groups(state: State<'_, AppState>) -> Vec<ProjectGroupSummary> {
+    state.db.list_project_groups()
 }
 
 /// 项目复用:某个文件夹是否已绑过团队(同一项目反复干活复用同支团队,不重复组队)。

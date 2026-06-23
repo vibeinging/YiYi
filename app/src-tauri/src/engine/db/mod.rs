@@ -35,7 +35,7 @@ pub use inbox::{InboxItem, NewInboxItem};
 pub use traces::{AgentTrace, NewAgentTrace};
 pub use quick_actions::QuickActionRow;
 pub use companions::{Companion, CompanionUpdate, NewCompanion};
-pub use companion_groups::CompanionGroup;
+pub use companion_groups::{CompanionGroup, ProjectGroupSummary};
 pub use questions::PendingQuestion;
 
 pub struct Database {

@@ -17,15 +17,16 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Hammer, Loader2, CheckCircle2, XCircle, Plus, X, Folder, Sparkles, Check,
-  CircleHelp, PlayCircle, OctagonX, UserPlus,
+  Hammer, Loader2, CheckCircle2, XCircle, Plus, X, Folder, FolderOpen, Sparkles, Check,
+  CircleHelp, PlayCircle, OctagonX, UserPlus, CornerDownLeft,
 } from 'lucide-react';
-import { listWorkJobs, launchWorkJob, findTeamByFolder, abortWorkJob, type WorkJob } from '../api/work';
+import { listWorkJobs, launchWorkJob, findTeamByFolder, abortWorkJob, listProjectGroups, type WorkJob, type ProjectGroup } from '../api/work';
 import { pickFolder } from '../api/workspace';
 import { addCompanionToGroup } from '../api/groups';
 import { generateTeam, commitDynamicTeam, listCompanions, type GeneratedTeam, type Companion } from '../api/companions';
 import { listen } from '@tauri-apps/api/event';
 import { confirm, toast } from '../components/Toast';
+import { Select } from '../components/Select';
 import { useSessionStore } from '../stores/sessionStore';
 import { useWorkStore } from '../stores/workStore';
 import { CustomTeamPanel } from '../components/companions/CustomTeamPanel';
@@ -443,9 +444,21 @@ function WorkLauncher({
   /** chat 引导卡带来的任务文本(预填,免得用户重打)。 */
   initialTask?: string;
 }) {
-  const [folderMode, setFolderMode] = useState<'auto' | 'pick'>('auto');
+  // ── 项目下拉:历史 work 项目 + 选新文件夹(对齐 ZCode 新建任务交互)──
+  const [projectGroups, setProjectGroups] = useState<ProjectGroup[]>([]);
+  // '__new__' = 新建项目(自动) / '__pick__' = 选文件夹 / <gid> = 复用某历史项目团队
+  const [selectedProject, setSelectedProject] = useState<string>('__new__');
   const [pickedFolder, setPickedFolder] = useState<string | null>(null);
+  const [taskType, setTaskType] = useState<'new' | 'continue'>('new');
+  // 「继续」时该项目的进行中 job(选中即跳进去,不组队、不发起新 job)。
+  const [continueJobs, setContinueJobs] = useState<WorkJob[]>([]);
   const [task, setTask] = useState(initialTask ?? '');
+
+  // 拉一次历史项目(下拉数据源)。空数组时不显示该段,只剩"新建/选文件夹"。
+  useEffect(() => {
+    listProjectGroups().then(setProjectGroups).catch(() => setProjectGroups([]));
+  }, []);
+
   // 已组建团队的 gid(R6):launch 失败重试时复用,不再重复组队(失败留孤儿团队的根)。
   const committedGidRef = useRef<number | null>(null);
   const [launching, setLaunching] = useState(false);
@@ -474,19 +487,63 @@ function WorkLauncher({
     return () => { un.then((f) => f()); };
   }, []);
 
-  // 选定项目目录:auto → null(commit_dynamic_team 自动建 projects/<名>);pick → 选定路径。
-  const folder = folderMode === 'pick' ? pickedFolder : null;
-  const canGo = task.trim().length > 0 && (folderMode === 'auto' || !!pickedFolder);
+  // 选中的历史项目对象(selectedProject 是数字 gid 时)。
+  const selectedGroup = useMemo(
+    () => projectGroups.find((g) => String(g.id) === selectedProject) ?? null,
+    [projectGroups, selectedProject],
+  );
+
+  // 选定项目目录:新建 → null(commit_dynamic_team 自动建 projects/<名>);
+  // 选文件夹 → pickedFolder;复用历史项目 → 该项目的工作区路径。
+  const folder =
+    selectedProject === '__pick__' ? pickedFolder
+    : selectedGroup ? selectedGroup.workspace_path
+    : null;
+  // 选中历史项目团队时,这是复用团队 gid(launchAuto 据此跳过组队)。
+  const reuseGid = selectedGroup ? selectedGroup.id : null;
 
   const handlePick = async () => {
     setError('');
     try {
       const p = await pickFolder();
-      if (p) { setPickedFolder(p); setFolderMode('pick'); }
+      if (p) {
+        setPickedFolder(p);
+        // 选的文件夹若已绑过团队,直接切到那个项目(复用团队,不再走"选文件夹"态)。
+        const gid = await findTeamByFolder(p);
+        if (gid != null) { setSelectedProject(String(gid)); }
+      }
     } catch (e) {
       setError(String(e));
     }
   };
+
+  // 切项目时:清掉「继续」job 缓存、重置类型回新任务(新项目/选文件夹没有"继续")。
+  const onSelectProject = (value: string) => {
+    setSelectedProject(value);
+    setTaskType('new');
+    setContinueJobs([]);
+    if (value === '__pick__' && !pickedFolder) {
+      void handlePick();
+    }
+  };
+
+  // 切「继续」时:拉该项目进行中的 job(clarifying/pending_commit/running)。
+  useEffect(() => {
+    if (taskType !== 'continue' || !reuseGid) { setContinueJobs([]); return; }
+    listWorkJobs()
+      .then((all) => setContinueJobs(
+        all.filter((j) => j.group_id === reuseGid && ['clarifying', 'pending_commit', 'running'].includes(j.status))
+            .sort((a, b) => b.created_at - a.created_at),
+      ))
+      .catch(() => setContinueJobs([]));
+  }, [taskType, reuseGid]);
+
+  // 发送条件:新任务 → 有任务文本 + (新建 / 已选文件夹 / 已选项目);继续 → 靠点 job 列表进入。
+  const canGo =
+    taskType === 'continue'
+      ? false
+      : task.trim().length > 0 &&
+        (selectedProject === '__new__' || (!!pickedFolder && selectedProject === '__pick__') || !!reuseGid);
 
   // 用一支团队(gid)在选定目录开工 → 选中新会话。auto 与 review 两条路共用。
   const launchOn = async (gid: number) => {
@@ -501,10 +558,11 @@ function WorkLauncher({
     setLaunching(true);
     setError('');
     try {
-      // 项目复用:本次弹窗里已组建过(launch 失败重试)→ 复用;选了已有文件夹且
-      // 该目录已绑团队 → 复用;都没有才组队。失败重试不再留一地孤儿团队。
+      // 项目复用优先级:① 本次弹窗里已组建过(失败重试)→ 复用;
+      //   ② 下拉选了历史项目团队 → 直接复用其 gid;③ 选了已有文件夹且该目录已绑团队 → 复用;
+      //   都没有才组队。失败重试不再留一地孤儿团队。
       let gid: number | null =
-        committedGidRef.current ?? (folder ? await findTeamByFolder(folder) : null);
+        committedGidRef.current ?? reuseGid ?? (folder ? await findTeamByFolder(folder) : null);
       if (!gid) {
         setReusedTeam(false);
         setGenEvents([]);
@@ -525,6 +583,19 @@ function WorkLauncher({
       setStage('idle');
     }
   };
+
+  // 跳进某个已有 work 会话(「继续」点 job)。复用上层选会话能力,不发起新 job。
+  const switchToSession = useSessionStore((s) => s.switchToSession);
+  const jumpToJob = (sessionId: string) => {
+    switchToSession(sessionId);
+    onLaunched(sessionId);
+  };
+
+  // 标题里的项目名(动态):历史项目名 / 选文件夹末段 / "新项目"。
+  const projectLabel =
+    selectedGroup ? selectedGroup.name
+    : selectedProject === '__pick__' && pickedFolder ? basename(pickedFolder)
+    : '新项目';
 
   const stageLabel =
     stage === 'generating' ? '正在组队…'
@@ -599,69 +670,110 @@ function WorkLauncher({
       <div className="w-[480px] max-w-full shrink-0 flex flex-col gap-4 p-5">
         <div className="flex items-center gap-2">
           <Hammer size={16} color={AMBER} strokeWidth={2.2} />
-          <span className="text-[15px] font-semibold flex-1" style={{ color: 'var(--color-text)' }}>新建工作</span>
+          <span className="text-[15px] font-semibold flex-1" style={{ color: 'var(--color-text)' }}>
+            在 {projectLabel} 新建任务
+          </span>
           <button onClick={onClose} className="p-1 rounded-lg" style={{ color: 'var(--color-text-muted)' }}>
             <X size={16} />
           </button>
         </div>
 
-        {/* 项目文件夹(主):自动新建 / 选已有 */}
+        {/* 项目(文件夹):历史项目置顶 + 选新文件夹 + 新建项目(自动) */}
         <div className="flex flex-col gap-1.5">
           <span className="text-[12px] font-medium" style={{ color: 'var(--color-text-secondary)' }}>
-            项目文件夹 <span style={{ color: 'var(--color-text-muted)' }}>—— 团队在里面干活</span>
+            项目 <span style={{ color: 'var(--color-text-muted)' }}>—— 团队在里面干活的文件夹</span>
           </span>
-          <div className="flex flex-col gap-1.5">
-            <button
-              onClick={() => setFolderMode('auto')}
-              className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-left transition-colors"
-              style={{
-                background: folderMode === 'auto' ? 'var(--color-warning-subtle)' : 'var(--color-bg-muted)',
-                border: `1px solid ${folderMode === 'auto' ? AMBER : 'var(--color-border)'}`,
-              }}
-            >
-              <Sparkles size={15} color={folderMode === 'auto' ? AMBER : 'var(--color-text-muted)'} className="shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="text-[12.5px] font-medium" style={{ color: 'var(--color-text)' }}>新建项目(自动)</div>
-                <div className="text-[10.5px]" style={{ color: 'var(--color-text-muted)' }}>YiYi 自动建一个项目目录</div>
-              </div>
-              {folderMode === 'auto' && <Check size={15} color={AMBER} strokeWidth={2.4} className="shrink-0" />}
-            </button>
+          <Select
+            value={selectedProject}
+            onChange={onSelectProject}
+            fullWidth
+            placeholder="选择项目"
+            options={[
+              ...projectGroups.map((g) => ({
+                value: String(g.id),
+                label: `${g.emoji ?? '📁'} ${g.name} · ${basename(g.workspace_path)}`,
+              })),
+              { value: '__pick__', label: pickedFolder ? `🗂️ ${basename(pickedFolder)}(改选…)` : '🗂️ 选择文件夹…' },
+              { value: '__new__', label: '✨ 新建项目(自动)' },
+            ]}
+          />
+          {selectedProject === '__pick__' && (
             <button
               onClick={handlePick}
-              className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-left transition-colors"
-              style={{
-                background: folderMode === 'pick' ? 'var(--color-warning-subtle)' : 'var(--color-bg-muted)',
-                border: `1px solid ${folderMode === 'pick' ? AMBER : 'var(--color-border)'}`,
-              }}
+              className="self-start text-[11px] px-2 py-1 rounded-lg transition-colors hover:bg-[var(--color-bg-subtle)] inline-flex items-center gap-1"
+              style={{ color: 'var(--color-text-muted)' }}
             >
-              <Folder size={15} color={folderMode === 'pick' ? AMBER : 'var(--color-text-muted)'} className="shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="text-[12.5px] font-medium" style={{ color: 'var(--color-text)' }}>选已有文件夹…</div>
-                <div className="text-[10.5px] truncate" style={{ color: 'var(--color-text-muted)' }}>
-                  {pickedFolder || '让团队改造电脑上现成的项目'}
-                </div>
-              </div>
-              {folderMode === 'pick' && <Check size={15} color={AMBER} strokeWidth={2.4} className="shrink-0" />}
+              <FolderOpen size={12} />
+              {pickedFolder ? `已选 ${basename(pickedFolder)} · 重选` : '打开选择器'}
             </button>
-          </div>
+          )}
         </div>
 
-        {/* 任务描述 */}
+        {/* 类型:新任务 / 继续(仅历史项目可选) */}
         <div className="flex flex-col gap-1.5">
-          <span className="text-[12px] font-medium" style={{ color: 'var(--color-text-secondary)' }}>要做什么</span>
-          <textarea
-            value={task}
-            onChange={(e) => setTask(e.target.value)}
-            rows={3}
-            autoFocus
-            placeholder="比如:做个待办事项落地页 —— 能添加 / 删除 / 标记完成,localStorage 存数据"
-            className="w-full rounded-lg px-3 py-2 text-[13px] resize-none outline-none"
-            style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text)' }}
+          <span className="text-[12px] font-medium" style={{ color: 'var(--color-text-secondary)' }}>类型</span>
+          <Select
+            value={taskType}
+            onChange={(v) => setTaskType(v as 'new' | 'continue')}
+            fullWidth
+            options={[
+              { value: 'new', label: '✦ 新任务 —— 组队 / 派工' },
+              { value: 'continue', label: '↻ 继续 —— 回到进行中的活', disabled: !reuseGid },
+            ]}
           />
-          <span className="text-[10.5px]" style={{ color: 'var(--color-text-muted)' }}>
-            YiYi 会据此自动组建一支团队来干。想先看看 / 调团队?用下面「先看看团队」。
-          </span>
         </div>
+
+        {/* 继续态:列出该项目进行中的 job,点一个即跳进去(不组队、不发起新 job)。 */}
+        {taskType === 'continue' && (
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+              {continueJobs.length === 0 ? '这个项目目前没有进行中的活。' : '选一个回到现场:'}
+            </span>
+            <div className="flex flex-col gap-1">
+              {continueJobs.map((j) => {
+                const m = statusMeta(j.status);
+                return (
+                  <button
+                    key={j.session_id}
+                    onClick={() => jumpToJob(j.session_id)}
+                    className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left transition-colors hover:bg-[var(--color-bg-subtle)]"
+                    style={{ border: '1px solid var(--color-border)' }}
+                  >
+                    <m.Icon size={13} color={m.color} className={m.spin ? 'animate-spin' : ''} />
+                    <span className="text-[12.5px] truncate flex-1" style={{ color: 'var(--color-text)' }}>{j.intent}</span>
+                    <span className="text-[10.5px]" style={{ color: 'var(--color-text-muted)' }}>{m.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* 任务描述(仅新任务态) */}
+        {taskType === 'new' && (
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[12px] font-medium" style={{ color: 'var(--color-text-secondary)' }}>要做什么</span>
+            <textarea
+              value={task}
+              onChange={(e) => setTask(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+                  e.preventDefault();
+                  if (canGo && !launching) void launchAuto();
+                }
+              }}
+              rows={3}
+              autoFocus
+              placeholder="比如:做个待办事项落地页 —— 能添加 / 删除 / 标记完成,localStorage 存数据"
+              className="w-full rounded-lg px-3 py-2 text-[13px] resize-none outline-none"
+              style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text)' }}
+            />
+            <span className="text-[10.5px] flex items-center gap-1" style={{ color: 'var(--color-text-muted)' }}>
+              <CornerDownLeft size={11} /> 发送 · Shift+Enter 换行
+              {reuseGid ? ' · 复用这支项目的团队' : ' · YiYi 会据此自动组队'}
+            </span>
+          </div>
+        )}
 
         {error && (
           <div className="text-[12px] px-2.5 py-1.5 rounded-lg flex items-start gap-2" style={{ background: 'var(--color-error-bg, #fee)', color: 'var(--color-error, #c00)' }}>
@@ -678,27 +790,35 @@ function WorkLauncher({
         )}
 
         <div className="flex items-center justify-between gap-2">
-          <button
-            onClick={() => { if (task.trim()) setReview(true); }}
-            disabled={!task.trim() || launching}
-            className="text-[12.5px] px-2 py-1.5 rounded-lg transition-colors disabled:opacity-40 hover:bg-[var(--color-bg-subtle)]"
-            style={{ color: 'var(--color-text-secondary)' }}
-          >
-            先看看团队
-          </button>
+          {taskType === 'new' ? (
+            <button
+              onClick={() => { if (task.trim()) setReview(true); }}
+              disabled={!task.trim() || launching}
+              className="text-[12.5px] px-2 py-1.5 rounded-lg transition-colors disabled:opacity-40 hover:bg-[var(--color-bg-subtle)]"
+              style={{ color: 'var(--color-text-secondary)' }}
+            >
+              先看看团队
+            </button>
+          ) : (
+            <span className="text-[11px] px-2" style={{ color: 'var(--color-text-muted)' }}>
+              选一个进行中的活即可回到现场
+            </span>
+          )}
           <div className="flex items-center gap-2">
             <button onClick={onClose} className="px-3.5 py-1.5 rounded-lg text-[13px]" style={{ color: 'var(--color-text-secondary)' }}>
               取消
             </button>
-            <button
-              onClick={launchAuto}
-              disabled={!canGo || launching}
-              className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[13px] font-medium transition-opacity disabled:opacity-50"
-              style={{ background: AMBER, color: '#1a1206' }}
-            >
-              {launching ? <Loader2 size={14} className="animate-spin" /> : <Hammer size={14} strokeWidth={2.2} />}
-              {launching ? stageLabel : '开工'}
-            </button>
+            {taskType === 'new' && (
+              <button
+                onClick={launchAuto}
+                disabled={!canGo || launching}
+                className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[13px] font-medium transition-opacity disabled:opacity-50"
+                style={{ background: AMBER, color: '#1a1206' }}
+              >
+                {launching ? <Loader2 size={14} className="animate-spin" /> : <Hammer size={14} strokeWidth={2.2} />}
+                {launching ? stageLabel : '开工'}
+              </button>
+            )}
           </div>
         </div>
       </div>

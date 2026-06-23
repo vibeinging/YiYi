@@ -543,6 +543,7 @@ pub fn run() {
             commands::agent::chat::chat_stream_stop,
             commands::work::commit_work_plan,
             commands::work::list_work_jobs,
+            commands::work::list_project_groups,
             commands::work::launch_work_job,
             commands::work::find_team_by_folder,
             commands::work::abort_work_job,
