@@ -1,0 +1,259 @@
+.projectMembersTable {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.membersToolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 16px;
+  margin-bottom: 0;
+  margin-left: 2px;
+  margin-top: 4px;
+  border-bottom: 1px solid #f0f0f0;
+  flex-shrink: 0;
+
+  .toolbarLeft {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  @media (max-width: 767px) {
+    flex-direction: column;
+    gap: 10px;
+    align-items: stretch;
+
+    .toolbarLeft {
+      flex-direction: column;
+
+      :global(.el-input),
+      :global(.el-select) {
+        width: 100% !important;
+      }
+    }
+
+    .toolbarRight {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      gap: 10px;
+
+      :global(.el-button) {
+        width: 100%;
+        min-height: 44px;
+        margin-right: 0 !important;
+      }
+    }
+  }
+}
+
+.tableView {
+  display: block;
+  flex: 1;
+  min-height: 0;
+}
+
+.cardView {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .tableView {
+    display: none;
+  }
+  .cardView {
+    display: block;
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding-top: 8px;
+  }
+}
+
+.mobileCardList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+
+  .mobileCard {
+    background: #fff;
+    border: 1px solid #eaeef3;
+    border-radius: 10px;
+    padding: 14px 16px;
+
+    .cardHeader {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+
+      .cardTitle {
+        font-size: 15px;
+        font-weight: 600;
+        color: #17211d;
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        overflow: hidden;
+
+        > span:first-child {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+      }
+    }
+
+    .cardBody {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+
+      .cardField {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 13px;
+
+        .fieldLabel {
+          color: #8c8c8c;
+          flex-shrink: 0;
+        }
+
+        .fieldValue {
+          color: #333;
+          text-align: right;
+          flex: 1;
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          margin-left: 12px;
+        }
+      }
+    }
+
+    .cardFooter {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid #f0f0f0;
+    }
+  }
+}
+
+.tableWrapper {
+  flex: 1;
+  min-height: 0;
+  padding-top: 8px;
+
+  // 表头样式：透明背景 + 浅色分隔线（对齐原 el-table 定制）
+  .membersTable {
+    border: none;
+    --el-table-header-bg-color: transparent;
+
+    thead th {
+      background: transparent !important;
+      border-bottom: 1px solid #eef0f3 !important;
+      padding: 16px !important;
+      font-weight: 500;
+      color: #64748b;
+      font-size: 13px;
+    }
+
+    tbody td {
+      border-bottom: 1px solid #f5f5f5;
+      padding: 16px;
+      overflow: visible !important;
+    }
+
+    tbody tr {
+      height: 72px;
+    }
+
+    tbody tr:hover > td {
+      background: #fafbfc !important;
+    }
+  }
+}
+
+.memberInfo {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+
+  :global(.el-avatar) {
+    background: #17483e;
+    color: white;
+    font-weight: 600;
+    font-size: 14px;
+  }
+
+  .memberDetails {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+
+    .memberNameRow {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .memberName {
+      font-weight: 500;
+      font-size: 14px;
+      color: #1e293b;
+    }
+
+    .memberUsername {
+      font-size: 13px;
+      color: #94a3b8;
+    }
+  }
+}
+
+.timeText {
+  font-size: 13px;
+  color: #64748b;
+}
+
+.textMuted {
+  color: #94a3b8;
+}
+
+.removedMember {
+  color: #94a3b8;
+  text-decoration: line-through;
+}
+
+.toggleWrapper {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.membersTip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 12px 16px;
+  background: #fffbeb;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #92400e;
+  flex-shrink: 0;
+
+  .tipIcon {
+    color: #f59e0b;
+    display: inline-flex;
+  }
+}

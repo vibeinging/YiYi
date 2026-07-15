@@ -1,0 +1,51 @@
+.schemaEditor {
+  border: 1px dashed #d1d5db;
+  border-radius: 4px;
+  padding: 8px;
+  background: #fafafa;
+}
+
+.schemaRow {
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+  border-bottom: 1px dashed #e5e7eb;
+}
+
+.schemaRow:last-of-type {
+  border-bottom: none;
+}
+
+.rowMain {
+  display: grid;
+  grid-template-columns: 1fr 90px 24px;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.editorActions {
+  display: flex;
+  gap: 8px;
+}
+
+// 对应 Vue 的 :deep(.el-input__inner) { font-size: 12px } —— 收紧名称/描述输入字号
+.fieldName :global(input),
+.fieldDesc :global(input) {
+  font-size: 12px;
+}
+
+// 删除按钮在 24px 网格列里,去掉默认内边距让 × 居中
+.deleteBtn {
+  padding: 0;
+}
+
+.addBtn {
+  margin-top: 4px;
+}
+
+.emptyHint {
+  font-size: 11px;
+  color: #9ca3af;
+  padding: 8px;
+  text-align: center;
+}

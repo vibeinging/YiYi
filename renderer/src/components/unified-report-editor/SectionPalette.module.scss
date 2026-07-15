@@ -1,0 +1,44 @@
+.sectionPalette {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.paletteTitle {
+  font-size: 14px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.paletteItem {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #fff;
+  cursor: grab;
+  transition: all 0.15s ease;
+
+  &:hover {
+    border-color: #dce8e2;
+    background: #f8faff;
+  }
+}
+
+.paletteCopy {
+  min-width: 0;
+}
+
+.label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.desc {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.5;
+}

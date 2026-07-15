@@ -1,0 +1,35 @@
+// 原 ChatItem.vue 中非 scoped 的全局 <style>,作用于 marked 渲染出的 code / think 标签
+code {
+  border-radius: 4px;
+  background-color: rgba(0, 0, 0, 0.3);
+  padding: 2px 4px;
+  font-family: 'Monaco', 'Consolas', 'Courier New', monospace;
+  color: #98c379;
+}
+
+think {
+  display: block;
+  border-radius: 4px;
+  color: #abb2bf;
+  padding: 15px;
+  margin: 10px 0;
+  position: relative;
+  background-color: rgba(0, 0, 0, 0.3);
+  border-left: 2px solid #61afef;
+}
+
+think:before {
+  content: '💡';
+  font-size: 24px;
+  position: absolute;
+  left: -13px;
+  top: -16px;
+}
+
+think pre code {
+  background: rgba(0, 0, 0, 0.2) !important;
+  padding: 12px;
+  border-radius: 4px;
+  font-size: 14px;
+  color: #98c379;
+}

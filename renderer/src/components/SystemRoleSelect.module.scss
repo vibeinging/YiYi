@@ -1,0 +1,21 @@
+.systemRoleSelect {
+  width: 140px;
+}
+
+// 自定义两行选项(原 .select-option-item / .option-name / .option-desc)
+.selectOptionItem {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.optionName {
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.optionDesc {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.4;
+}

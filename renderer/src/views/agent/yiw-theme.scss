@@ -1,0 +1,162 @@
+/* YiW 工作台皮肤 —— 作用域限定 .yiw-root。
+   双主题:暖白浅色 / 炭绿深色。由 .yiw-root[data-theme] 切换,
+   同一套 --yiw-* 变量,暗色仅覆盖颜色 token,结构样式(yiw.module.scss)无需改。
+   原则:深绿负责操作,暖黄负责品牌与强调,状态色只表达状态。 */
+
+/* ── 颜色 token:亮 / 暗 两套,抽成 mixin,供 .yiw-root 与「传送门作用域」共用 ── */
+@mixin yiw-color-light {
+  --yiw-bg: #f3efe5;
+  --yiw-surface: #fcfaf5;
+  --yiw-hover: #f0ece2;
+  --yiw-nav-hover: rgba(255, 250, 238, 0.72);
+  --yiw-nav-active: #fff1b8;
+  --yiw-border: var(--el-border-color-light, rgba(23, 72, 62, 0.15));
+  --yiw-border-soft: var(--el-border-color-lighter, rgba(23, 72, 62, 0.09));
+
+  --yiw-text: var(--el-text-color-primary, #17211d);
+  --yiw-text-soft: var(--el-text-color-regular, #3f4b45);
+  --yiw-muted: var(--el-text-color-secondary, #66716b);
+  --yiw-faint: var(--el-text-color-placeholder, #89918c);
+
+  --yiw-accent: var(--el-color-primary, #17483e); /* YiW 深绿 */
+  --yiw-accent-soft: var(--el-color-primary-light-8, #dce8e2);
+  --yiw-accent-tint: #edf3ef;
+  --yiw-on-accent: #fffaf0;
+  --yiw-brand: #ffd34e;
+  --yiw-brand-soft: #fff1b8;
+  --yiw-on-brand: #17211d;
+
+  --yiw-amber: #b7791f;
+  --yiw-amber-bg: #fdf6e3;
+  --yiw-amber-border: #f0dca0;
+  --yiw-ok: #2f9e6e;
+  --yiw-danger: #c0392b;
+
+  --yiw-chip-bg: rgba(23, 72, 62, 0.08);
+  --yiw-code-bg: #f1eee6;
+  --yiw-code-text: #24312b;
+  --yiw-card-shadow: 0 1px 3px rgba(23, 33, 29, 0.05), 0 10px 30px rgba(23, 33, 29, 0.07);
+  --yiw-active-shadow: 0 1px 4px rgba(23, 72, 62, 0.1);
+  --yiw-btn-shadow: 0 2px 8px rgba(23, 72, 62, 0.2);
+  --yiw-btn-shadow-hover: 0 4px 14px rgba(23, 72, 62, 0.26);
+  --yiw-ring: 0 0 0 3px rgba(23, 72, 62, 0.12);
+}
+
+/* ── 暗色:炭绿背景 + 暖白文字 + 暖黄强调 ── */
+@mixin yiw-color-dark {
+  --yiw-bg: #202a25;
+  --yiw-surface: #121815;
+  --yiw-hover: #25322c;
+  --yiw-nav-hover: rgba(255, 211, 78, 0.08);
+  --yiw-nav-active: #2f3b31;
+  --yiw-border: rgba(255, 255, 255, 0.09);
+  --yiw-border-soft: rgba(255, 255, 255, 0.055);
+
+  --yiw-text: #f4efe3;
+  --yiw-text-soft: #ddd7ca;
+  --yiw-muted: #b9b4a9;
+  --yiw-faint: #8f918b;
+
+  --yiw-accent: #ffd34e;
+  --yiw-accent-soft: #3b3522;
+  --yiw-accent-tint: #23251d;
+  --yiw-on-accent: #17211d;
+  --yiw-brand: #ffd34e;
+  --yiw-brand-soft: #3b3522;
+  --yiw-on-brand: #17211d;
+
+  --yiw-amber: #e0b341;
+  --yiw-amber-bg: #2a2417;
+  --yiw-amber-border: #4a3f1e;
+  --yiw-ok: #4ec98a;
+  --yiw-danger: #e8897c;
+
+  --yiw-chip-bg: rgba(255, 255, 255, 0.06);
+  --yiw-code-bg: #19211d;
+  --yiw-code-text: #ebe4d6;
+  --yiw-card-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 10px 30px rgba(0, 0, 0, 0.34);
+  --yiw-active-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  --yiw-btn-shadow: none;
+  --yiw-btn-shadow-hover: 0 4px 14px rgba(0, 0, 0, 0.4);
+  --yiw-ring: 0 0 0 3px rgba(255, 255, 255, 0.09);
+}
+
+/* ── 与主题无关:圆角 / 字体 / Workstation 重映射(铺到各作用域,供卡片/弹层取用)── */
+@mixin yiw-static {
+  --yiw-r-card: 16px;
+  --yiw-r-el: 10px;
+  --yiw-r-sm: 8px;
+  --yiw-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  --yiw-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --mono: var(--yiw-mono);
+  --app-border: var(--yiw-border);
+  --app-accent-tint: var(--yiw-accent-tint);
+  --app-accent-border: var(--yiw-accent-soft);
+}
+
+.yiw-root {
+  @include yiw-color-light;
+  @include yiw-static;
+
+  position: fixed;
+  inset: 0;
+  background: var(--yiw-bg);
+  color: var(--yiw-text);
+  font-family: var(--yiw-sans);
+  /* 外框 padding 固定在这里(不缩放):四周统一 10px */
+  padding: 10px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.yiw-root[data-theme='dark'] {
+  @include yiw-color-dark;
+}
+
+/* ── 传送门弹层(Mantine Modal / Select 下拉 / Tooltip)逃出了 .yiw-root,挂在 <body>。
+   入口 index.tsx 已把 data-mantine-color-scheme 同步到 <html>,据此把同一套 --yiw-* token
+   也铺到 html 作用域 —— 否则弹层里用 var(--yiw-surface) 等只能落回 fallback,不跟随主题
+   (表现为:暗色 app 里弹窗仍是亮色/无色)。值与上面两套完全一致(同 mixin),无漂移。 ── */
+:root[data-mantine-color-scheme='light'] {
+  @include yiw-color-light;
+  @include yiw-static;
+}
+:root[data-mantine-color-scheme='dark'] {
+  @include yiw-color-dark;
+  @include yiw-static;
+}
+
+/* 缩放层:zoom 容器 + 尺寸抵消都在本元素完成。
+   宽高按 --yiw-zoom 因子反向收缩(100%/f),再用 transform 放大 f 倍。
+   视觉尺寸始终精确等于 .yiw-root 的 content 区,外框 10px padding 不参与缩放。 */
+.yiw-root .yiw-zoom {
+  width: calc(100% / var(--yiw-zoom, 1));
+  height: calc(100% / var(--yiw-zoom, 1));
+  transform: scale(var(--yiw-zoom, 1));
+  transform-origin: 0 0;
+}
+
+/* 自定义标题栏:横跨整个顶部的可拖拽透明条(卡片在它下方,不被遮挡)。
+   高度与 .shell 顶部 padding(32px)一致;在浏览器里无副作用。 */
+/* 拖拽区(在不缩放的 .yiw-root 上,固定不随缩放变):
+   ① 满宽顶部细条(窗口顶边,全宽可拖,卡片从 10px 起、不被遮挡)
+   ② 左栏区高条(覆盖 macOS 交通灯所在的左上,提供顺手的拖拽把手) */
+.yiw-root .yiw-dragbar,
+.yiw-root .yiw-dragbar-side {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 40;
+  -webkit-app-region: drag;
+}
+.yiw-root .yiw-dragbar {
+  right: 0;
+  height: 10px;
+}
+.yiw-root .yiw-dragbar-side {
+  width: 248px;
+  height: 28px;
+}
+body[data-yiw-nav-collapsed='true'] .yiw-root .yiw-dragbar-side {
+  width: 112px;
+}

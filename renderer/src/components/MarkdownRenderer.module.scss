@@ -1,0 +1,385 @@
+.markdownRenderer {
+  width: 100%;
+
+  &.dark {
+    --md-bg: transparent;
+    --md-text: rgba(255, 255, 255, 0.85);
+    --md-text-muted: rgba(255, 255, 255, 0.6);
+    --md-heading: #fff;
+    --md-link: #5f9ec2;
+    --md-link-hover: #a5b4fc;
+    --md-code-bg: rgba(255, 255, 255, 0.08);
+    --md-code-text: #df7657;
+    --md-pre-bg: rgba(0, 0, 0, 0.4);
+    --md-pre-border: rgba(255, 255, 255, 0.1);
+    --md-border: rgba(255, 255, 255, 0.1);
+    --md-blockquote-bg: rgba(23, 72, 62, 0.1);
+    --md-blockquote-border: rgba(23, 72, 62, 0.5);
+    --md-table-header-bg: rgba(255, 255, 255, 0.05);
+    --md-table-row-hover: rgba(255, 255, 255, 0.03);
+  }
+
+  &.github {
+    --md-bg: transparent;
+    --md-text: #c9d1d9;
+    --md-text-muted: #8b949e;
+    --md-heading: #f0f6fc;
+    --md-link: #58a6ff;
+    --md-link-hover: #79c0ff;
+    --md-code-bg: rgba(110, 118, 129, 0.4);
+    --md-code-text: #ff7b72;
+    --md-pre-bg: #161b22;
+    --md-pre-border: rgba(48, 54, 61, 0.5);
+    --md-border: rgba(48, 54, 61, 0.5);
+    --md-blockquote-bg: rgba(88, 166, 255, 0.1);
+    --md-blockquote-border: rgba(88, 166, 255, 0.5);
+    --md-table-header-bg: rgba(22, 27, 34, 0.8);
+    --md-table-row-hover: rgba(177, 186, 196, 0.08);
+  }
+
+  &.light {
+    --md-bg: transparent;
+    --md-text: #334155;
+    --md-text-muted: #64748b;
+    --md-heading: #0f172a;
+    --md-link: #0f766e;
+    --md-link-hover: #115e59;
+    --md-code-bg: #eef2f7;
+    --md-code-text: #0f172a;
+    --md-pre-bg: #0f172a;
+    --md-pre-border: #dbe3ef;
+    --md-border: #dbe3ef;
+    --md-blockquote-bg: #f8fafc;
+    --md-blockquote-border: #94a3b8;
+    --md-table-header-bg: #f8fafc;
+    --md-table-row-hover: #f8fafc;
+  }
+}
+
+.markdownContent {
+  color: var(--md-text);
+  line-height: 1.8;
+  font-size: 16px;
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    color: var(--md-heading);
+    font-weight: 700;
+    line-height: 1.3;
+    letter-spacing: -0.02em;
+    margin-top: 1.8em;
+    margin-bottom: 0.8em;
+    scroll-margin-top: 110px;
+
+    &:first-child {
+      margin-top: 0;
+    }
+  }
+
+  h1 {
+    display: none;
+  }
+
+  h2 {
+    padding-top: 0.2em;
+    border-top: 1px solid var(--md-border);
+    font-size: 1.75em;
+  }
+
+  h3 {
+    font-size: 1.3em;
+  }
+
+  h4 {
+    font-size: 1.05em;
+  }
+
+  p {
+    margin: 1em 0;
+  }
+
+  a {
+    color: var(--md-link);
+    text-decoration: underline;
+    text-decoration-color: rgba(15, 118, 110, 0.24);
+    text-underline-offset: 0.18em;
+
+    &:hover {
+      color: var(--md-link-hover);
+      text-decoration-color: currentColor;
+    }
+  }
+
+  code {
+    background: var(--md-code-bg);
+    color: var(--md-code-text);
+    padding: 0.18em 0.42em;
+    border-radius: 6px;
+    font-size: 0.875em;
+    font-family: 'Monaco', 'Consolas', 'Courier New', monospace;
+  }
+
+  pre {
+    background: var(--md-pre-bg);
+    border: 1px solid var(--md-pre-border);
+    border-radius: 14px;
+    padding: 18px;
+    overflow-x: auto;
+    margin: 1.2em 0;
+    position: relative;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+
+    code {
+      background: transparent;
+      color: #e6edf3;
+      padding: 0;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .code-copy-button {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      padding: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      border: none;
+      border-radius: 8px;
+      color: rgba(255, 255, 255, 0.5);
+      cursor: pointer;
+      opacity: 0;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+
+      &:hover {
+        background: rgba(255, 255, 255, 0.2);
+        color: #fff;
+      }
+
+      &.copied {
+        color: #22c55e;
+      }
+    }
+
+    &:hover .code-copy-button {
+      opacity: 1;
+    }
+  }
+
+  blockquote {
+    background: var(--md-blockquote-bg);
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-left: 4px solid var(--md-blockquote-border);
+    margin: 1.2em 0;
+    padding: 14px 18px;
+    border-radius: 0 14px 14px 0;
+
+    p {
+      margin: 0;
+      color: var(--md-text);
+    }
+  }
+
+  ul,
+  ol {
+    margin: 1em 0;
+    padding-left: 2em;
+
+    li {
+      margin: 0.5em 0;
+    }
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.2em 0;
+    font-size: 14px;
+    overflow: hidden;
+    border-radius: 14px;
+
+    th,
+    td {
+      padding: 13px 16px;
+      text-align: left;
+      border: 1px solid var(--md-border);
+    }
+
+    th {
+      background: var(--md-table-header-bg);
+      font-weight: 600;
+      color: var(--md-heading);
+    }
+
+    tr:hover td {
+      background: var(--md-table-row-hover);
+    }
+  }
+
+  hr {
+    border: none;
+    border-top: 1px solid var(--md-border);
+    margin: 2.4em 0;
+  }
+
+  img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    border-radius: 16px;
+    margin: 1.2em auto;
+    border: 1px solid var(--md-border);
+  }
+
+  figure {
+    margin: 1.5em 0;
+  }
+
+  figcaption {
+    margin-top: 0.75em;
+    color: var(--md-text-muted);
+    font-size: 0.92em;
+    text-align: center;
+  }
+
+  strong {
+    font-weight: 600;
+    color: var(--md-heading);
+  }
+
+  em {
+    font-style: italic;
+  }
+
+  // KaTeX 样式
+  :global(.katex-display) {
+    margin: 1em 0;
+    overflow-x: auto;
+  }
+
+  :global(.katex) {
+    font-size: 1.1em;
+  }
+
+  // Mermaid 样式
+  :global(.mermaid-diagram) {
+    margin: 1.5em 0;
+    padding: 18px;
+    background: var(--md-pre-bg);
+    border: 1px solid var(--md-pre-border);
+    border-radius: 14px;
+    text-align: center;
+    overflow-x: auto;
+    position: relative;
+
+    svg {
+      max-width: 100%;
+      height: auto;
+    }
+
+    text, tspan {
+      fill: currentColor !important;
+    }
+  }
+
+  // Mermaid 放大镜按钮
+  :global(.mermaid-zoom-button) {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    padding: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border: none;
+    border-radius: 8px;
+    color: rgba(255, 255, 255, 0.6);
+    cursor: pointer;
+    opacity: 0;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    pointer-events: auto;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.2);
+      color: #fff;
+    }
+
+    &:active {
+      transform: scale(0.95);
+    }
+  }
+
+  :global(.mermaid-diagram):hover :global(.mermaid-zoom-button) {
+    opacity: 1;
+  }
+
+  :global(.mermaid-error) {
+    border-color: #ef4444 !important;
+    &::after {
+      content: '图表渲染失败: ' attr(data-error);
+      display: block;
+      color: #ef4444;
+      padding: 8px;
+      font-size: 12px;
+    }
+  }
+}
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+  .markdownContent {
+    font-size: 14px;
+
+    h1 {
+      font-size: 1.6em;
+    }
+
+    h2 {
+      font-size: 1.3em;
+    }
+
+    h3 {
+      font-size: 1.1em;
+    }
+
+    pre {
+      padding: 12px;
+      margin: 0.8em -16px;
+      border-radius: 0;
+      border-left: none;
+      border-right: none;
+      max-width: calc(100% + 32px);
+
+      code {
+        font-size: 12px;
+        white-space: pre;
+      }
+    }
+
+    table {
+      display: block;
+      overflow-x: auto;
+      white-space: nowrap;
+      font-size: 13px;
+
+      th,
+      td {
+        padding: 8px 12px;
+      }
+    }
+
+    blockquote {
+      padding: 10px 16px;
+      margin-left: 0;
+      margin-right: 0;
+    }
+  }
+}

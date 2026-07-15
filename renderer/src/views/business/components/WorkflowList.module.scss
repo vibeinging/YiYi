@@ -1,0 +1,217 @@
+.workflowListTab {
+  padding: 16px 4px;
+}
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.hint {
+  font-size: 13px;
+  color: var(--yiw-muted, #909399);
+}
+.headerActions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.searchInput {
+  width: 240px;
+}
+.statusFilter {
+  width: 130px;
+}
+
+.emptyHint {
+  padding: 40px 16px;
+  text-align: center;
+  color: var(--yiw-muted, #909399);
+  font-size: 13px;
+}
+.pagination {
+  margin-top: 16px;
+  justify-content: flex-end;
+}
+
+/* 列表内长文本省略(原 el-table show-overflow-tooltip) */
+.ellipsis {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+/* run dialog 表单项(原 el-form-item label-width=120) */
+.runFormItem {
+  display: flex;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+.runFormLabel {
+  flex: 0 0 120px;
+  padding-top: 7px;
+  font-size: 14px;
+  color: var(--el-text-color-regular, #606266);
+}
+.runFormItem > :global(.mantine-TextInput-root),
+.runFormItem > :global(.mantine-Select-root),
+.runFormItem > :global(.mantine-Textarea-root) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* === Run 详情样式 === */
+.runDetailEmpty {
+  color: var(--yiw-muted, #909399);
+  text-align: center;
+  padding: 40px 0;
+  font-size: 13px;
+}
+.runDetail {
+  padding: 0 16px 16px;
+}
+.runMeta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 14px;
+  font-size: 13px;
+  background: var(--yiw-code-bg, #f9fafb);
+  padding: 12px;
+  border-radius: 6px;
+  margin-bottom: 16px;
+
+  code {
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-size: 11px;
+    color: var(--yiw-text-soft, #4b5563);
+  }
+}
+
+.runSection {
+  margin-bottom: 20px;
+}
+.runSectionTitle {
+  font-weight: 600;
+  color: var(--yiw-text-soft, #374151);
+  font-size: 13px;
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px dashed var(--yiw-border, #e5e7eb);
+}
+.runSectionError {
+  color: #b91c1c;
+}
+
+.runJson {
+  background: var(--yiw-code-bg, #f3f4f6);
+  padding: 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  color: var(--yiw-text, #1f2937);
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+}
+.runError {
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.nodeRunTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  width: 100%;
+  padding-right: 8px;
+}
+.nodeRunId {
+  font-weight: 600;
+  color: var(--yiw-text, #111827);
+  font-family: monospace;
+}
+.nodeRunType {
+  color: var(--yiw-muted, #6b7280);
+  font-size: 11px;
+  background: var(--yiw-code-bg, #f3f4f6);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.nodeRunTool {
+  color: #1e40af;
+  font-size: 11px;
+  font-family: monospace;
+}
+.nodeRunErrorFlag {
+  margin-left: auto;
+  color: #dc2626;
+  font-size: 14px;
+}
+.nodeRunBody {
+  padding: 0 12px;
+}
+.nodeRunError {
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #991b1b;
+}
+.nodeRunOutput {
+  font-size: 12px;
+}
+.nodeRunEmpty {
+  color: var(--yiw-faint, #9ca3af);
+  font-size: 12px;
+}
+
+/* envelope skipped 灰底 + paused 橙底 + 路由指令高亮(2026-05-28/29 节点状态机)
+   原 :deep(.el-collapse-item__header) → 改打 Mantine Accordion 的 control */
+.nodeRunSkipped {
+  :global(.mantine-Accordion-control) {
+    background-color: var(--yiw-code-bg, #f9fafb);
+    color: var(--yiw-faint, #9ca3af);
+  }
+}
+.nodeRunPaused {
+  :global(.mantine-Accordion-control) {
+    background-color: #fffbeb;
+    color: #92400e;
+  }
+}
+.nodeRunDirectiveFlag {
+  color: #c65d3d;
+  font-weight: 700;
+  margin-left: 4px;
+}
+.nodeRunDirective {
+  background-color: #fef3c7;
+  border-left: 3px solid #d97706;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border-radius: 4px;
+  font-size: 12px;
+
+  code {
+    background: rgba(0, 0, 0, 0.06);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+}
+.nodeRunDirectiveReason {
+  margin-top: 4px;
+  color: #92400e;
+  font-style: italic;
+}
+.nodeRunMeta {
+  background-color: var(--yiw-code-bg, #f3f4f6);
+  border-left: 3px solid var(--yiw-faint, #9ca3af);
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  border-radius: 4px;
+  font-size: 12px;
+}

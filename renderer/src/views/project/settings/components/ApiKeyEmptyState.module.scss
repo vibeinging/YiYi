@@ -1,0 +1,122 @@
+.empty-placeholder {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  padding: 60px 20px;
+  text-align: center;
+
+  .empty-content {
+    max-width: 750px;
+    width: 100%;
+  }
+
+  .empty-intro {
+    margin-bottom: 32px;
+
+    h3 {
+      margin: 0 0 12px 0;
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--yiw-text, #303133);
+    }
+
+    p {
+      margin: 0;
+      font-size: 14px;
+      color: var(--yiw-text-soft, #606266);
+      line-height: 1.6;
+    }
+  }
+
+  .feature-card {
+    background: var(--yiw-bg, #f8f9fa);
+    border: 1px solid var(--yiw-border, #e4e7ed);
+    border-radius: 8px;
+    padding: 24px;
+    text-align: left;
+    transition: all 0.3s;
+
+    &:hover {
+      border-color: #409eff;
+      box-shadow: 0 2px 12px rgba(64, 158, 255, 0.1);
+    }
+
+    .feature-details {
+      margin-bottom: 20px;
+
+      .detail-item {
+        color: var(--yiw-text-soft, #606266);
+        font-size: 13px;
+        line-height: 1.6;
+        margin-bottom: 10px;
+
+        &:last-child {
+          margin-bottom: 0;
+        }
+
+        strong {
+          color: var(--yiw-text, #303133);
+          font-weight: 600;
+        }
+      }
+    }
+
+    .example-box {
+      background: var(--yiw-surface, #ffffff);
+      border-radius: 8px;
+      border: 1px solid var(--yiw-border, #e4e7ed);
+      padding: 16px 20px;
+      margin-bottom: 20px;
+      margin-top: 20px;
+
+      .example-label {
+        color: var(--yiw-text, #303133);
+        font-size: 14px;
+        font-weight: 600;
+        margin-bottom: 12px;
+      }
+
+      .example-item {
+        color: var(--yiw-text-soft, #606266);
+        font-size: 13px;
+        line-height: 1.8;
+        margin-bottom: 8px;
+        word-break: break-all;
+
+        &:last-child {
+          margin-bottom: 0;
+        }
+
+        strong {
+          color: var(--yiw-accent, #17483e);
+          font-weight: 600;
+          margin-right: 4px;
+        }
+      }
+    }
+
+    .value-summary {
+      margin: 0 0 20px 0;
+      padding-top: 20px;
+      border-top: 1px solid var(--yiw-border, #e4e7ed);
+      color: var(--yiw-text-soft, #606266);
+      font-size: 14px;
+      line-height: 1.8;
+      text-align: center;
+
+      strong {
+        color: var(--yiw-text, #303133);
+        font-weight: 600;
+      }
+    }
+
+    .action-buttons {
+      display: flex;
+      gap: 12px;
+
+      .card-action {
+        flex: 1;
+      }
+    }
+  }
+}

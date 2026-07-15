@@ -1,0 +1,54 @@
+.section-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  background: #fff;
+  cursor: pointer;
+  transition: all .15s ease;
+}
+.section-card:hover { border-color: #dce8e2; }
+.section-card.selected {
+  border-color: #2f6f60;
+  box-shadow: 0 0 0 3px rgba(47, 111, 96, 0.12);
+}
+.card-title { font-size: 14px; font-weight: 700; color: #111827; }
+.card-meta { margin-top: 4px; font-size: 12px; color: #6b7280; }
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s ease;
+}
+.section-card:hover .card-actions,
+.section-card.selected .card-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.action-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: #f7f4ec;
+  color: #22594c;
+  cursor: pointer;
+  transition: all .15s ease;
+}
+.action-btn:hover {
+  background: #e9e4d8;
+}
+.action-btn.danger {
+  background: #fff1f2;
+  color: #ef4444;
+}
+.action-btn.danger:hover {
+  background: #ffe4e6;
+}

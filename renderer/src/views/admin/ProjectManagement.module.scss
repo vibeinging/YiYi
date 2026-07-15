@@ -1,0 +1,510 @@
+.projectManagement {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 12px;
+  background: #f5f7fa;
+}
+
+.pageHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+  flex-shrink: 0;
+
+  .headerLeft {
+    flex: 1;
+    min-width: 0;
+
+    h1 {
+      margin: 0 0 6px 0;
+      font-size: 26px;
+      font-weight: 600;
+      color: #1e293b;
+      letter-spacing: -0.5px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    p {
+      margin: 0;
+      font-size: 14px;
+      color: #64748b;
+    }
+  }
+}
+
+.contentWrapper {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  overflow: hidden;
+}
+
+.toolbar {
+  display: flex;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid #f0f0f0;
+  flex-shrink: 0;
+}
+
+.tableContainer {
+  flex: 1;
+  min-height: 0;
+  padding: 0 12px 0;
+  display: flex;
+  flex-direction: column;
+
+  .tableView {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: auto;
+  }
+
+  // 表格样式（对齐原 el-table 视觉）
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  thead th {
+    background: transparent;
+    border-bottom: 1px solid #eef0f3;
+    padding: 16px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #64748b;
+    text-align: left;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  tbody td {
+    border-bottom: 1px solid #f5f5f5;
+    padding: 16px;
+    vertical-align: middle;
+  }
+
+  tbody tr:hover > td {
+    background: #fafbfc;
+  }
+}
+
+// 居中列
+.centerCell {
+  text-align: center !important;
+}
+
+// 项目单元格
+.projectCell {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+
+  .projectIcon {
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    min-height: 40px;
+    flex: 0 0 40px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    background: #17483e;
+    color: white;
+    box-sizing: border-box;
+
+    &.small {
+      width: 36px;
+      height: 36px;
+      min-width: 36px;
+      min-height: 36px;
+      flex: 0 0 36px;
+      font-size: 16px;
+    }
+  }
+
+  .projectInfo {
+    flex: 1;
+    min-width: 0;
+
+    .projectName {
+      font-weight: 500;
+      font-size: 14px;
+      color: #1e293b;
+      margin-bottom: 2px;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+
+    .projectDesc {
+      font-size: 13px;
+      color: #64748b;
+      line-height: 1.4;
+      word-break: break-word;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      overflow: hidden;
+    }
+  }
+}
+
+// 负责人名称
+.managerName {
+  font-size: 14px;
+  color: #1e293b;
+}
+
+// 成员数
+.memberCount {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1e293b;
+
+  &.clickable {
+    color: #17483e;
+    cursor: pointer;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+}
+
+// 状态徽章
+.statusBadge {
+  display: inline-block;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 12px;
+
+  &.active {
+    background: rgba(34, 197, 94, 0.1);
+    color: #16a34a;
+  }
+
+  &.archived {
+    background: rgba(148, 163, 184, 0.15);
+    color: #64748b;
+  }
+}
+
+// 时间文本
+.timeText {
+  font-size: 13px;
+  color: #64748b;
+}
+
+// 操作按钮
+.actionBtn {
+  padding: 6px 14px !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  border-radius: 6px !important;
+  border: none !important;
+  margin: 0 4px !important;
+  height: auto !important;
+
+  &.primary {
+    background: #17483e !important;
+    color: white !important;
+
+    &:hover {
+      background: #22594c !important;
+    }
+  }
+
+  &.secondary {
+    background: rgba(23, 72, 62, 0.1) !important;
+    color: #17483e !important;
+
+    &:hover {
+      background: rgba(23, 72, 62, 0.2) !important;
+    }
+  }
+
+  &.small {
+    padding: 4px 10px !important;
+    font-size: 12px !important;
+  }
+
+  .iconRight {
+    margin-left: 4px;
+  }
+}
+
+// “更多”按钮渲染为 inline-flex 原生 button
+.actionBtn {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+// 操作列容器（保持按钮在一行）
+.actionsCell {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+// 危险文本
+.dangerText {
+  color: #ef4444;
+}
+
+// 分页
+.paginationWrapper {
+  display: flex;
+  justify-content: flex-end;
+  padding: 16px 20px;
+  border-top: 1px solid #f0f0f0;
+  flex-shrink: 0;
+  gap: 12px;
+  align-items: center;
+}
+
+.paginationTotal {
+  font-size: 13px;
+  color: #64748b;
+}
+
+.currentProject {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: #f8fafc;
+  border-radius: 8px;
+  font-weight: 500;
+  color: #1e293b;
+
+  svg,
+  .folderIcon {
+    color: #17483e;
+  }
+}
+
+// 表单项（对齐 el-form-item label-position="top"）
+.formItem {
+  margin-bottom: 18px;
+
+  .formLabel {
+    margin-bottom: 6px;
+    font-size: 14px;
+    font-weight: 500;
+    color: #1e293b;
+  }
+}
+
+.modalFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.userOption {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+
+  .userOptionName {
+    font-weight: 500;
+    color: #1e293b;
+  }
+
+  .userOptionEmail,
+  .userOptionRole {
+    font-size: 12px;
+    color: #94a3b8;
+  }
+}
+
+// 角色选项
+.roleOption {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+
+  .roleOptionName {
+    font-weight: 500;
+  }
+
+  .roleOptionDesc {
+    font-size: 12px;
+    color: #94a3b8;
+  }
+}
+
+// 表格/卡片视图切换
+.tableContainer {
+  display: flex;
+}
+.cardView {
+  display: none;
+}
+
+// 移动端卡片样式
+.mobileCardList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+
+  .mobileCard {
+    background: #fff;
+    border: 1px solid #eaeef3;
+    border-radius: 10px;
+    padding: 14px 16px;
+
+    .cardHeader {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      .cardTitle {
+        font-size: 15px;
+        font-weight: 600;
+        color: #17211d;
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+    }
+
+    .cardBody {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      .cardField {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 13px;
+        .fieldLabel {
+          color: #8c8c8c;
+          flex-shrink: 0;
+        }
+        .fieldValue {
+          color: #333;
+          text-align: right;
+        }
+      }
+    }
+
+    .cardFooter {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid #f0f0f0;
+    }
+  }
+}
+
+/* ==================== 响应式适配 ==================== */
+
+/* 平板适配 */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .projectManagement {
+    padding: 16px 8px;
+  }
+
+  .pageHeader {
+    margin-bottom: 16px;
+
+    .headerLeft h1 {
+      font-size: 22px;
+    }
+  }
+
+  .toolbar {
+    flex-wrap: wrap;
+  }
+
+  .paginationWrapper {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+}
+
+/* 移动端适配 */
+@media (max-width: 767px) {
+  .projectManagement {
+    padding: 12px 6px;
+  }
+
+  .pageHeader {
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 16px;
+
+    .headerLeft h1 {
+      font-size: 20px;
+    }
+
+    .headerRight {
+      width: 100%;
+
+      button {
+        width: 100%;
+      }
+    }
+  }
+
+  .toolbar {
+    flex-direction: column;
+    padding: 12px;
+
+    > * {
+      width: 100% !important;
+    }
+  }
+
+  .tableContainer {
+    flex: 0 0 auto;
+  }
+
+  .tableView {
+    display: none;
+  }
+  .cardView {
+    display: block;
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .paginationWrapper {
+    justify-content: center;
+    padding: 12px 8px;
+    flex-wrap: wrap;
+  }
+}

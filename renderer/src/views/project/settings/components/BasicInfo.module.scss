@@ -1,0 +1,293 @@
+// 基本信息页:身份头(文件夹标 + 名称 + 打开文件夹)+ 编辑表单 + 元信息卡。
+// 配色走 --ps-*(嵌入 yiw 时接主题 token,亮/暗自适应;云端用 fallback 原色)。
+
+.basicInfo {
+  max-width: none; // 铺满内容区(对齐 App 设置满宽内容,不再限宽留大片空白)
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* ── 身份头 ── */
+.identity {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 20px;
+  border-radius: 14px;
+  background: var(--ps-inset, #f8fafc);
+  border: 1px solid var(--ps-border, #e5e7eb);
+}
+
+.avatar {
+  flex: none;
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  border: none;
+  background: var(--ps-accent-tint, #edf3ef);
+  color: var(--ps-accent, #17483e);
+  cursor: default;
+  transition:
+    transform 0.14s ease,
+    box-shadow 0.14s ease,
+    filter 0.14s ease;
+
+  &[data-clickable='true']:not(:disabled) {
+    cursor: pointer;
+
+    &:hover {
+      transform: translateY(-1px);
+      filter: brightness(1.04);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
+    }
+  }
+
+  &:disabled {
+    opacity: 0.85;
+  }
+}
+
+.avatarInitial {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.identityMain {
+  flex: 1;
+  min-width: 0;
+}
+
+.identityName {
+  font-size: 18px;
+  font-weight: 650;
+  color: var(--ps-text, #1e293b);
+  letter-spacing: -0.2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.identitySub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: var(--ps-muted, #64748b);
+  min-width: 0;
+
+  > span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+.dot {
+  flex: none;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.55;
+}
+
+.openBtn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--ps-border, #e5e7eb);
+  background: var(--ps-panel, #fff);
+  color: var(--ps-text, #1e293b);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background 0.14s ease,
+    border-color 0.14s ease,
+    color 0.14s ease;
+
+  svg {
+    color: var(--ps-accent, #17483e);
+  }
+
+  &:hover:not(:disabled) {
+    background: var(--ps-hover, #f1f5f9);
+    border-color: var(--ps-accent, #17483e);
+  }
+
+  &:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+}
+
+/* ── 编辑表单 ── */
+.form {
+  .formLabel {
+    font-weight: 500;
+    color: var(--ps-text, #374151);
+  }
+}
+
+.formActions {
+  margin-top: 4px;
+}
+
+/* ── 元信息卡 ── */
+.meta {
+  padding: 4px 18px;
+  background: var(--ps-inset, #f8fafc);
+  border-radius: 12px;
+  border: 1px solid var(--ps-border, #e5e7eb);
+}
+
+.metaRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 0;
+
+  &:not(:last-child) {
+    border-bottom: 1px solid var(--ps-border, #e5e7eb);
+  }
+}
+
+.metaLabel {
+  width: 92px;
+  flex: none;
+  font-size: 13px;
+  color: var(--ps-muted, #64748b);
+}
+
+.metaValue {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--ps-text, #1e293b);
+  font-family: 'SF Mono', Monaco, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.metaPath {
+  unicode-bidi: plaintext; // 按路径原序显示;过长时末尾省略,完整路径见悬浮
+}
+
+.metaAction {
+  position: relative; // 作为纯 CSS tooltip(::after)的定位锚点
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ps-muted, #64748b);
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+
+  &:hover:not(:disabled) {
+    background: var(--ps-hover, #f1f5f9);
+    color: var(--ps-accent, #17483e);
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  // 纯 CSS hover 提示:相对按钮定位,随 .yiw-zoom 一起缩放 → 不受 CSS zoom 影响,必对齐;
+  // 且在 WebView 里能正常显示。
+  &[data-tip]:hover::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 30;
+    padding: 5px 9px;
+    border-radius: 7px;
+    background: var(--ps-text, #1e293b);
+    color: var(--ps-panel, #fff);
+    font-size: 12px;
+    line-height: 1.2;
+    white-space: nowrap;
+    pointer-events: none;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+  }
+
+  &[data-tip]:hover::before {
+    content: '';
+    position: absolute;
+    bottom: calc(100% + 3px);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 30;
+    border: 5px solid transparent;
+    border-top-color: var(--ps-text, #1e293b);
+    pointer-events: none;
+  }
+}
+
+@include mobile {
+  .basicInfo {
+    max-width: 100%;
+    min-width: 0;
+    gap: 16px;
+  }
+
+  .identity {
+    flex-wrap: wrap;
+    padding: 14px 16px;
+  }
+
+  .openBtn {
+    width: 100%;
+    justify-content: center;
+    order: 3;
+  }
+
+  .formActions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+
+    :global(.mantine-Button-root) {
+      width: 100%;
+      min-height: 44px;
+      margin-left: 0 !important;
+    }
+  }
+
+  .meta {
+    padding: 2px 14px;
+  }
+
+  .metaRow {
+    flex-wrap: wrap;
+  }
+
+  .metaLabel {
+    width: auto;
+  }
+
+  .metaValue {
+    white-space: normal;
+    word-break: break-all;
+  }
+}

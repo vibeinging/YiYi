@@ -1,0 +1,86 @@
+.chatItemContainer {
+  margin: 10px 0;
+  background-color: #282c34;
+  border-radius: 6px;
+  overflow: hidden;
+  font-family: 'Monaco', 'Consolas', 'Courier New', monospace;
+}
+
+.terminalHeader {
+  background-color: #21252b;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid #181a1f;
+
+  .prompt {
+    color: #98c379;
+    font-weight: bold;
+  }
+
+  .role {
+    color: #61afef;
+    font-weight: 500;
+  }
+
+  .time {
+    color: #5c6370;
+    font-size: 12px;
+    margin-left: auto;
+  }
+}
+
+.terminalContent {
+  padding: 15px;
+  color: #abb2bf;
+  font-size: 14px;
+  line-height: 1.6;
+
+  // 原 Vue :deep() 选择器,React 下样式作用于 v-html 渲染的子节点
+  p {
+    margin: 8px 0;
+  }
+
+  pre {
+    background-color: rgba(0, 0, 0, 0.3);
+    padding: 12px;
+    border-radius: 4px;
+    overflow-x: auto;
+    margin: 10px 0;
+  }
+
+  ul,
+  ol {
+    padding-left: 20px;
+    margin: 8px 0;
+  }
+
+  li {
+    margin: 4px 0;
+  }
+
+  a {
+    color: #61afef;
+    text-decoration: none;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  blockquote {
+    border-left: 2px solid #61afef;
+    margin: 10px 0;
+    padding-left: 15px;
+    color: #5c6370;
+  }
+
+  .loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    color: #61afef;
+  }
+}

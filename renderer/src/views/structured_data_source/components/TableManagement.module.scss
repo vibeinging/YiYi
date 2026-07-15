@@ -1,0 +1,112 @@
+/* TableManagement 样式 — 迁移自 TableManagement.vue 的 scoped 样式 + 内联用到的 shared-styles 规则 */
+
+.table-management {
+  height: 100%;
+  padding: 0;
+}
+
+/* 整体容器(来自 shared-styles) */
+.tab-container {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+
+/* 主内容区 - 占满剩余高度(来自 shared-styles) */
+.content-card {
+  background: var(--ad-bg-white);
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+
+  &:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  }
+}
+
+/* Empty状态(来自 shared-styles) */
+.empty-placeholder {
+  display: flex;
+  justify-content: center;
+  min-height: 200px;
+  flex: 1;
+}
+
+/* Loading状态(来自 shared-styles) */
+.loading-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+  flex: 1;
+
+  .loading-content {
+    text-align: center;
+
+    .loading-icon {
+      color: #17483e;
+      margin-bottom: 16px;
+      animation: rotate 2s linear infinite;
+    }
+
+    .loading-text {
+      font-size: 16px;
+      color: #303133;
+      margin-bottom: 8px;
+      font-weight: 500;
+    }
+
+    .loading-subtext {
+      font-size: 14px;
+      color: #909399;
+    }
+  }
+}
+
+@keyframes rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 顶部操作区(本组件 scoped 样式) */
+.operations-header {
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--ad-bg-hover);
+
+  .header-actions {
+    display: flex;
+    justify-content: flex-end;
+  }
+}
+
+/* 移动端适配(原 @include mobile，760px 断点) */
+@media (max-width: 768px) {
+  .operations-header {
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+
+    .header-actions {
+      width: 100%;
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: flex-start;
+
+      :global(.el-button) {
+        width: 100%;
+        min-height: 44px;
+      }
+    }
+  }
+}

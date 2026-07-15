@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="760" viewBox="0 0 1800 760">
+  <rect width="1800" height="760" fill="#EDEAE3"/>
+  <text x="60" y="62" font-family="Avenir Next, sans-serif" font-size="30" font-weight="700" fill="#171717">YiW Logo Directions</text>
+  <text x="60" y="94" font-family="Avenir Next, sans-serif" font-size="16" fill="#6B6861">全工作场景 · 平面色 · 16px 可识别 · 不绑定具体功能</text>
+
+  <g transform="translate(60 120)">
+    <rect width="500" height="580" rx="28" fill="#F7F4ED"/>
+    <g transform="translate(90 42)">
+      <rect width="320" height="320" rx="78" fill="#F04B2F"/>
+      <g fill="none" stroke="#FFF9EF" stroke-width="28" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M44 84L108 150L170 84M108 150V246"/>
+        <path d="M184 96L214 244L250 170L284 244L306 96"/>
+      </g>
+    </g>
+    <text x="40" y="420" font-family="Avenir Next, sans-serif" font-size="14" font-weight="700" letter-spacing="2" fill="#F04B2F">A · CLEAR MONOGRAM</text>
+    <text x="40" y="460" font-family="Avenir Next, sans-serif" font-size="28" font-weight="700" fill="#171717">清晰合字</text>
+    <text x="40" y="494" font-family="Avenir Next, sans-serif" font-size="16" fill="#65615B">Y 和 W 一眼可读，结构最稳。</text>
+    <text x="40" y="522" font-family="Avenir Next, sans-serif" font-size="16" fill="#65615B">适合 Dock、favicon 和正式产品。</text>
+  </g>
+
+  <g transform="translate(650 120)">
+    <rect width="500" height="580" rx="28" fill="#F7F4ED"/>
+    <g transform="translate(90 42)">
+      <rect width="320" height="320" rx="78" fill="#171717"/>
+      <g fill="none" stroke="#F04B2F" stroke-width="28" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M42 82L112 154L184 82"/>
+        <path d="M112 154L166 246L222 166L274 246L306 84"/>
+      </g>
+      <circle cx="112" cy="154" r="10" fill="#FFF9EF"/>
+    </g>
+    <text x="40" y="420" font-family="Avenir Next, sans-serif" font-size="14" font-weight="700" letter-spacing="2" fill="#F04B2F">B · SHARED STROKE</text>
+    <text x="40" y="460" font-family="Avenir Next, sans-serif" font-size="28" font-weight="700" fill="#171717">共享笔画</text>
+    <text x="40" y="494" font-family="Avenir Next, sans-serif" font-size="16" fill="#65615B">两个字母连成一笔，更像独立符号。</text>
+    <text x="40" y="522" font-family="Avenir Next, sans-serif" font-size="16" fill="#65615B">记忆点更强，但识别略慢。</text>
+  </g>
+
+  <g transform="translate(1240 120)">
+    <rect width="500" height="580" rx="28" fill="#F7F4ED"/>
+    <g transform="translate(90 42)">
+      <rect width="320" height="320" rx="78" fill="#FFF9EF" stroke="#D9D3C8" stroke-width="2"/>
+      <g fill="none" stroke="#171717" stroke-width="27" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M32 84L84 146L136 84M84 146V244"/>
+        <path d="M160 140V244"/>
+        <path d="M192 96L220 244L252 170L284 244L306 96"/>
+      </g>
+      <circle cx="160" cy="88" r="15" fill="#F04B2F"/>
+    </g>
+    <text x="40" y="420" font-family="Avenir Next, sans-serif" font-size="14" font-weight="700" letter-spacing="2" fill="#F04B2F">C · FULL NAME MARK</text>
+    <text x="40" y="460" font-family="Avenir Next, sans-serif" font-size="28" font-weight="700" fill="#171717">完整 YiW</text>
+    <text x="40" y="494" font-family="Avenir Next, sans-serif" font-size="16" fill="#65615B">把 i 也纳入图标，产品名最直接。</text>
+    <text x="40" y="522" font-family="Avenir Next, sans-serif" font-size="16" fill="#65615B">适合新品牌早期建立认知。</text>
+    <rect x="390" y="422" width="70" height="32" rx="16" fill="#171717"/>
+    <text x="425" y="444" text-anchor="middle" font-family="Avenir Next, sans-serif" font-size="13" font-weight="700" fill="#FFF9EF">推荐</text>
+  </g>
+</svg>

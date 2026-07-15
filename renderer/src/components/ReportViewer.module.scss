@@ -1,0 +1,68 @@
+.reportHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0;
+  width: 100%;
+}
+
+.headerLeft {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.reportIcon {
+  font-size: 24px;
+}
+
+.headerTitle {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.headerActions {
+  display: flex;
+  gap: 8px;
+}
+
+.reportContainer {
+  position: relative;
+  width: 100%;
+  height: 70vh;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.reportIframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+.reportFooter {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.footerStats {
+  display: flex;
+  gap: 16px;
+  font-size: 14px;
+  color: #666;
+}
+
+.footerStats span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.footerStats span:not(:last-child)::after {
+  content: '·';
+  margin-left: 16px;
+}

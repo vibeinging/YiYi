@@ -1,0 +1,290 @@
+.testRetrievalContent {
+  .inputSection {
+    margin-bottom: 20px;
+  }
+
+  .resultsSection {
+    .resultsHeader {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 15px;
+      padding: 10px 14px;
+      background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+      border-radius: 6px;
+      border-left: 4px solid #409eff;
+
+      .resultsCount {
+        font-weight: 600;
+        color: #409eff;
+        font-size: 14px;
+      }
+
+      .methodStats {
+        display: flex;
+        gap: 8px;
+      }
+    }
+
+    .resultsTable {
+      .tableNameCell {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+
+        .tableName {
+          font-weight: 600;
+          font-size: 14px;
+          color: #303133;
+        }
+
+        .columnCount {
+          font-size: 11px;
+          color: #909399;
+        }
+      }
+
+      .columnsSummary {
+        display: flex;
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 3px;
+        font-size: 12px;
+
+        .columnItem {
+          display: flex;
+          gap: 6px;
+          padding: 4px 8px;
+          border-radius: 8px;
+          background: #409eff;
+          color: white;
+        }
+      }
+
+      .retrievalMethodTags {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+
+        .similarityInTag {
+          margin-left: 4px;
+          font-weight: 600;
+          opacity: 0.9;
+        }
+      }
+
+      .expandTrigger {
+        cursor: pointer;
+        color: #409eff;
+        font-size: 14px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 20px;
+        user-select: none;
+      }
+
+      .columnsDetail {
+        padding: 12px 20px;
+        background: #f8f9fa;
+        margin: 4px 0;
+
+        .tableDescriptionDetail {
+          margin-bottom: 12px;
+          padding: 8px 12px;
+          background: white;
+          border-radius: 4px;
+          border-left: 3px solid #409eff;
+
+          .detailLabel {
+            font-size: 12px;
+            color: #909399;
+            margin-bottom: 4px;
+          }
+
+          .detailContent {
+            font-size: 13px;
+            color: #606266;
+            line-height: 1.5;
+          }
+        }
+
+        .columnsHeader {
+          margin-bottom: 8px;
+          padding-bottom: 6px;
+          border-bottom: 1px solid var(--ad-border);
+
+          .columnsTitle {
+            font-weight: 600;
+            color: #303133;
+            font-size: 13px;
+          }
+        }
+
+        .columnsTable {
+          background: white;
+          border-radius: 4px;
+
+          .dataTypeText {
+            font-size: 12px;
+            color: #606266;
+            font-family: 'Monaco', monospace;
+          }
+
+          .columnBadges {
+            display: flex;
+            gap: 3px;
+            flex-wrap: wrap;
+          }
+
+          .columnDesc {
+            font-size: 12px;
+            color: #606266;
+            line-height: 1.4;
+          }
+
+          .exampleValues {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            font-size: 11px;
+
+            .exampleItem {
+              padding: 1px 6px;
+              background: var(--ad-bg-hover);
+              border-radius: 2px;
+              color: #606266;
+              max-width: 60px;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+            }
+          }
+
+          .noExample {
+            color: #c0c4cc;
+            font-size: 11px;
+          }
+        }
+      }
+    }
+
+    .resultsJson {
+      .jsonDisplay {
+        background: #f5f7fa;
+        border: 1px solid #e4e7ed;
+        border-radius: 4px;
+        padding: 12px;
+        font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+        font-size: 12px;
+        line-height: 1.5;
+        max-height: 400px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
+        margin: 0;
+      }
+    }
+  }
+
+  .noResults {
+    padding: 40px 0;
+    text-align: center;
+
+    .emptyIcon {
+      color: #c0c4cc;
+      margin-bottom: 8px;
+    }
+
+    .emptyText {
+      p {
+        margin: 0;
+        font-size: 15px;
+        color: #606266;
+      }
+
+      .emptySubtitle {
+        font-size: 13px;
+        color: #909399;
+        margin-top: 8px;
+      }
+    }
+  }
+}
+
+.dialogFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+// Modal content 容器（对应 .test-retrieval-dialog.el-dialog），移动端布局
+.testRetrievalDialog {
+  @media (max-width: 767px) {
+    margin: 8px auto !important;
+    max-height: calc(100dvh - 16px);
+    display: flex;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 767px) {
+  .testRetrievalContent {
+    min-width: 0;
+
+    .inputSection {
+      margin-bottom: 14px;
+    }
+
+    .resultsSection {
+      .resultsHeader {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 10px 12px;
+
+        .methodStats {
+          flex-wrap: wrap;
+          width: 100%;
+        }
+      }
+
+      .resultsTable {
+        max-width: 100%;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      .columnsDetail {
+        padding: 10px 12px;
+      }
+
+      .columnsTable .exampleValues .exampleItem {
+        max-width: none;
+        white-space: normal;
+        word-break: break-word;
+      }
+
+      .resultsJson .jsonDisplay {
+        max-height: 35dvh;
+        font-size: 11px;
+      }
+    }
+
+    .noResults {
+      padding: 24px 0;
+    }
+  }
+
+  .dialogFooter {
+    flex-direction: column-reverse;
+    align-items: stretch;
+    gap: 10px;
+
+    button {
+      width: 100%;
+      margin: 0 !important;
+      min-height: 44px;
+    }
+  }
+}

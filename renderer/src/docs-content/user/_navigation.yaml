@@ -1,0 +1,88 @@
+sections:
+  - title: "快速上手"
+    path: "/docs/user/onboarding"
+    order: 1
+    children:
+      - title: "产品介绍"
+        path: "/docs/user/getting-started/introduction"
+        file: "getting-started/introduction.md"
+        order: 1
+      - title: "登录与注册"
+        path: "/docs/user/getting-started/login"
+        file: "getting-started/login.md"
+        order: 2
+      - title: "项目管理"
+        path: "/docs/user/getting-started/project"
+        file: "getting-started/project.md"
+        order: 3
+      - title: "快速开始"
+        path: "/docs/user/getting-started/quickstart"
+        file: "getting-started/quickstart.md"
+        order: 4
+      - title: "核心概念"
+        path: "/docs/user/getting-started/concepts"
+        file: "getting-started/concepts.md"
+        order: 5
+
+  - title: "数据接入与配置"
+    path: "/docs/user/data-configuration"
+    order: 2
+    children:
+      - title: "业务概述"
+        path: "/docs/user/business/overview"
+        file: "data/business.md"
+        order: 1
+      - title: "模型管理"
+        path: "/docs/user/models/management"
+        file: "models/management.md"
+        order: 2
+      - title: "数据库管理"
+        path: "/docs/user/business/database"
+        file: "data/database.md"
+        order: 3
+      - title: "非结构化数据源"
+        path: "/docs/user/business/unstructured"
+        file: "data/unstructured.md"
+        order: 4
+      - title: "结构化数据源"
+        path: "/docs/user/business/structured"
+        file: "data/structured.md"
+        order: 5
+      - title: "网络数据源"
+        path: "/docs/user/business/web-search"
+        file: "data/web-search.md"
+        order: 6
+
+  - title: "展示与协作"
+    path: "/docs/user/visualization-collaboration"
+    order: 3
+    children:
+      - title: "Dashboard 管理"
+        path: "/docs/user/visualization/dashboard"
+        file: "visualization/dashboard.md"
+        order: 1
+      - title: "项目配置"
+        path: "/docs/user/project/settings"
+        file: "project/settings.md"
+        order: 2
+      - title: "成员管理"
+        path: "/docs/user/project/members"
+        file: "project/members.md"
+        order: 3
+      - title: "角色与权限"
+        path: "/docs/user/project/roles"
+        file: "project/roles.md"
+        order: 4
+
+  - title: "帮助"
+    path: "/docs/user/help"
+    order: 4
+    children:
+      - title: "名词解释"
+        path: "/docs/user/help/glossary"
+        file: "help/glossary.md"
+        order: 1
+      - title: "常见问题"
+        path: "/docs/user/help/faq"
+        file: "help/faq.md"
+        order: 2

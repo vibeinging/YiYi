@@ -1,0 +1,333 @@
+/* 使用全局样式: ad-detail-page, ad-detail-page-header, ad-detail-page-content, ad-tab-label */
+/* 源 Vue 仅依赖全局类 + 自带 scoped 样式，这里在 module 内补齐高度链与布局以对齐全局行为 */
+
+.ad-detail-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.ad-detail-page-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+
+  .header-title {
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  /* header 操作按钮 */
+  .header-actions {
+    margin-left: auto;
+    display: flex;
+    gap: 8px;
+  }
+}
+
+.ad-detail-page-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 修复 border-card tabs 高度链 */
+.ad-detail-tabs-bordered {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+
+  :global(.mantine-Tabs-list) {
+    border-bottom: none;
+    flex-shrink: 0;
+  }
+
+  :global(.mantine-Tabs-panel) {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    padding: 0 5px 10px 5px;
+    display: flex;
+    flex-direction: column;
+  }
+}
+
+/* tab 标签：图标 + 文字 */
+.ad-tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 视图切换栏 */
+.view-switch-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 10px;
+  flex-shrink: 0;
+}
+
+/* 自定义视图切换器 */
+.view-switcher {
+  position: relative;
+  display: inline-flex;
+  background: var(--yiw-code-bg, #f1f3f5);
+  border-radius: 8px;
+  padding: 3px;
+  gap: 2px;
+
+  .switcher-btn {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 14px;
+    border: none;
+    background: transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--yiw-muted, #64748b);
+    transition: color 0.25s cubic-bezier(0.25, 1, 0.5, 1);
+    white-space: nowrap;
+    outline: none;
+
+    &:hover:not(.active) {
+      color: var(--yiw-text-soft, #475569);
+    }
+
+    &.active {
+      color: var(--yiw-accent, #22594c);
+    }
+  }
+
+  .switcher-indicator {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: calc(50% - 4px);
+    height: calc(100% - 6px);
+    background: var(--yiw-surface, #fff);
+    border-radius: 6px;
+    box-shadow: var(--yiw-card-shadow, 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04));
+    transition: transform 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+
+    &.at-table {
+      transform: translateX(calc(100% + 2px));
+    }
+  }
+}
+
+/* ER图 + 左侧面板容器：抵消 tab-pane 的 padding，flex 填充剩余空间 */
+.er-with-panel {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  margin: 0 -5px -10px -5px;
+  overflow: hidden;
+}
+
+/* 表列表视图在 flex 容器中填充剩余空间 */
+:global(.table-structure-container) {
+  flex: 1;
+  min-height: 0;
+}
+
+/* 步骤组件在 tab 中的容器 */
+.tab-step-wrapper {
+  height: 100%;
+  overflow: auto;
+}
+
+/* 左侧表详情面板 */
+.table-detail-panel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 75%;
+  background: var(--yiw-surface, #fff);
+  border-right: none;
+  border-radius: 0 12px 12px 0;
+  box-shadow: var(--yiw-card-shadow,
+    6px 0 24px rgba(0, 0, 0, 0.1),
+    2px 0 8px rgba(0, 0, 0, 0.04));
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  padding: 30px;
+
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+
+    .panel-title-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+
+      .panel-title {
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--yiw-text, #1e293b);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+    }
+  }
+
+  .panel-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--yiw-border-soft, #f0f0f5);
+  }
+
+  .panel-desc {
+    padding: 8px 10px;
+    background: var(--yiw-code-bg, #f8fafc);
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--yiw-muted, #64748b);
+    line-height: 1.6;
+    margin-bottom: 10px;
+  }
+
+  .panel-schema {
+    font-size: 13px;
+    color: var(--yiw-muted, #64748b);
+    margin-bottom: 10px;
+  }
+
+  .panel-column-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+
+    .column-search-input {
+      flex: 1;
+    }
+
+    .column-count {
+      font-size: 13px;
+      color: var(--yiw-muted, #909399);
+      white-space: nowrap;
+    }
+  }
+
+  .panel-column-list {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+
+    .col-name-cell {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+
+      .col-badge {
+        font-size: 10px;
+        font-weight: 600;
+        padding: 1px 4px;
+        border-radius: 3px;
+        flex-shrink: 0;
+
+        &.pk {
+          background: #fef3c7;
+          color: #d97706;
+        }
+
+        &.fk {
+          background: #dce8e2;
+          color: #22594c;
+        }
+      }
+    }
+
+    .col-desc {
+      color: var(--yiw-muted, #909399);
+      font-size: 12px;
+    }
+
+    .example-preview {
+      font-size: 12px;
+      color: var(--yiw-text-soft, #606266);
+      cursor: pointer;
+    }
+  }
+}
+
+/* 滑入动画（slide-left transition → 进入时播放一次） */
+.slide-left-enter {
+  animation: slide-left-in 0.25s ease;
+}
+
+@keyframes slide-left-in {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+/* Mobile responsive */
+@media (max-width: 767px) {
+  .ad-detail-page-header {
+    flex-wrap: wrap;
+    gap: 8px;
+
+    .header-actions {
+      width: 100%;
+      justify-content: flex-end;
+    }
+  }
+
+  .table-detail-panel {
+    width: 100%;
+    border-radius: 0;
+    padding: 16px;
+
+    .panel-actions {
+      flex-direction: column;
+
+      :global(.mantine-Button-root) {
+        width: 100%;
+      }
+    }
+
+    .panel-column-list {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+
+      :global(.mantine-Table-table) {
+        min-width: 600px;
+      }
+    }
+  }
+
+  :global(.mantine-Modal-content) {
+    width: 95vw !important;
+    margin: 10px auto !important;
+  }
+}
+
+/* Tablet responsive */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .table-detail-panel {
+    width: 85%;
+    padding: 20px;
+  }
+}

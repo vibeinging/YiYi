@@ -1,0 +1,408 @@
+.skillEditor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  gap: 12px;
+}
+
+/* ===== 顶栏 ===== */
+.editorTop {
+  display: flex;
+  gap: 12px;
+  flex-shrink: 0;
+  background: var(--yiw-code-bg, #f8fafc);
+  border: 1px solid var(--yiw-border-soft, #ebeef5);
+  border-radius: 10px;
+  padding: 14px 20px 6px;
+  flex-wrap: wrap;
+}
+
+.topField {
+  min-width: 160px;
+}
+.topFieldShort {
+  width: 140px;
+  flex-shrink: 0;
+}
+.topFieldGrow {
+  flex: 1;
+  min-width: 180px;
+}
+.topSwitchField {
+  min-width: 150px;
+  display: flex;
+  align-items: flex-end;
+  padding-bottom: 8px;
+}
+
+/* ===== 两栏 ===== */
+.editorMain {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 12px;
+}
+
+.panelTitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--yiw-muted, #64748b);
+  padding: 10px 12px 0;
+  flex-shrink: 0;
+  letter-spacing: 0.3px;
+}
+
+.toolCount {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--yiw-accent, #17483e);
+  color: var(--yiw-on-accent, #fff);
+  font-size: 10px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 左：工具调色板 */
+.toolPalette {
+  width: 260px;
+  flex-shrink: 0;
+  background: var(--yiw-code-bg, #f8fafc);
+  border: 1px solid var(--yiw-border-soft, #ebeef5);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.paletteSearch {
+  padding: 8px 8px 4px;
+}
+
+.paletteList {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 6px 8px;
+  position: relative;
+}
+
+.paletteItem {
+  padding: 7px 9px;
+  border-radius: 7px;
+  cursor: grab;
+  transition: all 0.15s;
+  margin-bottom: 3px;
+  border: 1px solid transparent;
+
+  &:hover {
+    background: var(--yiw-surface, #fff);
+    border-color: var(--yiw-accent-tint, #dce8e2);
+    box-shadow: var(--yiw-card-shadow, 0 1px 4px rgba(23, 72, 62, 0.08));
+  }
+
+  &:active {
+    cursor: grabbing;
+    opacity: 0.7;
+  }
+
+  &.isSelected {
+    background: var(--yiw-accent-tint, rgba(23, 72, 62, 0.06));
+    border-color: var(--yiw-accent-tint, rgba(23, 72, 62, 0.2));
+
+    .paletteItemName .paletteIco {
+      color: var(--yiw-accent, #17483e);
+    }
+  }
+}
+
+.paletteItemName {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--yiw-text, #1e293b);
+  margin-bottom: 1px;
+
+  .paletteIco {
+    color: var(--yiw-accent, #17483e);
+    font-size: 12px;
+  }
+}
+
+.paletteItemDesc {
+  font-size: 11px;
+  color: var(--yiw-muted, #94a3b8);
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.paletteEmpty {
+  padding: 20px 10px;
+  text-align: center;
+  color: var(--yiw-faint, #c0c4cc);
+  font-size: 12px;
+}
+
+/* 右：工作区 */
+.workArea {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  border: 1px solid var(--yiw-border, #e2e8f0);
+  border-radius: 10px;
+  background: var(--yiw-surface, #fff);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  transition: border-color 0.2s;
+
+  &.isDragOver {
+    border-color: var(--yiw-accent, #17483e);
+  }
+}
+
+/* 已选工具 chips 条 */
+.selectedChipsBar {
+  flex-shrink: 0;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--yiw-border, #f1f5f9);
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.chipsLabel {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--yiw-muted, #64748b);
+  letter-spacing: 0.3px;
+  padding-top: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chipsArea {
+  flex: 1;
+  min-height: 28px;
+  min-width: 0;
+}
+
+.chipsHint {
+  font-size: 12.5px;
+  color: var(--yiw-muted, #94a3b8);
+  line-height: 1.8;
+  padding: 4px 2px;
+
+  b {
+    color: var(--yiw-accent, #17483e);
+    font-weight: 600;
+  }
+}
+
+.chipsList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 10px;
+  background: var(--yiw-accent-tint, rgba(23, 72, 62, 0.08));
+  border: 1px solid var(--yiw-accent-tint, rgba(23, 72, 62, 0.2));
+  border-radius: 16px;
+  font-size: 12px;
+  color: var(--yiw-accent, #17483e);
+  max-width: 260px;
+  /* 出入场动画（AI 生成时 chips 滑入） */
+  animation: chipEnter 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  .chipIco {
+    color: var(--yiw-accent, #17483e);
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+
+  .chipName {
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chipRemove {
+    width: 18px;
+    height: 18px;
+    border: none;
+    background: transparent;
+    color: var(--yiw-accent, #17483e);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    transition: background 0.12s;
+
+    &:hover {
+      background: var(--yiw-accent-tint, rgba(23, 72, 62, 0.18));
+      color: var(--yiw-accent, #17483e);
+    }
+  }
+}
+
+@keyframes chipEnter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* AI 描述条 */
+.aiBar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--yiw-border, #f1f5f9);
+  background: var(--yiw-accent-tint, linear-gradient(135deg, #fcfaf5 0%, #f7f4ec 100%));
+
+  .aiBarIco {
+    color: var(--yiw-accent, #ffc943);
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+
+  .aiBarInput {
+    flex: 1;
+    min-width: 0;
+
+    input {
+      background: var(--yiw-surface, #fff);
+      box-shadow: 0 0 0 1px var(--yiw-accent-tint, rgba(255, 201, 67, 0.2)) inset;
+      font-size: 13px;
+
+      &:focus {
+        box-shadow: 0 0 0 1px var(--yiw-accent, #ffc943) inset;
+      }
+    }
+  }
+}
+
+/* 指令编辑器 */
+.promptArea {
+  flex: 1;
+  min-height: 0;
+  padding: 14px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.promptAreaLabel {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--yiw-muted, #64748b);
+  letter-spacing: 0.3px;
+}
+
+.promptEditor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+
+  :global(.mantine-Textarea-wrapper),
+  textarea {
+    height: 100% !important;
+  }
+
+  textarea {
+    font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+    font-size: 13px;
+    line-height: 1.75;
+    background: var(--yiw-code-bg, #fafbfc);
+    border-radius: 8px;
+    padding: 14px 16px;
+    resize: none;
+  }
+}
+
+/* 拖放覆盖层 */
+.dropOverlay {
+  position: absolute;
+  inset: 0;
+  background: var(--yiw-accent-tint, rgba(23, 72, 62, 0.08));
+  border-radius: 10px;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.dropOverlayBox {
+  padding: 16px 24px;
+  background: var(--yiw-surface, #fff);
+  border: 2px dashed var(--yiw-accent, #17483e);
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--yiw-accent, #22594c);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: var(--yiw-card-shadow, 0 8px 24px rgba(23, 72, 62, 0.18));
+}
+
+/* ===== Responsive ===== */
+@media (max-width: 1023px) {
+  .editorMain {
+    flex-direction: column;
+  }
+  .toolPalette {
+    width: 100%;
+    flex: none;
+    height: 180px;
+  }
+  .workArea {
+    min-height: 400px;
+  }
+}
+
+@media (max-width: 767px) {
+  .editorTop {
+    flex-direction: column;
+    gap: 0;
+    padding: 10px 14px 4px;
+  }
+  .editorTop .topFieldShort {
+    width: auto;
+  }
+  .aiBar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

@@ -1,0 +1,297 @@
+/* ── Base ─────────────────────────────────────────── */
+.tdb {
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+}
+
+/* ── Header ───────────────────────────────────────── */
+.tdb-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1;
+}
+
+.tdb-icon {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.tdb-label {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.tdb-action {
+  font-size: 12px;
+  color: var(--el-text-color-regular, #64748b);
+  font-weight: 400;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tdb-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 100px;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+  background: rgba(23, 72, 62, 0.08);
+  color: var(--el-color-primary, #17483e);
+}
+
+/* ── Body ─────────────────────────────────────────── */
+.tdb-body {
+  margin-top: 6px;
+  position: relative;
+  /* 平滑过渡：autoCollapseOnDone 触发收起时高度变化有动画，避免页面"跳一下" */
+  transition: max-height 0.25s ease-in-out;
+
+  &.collapsed {
+    overflow: hidden;
+  }
+}
+
+.tdb-text {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--el-text-color-regular, #64748b);
+  word-break: break-word;
+  transition: max-height 0.25s ease-in-out;
+
+  &.height-clamp {
+    overflow: hidden;
+  }
+
+  :global(p) {
+    margin: 0;
+  }
+
+  :global(p + p) {
+    margin-top: 4px;
+  }
+
+  :global(table) {
+    width: 100%;
+    table-layout: fixed;
+    th:nth-child(1), td:nth-child(1) { width: 160px; }
+    th:nth-child(2), td:nth-child(2) { width: 70px; text-align: center; }
+    th:nth-child(3), td:nth-child(3) { overflow: hidden; text-overflow: ellipsis; }
+  }
+}
+
+/* ── Fade Overlay ─────────────────────────────────── */
+.tdb-fade {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 24px;
+  background: linear-gradient(to bottom, transparent, var(--el-bg-color, #fff));
+  pointer-events: none;
+}
+
+/* ── Collapse Button ──────────────────────────────── */
+.tdb-more {
+  margin-top: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 12px;
+  color: var(--el-color-primary, #17483e);
+  cursor: pointer;
+  opacity: 0.8;
+  transition: opacity 0.15s;
+
+  &:hover {
+    opacity: 1;
+  }
+}
+
+/* ── Color Classes ────────────────────────────────── */
+.c-brand {
+  /* 思考/分析块——AI 推理过程的"侧注"。视觉克制：
+     - 极淡深绿渐变 + 细深绿色左缘强调；不与回答正文抢视线
+     - 文字用 secondary 色 + 略宽行距，读起来"轻"
+     - 完成后自动折叠到 2 行预览，靠 fade 遮罩自然过渡 */
+  position: relative;
+  background: linear-gradient(
+    135deg,
+    rgba(47, 111, 96, 0.045) 0%,
+    rgba(23, 72, 62, 0.03) 100%
+  );
+  border: 1px solid rgba(47, 111, 96, 0.1);
+  border-left: 3px solid rgba(47, 111, 96, 0.4);
+  padding: 10px 14px;
+  border-radius: 4px 8px 8px 4px;
+  margin: 4px 0 8px;
+
+  .tdb-header {
+    margin-bottom: 2px;
+  }
+
+  .tdb-icon {
+    color: rgba(47, 111, 96, 0.75);
+    opacity: 0.9;
+  }
+
+  .tdb-label {
+    color: rgba(47, 111, 96, 0.9);
+    font-weight: 500;
+    font-size: 12px;
+    letter-spacing: 0.2px;
+  }
+
+  .tdb-text {
+    color: var(--el-text-color-secondary, #6b7280);
+    line-height: 1.75;
+    font-size: 12.5px;
+  }
+
+  .tdb-more {
+    color: rgba(47, 111, 96, 0.75);
+    font-size: 11px;
+  }
+
+  /* fade 遮罩跟随渐变背景调，避免折叠时下端"白边" */
+  .tdb-fade {
+    background: linear-gradient(
+      to bottom,
+      transparent,
+      rgba(252, 251, 255, 0.95)
+    );
+  }
+
+  /* header 的 loading 三点用深绿色，跟整体色调统一 */
+  .tdb-loading span {
+    background: rgba(47, 111, 96, 0.7);
+  }
+}
+
+.c-blue {
+  .tdb-icon,
+  .tdb-label {
+    color: var(--el-color-primary, #17483e);
+  }
+}
+
+.c-gray {
+  .tdb-icon,
+  .tdb-label {
+    color: var(--el-text-color-placeholder, #94a3b8);
+  }
+}
+
+/* ── Loading Animation ────────────────────────────── */
+.tdb-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+
+  span {
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: var(--el-color-primary, #17483e);
+    animation: tdb-bounce 1.2s ease-in-out infinite;
+  }
+
+  span:nth-child(2) { animation-delay: 0.15s; }
+  span:nth-child(3) { animation-delay: 0.3s; }
+}
+
+@keyframes tdb-bounce {
+  0%, 60%, 100% { opacity: 0.3; transform: scale(0.8); }
+  30% { opacity: 1; transform: scale(1); }
+}
+
+.c-green {
+  background: rgba(16, 185, 129, 0.04);
+  border-left: 2px solid rgba(16, 185, 129, 0.2);
+
+  .tdb-icon,
+  .tdb-label {
+    color: var(--el-color-success, #10b981);
+  }
+}
+
+.c-red {
+  background: rgba(239, 68, 68, 0.04);
+  border-left: 2px solid rgba(239, 68, 68, 0.2);
+
+  .tdb-icon,
+  .tdb-label {
+    color: var(--el-color-danger, #ef4444);
+  }
+}
+
+.c-accent {
+  /* 分析（decomposition）/编排（orchestration）块——视觉上和"思考""回答"区分。
+     用淡米黄色背景 + 深绿色左边框，强调"模型在做拆解/规划"的中转态。 */
+  background: rgba(245, 158, 11, 0.06);
+  border-left: 2px solid rgba(47, 111, 96, 0.35);
+  padding: 6px 10px;
+  margin-bottom: 4px;
+  border-radius: 0 4px 4px 0;
+
+  .tdb-icon,
+  .tdb-label {
+    color: var(--el-color-primary, #17483e);
+    font-weight: 500;
+  }
+
+  /* 不覆盖 .tdb-text 的 font-size，统一用默认 13px */
+  .tdb-text {
+    color: var(--el-text-color-regular, #606266);
+    line-height: 1.7;
+  }
+
+  .tdb-more {
+    font-size: 11px;
+    color: var(--el-color-primary, #17483e);
+  }
+}
+
+/* ========== Mobile Responsive (max-width: 767px) ========== */
+@media (max-width: 767px) {
+  .tdb {
+    padding: 6px 8px;
+  }
+
+  .tdb-header {
+    gap: 4px;
+    overflow: hidden;
+
+    .tdb-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  .tdb-badge {
+    font-size: 10px;
+    padding: 1px 6px;
+  }
+
+  .tdb-text {
+    font-size: 12px;
+  }
+
+  .tdb-more {
+    min-height: 32px;
+    display: inline-flex;
+    align-items: center;
+  }
+}

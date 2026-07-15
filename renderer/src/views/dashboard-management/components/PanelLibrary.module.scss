@@ -1,0 +1,273 @@
+.panelLibrary {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 320px;
+  background: #fff;
+  border-left: 1px solid #e4e7ed;
+  display: flex;
+  flex-direction: column;
+  z-index: 10;
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.08);
+}
+
+.libraryHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e4e7ed;
+  background: #fafafa;
+
+  .title {
+    font-weight: 600;
+    font-size: 14px;
+    color: #303133;
+  }
+}
+
+.libraryFilter {
+  display: flex;
+  padding: 12px;
+  border-bottom: 1px solid #ebeef5;
+}
+
+.libraryTip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: #ecf5ff;
+  color: #409eff;
+  font-size: 12px;
+}
+
+.panelList {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  position: relative;
+}
+
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  color: #909399;
+
+  p {
+    margin-top: 8px;
+    font-size: 13px;
+  }
+}
+
+.panelItem {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: #f8f9fa;
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+  cursor: grab;
+  transition: all 0.2s;
+
+  &:hover {
+    border-color: var(--el-color-primary);
+    background: #fff;
+    box-shadow: 0 2px 8px rgba(64, 158, 255, 0.15);
+
+    .dragIcon,
+    .deleteIcon {
+      opacity: 1;
+    }
+  }
+
+  &:active {
+    cursor: grabbing;
+  }
+}
+
+.panelIcon {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  margin-right: 10px;
+
+  &.typeTable {
+    background: #ecf5ff;
+  }
+  &.typeBar {
+    background: #f0f9eb;
+  }
+  &.typeLine {
+    background: #fdf6ec;
+  }
+  &.typePie {
+    background: #fef0f0;
+  }
+  &.typeText {
+    background: #f5f7fa;
+  }
+}
+
+.panelInfo {
+  flex: 1;
+  min-width: 0;
+}
+
+.panelTitle {
+  font-size: 13px;
+  font-weight: 500;
+  color: #303133;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 2px;
+}
+
+.panelMeta {
+  .typeName {
+    font-size: 11px;
+    color: #909399;
+  }
+}
+
+.panelActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dragIcon {
+  color: #c0c4cc;
+  opacity: 0;
+  transition: opacity 0.2s;
+  display: flex;
+  align-items: center;
+}
+
+.deleteIcon {
+  color: #c0c4cc;
+  opacity: 0;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+
+  &:hover {
+    color: #f56c6c;
+  }
+}
+
+.paginationWrapper {
+  padding: 8px;
+  border-top: 1px solid #ebeef5;
+  display: flex;
+  justify-content: center;
+}
+
+// 拖拽虚影
+.dragGhost {
+  position: fixed;
+  z-index: 9999;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #fff;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  font-size: 12px;
+  color: #303133;
+  max-width: 200px;
+
+  span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/* Mobile: panel library slides over full width with overlay */
+@media (max-width: 767px) {
+  .panelLibraryWrapper {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 100;
+    background: rgba(0, 0, 0, 0.5);
+  }
+
+  .panelLibrary {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: auto;
+    bottom: 0;
+    width: 100%;
+    max-height: 70vh;
+    border-radius: 16px 16px 0 0;
+    border-left: none;
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.15);
+  }
+
+  .libraryHeader {
+    position: relative;
+    padding: 14px 16px;
+
+    .title {
+      font-size: 15px;
+    }
+  }
+
+  .libraryFilter {
+    padding: 8px 12px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .panelItem {
+    padding: 12px;
+    min-height: 56px;
+  }
+
+  .panelIcon {
+    width: 40px;
+    height: 40px;
+  }
+
+  .panelTitle {
+    font-size: 14px;
+  }
+
+  .panelActions {
+    .dragIcon,
+    .deleteIcon {
+      opacity: 1;
+      font-size: 18px;
+      padding: 4px;
+    }
+  }
+
+  .paginationWrapper {
+    padding: 12px;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* Tablet: slightly narrower */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .panelLibrary {
+    width: 280px;
+  }
+}

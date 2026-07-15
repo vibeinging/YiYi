@@ -1,0 +1,26 @@
+import * as traceOptimization from "../app/traces/trace_optimization.js";
+
+export const traceOptimizationRoutes = [
+  { m: "GET", p: "/api/agent/projects/:pid/trace-optimization/summary", fn: traceOptimization.summary, auth: true },
+  { m: "GET", p: "/api/agent/projects/:pid/trace-optimization/benchmark", fn: traceOptimization.benchmarkOverview, auth: true },
+  { m: "POST", p: "/api/agent/projects/:pid/trace-optimization/benchmark/normalize", fn: traceOptimization.normalizeBenchmark, auth: true },
+  { m: "POST", p: "/api/agent/projects/:pid/trace-optimization/benchmark/normalize-folder", fn: traceOptimization.normalizeBenchmarkFolder, auth: true },
+  { m: "POST", p: "/api/agent/projects/:pid/trace-optimization/benchmark/cases/import", fn: traceOptimization.importBenchmarkCases, auth: true },
+  { m: "POST", p: "/api/agent/projects/:pid/trace-optimization/benchmark/cases/:caseId/materialize", fn: traceOptimization.materializeBenchmarkCase, auth: true },
+  { m: "GET", p: "/api/agent/projects/:pid/trace-optimization/benchmark/cases/:caseId/runs", fn: traceOptimization.listBenchmarkRuns, auth: true },
+  { m: "POST", p: "/api/agent/projects/:pid/trace-optimization/benchmark/cases/:caseId/run", fn: traceOptimization.runBenchmarkCase, auth: true },
+  { m: "GET", p: "/api/agent/projects/:pid/trace-optimization/reviews", fn: traceOptimization.listReviews, auth: true },
+  { m: "POST", p: "/api/agent/projects/:pid/trace-optimization/reviews", fn: traceOptimization.saveReview, auth: true },
+  { m: "POST", p: "/api/agent/projects/:pid/trace-optimization/drafts/from-review", fn: traceOptimization.createDraftFromReview, auth: true },
+  { m: "GET", p: "/api/agent/projects/:pid/trace-optimization/drafts", fn: traceOptimization.listDrafts, auth: true },
+  { m: "GET", p: "/api/agent/projects/:pid/trace-optimization/drafts/:draftId", fn: traceOptimization.getDraft, auth: true },
+  { m: "PUT", p: "/api/agent/projects/:pid/trace-optimization/drafts/:draftId", fn: traceOptimization.updateDraft, auth: true },
+  { m: "GET", p: "/api/agent/projects/:pid/trace-optimization/drafts/:draftId/attempts", fn: traceOptimization.listAttempts, auth: true },
+  { m: "POST", p: "/api/agent/projects/:pid/trace-optimization/drafts/:draftId/attempts", fn: traceOptimization.createAttempt, auth: true },
+  { m: "POST", p: "/api/agent/projects/:pid/trace-optimization/drafts/:draftId/diagnose", fn: traceOptimization.diagnoseDraft, auth: true },
+  { m: "POST", p: "/api/agent/projects/:pid/trace-optimization/drafts/:draftId/tuning-proposal", fn: traceOptimization.generateTuningProposal, auth: true },
+  { m: "POST", p: "/api/agent/projects/:pid/trace-optimization/drafts/:draftId/gold-solve/generate", fn: traceOptimization.generateGoldSolve, auth: true },
+  { m: "POST", p: "/api/agent/projects/:pid/trace-optimization/drafts/:draftId/gold-solve", fn: traceOptimization.saveGoldSolve, auth: true },
+  { m: "PUT", p: "/api/agent/projects/:pid/trace-optimization/attempts/:attemptId", fn: traceOptimization.updateAttempt, auth: true },
+  { m: "PUT", p: "/api/agent/projects/:pid/trace-optimization/gold-solves/:goldSolveId", fn: traceOptimization.updateGoldSolve, auth: true },
+];

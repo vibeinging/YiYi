@@ -1,0 +1,332 @@
+//leave the padding of  el-scroll sidebar
+.el-scrollbar__view {
+  padding-bottom: 0px;
+}
+
+.el-scrollbar {
+  --el-menu-base-level-padding: 15px;
+}
+
+.el-dialog {
+  border-radius: 10px !important;
+}
+
+/* Tabs 导航箭头居中 */
+.el-tabs__nav-prev,
+.el-tabs__nav-next {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  margin-top: -4px;
+}
+
+/* ========================================
+   Element Plus 全局样式定制
+   ======================================== */
+
+/* 统一的 Select 下拉框样式 */
+/* 使用方式: el-select 添加 popper-class="styled-select-popper" */
+.styled-select-popper {
+  padding: 8px !important;
+
+  .el-select-dropdown__item {
+    height: auto !important;
+    padding: 10px 14px !important;
+    line-height: 1.5 !important;
+    border-radius: 8px !important;
+    margin-bottom: 4px !important;
+
+    &:last-child {
+      margin-bottom: 0 !important;
+    }
+
+    &:hover,
+    &.hover {
+      background: rgba(23, 72, 62, 0.08) !important;
+    }
+
+    &.selected {
+      background: rgba(23, 72, 62, 0.12) !important;
+    }
+  }
+
+  /* 两行布局的选项样式（可选使用） */
+  .select-option-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+
+    .option-name {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      font-size: 14px;
+      color: #1e293b;
+    }
+
+    .option-desc {
+      font-size: 12px;
+      color: #64748b;
+      line-height: 1.4;
+    }
+  }
+}
+
+/* ----------------------------------------
+   Tabs 标签页样式
+   ---------------------------------------- */
+
+/* 全局 Tabs 头部透明背景 */
+.el-tabs__header {
+  background: transparent !important;
+}
+
+.el-tabs--border-card {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+
+  > .el-tabs__header {
+    background: transparent !important;
+    border-bottom: 1px solid #e5e7eb;
+
+    .el-tabs__item {
+      background: transparent;
+      border: none;
+
+      &.is-active {
+        background: transparent;
+        border-bottom-color: transparent;
+      }
+    }
+  }
+
+  > .el-tabs__content {
+    padding: 0;
+  }
+}
+
+/* 无背景透明标签页 */
+/* 使用方式: el-tabs 添加 class="ad-tabs-transparent" */
+.ad-tabs-transparent {
+  &.el-tabs {
+    --el-tabs-header-height: 48px;
+  }
+
+  .el-tabs__nav-wrap::after {
+    display: none;
+  }
+
+  .el-tabs__item {
+    color: #64748b;
+    font-size: 14px;
+
+    &.is-active {
+      color: #17483e;
+      font-weight: 500;
+    }
+
+    &:hover {
+      color: #17483e;
+    }
+  }
+
+  .el-tabs__active-bar {
+    background-color: #17483e;
+  }
+}
+
+/* 卡片式标签页 */
+/* 使用方式: el-tabs 添加 class="ad-tabs-card" */
+.ad-tabs-card {
+  .el-tabs__header {
+    margin: 0;
+    border: none;
+    background: #f8fafc;
+    border-radius: 8px;
+    padding: 4px;
+  }
+
+  .el-tabs__nav-wrap::after {
+    display: none;
+  }
+
+  .el-tabs__nav {
+    border: none !important;
+  }
+
+  .el-tabs__item {
+    border: none !important;
+    border-radius: 6px;
+    color: #64748b;
+    transition: all 0.2s;
+
+    &.is-active {
+      background: #ffffff;
+      color: #17483e;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+
+    &:hover:not(.is-active) {
+      color: #17483e;
+    }
+  }
+}
+
+/* ----------------------------------------
+   Button 按钮样式
+   ---------------------------------------- */
+
+/* 按钮图标与文字间距（仅当 icon 旁有文字时） */
+.el-button .el-icon + span:not(:empty) {
+  margin-left: 10px;
+}
+.el-button span:not(:empty) + .el-icon {
+  margin-left: 10px;
+}
+
+/* 主色调按钮 */
+.el-button--primary {
+  --el-button-bg-color: #17483e;
+  --el-button-border-color: #17483e;
+  --el-button-hover-bg-color: #22594c;
+  --el-button-hover-border-color: #22594c;
+  --el-button-active-bg-color: #17483e;
+  --el-button-active-border-color: #17483e;
+}
+
+/* 链接按钮统一颜色 */
+.el-button--text,
+.el-button.is-link {
+  --el-button-text-color: #17483e;
+  --el-button-hover-text-color: #22594c;
+}
+
+/* ----------------------------------------
+   Table 表格样式
+   ---------------------------------------- */
+
+/* 简洁表格样式 */
+/* 使用方式: el-table 添加 class="ad-table-simple" */
+.ad-table-simple {
+  --el-table-border-color: #f1f5f9;
+  --el-table-header-bg-color: #f8fafc;
+  --el-table-row-hover-bg-color: #f8fafc;
+
+  .el-table__header th {
+    font-weight: 600;
+    color: #64748b;
+    font-size: 13px;
+  }
+
+  .el-table__body td {
+    color: #1e293b;
+  }
+
+  &.el-table--border {
+    border-radius: 8px;
+    overflow: hidden;
+
+    &::before,
+    &::after {
+      display: none;
+    }
+  }
+}
+
+/* ----------------------------------------
+   Form 表单样式
+   ---------------------------------------- */
+
+/* 紧凑表单 */
+/* 使用方式: el-form 添加 class="ad-form-compact" */
+.ad-form-compact {
+  .el-form-item {
+    margin-bottom: 16px;
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+
+  .el-form-item__label {
+    font-weight: 500;
+    color: #1e293b;
+  }
+}
+
+/* ----------------------------------------
+   Input 输入框样式
+   ---------------------------------------- */
+
+/* 现代风格输入框 */
+/* 使用方式: el-input 添加 class="ad-input-modern" */
+.ad-input-modern {
+  .el-input__wrapper {
+    border-radius: 8px;
+    box-shadow: 0 0 0 1px #e2e8f0;
+    transition: all 0.2s;
+
+    &:hover {
+      box-shadow: 0 0 0 1px #cbd5e1;
+    }
+
+    &.is-focus {
+      box-shadow: 0 0 0 2px rgba(23, 72, 62, 0.2);
+    }
+  }
+}
+
+/* ----------------------------------------
+   Tag 标签样式
+   ---------------------------------------- */
+
+/* 圆角标签 */
+.el-tag {
+  border-radius: 6px;
+}
+
+/* ----------------------------------------
+   Empty 空状态样式
+   ---------------------------------------- */
+
+/* 简洁空状态 */
+.el-empty {
+  --el-empty-description-margin-top: 16px;
+
+  .el-empty__description {
+    color: #64748b;
+  }
+}
+
+/* ----------------------------------------
+   Dialog 对话框样式
+   ---------------------------------------- */
+
+/* 使 dialog 内容自适应高度 */
+.ad-dialog-flex {
+  .el-dialog__body {
+    display: flex;
+    flex-direction: column;
+    max-height: 70vh;
+    overflow: hidden;
+  }
+}
+
+/* ----------------------------------------
+   Descriptions 描述列表样式
+   ---------------------------------------- */
+
+/* 紧凑描述列表 */
+.ad-descriptions-compact {
+  .el-descriptions__label {
+    width: 100px;
+    color: #64748b;
+  }
+
+  .el-descriptions__content {
+    color: #1e293b;
+  }
+}

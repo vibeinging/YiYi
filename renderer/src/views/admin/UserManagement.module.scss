@@ -1,0 +1,537 @@
+// 用户管理样式（源：views/admin/UserManagement.vue <style scoped>）
+// 类名由 kebab-case 改为 camelCase 以对齐 CSS Modules 在 TSX 中的 styles.xxx 引用。
+.userManagement {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 12px;
+  background: #f5f7fa;
+}
+
+.pageHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+  flex-shrink: 0;
+
+  .headerLeft {
+    flex: 1;
+    min-width: 0;
+
+    h1 {
+      margin: 0 0 6px 0;
+      font-size: 26px;
+      font-weight: 600;
+      color: #1e293b;
+      letter-spacing: -0.5px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    p {
+      margin: 0;
+      font-size: 14px;
+      color: #64748b;
+    }
+  }
+}
+
+// 内容区域
+.contentWrapper {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+
+  // Card 类型 Tabs 样式（源 :deep(.admin-tabs)，迁移后 Tabs 结构为 Mantine，
+  // 这里保留容器布局；Mantine tab 视觉由全局主题接管）
+  :global(.admin-tabs) {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+}
+
+.tabPanel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  overflow: hidden;
+}
+
+.toolbar {
+  display: flex;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid #f0f0f0;
+  flex-shrink: 0;
+}
+
+.searchIcon {
+  cursor: pointer;
+  color: #94a3b8;
+  transition: color 0.2s;
+
+  &:hover {
+    color: #17483e;
+  }
+}
+
+.tableContainer {
+  flex: 1;
+  min-height: 0;
+  padding: 0 12px 12px;
+  display: flex;
+  flex-direction: column;
+
+  &.hasPagination {
+    .dataTable {
+      flex: 1;
+      min-height: 0;
+    }
+  }
+
+  .dataTable {
+    border: none;
+
+    :global(th) {
+      background: transparent !important;
+      border-bottom: 1px solid #eef0f3 !important;
+      padding: 16px !important;
+      font-size: 13px;
+      font-weight: 500;
+      color: #64748b;
+    }
+
+    :global(td) {
+      border-bottom: 1px solid #f5f5f5;
+      padding: 16px !important;
+    }
+
+    :global(tbody tr:hover > td) {
+      background: #fafbfc !important;
+    }
+  }
+}
+
+// 分页
+.paginationWrapper {
+  display: flex;
+  justify-content: flex-end;
+  padding: 16px 16px 4px;
+  flex-shrink: 0;
+}
+
+// 用户单元格
+.userCell {
+  .userName {
+    font-weight: 500;
+    font-size: 14px;
+    color: #1e293b;
+    margin-bottom: 2px;
+  }
+
+  .userEmail {
+    font-size: 13px;
+    color: #94a3b8;
+  }
+}
+
+// 权限标签
+.permissionTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+
+  .permTag {
+    border: none;
+    font-weight: 500;
+    padding: 0 12px;
+    height: 28px;
+    line-height: 28px;
+    border-radius: 14px;
+    font-size: 13px;
+
+    &.admin {
+      background: rgba(239, 68, 68, 0.1);
+      color: #ef4444;
+    }
+
+    &.creator {
+      background: rgba(34, 197, 94, 0.1);
+      color: #16a34a;
+    }
+
+    &.guest {
+      background: rgba(148, 163, 184, 0.15);
+      color: #64748b;
+    }
+  }
+}
+
+// 状态徽章
+.statusBadge {
+  display: inline-block;
+  padding: 4px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 12px;
+
+  &.active {
+    background: rgba(34, 197, 94, 0.1);
+    color: #16a34a;
+  }
+
+  &.disabled {
+    background: rgba(148, 163, 184, 0.1);
+    color: #94a3b8;
+  }
+}
+
+// 时间文本
+.timeText {
+  font-size: 13px;
+  color: #64748b;
+
+  &.expired {
+    color: #94a3b8;
+  }
+}
+
+// 邀请链接
+.linkCell {
+  .inviteLink {
+    display: inline-block;
+  }
+}
+
+.inviteLink {
+  display: inline-block;
+  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+  font-size: 12px;
+  color: #17483e;
+  background: linear-gradient(135deg, rgba(23, 72, 62, 0.08), rgba(47, 111, 96, 0.08));
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(23, 72, 62, 0.15);
+}
+
+// 使用情况
+.usageText {
+  font-size: 13px;
+  color: #64748b;
+}
+
+// 操作按钮
+.actionBtn {
+  padding: 6px 14px !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  border-radius: 6px !important;
+  border: none !important;
+  margin: 0 4px !important;
+  cursor: pointer;
+  background: transparent;
+
+  &.primary {
+    background: #17483e !important;
+    color: white !important;
+
+    &:hover {
+      background: #22594c !important;
+    }
+  }
+
+  &.danger {
+    background: rgba(239, 68, 68, 0.1) !important;
+    color: #ef4444 !important;
+
+    &:hover {
+      background: rgba(239, 68, 68, 0.2) !important;
+    }
+  }
+
+  &.success {
+    background: rgba(34, 197, 94, 0.1) !important;
+    color: #16a34a !important;
+
+    &:hover {
+      background: rgba(34, 197, 94, 0.2) !important;
+    }
+  }
+
+  // 禁用状态样式
+  &:disabled {
+    opacity: 0.5 !important;
+    cursor: not-allowed !important;
+
+    &.danger {
+      background: rgba(239, 68, 68, 0.05) !important;
+      color: rgba(239, 68, 68, 0.5) !important;
+    }
+
+    &.success {
+      background: rgba(34, 197, 94, 0.05) !important;
+      color: rgba(34, 197, 94, 0.5) !important;
+    }
+  }
+}
+
+.textMuted {
+  color: #cbd5e1;
+}
+
+// 弹窗底部按钮区（原 el-dialog footer）
+.modalFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+// 表单项（原 el-form-item label-position="top"）
+.formItem {
+  margin-bottom: 18px;
+
+  .formLabel {
+    font-size: 14px;
+    color: #1e293b;
+    margin-bottom: 8px;
+    font-weight: 500;
+  }
+}
+
+// 权限编辑对话框
+.permissionForm {
+  .userInfoHeader {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+
+    .userAvatar {
+      background: #17483e;
+      color: white;
+      font-weight: 600;
+      font-size: 20px;
+    }
+
+    .userDetails {
+      h3 {
+        margin: 0 0 4px 0;
+        font-size: 18px;
+        font-weight: 600;
+      }
+
+      p {
+        margin: 0;
+        font-size: 14px;
+        color: #64748b;
+      }
+    }
+  }
+
+  .formTip {
+    margin: 8px 0 0 0;
+    font-size: 12px;
+    color: #94a3b8;
+  }
+}
+
+// 邀请对话框
+.inviteForm {
+  .inputSuffix {
+    margin-left: 8px;
+    font-size: 14px;
+    color: #64748b;
+  }
+}
+
+.generatedLink {
+  margin-top: 20px;
+
+  .linkContent {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+  }
+
+  .linkUrl {
+    display: block;
+    margin-top: 8px;
+    padding: 8px;
+    background: #f0fdf4;
+    border-radius: 4px;
+    font-size: 12px;
+    word-break: break-all;
+    font-family: monospace;
+  }
+}
+
+// 表格/卡片视图切换
+.tableView {
+  display: block;
+  height: 100%;
+}
+
+.cardView {
+  display: none;
+}
+
+// 移动端卡片列表
+.mobileCardList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 0;
+
+  .mobileCard {
+    background: #fff;
+    border: 1px solid #eaeef3;
+    border-radius: 10px;
+    padding: 14px 16px;
+
+    .cardHeader {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 4px;
+
+      .cardTitle {
+        font-size: 15px;
+        font-weight: 600;
+        color: #17211d;
+      }
+    }
+
+    .cardSubtitle {
+      font-size: 13px;
+      color: #8c8c8c;
+      margin-bottom: 10px;
+    }
+
+    .cardBody {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+
+      .cardField {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 13px;
+
+        .fieldLabel {
+          color: #8c8c8c;
+          flex-shrink: 0;
+        }
+
+        .fieldValue {
+          color: #333;
+        }
+      }
+    }
+
+    .cardFooter {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid #f0f0f0;
+    }
+  }
+}
+
+/* ==================== 响应式适配 ==================== */
+
+/* 平板适配 */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .userManagement {
+    padding: 16px 8px;
+  }
+
+  .pageHeader {
+    margin-bottom: 16px;
+
+    .headerLeft h1 {
+      font-size: 22px;
+    }
+  }
+
+  .toolbar {
+    flex-wrap: wrap;
+  }
+}
+
+/* 移动端适配 */
+@media (max-width: 767px) {
+  .userManagement {
+    padding: 12px 6px;
+  }
+
+  .pageHeader {
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 16px;
+
+    .headerLeft h1 {
+      font-size: 20px;
+    }
+
+    .headerRight {
+      width: 100%;
+
+      button {
+        width: 100%;
+      }
+    }
+  }
+
+  .toolbar {
+    flex-direction: column;
+    padding: 12px;
+
+    :global(.mantine-TextInput-root),
+    :global(.mantine-Select-root) {
+      width: 100% !important;
+    }
+  }
+
+  .tableView {
+    display: none !important;
+  }
+
+  .cardView {
+    display: block !important;
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 0 4px;
+  }
+
+  .actionBtn {
+    min-height: 44px !important;
+    min-width: 44px !important;
+    padding: 8px 12px !important;
+  }
+
+  .paginationWrapper {
+    justify-content: center;
+    padding: 12px 8px;
+  }
+
+  .inviteForm {
+    .inputSuffix {
+      display: block;
+      margin-left: 0;
+      margin-top: 4px;
+    }
+  }
+}

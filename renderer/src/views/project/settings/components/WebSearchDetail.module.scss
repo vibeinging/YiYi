@@ -1,0 +1,141 @@
+/* 使用全局样式: ad-detail-page, ad-detail-page-header, ad-detail-page-content, ad-detail-tabs, ad-tab-label */
+
+.formTip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--yiw-muted, #64748b);
+
+  .formTipIcon {
+    font-size: 14px;
+    color: #409eff;
+    display: inline-flex;
+    align-items: center;
+  }
+}
+
+.headerActions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+.infoSection {
+  padding: 20px;
+
+  .apiMasked {
+    font-family: 'Courier New', monospace;
+    color: var(--yiw-muted, #64748b);
+  }
+}
+
+/* el-descriptions 替代：简单两列表格 */
+.descriptions {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--el-border-color, #ebeef5);
+
+  th,
+  td {
+    border: 1px solid var(--el-border-color, #ebeef5);
+    padding: 12px 16px;
+    text-align: left;
+    vertical-align: top;
+    font-size: 14px;
+  }
+
+  th {
+    width: 140px;
+    background: var(--el-fill-color-light, #f5f7fa);
+    color: var(--el-text-color-regular, #606266);
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  td {
+    color: var(--el-text-color-primary, #303133);
+  }
+}
+
+.settingsSection {
+  padding: 20px;
+  max-width: 600px;
+
+  .settingsForm {
+    margin-bottom: 24px;
+  }
+
+  .dangerZone {
+    padding: 20px;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: 8px;
+
+    h4 {
+      margin: 0 0 12px 0;
+      font-size: 14px;
+      font-weight: 600;
+      color: #dc2626;
+    }
+  }
+}
+
+.formActions {
+  display: flex;
+  gap: 12px;
+}
+
+.rawResponseJson {
+  background: #0b1120;
+  color: #e5e7eb;
+  padding: 12px;
+  border-radius: 4px;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  max-height: 480px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+@include mobile {
+  .headerActions {
+    margin-left: 0;
+    flex-direction: column;
+    align-items: stretch;
+
+    button {
+      width: 100%;
+      min-height: 44px;
+    }
+  }
+
+  .infoSection,
+  .settingsSection {
+    padding: 12px;
+    max-width: 100%;
+  }
+
+  .settingsSection .dangerZone {
+    padding: 14px;
+  }
+
+  .formActions {
+    flex-direction: column;
+    gap: 10px;
+    align-items: stretch;
+
+    button {
+      width: 100%;
+      min-height: 44px;
+    }
+  }
+
+  .rawResponseJson {
+    max-height: 40dvh;
+    font-size: 11px;
+  }
+}

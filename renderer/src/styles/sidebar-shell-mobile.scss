@@ -1,0 +1,49 @@
+@use './responsive.scss' as *;
+
+// =============================================================================
+// 非 ad-* 壳布局：数据库管理、结构化/非结构化/联网搜索数据源等
+// 与各模块 views/*/index.css 中的 @media (max-width: 767px) 互补
+// =============================================================================
+
+@media (max-width: #{$breakpoint-mobile - 1px}) {
+  .database-layout,
+  .data-source-layout {
+    min-width: 0;
+  }
+
+  .database-content,
+  .data-source-content {
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  /* 各页 el-tabs 使用 class="datasource-tabs"：顶栏标签横向滑动，避免窄屏挤爆 */
+  .datasource-tabs {
+    min-width: 0;
+
+    .el-tabs__header {
+      margin: 0;
+    }
+
+    .el-tabs__nav-wrap {
+      overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .el-tabs__nav {
+      flex-wrap: nowrap;
+    }
+
+    .el-tabs__item {
+      flex-shrink: 0;
+      padding: 0 12px;
+      font-size: 13px;
+    }
+
+    .el-tabs__content {
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior-y: contain;
+    }
+  }
+}

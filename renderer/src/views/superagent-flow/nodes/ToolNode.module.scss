@@ -1,0 +1,170 @@
+.wfShapeNode {
+  position: relative;
+  width: 220px;
+  height: 110px;
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+.shapeSvg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.05));
+  transition: filter 0.15s;
+  pointer-events: none;
+}
+.wfShapeNode:hover .shapeSvg {
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.08));
+}
+.wfShapeNode.selected .shapeSvg {
+  filter: drop-shadow(0 4px 14px rgba(59, 130, 246, 0.25));
+}
+.wfShapeNode.shapeOperator.selected .shapeSvg {
+  filter: drop-shadow(0 4px 14px rgba(255, 201, 67, 0.3));
+}
+
+.shapeContent {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center; // 水平居中(跟菱形一致)
+  justify-content: center; // 垂直居中
+  text-align: center;
+  padding: 12px 22px; // 椭圆需要左右更多 padding 避免被弧形裁掉
+  pointer-events: none;
+  gap: 3px;
+}
+
+.shapeHeader {
+  display: flex;
+  align-items: center;
+  justify-content: center; // header 内 icon+title+cost 居中排列
+  gap: 6px;
+  width: 100%; // 撑满父容器,避免 title max-width 进入负反馈循环
+}
+
+.shapeIcon {
+  font-size: 16px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.shapeTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  // flex shrink 允许长文字截断;min-width:0 让 ellipsis 在 flex 中生效;
+  // 不设 flex-grow(短文字不撑开,跟 icon 一起居中)
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.shapeCost {
+  font-size: 9px;
+  letter-spacing: -2px;
+  flex-shrink: 0;
+}
+
+.shapeTech {
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 10px;
+  color: #6b7280;
+  background: rgba(255, 255, 255, 0.7);
+  padding: 1px 6px;
+  border-radius: 3px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shapeParams {
+  font-size: 11px;
+  color: #4b5563;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shapeError {
+  font-size: 10px;
+  color: #b91c1c;
+  font-weight: 500;
+  background: rgba(254, 226, 226, 0.85);
+  padding: 1px 5px;
+  border-radius: 3px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shapeId {
+  position: absolute;
+  bottom: -16px;
+  right: 4px;
+  font-size: 10px;
+  color: #9ca3af;
+  font-family: monospace;
+}
+
+// reactflow Handle 视觉(原 vue-flow__handle)
+.wfShapeNode :global(.react-flow__handle) {
+  width: 12px !important;
+  height: 12px !important;
+  border: 2px solid #fff !important;
+  background: #94a3b8 !important;
+  z-index: 3;
+}
+
+/* Run 状态色块(2026-05-28 节点状态机 · 加 paused 4 态 2026-05-29)*/
+.wfShapeNode.runSkipped {
+  opacity: 0.55;
+}
+.wfShapeNode.runFail .shapeSvg {
+  filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.5));
+}
+.wfShapeNode.runOk .shapeSvg {
+  filter: drop-shadow(0 0 8px rgba(34, 197, 94, 0.4));
+}
+.wfShapeNode.runPaused .shapeSvg {
+  filter: drop-shadow(0 0 8px rgba(245, 158, 11, 0.55));
+}
+
+.runStatusBadge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+  z-index: 4;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+.runStatusBadge.badgeOk {
+  background: #22c55e;
+}
+.runStatusBadge.badgeFail {
+  background: #ef4444;
+}
+.runStatusBadge.badgeSkipped {
+  background: #9ca3af;
+}
+.runStatusBadge.badgePaused {
+  background: #f59e0b;
+}

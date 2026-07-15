@@ -1,0 +1,354 @@
+.admin-log-management {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 12px;
+  background: #f5f7fa;
+}
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 16px;
+  flex-shrink: 0;
+
+  .header-left {
+    flex: 1;
+    min-width: 0;
+
+    h1 {
+      margin: 0 0 6px 0;
+      font-size: 26px;
+      font-weight: 600;
+      color: #1e293b;
+      letter-spacing: -0.5px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    p {
+      margin: 0;
+      font-size: 14px;
+      color: #64748b;
+    }
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+}
+
+.log-tabs-wrapper {
+  flex-shrink: 0;
+  margin-bottom: 0;
+  border-bottom: 2px solid #e4e7ed;
+
+  :global(.el-tabs__header) {
+    margin-bottom: 0;
+  }
+}
+
+.log-tabs {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+}
+
+// el-tabs 头部 tab 项(原生 button 还原)
+.log-tab {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 0 20px;
+  height: 40px;
+  font-size: 14px;
+  color: #303133;
+  cursor: pointer;
+  position: relative;
+  white-space: nowrap;
+  transition: color 0.15s ease;
+
+  &:hover {
+    color: var(--el-color-primary, #409eff);
+  }
+}
+
+.log-tab-active {
+  color: var(--el-color-primary, #409eff);
+  font-weight: 500;
+
+  &::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -2px;
+    height: 2px;
+    background: var(--el-color-primary, #409eff);
+  }
+}
+
+.search-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0;
+  flex-wrap: wrap;
+
+  .search-bar-divider {
+    width: 1px;
+    height: 24px;
+    background: #dcdfe6;
+    margin: 0 4px;
+  }
+}
+
+.log-content-wrapper {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #1e1e1e;
+  border-radius: 8px;
+  overflow: hidden;
+
+  .log-info {
+    flex-shrink: 0;
+    padding: 8px 16px;
+    background: #2d2d2d;
+    color: #a0a0a0;
+    font-size: 12px;
+    border-bottom: 1px solid #3d3d3d;
+
+    .separator {
+      margin: 0 12px;
+      color: #4d4d4d;
+    }
+  }
+
+  .log-scrollbar {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .log-entries {
+    padding: 8px 16px;
+    min-height: 100%;
+    position: relative;
+  }
+
+  .log-empty {
+    color: #666;
+    text-align: center;
+    padding: 40px 0;
+    font-size: 14px;
+  }
+
+  .log-entry {
+    padding: 6px 8px;
+    border-bottom: 1px solid #2a2a2a;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+
+    &.entry-error {
+      border-left: 3px solid #f56c6c;
+    }
+    &.entry-warning {
+      border-left: 3px solid #e6a23c;
+    }
+    &.entry-info {
+      border-left: 3px solid #409eff;
+    }
+
+    .entry-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 2px;
+    }
+
+    .entry-time {
+      color: #7a7a7a;
+      font-size: 11px;
+    }
+
+    .entry-level {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 0 5px;
+      border-radius: 3px;
+
+      &.level-error {
+        color: #fff;
+        background: #f56c6c;
+      }
+      &.level-warning {
+        color: #fff;
+        background: #e6a23c;
+      }
+      &.level-info {
+        color: #fff;
+        background: #409eff;
+      }
+    }
+
+    .entry-module {
+      color: #67c23a;
+      font-size: 11px;
+    }
+
+    .entry-message {
+      color: #d4d4d4;
+      white-space: pre-wrap;
+      word-break: break-all;
+      cursor: pointer;
+
+      :global(mark) {
+        background: #e6a23c;
+        color: #1e1e1e;
+        padding: 0 2px;
+        border-radius: 2px;
+      }
+    }
+  }
+
+  .log-pagination {
+    flex-shrink: 0;
+    padding: 10px 16px;
+    background: #2d2d2d;
+    border-top: 1px solid #3d3d3d;
+    display: flex;
+    justify-content: center;
+
+    :global(.el-pagination) {
+      --el-pagination-bg-color: transparent;
+      --el-pagination-text-color: #a0a0a0;
+      --el-pagination-button-disabled-color: #555;
+      --el-pagination-hover-color: #409eff;
+    }
+
+    :global(.el-input__wrapper) {
+      background: #3d3d3d;
+      box-shadow: none;
+    }
+
+    :global(.el-input__inner) {
+      color: #d4d4d4;
+    }
+
+    :global(.el-select .el-input .el-select__caret) {
+      color: #a0a0a0;
+    }
+  }
+}
+
+/* ==================== 响应式适配 ==================== */
+
+/* 平板适配 */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .admin-log-management {
+    padding: 16px 8px;
+  }
+
+  .page-header .header-left h1 {
+    font-size: 22px;
+  }
+
+  .search-bar {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+}
+
+/* 移动端适配 */
+@media (max-width: 767px) {
+  .admin-log-management {
+    padding: 12px 6px;
+  }
+
+  .page-header {
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 12px;
+
+    .header-left h1 {
+      font-size: 20px;
+    }
+
+    .header-right {
+      width: 100%;
+
+      :global(.el-button),
+      button {
+        width: 100%;
+      }
+    }
+  }
+
+  .search-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 8px 0;
+
+    .search-bar-divider {
+      width: 100%;
+      height: 1px;
+      margin: 4px 0;
+    }
+
+    button {
+      min-height: 44px;
+    }
+  }
+
+  .log-tabs-wrapper {
+    .log-tabs {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+  }
+
+  .log-content-wrapper {
+    .log-info {
+      padding: 6px 12px;
+      font-size: 11px;
+      flex-wrap: wrap;
+      display: flex;
+      gap: 4px;
+    }
+
+    .log-entries {
+      padding: 8px;
+    }
+
+    .log-entry {
+      font-size: 11px;
+
+      .entry-header {
+        flex-wrap: wrap;
+        gap: 4px;
+      }
+    }
+
+    .log-pagination {
+      padding: 8px;
+
+      :global(.el-pagination) {
+        flex-wrap: wrap;
+        justify-content: center;
+
+        .el-pagination__sizes,
+        .el-pagination__jump {
+          display: none;
+        }
+      }
+    }
+  }
+}

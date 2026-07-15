@@ -1,0 +1,45 @@
+.viewerPage {
+  padding: 16px;
+  min-height: calc(100vh - 32px);
+  box-sizing: border-box;
+}
+.viewerState {
+  margin-bottom: 16px;
+}
+.viewerToolbar {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.viewerMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.metaLabel {
+  font-size: 12px;
+  color: var(--yiw-muted, #6b7280);
+}
+.metaValue {
+  color: var(--yiw-text, #111827);
+  line-height: 1.6;
+  word-break: break-all;
+}
+// 对应 :deep(.el-card) —— 卡片最小高度
+.viewerCard {
+  min-height: calc(100vh - 120px);
+
+  // 对应 :deep(.el-card__body) —— body 去内边距
+  :global(.mantine-Card-root),
+  :global(.mantine-Paper-root) {
+    padding: 0;
+  }
+}
+.viewerIframe {
+  width: 100%;
+  min-height: calc(100vh - 120px);
+  border: 0;
+  background: var(--yiw-surface, #fff);
+  display: block;
+}

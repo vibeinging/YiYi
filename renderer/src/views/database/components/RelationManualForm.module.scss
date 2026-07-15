@@ -1,0 +1,14 @@
+// 原 RelationManualForm.vue 无 <style scoped>，此处补齐 el-form label-position="top" + 间距等价样式
+
+.relationManualForm {
+  width: 100%;
+
+  // el-form-item 默认带底部间距，label 在上方
+  .formItem {
+    margin-bottom: 18px;
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+}

@@ -1,0 +1,260 @@
+$primary-color: #17483e;
+$primary-light: #2f6f60;
+$text-secondary: #64748b;
+$text-muted: #94a3b8;
+
+// NL2SQL 图标样式
+.nl2sqlIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 20px;
+  background: linear-gradient(135deg, rgba(23, 72, 62, 0.05), rgba(47, 111, 96, 0.05));
+  border-radius: 16px;
+  border: 2px solid rgba(23, 72, 62, 0.1);
+  position: relative;
+  overflow: hidden;
+  animation: iconGlow 3s ease-in-out infinite;
+
+  &::before {
+    content: '';
+    position: absolute;
+    top: -2px;
+    left: -2px;
+    right: -2px;
+    bottom: -2px;
+    background: linear-gradient(45deg, $primary-color, $primary-light, $primary-color);
+    border-radius: 16px;
+    z-index: -1;
+    animation: borderRotate 4s linear infinite;
+    opacity: 0.3;
+  }
+}
+
+@keyframes iconGlow {
+  0%,
+  100% {
+    box-shadow: 0 4px 20px rgba(23, 72, 62, 0.2);
+  }
+  50% {
+    box-shadow: 0 8px 30px rgba(23, 72, 62, 0.4);
+  }
+}
+
+@keyframes borderRotate {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+// 文字气泡样式
+.textBubble {
+  position: relative;
+  background: linear-gradient(135deg, #f8fafc, #e2e8f0);
+  border-radius: 12px;
+  padding: 8px 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border: 1px solid #e2e8f0;
+
+  &::after {
+    content: '';
+    position: absolute;
+    right: -6px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 0;
+    height: 0;
+    border-left: 6px solid #f8fafc;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+  }
+
+  .bubbleContent {
+    .textLines {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+
+      .textLine {
+        height: 2px;
+        background: linear-gradient(90deg, $text-secondary, $text-muted);
+        border-radius: 1px;
+        animation: textFlow 2s ease-in-out infinite;
+
+        &.short {
+          width: 20px;
+          animation-delay: 0s;
+        }
+
+        &.long {
+          width: 32px;
+          animation-delay: 0.3s;
+        }
+
+        &.medium {
+          width: 26px;
+          animation-delay: 0.6s;
+        }
+      }
+    }
+  }
+}
+
+@keyframes textFlow {
+  0%,
+  100% {
+    opacity: 0.6;
+    transform: translateX(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translateX(2px);
+  }
+}
+
+// 转换箭头样式
+.transformArrow {
+  display: flex;
+  align-items: center;
+  position: relative;
+  animation: arrowPulse 2s ease-in-out infinite;
+
+  .arrowBody {
+    width: 16px;
+    height: 2px;
+    background: linear-gradient(90deg, $primary-color, $primary-light);
+    border-radius: 1px;
+    position: relative;
+
+    &::before {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 4px;
+      height: 4px;
+      background: $primary-light;
+      border-radius: 50%;
+      animation: dotMove 1.5s ease-in-out infinite;
+    }
+  }
+
+  .arrowHead {
+    width: 0;
+    height: 0;
+    border-left: 6px solid $primary-color;
+    border-top: 3px solid transparent;
+    border-bottom: 3px solid transparent;
+    margin-left: -1px;
+  }
+}
+
+@keyframes arrowPulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+}
+
+@keyframes dotMove {
+  0% {
+    transform: translate(-150%, -50%);
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate(50%, -50%);
+    opacity: 0;
+  }
+}
+
+// SQL查询框样式
+.sqlBox {
+  background: #1a1b26;
+  border-radius: 8px;
+  padding: 0;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border: 1px solid #2a2b3e;
+  overflow: hidden;
+  min-width: 80px;
+  animation: sqlGlow 3s ease-in-out infinite;
+
+  .sqlHeader {
+    background: #2a2b3e;
+    padding: 4px 6px;
+    display: flex;
+    gap: 3px;
+    border-bottom: 1px solid #3a3b4e;
+
+    .sqlDot {
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+
+      &.red {
+        background: #ff5f56;
+      }
+      &.yellow {
+        background: #ffbd2e;
+      }
+      &.green {
+        background: #27ca3f;
+      }
+    }
+  }
+
+  .sqlContent {
+    padding: 6px 8px;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 8px;
+    line-height: 1.2;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+
+    .sqlKeyword {
+      color: #ffd34e;
+      font-weight: 600;
+      animation: keywordHighlight 2s ease-in-out infinite;
+    }
+
+    .sqlText {
+      color: #7dcfff;
+    }
+
+    .sqlTable {
+      color: #9ece6a;
+    }
+  }
+}
+
+@keyframes sqlGlow {
+  0%,
+  100% {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  }
+  50% {
+    box-shadow: 0 6px 20px rgba(23, 72, 62, 0.2);
+  }
+}
+
+@keyframes keywordHighlight {
+  0%,
+  100% {
+    opacity: 0.8;
+  }
+  50% {
+    opacity: 1;
+    text-shadow: 0 0 4px rgba(255, 211, 78, 0.5);
+  }
+}

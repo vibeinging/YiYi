@@ -1,0 +1,349 @@
+.enumValueSelector {
+  border: 1px solid var(--yiw-border, #e4e7ed);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--yiw-bg, #f8f9fa);
+}
+
+.modeSwitchBar {
+  padding: 12px 16px;
+  background: var(--yiw-surface, #ffffff);
+  border-bottom: 1px solid var(--yiw-border, #e4e7ed);
+}
+
+/* 选择器模式：三栏布局 */
+.selectorMode {
+  display: flex;
+  gap: 16px;
+  height: 420px;
+  padding: 12px;
+}
+
+.enumSelectionPanel {
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+  background: var(--yiw-bg, #f8f9fa);
+  border-radius: 8px;
+  padding: 12px;
+  gap: 0;
+  flex: 1;
+}
+
+/* 字段选择区 */
+.fieldSelectArea {
+  width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding-right: 12px;
+}
+
+/* 枚举值选择区 */
+.enumValueSelectArea {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding-left: 12px;
+  border-left: 1px solid var(--yiw-border, #e4e7ed);
+}
+
+/* 区域头部 */
+.areaHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  flex-shrink: 0;
+
+  h4 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--yiw-text, #303133);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .enumActions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+}
+
+/* 字段列表容器 */
+.fieldsListContainer {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  background: var(--yiw-surface, #fff);
+  border-radius: 6px;
+}
+
+.fieldListItem {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: background 0.2s;
+  border-bottom: 1px solid var(--yiw-border-soft, #f5f7fa);
+
+  &:last-child {
+    border-bottom: none;
+  }
+
+  &:hover {
+    background: var(--yiw-hover, #f5f7fa);
+  }
+
+  &.active {
+    background: #ecf5ff;
+  }
+
+  .fieldName {
+    font-weight: 500;
+    color: var(--yiw-text, #303133);
+    font-size: 13px;
+  }
+
+  .fieldDesc {
+    font-size: 12px;
+    color: var(--yiw-muted, #909399);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.noFieldsHint {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  .hintText {
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--yiw-muted, #909399);
+  }
+}
+
+/* 枚举值 Checkbox 列表 */
+.valuesCheckboxList {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  background: var(--yiw-surface, #fff);
+  border-radius: 6px;
+}
+
+.valueCheckboxItem {
+  display: flex;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--yiw-border-soft, #f5f7fa);
+  transition: background 0.2s;
+
+  &:hover {
+    background: var(--yiw-hover, #f5f7fa);
+  }
+
+  &.disabled {
+    opacity: 0.5;
+    background: var(--yiw-code-bg, #fafafa);
+    cursor: not-allowed;
+  }
+
+  .valueInfo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .codeText {
+    font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+    font-weight: 600;
+    color: #409eff;
+    background: #ecf5ff;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 12px;
+  }
+
+  .labelText {
+    color: var(--yiw-text-soft, #606266);
+    font-size: 13px;
+  }
+}
+
+.noFieldSelectedHint {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 已选配置面板 */
+.selectedConfigsPanel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: #f8f9fa;
+  border-radius: 8px;
+  padding: 12px;
+  min-width: 400px;
+}
+
+.configsListContainer {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.noConfigsHint {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+
+  .hintText {
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--yiw-muted, #909399);
+  }
+}
+
+.configFieldGroup {
+  background: var(--yiw-surface, #fff);
+  border-radius: 6px;
+  border: 1px solid var(--yiw-border, #e4e7ed);
+  margin-bottom: 10px;
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+}
+
+.configGroupHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  background: var(--yiw-bg, #f5f7fa);
+  border-bottom: 1px solid var(--yiw-border, #e4e7ed);
+
+  .groupTitle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+
+    .groupDesc {
+      font-size: 12px;
+      color: var(--yiw-muted, #909399);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .groupCount {
+      font-size: 12px;
+      color: var(--yiw-muted, #909399);
+    }
+  }
+}
+
+/* el-tag type="info" 的近似样式 */
+.fieldTag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--yiw-muted, #909399);
+  background: var(--yiw-code-bg, #f4f4f5);
+  border: 1px solid var(--yiw-border, #e9e9eb);
+  flex-shrink: 0;
+}
+
+.configValuesTags {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 6px;
+  padding: 10px;
+  max-height: 200px;
+  overflow-y: auto;
+
+  /* el-tag type="info" closable 的近似样式 */
+  .valueTag {
+    margin: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 4px 1px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    line-height: 20px;
+    color: var(--yiw-muted, #909399);
+    background: var(--yiw-code-bg, #f4f4f5);
+    border: 1px solid var(--yiw-border, #e9e9eb);
+
+    .tagCode {
+      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+      font-weight: 600;
+    }
+
+    .tagLabel {
+      font-size: 12px;
+    }
+  }
+}
+
+/* el-empty 的近似实现 */
+.emptyWrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  color: var(--yiw-muted, #909399);
+
+  :global(svg) {
+    width: 60px;
+    height: 60px;
+    opacity: 0.4;
+  }
+
+  .emptyDesc {
+    margin: 8px 0 0;
+    font-size: 13px;
+    color: var(--yiw-muted, #909399);
+  }
+
+  .hintText {
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--yiw-muted, #909399);
+  }
+}
+
+/* JSON模式 */
+.jsonMode {
+  padding: 16px;
+  background: var(--yiw-surface, #ffffff);
+}
+
+.jsonError {
+  margin-top: 8px;
+}

@@ -1,0 +1,66 @@
+.nodeGroup {
+  margin-bottom: 12px;
+}
+
+.groupHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 4px;
+  cursor: pointer;
+  border-radius: 4px;
+  user-select: none;
+  font-size: 13px;
+  color: #303133;
+  transition: background 0.15s;
+}
+
+.groupHeader:hover {
+  background: #f3f4f6;
+}
+
+.expandIcon {
+  display: inline-flex;
+  font-size: 12px;
+  color: #6b7280;
+  transition: transform 0.2s;
+}
+
+.expandIcon.collapsed {
+  transform: rotate(-90deg);
+}
+
+.groupEmoji {
+  font-size: 14px;
+}
+
+.groupLabel {
+  font-weight: 600;
+}
+
+.groupCount {
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.groupSublabel {
+  color: #9ca3af;
+  font-size: 11px;
+  margin-left: auto;
+}
+
+.groupBody {
+  padding: 4px 0 0 4px;
+}
+
+.groupEmpty {
+  font-size: 12px;
+  color: #9ca3af;
+  padding: 12px;
+  text-align: center;
+}
+
+/* group-collapse 过渡:React 用 Mantine Collapse 处理动画,此处保留淡入语义 */
+.groupCollapse {
+  overflow: hidden;
+}

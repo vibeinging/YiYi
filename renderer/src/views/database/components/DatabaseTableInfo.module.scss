@@ -1,0 +1,466 @@
+/* 同步对话框样式 */
+.syncDialogContent {
+  padding: 0;
+}
+
+.syncDialogHeader {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 24px;
+  background: linear-gradient(135deg, #f5f7fa 0%, #ecf5ff 100%);
+  border-radius: 12px;
+  margin-bottom: 24px;
+
+  .headerIcon {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    background: var(--yiw-surface, white);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #409eff;
+    box-shadow: 0 2px 8px rgba(64, 158, 255, 0.15);
+  }
+
+  .headerText {
+    flex: 1;
+
+    .headerTitle {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--yiw-text, #303133);
+      margin-bottom: 4px;
+    }
+
+    .headerSubtitle {
+      font-size: 13px;
+      color: var(--yiw-muted, #909399);
+    }
+  }
+}
+
+.syncModeCards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.syncModeCard {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+  border: 2px solid var(--yiw-border, #e4e7ed);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  background: var(--yiw-surface, white);
+  position: relative;
+
+  &:hover {
+    border-color: var(--yiw-faint, #c0c4cc);
+    box-shadow: var(--yiw-card-shadow, 0 2px 12px rgba(0, 0, 0, 0.08));
+  }
+
+  &.active {
+    border-color: #409eff;
+    background: linear-gradient(135deg, #ecf5ff 0%, #f0f7ff 100%);
+    box-shadow: 0 4px 16px rgba(64, 158, 255, 0.2);
+  }
+
+  .cardIcon {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .cardContent {
+    flex: 1;
+
+    .cardTitle {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--yiw-text, #303133);
+      margin-bottom: 4px;
+    }
+
+    .cardDesc {
+      font-size: 13px;
+      color: var(--yiw-muted, #909399);
+      line-height: 1.4;
+    }
+  }
+
+  .cardCheck {
+    color: #409eff;
+  }
+}
+
+.syncModeDetail {
+  margin-top: 12px;
+  padding: 16px 20px;
+  background: var(--yiw-bg, #f8f9fa);
+  border-radius: 12px;
+
+  .detailTitle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--yiw-text, #303133);
+    margin-bottom: 12px;
+  }
+
+  .detailContent {
+    font-size: 13px;
+  }
+
+  .detailList {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .detailItem {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    line-height: 1.5;
+    color: var(--yiw-text-soft, #606266);
+
+    &::before {
+      content: '•';
+      flex-shrink: 0;
+      font-size: 16px;
+      line-height: 1.2;
+    }
+
+    &.tip {
+      color: var(--yiw-muted, #909399);
+      margin-top: 4px;
+
+      &::before {
+        content: '💡';
+        font-size: 14px;
+      }
+    }
+  }
+}
+
+.syncSelectorSection {
+  margin-top: 20px;
+  padding: 20px;
+  background: var(--yiw-bg, #f8f9fa);
+  border-radius: 12px;
+
+  .selectorHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+
+    .selectorLabel {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--yiw-text, #303133);
+    }
+  }
+
+  .selectorSummary {
+    margin-top: 12px;
+    padding: 10px 16px;
+    background: var(--yiw-surface, white);
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--yiw-text-soft, #606266);
+
+    strong {
+      color: #409eff;
+      font-weight: 600;
+    }
+  }
+
+  .tableSelect {
+    width: 100%;
+
+    :global(.el-select__wrapper) {
+      border-radius: 8px;
+    }
+  }
+}
+
+.schemaTagsContainer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.schemaTagItem {
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.2s ease;
+  background: var(--yiw-surface, white);
+  border: 1px solid var(--yiw-border, #dcdfe6);
+  color: var(--yiw-text-soft, #606266);
+
+  &:hover {
+    border-color: #409eff;
+    color: #409eff;
+  }
+
+  &.selected {
+    background: #409eff;
+    border-color: #409eff;
+    color: white;
+  }
+}
+
+.syncWarning {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 20px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  font-size: 13px;
+
+  .warningIcon {
+    font-size: 18px;
+  }
+
+  &.warning {
+    background: #fef0f0;
+    color: #f56c6c;
+  }
+
+  &.info {
+    background: #f4f4f5;
+    color: #909399;
+  }
+
+  &.success {
+    background: #f0f9ff;
+    color: #67c23a;
+  }
+}
+
+.syncDialogFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 0 0;
+}
+
+.tableOption {
+  font-size: 13px;
+}
+
+/* 内部操作区域样式 */
+.operationsHeader {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--yiw-border-soft, #f0f2f5);
+  flex-shrink: 0;
+
+  .headerActions {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    width: 100%;
+  }
+}
+
+/* 确保 TableStructureView 占满剩余空间 */
+.contentCard {
+  :global(.table-structure) {
+    flex: 1;
+    min-height: 0;
+  }
+}
+
+/* 加载占位 */
+.loadingPlaceholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+  padding: 40px 20px;
+}
+
+.loadingContent {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.loadingIcon {
+  color: #409eff;
+  animation: rotating 2s linear infinite;
+}
+
+.loadingText {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--yiw-text, #303133);
+}
+
+.loadingSubtext {
+  font-size: 13px;
+  color: var(--yiw-muted, #909399);
+}
+
+@keyframes rotating {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 空状态引导样式 */
+.emptyPlaceholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+  padding: 40px 20px;
+}
+
+.emptyGuideContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: 600px;
+  width: 100%;
+}
+
+.emptyGuideIcon {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-bottom: 32px;
+  opacity: 0.6;
+}
+
+.emptyGuideContent {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  width: 100%;
+}
+
+.guideText {
+  text-align: center;
+  width: 100%;
+
+  .guideTitle {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--yiw-text, #303133);
+    margin: 0 0 8px 0;
+    line-height: 1.5;
+  }
+
+  .guideSubtitle {
+    font-size: 14px;
+    color: var(--yiw-muted, #909399);
+    margin: 0 0 20px 0;
+    line-height: 1.5;
+  }
+
+  .guideDesc {
+    font-size: 14px;
+    color: var(--yiw-text-soft, #606266);
+    margin: 0 0 12px 0;
+    line-height: 1.5;
+    font-weight: 500;
+  }
+
+  .guideFeatures {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    text-align: left;
+    display: inline-block;
+
+    li {
+      font-size: 14px;
+      color: var(--yiw-text-soft, #606266);
+      line-height: 2;
+      padding-left: 20px;
+      position: relative;
+
+      &::before {
+        content: '✓';
+        position: absolute;
+        left: 0;
+        color: #67c23a;
+        font-weight: 600;
+      }
+    }
+  }
+}
+
+.guideButton {
+  padding: 12px 32px;
+  font-size: 15px;
+  font-weight: 500;
+
+  :global(.el-icon) {
+    margin-right: 8px;
+  }
+}
+
+.guideHint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  background: #f0f7ff;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #409eff;
+
+  :global(.el-icon) {
+    font-size: 16px;
+  }
+}
+
+// 移动端适配
+@media (max-width: 768px) {
+  .operationsHeader {
+    .headerActions {
+      flex-direction: column;
+      gap: 8px;
+
+      :global(.el-button) {
+        width: 100%;
+        min-height: 44px;
+      }
+    }
+  }
+
+  .contentCard {
+    :global(.table-structure) {
+      flex: none;
+      min-height: auto;
+      height: auto;
+      display: block;
+    }
+  }
+}

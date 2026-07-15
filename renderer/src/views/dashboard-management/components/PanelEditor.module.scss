@@ -1,0 +1,109 @@
+.dialogFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.dashboardSelectContainer {
+  display: flex;
+  align-items: center;
+}
+
+.tagsContainer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fieldsContainer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.elCheckTag {
+  cursor: pointer;
+  transition: all 0.2s;
+
+  &:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  }
+}
+
+.sqlEditorContainer {
+  width: 100%;
+}
+
+.sqlActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.configItem {
+  display: flex;
+  align-items: center;
+}
+
+.configHint {
+  color: #909399;
+  font-size: 12px;
+  margin-left: 8px;
+}
+
+.newFieldsPreview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: #f5f7fa;
+  border-radius: 4px;
+
+  .label {
+    font-size: 13px;
+    color: #606266;
+  }
+}
+
+.customChartConfig {
+  width: 100%;
+
+  :global(.el-textarea__inner) {
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+}
+
+.seriesConfig {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.seriesItem {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  background: #f5f7fa;
+  border-radius: 6px;
+  border: 1px solid #ebeef5;
+
+  &:hover {
+    background: #ecf5ff;
+    border-color: #c6e2ff;
+  }
+}
+
+/* Mobile: near full-screen dialog */
+@media (max-width: 767px) {
+  .panelDialog {
+    width: 95vw !important;
+    margin-top: 2vh !important;
+  }
+}

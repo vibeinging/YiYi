@@ -1,0 +1,424 @@
+// ===== 角色配色（hero 左侧色条 + icon 颜色）=====
+$primary-from: #17483e;
+$secondary-from: #2f6f60;
+$embedding-from: #0d9488;
+
+.modelFormInline {
+  padding: 24px 28px;
+  background: var(--md-surface, #fff);
+  border-radius: 12px;
+  border: 1px solid var(--md-card-border, var(--md-border, #e2e8f0));
+  overflow: hidden; // 滚动交给中间的 .modelForm，footer 作为独立 flex 项常驻底部
+  height: 100%;
+  box-sizing: border-box;
+  position: relative;
+  // flex 纵向三段：roleHero 顶 + .modelForm 中间滚动 + footer 底常驻（不浮层、不重叠）
+  display: flex;
+  flex-direction: column;
+
+  // ===== 角色 Hero（极简：白底 + 左侧 category 色条 + 小图标）=====
+  .roleHero {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px 18px 14px 22px;
+    margin-bottom: 20px;
+    background: var(--md-subtle, #fafbfc);
+    border: 1px solid var(--md-border-soft, #f1f5f9);
+    border-radius: 10px;
+    overflow: hidden;
+
+    // 左侧 3px category 色条做唯一的角色识别 accent
+    &::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+    }
+
+    &.rolePrimary {
+      &::before { background: $primary-from; }
+      .roleHeroIcon { color: $primary-from; background: #edf3ef; }
+    }
+    &.roleSecondary {
+      &::before { background: $secondary-from; }
+      .roleHeroIcon { color: $secondary-from; background: #f7f4ec; }
+    }
+    &.roleEmbedding {
+      &::before { background: $embedding-from; }
+      .roleHeroIcon { color: $embedding-from; background: #ecfdf5; }
+    }
+
+    .roleHeroLeft {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .roleHeroIcon {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+
+      :global(.el-icon),
+      svg {
+        color: inherit;
+      }
+    }
+
+    .roleHeroBody {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .roleHeroTitle {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--md-text, #1e293b);
+      letter-spacing: -0.1px;
+      line-height: 1.3;
+    }
+
+    .roleHeroDesc {
+      font-size: 12px;
+      color: var(--md-muted, #64748b);
+      line-height: 1.5;
+    }
+
+    .roleHeroRight {
+      flex-shrink: 0;
+    }
+
+    .roleStatus {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: 0.1px;
+
+      svg {
+        font-size: 13px;
+      }
+
+      &.configured {
+        background: rgba(16, 185, 129, 0.1);
+        color: #059669;
+      }
+
+      &.pending {
+        background: rgba(100, 116, 139, 0.08);
+        color: var(--md-muted, #64748b);
+      }
+    }
+  }
+
+  .modelForm {
+    // 中间滚动区：占满 roleHero 与 footer 之间的剩余高度
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    // 负的左右外边距 + 等量内边距：给卡片阴影留出空间，避免 overflow 裁切；同时让滚动条贴到容器边缘
+    margin: 10px -28px 0;
+    padding: 0 28px;
+
+    .formCard {
+      background: var(--md-surface, #fff);
+      border: 1px solid var(--md-border, #e2e8f0);
+      border-radius: 12px;
+      margin-bottom: 16px;
+      overflow: hidden;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+      position: relative;
+
+      &:hover {
+        border-color: var(--md-border-strong, #cbd5e1);
+        box-shadow: 0 6px 20px -8px rgba(15, 23, 42, 0.12);
+      }
+
+      .cardHeader {
+        background: var(--md-surface, #fff);
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--md-border-soft, #f1f5f9);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 600;
+        font-size: 13px;
+        color: var(--md-text-2, #475569);
+        letter-spacing: 0.1px;
+
+        svg {
+          font-size: 15px;
+          color: var(--md-faint, #94a3b8);
+        }
+
+        .optionalLabel {
+          font-size: 11px;
+          color: var(--md-faint, #94a3b8);
+          font-weight: 500;
+          margin-left: auto;
+          padding: 3px 8px;
+          background: var(--md-border-soft, #f1f5f9);
+          border-radius: 999px;
+          letter-spacing: 0.3px;
+        }
+
+        // 测试连接卡 header 的右侧提示文字
+        .cardHint {
+          font-size: 12px;
+          color: var(--md-faint, #94a3b8);
+          font-weight: 400;
+          margin-left: 8px;
+        }
+      }
+
+      .formTip {
+        font-size: 12px;
+        color: var(--el-text-color-secondary);
+        margin-top: 4px;
+        line-height: 1.4;
+      }
+
+      .configTextarea {
+        textarea {
+          font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+          font-size: 13px;
+          line-height: 1.5;
+          background-color: var(--md-subtle, #fafbfc);
+          border: 1px solid var(--md-border, #e1e4e8);
+
+          &:focus {
+            border-color: var(--el-color-primary);
+            box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.1);
+          }
+
+          &::placeholder {
+            color: var(--md-muted, #6a737d);
+            font-style: italic;
+          }
+        }
+      }
+
+      .cardContent {
+        padding: 10px 16px;
+        background: var(--md-subtle, #fafbfc);
+      }
+    }
+
+    // 测试连接卡：与其他 formCard 视觉一致，按钮用 primary plain
+    .formCard.testCard {
+      .cardContent {
+        padding: 14px 16px;
+      }
+    }
+
+    .formItem {
+      margin-bottom: 16px;
+
+      :global(.mantine-InputWrapper-label) {
+        font-weight: 600;
+        color: var(--el-text-color-primary);
+        font-size: 13px;
+        margin-bottom: 6px;
+        line-height: 1.4;
+      }
+
+      &:last-child {
+        margin-bottom: 0;
+      }
+    }
+
+    .formInput {
+      width: 100%;
+      font-size: 15px;
+    }
+  }
+
+  // 思考设置小标题
+  .thinkingTitle {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--el-text-color-primary);
+    margin: 4px 0 12px;
+  }
+
+  // 思考设置：参数名输入框（限宽）+ 开关同一行
+  .thinkingRow {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    width: 100%;
+
+    .thinkingParamInput {
+      width: 240px;
+      flex: 0 0 auto;
+    }
+  }
+
+  // 表单提示文字样式
+  .formItemTip {
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+    line-height: 1.4;
+    margin: 5px 5px 0 5px;
+  }
+
+  // Sticky 底部操作栏：纯白底 + 细顶边框，无渐变无重阴影
+  .modelFormFooter {
+    // 独立 flex 项常驻底部（非浮层，不与内容重叠）；负边距全宽出血贴到容器边缘
+    flex: 0 0 auto;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 -28px -24px;
+    padding: 14px 28px;
+    background: var(--md-surface, #fff);
+    border-top: 1px solid var(--md-border, #e2e8f0);
+    z-index: 10;
+
+    .footerSpacer {
+      flex: 1;
+    }
+
+    .btnDelete {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-weight: 500;
+
+      svg {
+        font-size: 14px;
+      }
+    }
+
+    .btnSubmit {
+      min-width: 100px;
+      font-weight: 500;
+    }
+  }
+}
+
+// 移动端断点（对齐 webui responsive.scss 的 @include mobile）
+@media (max-width: 767px) {
+  .modelFormInline {
+    padding: 14px 14px;
+
+    .roleHero {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 14px;
+      padding: 16px;
+      border-radius: 12px;
+
+      .roleHeroIcon {
+        width: 48px;
+        height: 48px;
+      }
+
+      .roleHeroTitle {
+        font-size: 18px;
+      }
+
+      .roleHeroDesc {
+        font-size: 12px;
+      }
+
+      .roleHeroRight {
+        align-self: stretch;
+      }
+
+      .roleStatus {
+        width: 100%;
+        justify-content: center;
+      }
+    }
+
+    .modelForm {
+      // 移动端容器内边距 14px，滚动区出血与之对齐
+      margin: 4px -14px 0;
+      padding: 0 14px;
+
+      .formCard {
+        margin-bottom: 12px;
+        border-radius: 10px;
+
+        .cardHeader {
+          padding: 12px 14px 12px 18px;
+          font-size: 13px;
+        }
+
+        .cardContent {
+          padding: 8px 12px;
+        }
+      }
+
+      .formCard.testCard .cardContent {
+        padding: 14px 12px;
+      }
+
+      .formItemApiBase {
+        input {
+          word-break: break-all;
+          font-size: 13px;
+        }
+      }
+    }
+
+    // footer 在 mobile 下保留，按钮等宽
+    .modelFormFooter {
+      margin: 0 -14px -14px;
+      padding: 12px 14px calc(12px + env(safe-area-inset-bottom, 0));
+      gap: 10px;
+
+      .btnDelete {
+        flex: 0 0 auto;
+        min-height: 44px;
+        padding: 0 14px;
+      }
+
+      .btnSubmit {
+        flex: 1;
+        min-height: 44px;
+        min-width: 0;
+      }
+    }
+  }
+}
+
+/* 平板：略收窄内边距 */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .modelFormInline {
+    padding: 20px 22px;
+
+    .modelForm {
+      margin-left: -22px;
+      margin-right: -22px;
+      padding-left: 22px;
+      padding-right: 22px;
+    }
+
+    .modelFormFooter {
+      margin-left: -22px;
+      margin-right: -22px;
+    }
+  }
+}

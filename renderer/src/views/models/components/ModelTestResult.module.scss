@@ -1,0 +1,274 @@
+.testResult {
+  margin-top: 16px;
+
+  .resultCard {
+    border-radius: 8px;
+    padding: 16px;
+    border: 1px solid;
+
+    &.success {
+      background: var(--el-color-success-light-9);
+      border-color: var(--el-color-success-light-7);
+
+      .resultHeader .resultIcon {
+        color: var(--el-color-success);
+      }
+    }
+
+    &.error {
+      background: var(--el-color-danger-light-9);
+      border-color: var(--el-color-danger-light-7);
+
+      .resultHeader .resultIcon {
+        color: var(--el-color-danger);
+      }
+    }
+
+    .resultHeader {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+
+      .resultTitle {
+        font-weight: 600;
+        font-size: 15px;
+      }
+
+      .headerTag {
+        margin-left: auto;
+      }
+    }
+
+    .resultContent {
+      .resultMessage {
+        font-size: 14px;
+        line-height: 1.5;
+        color: var(--el-text-color-primary);
+        margin-bottom: 12px;
+      }
+
+      .responsePreview,
+      .errorDetails,
+      .rawResponse {
+        margin-top: 12px;
+        padding: 12px;
+        border-radius: 6px;
+        background: white;
+        border: 1px solid var(--el-border-color-light);
+
+        .previewHeader,
+        .detailsHeader,
+        .rawHeader {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          margin-bottom: 8px;
+          font-weight: 600;
+          font-size: 13px;
+          color: var(--el-color-primary);
+
+          .headerTag,
+          .headerBtn {
+            margin-left: auto;
+          }
+        }
+
+        .previewContent,
+        .detailsContent,
+        .rawContent {
+          font-size: 13px;
+          line-height: 1.6;
+          color: var(--el-text-color-regular);
+          background: #f8f9fa;
+          padding: 8px 12px;
+          border-radius: 4px;
+          border: 1px solid #e9ecef;
+          font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+          white-space: pre-wrap;
+          word-break: break-all;
+        }
+      }
+
+      .rawResponse {
+        border-color: var(--el-color-warning-light-7);
+        background: var(--el-color-warning-light-9);
+
+        .rawHeader {
+          color: var(--el-color-warning);
+        }
+
+        .rawContent {
+          max-height: 300px;
+          overflow-y: auto;
+          background: #fffbf0;
+          border-color: var(--el-color-warning-light-5);
+
+          pre {
+            margin: 0;
+            font-size: 12px;
+            line-height: 1.4;
+            color: #2f6f60;
+          }
+        }
+      }
+
+      .errorDetails {
+        .detailsHeader {
+          color: var(--el-color-danger);
+        }
+
+        .detailsContent {
+          background: #fef2f2;
+          border-color: #f5c6cb;
+          color: #721c24;
+        }
+
+        .formatSuggestions {
+          margin-top: 12px;
+          padding: 12px;
+          background: var(--el-color-warning-light-9);
+          border: 1px solid var(--el-color-warning-light-7);
+          border-radius: 6px;
+
+          .suggestionsHeader {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 8px;
+            font-weight: 600;
+            font-size: 13px;
+            color: var(--el-color-warning);
+          }
+
+          .suggestionsContent {
+            font-size: 13px;
+            line-height: 1.6;
+            color: var(--el-text-color-regular);
+
+            p {
+              margin: 0 0 8px 0;
+            }
+
+            ul {
+              margin: 0;
+              padding-left: 16px;
+
+              li {
+                margin-bottom: 6px;
+                line-height: 1.5;
+              }
+            }
+
+            code {
+              background: #f0f0f0;
+              border: 1px solid #d0d0d0;
+              border-radius: 3px;
+              padding: 2px 4px;
+              font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+              font-size: 12px;
+              color: var(--el-color-primary);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// 向量信息展示样式
+.vectorInfo {
+  margin-top: 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  background: var(--el-bg-color-page);
+
+  .vectorHeader {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--el-border-color-lighter);
+    background: var(--el-bg-color);
+    border-radius: 6px 6px 0 0;
+    font-weight: 500;
+    color: var(--el-text-color-primary);
+
+    .vectorHeaderIcon {
+      font-size: 16px;
+      color: var(--el-color-primary);
+    }
+  }
+
+  .vectorContent {
+    padding: 12px;
+
+    .vectorPreview {
+      .previewLabel {
+        font-size: 12px;
+        color: var(--el-text-color-secondary);
+        margin-bottom: 6px;
+      }
+
+      .vectorValues {
+        font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+        font-size: 13px;
+        background: var(--el-bg-color);
+        padding: 8px;
+        border-radius: 4px;
+        border: 1px solid var(--el-border-color-lighter);
+        color: var(--el-text-color-primary);
+        word-break: break-all;
+        line-height: 1.4;
+      }
+    }
+  }
+}
+
+@media (max-width: 768px) {
+  .testResult {
+    margin-top: 12px;
+
+    .resultCard {
+      padding: 12px;
+
+      .resultHeader {
+        flex-wrap: wrap;
+        align-items: flex-start;
+
+        .resultTitle {
+          font-size: 14px;
+          flex: 1;
+          min-width: 0;
+        }
+
+        .headerTag {
+          margin-left: 0;
+        }
+      }
+
+      .resultContent {
+        .rawResponse .rawContent {
+          max-height: 35dvh;
+        }
+
+        .formatSuggestions .suggestionsContent {
+          overflow-x: auto;
+          -webkit-overflow-scrolling: touch;
+
+          code {
+            display: inline-block;
+            max-width: 100%;
+            word-break: break-all;
+            white-space: pre-wrap;
+          }
+        }
+      }
+    }
+  }
+
+  .vectorInfo .vectorHeader {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+}

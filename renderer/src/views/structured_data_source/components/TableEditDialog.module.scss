@@ -1,0 +1,240 @@
+.singleEditStructure {
+  --aligned-padding: 32px; // 统一的左侧内边距变量，与生成卡片对齐
+}
+
+.formSection {
+  padding-left: var(--aligned-padding, 32px);
+  padding-right: var(--aligned-padding, 32px);
+}
+
+// 表单项（对齐原 el-form-item 的间距）
+.formItem {
+  display: flex;
+  align-items: flex-start;
+  margin-bottom: 22px;
+}
+
+.formItemLabel {
+  width: 120px;
+  flex-shrink: 0;
+  line-height: 20px;
+  padding-top: 8px;
+  text-align: right;
+  padding-right: 12px;
+  color: #606266;
+  box-sizing: border-box;
+}
+
+.formItemContent {
+  flex: 1;
+  text-align: left;
+  margin-left: 0;
+  min-width: 0;
+}
+
+// AI生成区域样式
+.aiGenerateSection {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  width: 100%;
+
+  .aiTextarea {
+    flex: 1;
+  }
+
+  .aiButton {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+}
+
+// 对话框底部按钮样式
+.dialogFooter {
+  display: flex;
+  justify-content: flex-end;
+
+  .closeButton {
+    background: transparent;
+    border: 1px solid var(--ad-border);
+
+    &:hover {
+      background: transparent;
+      border-color: #409eff;
+      color: #409eff;
+    }
+  }
+}
+
+// 列工具栏
+.columnToolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+
+  .columnCount {
+    font-size: 13px;
+    color: #909399;
+  }
+}
+
+// 列分页
+.columnPagination {
+  margin-top: 12px;
+  display: flex;
+  justify-content: center;
+}
+
+// 表格容器（固定高度 + 滚动，对齐原 height="400"）
+.tableWrapper {
+  width: 100%;
+  height: 400px;
+  overflow: auto;
+}
+
+// 可编辑字段样式
+.editableField {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  border: 1px dashed var(--ad-border);
+  gap: 8px;
+  transition: all 0.2s;
+
+  &:hover {
+    border-color: #409eff;
+    background: #f5f7fa;
+  }
+
+  .fieldValue {
+    color: #606266;
+    font-size: 13px;
+
+    &.truncate {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  .placeholder {
+    color: #c0c4cc;
+    font-size: 13px;
+  }
+
+  .countBadge {
+    background: #409eff;
+    color: #fff;
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    flex-shrink: 0;
+  }
+
+  &:hover {
+    .placeholder {
+      color: #409eff;
+    }
+  }
+}
+
+// 编辑器弹窗样式
+.fieldEditor {
+  .editorHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    font-weight: 500;
+    color: #303133;
+
+    .editorTip {
+      font-weight: normal;
+      font-size: 12px;
+      color: #909399;
+    }
+  }
+
+  .editorFooter {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 12px;
+
+    .jsonError {
+      font-size: 12px;
+      color: #f56c6c;
+    }
+
+    .footerButtons {
+      display: flex;
+      gap: 8px;
+      margin-left: auto;
+    }
+  }
+}
+
+/* ===== Tablet ===== */
+@media (min-width: 768px) and (max-width: 1023px) {
+  // 对话框宽度在组件内通过 Modal size 控制，这里仅保留响应式收口
+}
+
+/* ===== Mobile ===== */
+@media (max-width: 767px) {
+  .singleEditStructure {
+    --aligned-padding: 8px;
+  }
+
+  .formSection {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  // 表单标签顶部对齐
+  .formItem {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .formItemLabel {
+    width: auto;
+    text-align: left;
+    padding-top: 0;
+    padding-right: 0;
+  }
+
+  .formItemContent {
+    margin-left: 0;
+  }
+
+  // AI 生成区域垂直排列
+  .aiGenerateSection {
+    flex-direction: column;
+
+    .aiButton {
+      width: 100%;
+      min-height: 36px;
+    }
+  }
+
+  // 列工具栏垂直排列
+  .columnToolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  // 表格水平滚动
+  .tableWrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+
+    table {
+      min-width: 700px;
+    }
+  }
+}

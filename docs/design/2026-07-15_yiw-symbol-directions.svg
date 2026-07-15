@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="760" viewBox="0 0 1800 760">
+  <rect width="1800" height="760" fill="#EAE8E2"/>
+  <text x="60" y="62" font-family="Avenir Next, sans-serif" font-size="30" font-weight="700" fill="#171717">YiW Symbol Directions</text>
+  <text x="60" y="94" font-family="Avenir Next, sans-serif" font-size="16" fill="#6A6760">图标与文字分开 · 只比较形状 · 暂不决定品牌色</text>
+
+  <g transform="translate(60 120)">
+    <rect width="500" height="580" rx="28" fill="#F8F6F1"/>
+    <g transform="translate(90 38)">
+      <rect width="320" height="320" rx="78" fill="#171717"/>
+      <rect x="54" y="56" width="92" height="104" rx="20" fill="#F5F0E6"/>
+      <rect x="164" y="56" width="102" height="46" rx="16" fill="#F5F0E6"/>
+      <rect x="164" y="120" width="102" height="144" rx="20" fill="#F5F0E6"/>
+      <rect x="54" y="178" width="92" height="86" rx="20" fill="#F5F0E6"/>
+    </g>
+    <g transform="translate(40 390)">
+      <rect width="48" height="48" rx="12" fill="#171717"/>
+      <rect x="9" y="9" width="13" height="15" rx="3" fill="#F5F0E6"/>
+      <rect x="26" y="9" width="13" height="7" rx="2" fill="#F5F0E6"/>
+      <rect x="26" y="20" width="13" height="19" rx="3" fill="#F5F0E6"/>
+      <rect x="9" y="28" width="13" height="11" rx="3" fill="#F5F0E6"/>
+      <text x="64" y="36" font-family="Avenir Next, sans-serif" font-size="31" font-weight="650" letter-spacing="-1" fill="#171717">YiW</text>
+    </g>
+    <text x="40" y="488" font-family="Avenir Next, sans-serif" font-size="14" font-weight="700" letter-spacing="2" fill="#4C4943">A · WORKBENCHES</text>
+    <text x="40" y="528" font-family="Avenir Next, sans-serif" font-size="28" font-weight="700" fill="#171717">多工作台</text>
+    <text x="40" y="560" font-family="Avenir Next, sans-serif" font-size="16" fill="#65615B">四个不同区域组合成一个工作空间。</text>
+    <rect x="390" y="490" width="70" height="32" rx="16" fill="#171717"/>
+    <text x="425" y="512" text-anchor="middle" font-family="Avenir Next, sans-serif" font-size="13" font-weight="700" fill="#F5F0E6">推荐</text>
+  </g>
+
+  <g transform="translate(650 120)">
+    <rect width="500" height="580" rx="28" fill="#F8F6F1"/>
+    <g transform="translate(90 38)">
+      <rect width="320" height="320" rx="78" fill="#F5F0E6" stroke="#CFCAC0" stroke-width="2"/>
+      <rect x="58" y="72" width="162" height="120" rx="24" fill="none" stroke="#171717" stroke-width="20"/>
+      <rect x="98" y="112" width="162" height="120" rx="24" fill="#F5F0E6" stroke="#171717" stroke-width="20"/>
+      <path d="M131 162H227M131 194H200" stroke="#171717" stroke-width="16" stroke-linecap="round"/>
+    </g>
+    <g transform="translate(40 390)">
+      <rect width="48" height="48" rx="12" fill="#F5F0E6" stroke="#CFCAC0"/>
+      <rect x="8" y="11" width="25" height="19" rx="4" fill="none" stroke="#171717" stroke-width="4"/>
+      <rect x="15" y="18" width="25" height="19" rx="4" fill="#F5F0E6" stroke="#171717" stroke-width="4"/>
+      <text x="64" y="36" font-family="Avenir Next, sans-serif" font-size="31" font-weight="650" letter-spacing="-1" fill="#171717">YiW</text>
+    </g>
+    <text x="40" y="488" font-family="Avenir Next, sans-serif" font-size="14" font-weight="700" letter-spacing="2" fill="#4C4943">B · WORK CARDS</text>
+    <text x="40" y="528" font-family="Avenir Next, sans-serif" font-size="28" font-weight="700" fill="#171717">工作卡片</text>
+    <text x="40" y="560" font-family="Avenir Next, sans-serif" font-size="16" fill="#65615B">多个任务和文件在同一处叠放、切换。</text>
+  </g>
+
+  <g transform="translate(1240 120)">
+    <rect width="500" height="580" rx="28" fill="#F8F6F1"/>
+    <g transform="translate(90 38)">
+      <rect width="320" height="320" rx="78" fill="#171717"/>
+      <path d="M74 76H246V244H74V76Z" fill="none" stroke="#F5F0E6" stroke-width="24" stroke-linejoin="round"/>
+      <path d="M112 112H208V208H112" fill="none" stroke="#F5F0E6" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M184 160H266" stroke="#F5F0E6" stroke-width="24" stroke-linecap="round"/>
+      <path d="M238 132L266 160L238 188" fill="none" stroke="#F5F0E6" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <g transform="translate(40 390)">
+      <rect width="48" height="48" rx="12" fill="#171717"/>
+      <rect x="9" y="9" width="25" height="25" fill="none" stroke="#F5F0E6" stroke-width="4"/>
+      <path d="M18 18H30V30H18M27 24H40M36 20L40 24L36 28" fill="none" stroke="#F5F0E6" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="64" y="36" font-family="Avenir Next, sans-serif" font-size="31" font-weight="650" letter-spacing="-1" fill="#171717">YiW</text>
+    </g>
+    <text x="40" y="488" font-family="Avenir Next, sans-serif" font-size="14" font-weight="700" letter-spacing="2" fill="#4C4943">C · ONE ENTRANCE</text>
+    <text x="40" y="528" font-family="Avenir Next, sans-serif" font-size="28" font-weight="700" fill="#171717">统一入口</text>
+    <text x="40" y="560" font-family="Avenir Next, sans-serif" font-size="16" fill="#65615B">从一个入口进入不同工作环境。</text>
+  </g>
+</svg>

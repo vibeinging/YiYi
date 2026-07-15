@@ -1,0 +1,81 @@
+.admin-model-management {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 12px;
+  background: #f5f7fa;
+}
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 16px;
+  flex-shrink: 0;
+
+  .header-left {
+    flex: 1;
+    min-width: 0;
+
+    h1 {
+      margin: 0 0 6px 0;
+      font-size: 26px;
+      font-weight: 600;
+      color: #1e293b;
+      letter-spacing: -0.5px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    p {
+      margin: 0;
+      font-size: 14px;
+      color: #64748b;
+    }
+  }
+}
+
+.content-wrapper {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+
+  // 嵌入的 ModelsPage 不需要自己的 padding
+  :global(.model-management) {
+    padding: 0;
+    background: transparent;
+  }
+}
+
+/* ==================== 响应式适配 ==================== */
+
+/* 平板适配 */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .admin-model-management {
+    padding: 16px 8px;
+  }
+
+  .page-header .header-left h1 {
+    font-size: 22px;
+  }
+}
+
+/* 移动端适配 */
+@media (max-width: 767px) {
+  .admin-model-management {
+    padding: 12px 6px;
+  }
+
+  .page-header {
+    margin-bottom: 12px;
+
+    .header-left h1 {
+      font-size: 20px;
+    }
+  }
+
+  .content-wrapper {
+    overflow: auto;
+  }
+}

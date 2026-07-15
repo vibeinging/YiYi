@@ -1,0 +1,106 @@
+// 由 EntityRefManager/index.vue 的 <style scoped> 迁移
+// 原 @use '../shared-styles.scss' 中依赖的 .tab-container / .content-card
+// 在 React 工程尚未迁移 shared-styles，这里直接内联所需的少量样式以保证可渲染。
+
+.tabContainer {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+
+.contentCard {
+  background: var(--yiw-surface, #ffffff);
+  border-radius: 12px;
+  padding: 20px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+
+  &:hover {
+    box-shadow: var(--yiw-card-shadow, 0 4px 12px rgba(0, 0, 0, 0.1));
+  }
+}
+
+.entityManagerContent {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  flex-shrink: 0;
+}
+
+.toolbarLeft,
+.toolbarRight {
+  display: flex;
+  gap: 8px;
+}
+
+.configuredEntitiesSection {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.emptyState {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 300px;
+}
+
+.paginationWrapper {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--el-border-color-lighter);
+  background: var(--el-bg-color);
+}
+
+.paginationInfo {
+  font-size: 13px;
+  color: var(--el-text-color-secondary, #909399);
+}
+
+// 添加引用对话框内部的 loading 容器
+.addRefContent {
+  position: relative;
+  min-height: 120px;
+}
+
+.dialogFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+@media (max-width: 768px) {
+  .contentCard {
+    padding: 16px;
+  }
+
+  .toolbar {
+    flex-direction: column;
+    gap: 12px;
+    align-items: stretch;
+  }
+
+  .toolbarLeft,
+  .toolbarRight {
+    flex-direction: column;
+  }
+}

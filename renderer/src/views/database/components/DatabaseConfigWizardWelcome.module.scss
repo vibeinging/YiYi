@@ -1,0 +1,177 @@
+.config-wizard-welcome {
+  padding: 32px 48px;
+  background: var(--yiw-bg, #f9fafb);
+  min-height: 100%;
+}
+
+.page-header {
+  margin-bottom: 32px;
+}
+
+.page-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--yiw-text, #1f2937);
+  margin-bottom: 8px;
+}
+
+.page-desc {
+  font-size: 14px;
+  color: var(--yiw-muted, #6b7280);
+}
+
+// 欢迎卡片
+.welcome-card {
+  background: linear-gradient(135deg, #f7f4ec 0%, #e9e4d8 50%, #d8d0be 100%);
+  border-radius: 12px;
+  margin-bottom: 32px;
+  border: none;
+  box-shadow: var(--yiw-card-shadow, 0 1px 2px rgba(0, 0, 0, 0.05));
+}
+
+.welcome-content {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  padding: 40px;
+}
+
+.welcome-icon {
+  width: 100px;
+  height: 100px;
+  background: linear-gradient(135deg, #17483e 0%, #ffc943 100%);
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  box-shadow: 0 8px 24px rgba(23, 72, 62, 0.3);
+  flex-shrink: 0;
+}
+
+.welcome-text {
+  flex: 1;
+}
+
+.welcome-title {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--yiw-text, #1f2937);
+  margin-bottom: 12px;
+}
+
+.welcome-desc {
+  font-size: 15px;
+  color: var(--yiw-muted, #6b7280);
+  line-height: 1.7;
+  margin-bottom: 24px;
+}
+
+.welcome-features {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+
+.feature-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--yiw-muted, #6b7280);
+}
+
+.feature-icon {
+  width: 24px;
+  height: 24px;
+  background: rgba(23, 72, 62, 0.1);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #17483e;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.welcome-actions {
+  display: flex;
+  gap: 12px;
+}
+
+// 步骤预览卡片
+.steps-preview-card {
+  background: var(--yiw-surface, #ffffff);
+  border-radius: 12px;
+  box-shadow: var(--yiw-card-shadow, 0 1px 2px rgba(0, 0, 0, 0.05));
+  border: 1px solid var(--yiw-border, #e5e7eb);
+  overflow: hidden;
+}
+
+.card-header {
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--yiw-border, #e5e7eb);
+}
+
+.card-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--yiw-text, #1f2937);
+}
+
+.card-body {
+  padding: 24px;
+}
+
+.step-preview-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 20px;
+  background: var(--yiw-surface, #ffffff);
+  border-radius: 8px;
+  border: 1px solid var(--yiw-border, #e5e7eb);
+  margin-bottom: 16px;
+  transition: all 0.2s;
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+
+  &:hover {
+    box-shadow: var(--yiw-card-shadow, 0 4px 6px -1px rgba(0, 0, 0, 0.1));
+    border-color: transparent;
+  }
+}
+
+.step-preview-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  font-weight: 600;
+  background: linear-gradient(135deg, rgba(23, 72, 62, 0.1) 0%, rgba(255, 201, 67, 0.1) 100%);
+  color: #17483e;
+  flex-shrink: 0;
+}
+
+.step-preview-content {
+  flex: 1;
+}
+
+.step-preview-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--yiw-text, #1f2937);
+  margin-bottom: 4px;
+}
+
+.step-preview-desc {
+  font-size: 13px;
+  color: var(--yiw-muted, #6b7280);
+  line-height: 1.5;
+}

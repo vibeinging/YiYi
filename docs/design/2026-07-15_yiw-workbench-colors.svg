@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="720" viewBox="0 0 2000 720">
+  <rect width="2000" height="720" fill="#EAE8E2"/>
+  <text x="52" y="58" font-family="Avenir Next, sans-serif" font-size="30" font-weight="700" fill="#171717">YiW Workbench Symbol · Color Study</text>
+  <text x="52" y="90" font-family="Avenir Next, sans-serif" font-size="16" fill="#69665F">固定“多工作台”符号，只比较颜色 · 平面色 · 无紫色 / 渐变</text>
+
+  <g transform="translate(50 120)">
+    <rect width="440" height="540" rx="28" fill="#F8F6F1"/>
+    <g transform="translate(70 38)">
+      <rect width="300" height="300" rx="72" fill="#171717"/>
+      <rect x="51" y="53" width="87" height="98" rx="19" fill="#F5F0E6"/>
+      <rect x="154" y="53" width="96" height="44" rx="15" fill="#F5F0E6"/>
+      <rect x="154" y="114" width="96" height="136" rx="19" fill="#F5F0E6"/>
+      <rect x="51" y="168" width="87" height="82" rx="19" fill="#F5F0E6"/>
+    </g>
+    <text x="34" y="390" font-family="Avenir Next, sans-serif" font-size="13" font-weight="700" letter-spacing="2" fill="#171717">A · INK</text>
+    <text x="34" y="430" font-family="Avenir Next, sans-serif" font-size="27" font-weight="700" fill="#171717">墨黑 + 暖白</text>
+    <text x="34" y="466" font-family="Avenir Next, sans-serif" font-size="15" fill="#68645D">克制、清楚，适配任何工作台。</text>
+    <text x="34" y="494" font-family="Avenir Next, sans-serif" font-size="15" fill="#68645D">风险是个性较弱。</text>
+  </g>
+
+  <g transform="translate(540 120)">
+    <rect width="440" height="540" rx="28" fill="#F8F6F1"/>
+    <g transform="translate(70 38)">
+      <rect width="300" height="300" rx="72" fill="#17483E"/>
+      <rect x="51" y="53" width="87" height="98" rx="19" fill="#F2E9D8"/>
+      <rect x="154" y="53" width="96" height="44" rx="15" fill="#F2E9D8"/>
+      <rect x="154" y="114" width="96" height="136" rx="19" fill="#F2E9D8"/>
+      <rect x="51" y="168" width="87" height="82" rx="19" fill="#D5E56A"/>
+    </g>
+    <text x="34" y="390" font-family="Avenir Next, sans-serif" font-size="13" font-weight="700" letter-spacing="2" fill="#17483E">B · FOREST</text>
+    <text x="34" y="430" font-family="Avenir Next, sans-serif" font-size="27" font-weight="700" fill="#171717">森林绿 + 柠檬黄</text>
+    <text x="34" y="466" font-family="Avenir Next, sans-serif" font-size="15" fill="#68645D">稳重，但有一个活跃工作区。</text>
+    <text x="34" y="494" font-family="Avenir Next, sans-serif" font-size="15" fill="#68645D">适合长期使用的工作平台。</text>
+    <rect x="334" y="392" width="72" height="32" rx="16" fill="#171717"/>
+    <text x="370" y="414" text-anchor="middle" font-family="Avenir Next, sans-serif" font-size="13" font-weight="700" fill="#F5F0E6">推荐</text>
+  </g>
+
+  <g transform="translate(1030 120)">
+    <rect width="440" height="540" rx="28" fill="#F8F6F1"/>
+    <g transform="translate(70 38)">
+      <rect width="300" height="300" rx="72" fill="#B84430"/>
+      <rect x="51" y="53" width="87" height="98" rx="19" fill="#FFF0E1"/>
+      <rect x="154" y="53" width="96" height="44" rx="15" fill="#FFF0E1"/>
+      <rect x="154" y="114" width="96" height="136" rx="19" fill="#FFF0E1"/>
+      <rect x="51" y="168" width="87" height="82" rx="19" fill="#F6B84A"/>
+    </g>
+    <text x="34" y="390" font-family="Avenir Next, sans-serif" font-size="13" font-weight="700" letter-spacing="2" fill="#9E3727">C · BRICK</text>
+    <text x="34" y="430" font-family="Avenir Next, sans-serif" font-size="27" font-weight="700" fill="#171717">砖红 + 杏黄</text>
+    <text x="34" y="466" font-family="Avenir Next, sans-serif" font-size="15" fill="#68645D">温暖、有创造力，品牌感更强。</text>
+    <text x="34" y="494" font-family="Avenir Next, sans-serif" font-size="15" fill="#68645D">整体更活泼。</text>
+  </g>
+
+  <g transform="translate(1520 120)">
+    <rect width="430" height="540" rx="28" fill="#F8F6F1"/>
+    <g transform="translate(65 38)">
+      <rect width="300" height="300" rx="72" fill="#F1B434"/>
+      <rect x="51" y="53" width="87" height="98" rx="19" fill="#17211D"/>
+      <rect x="154" y="53" width="96" height="44" rx="15" fill="#17211D"/>
+      <rect x="154" y="114" width="96" height="136" rx="19" fill="#17211D"/>
+      <rect x="51" y="168" width="87" height="82" rx="19" fill="#FFF4D4"/>
+    </g>
+    <text x="34" y="390" font-family="Avenir Next, sans-serif" font-size="13" font-weight="700" letter-spacing="2" fill="#9A6A12">D · SAFFRON</text>
+    <text x="34" y="430" font-family="Avenir Next, sans-serif" font-size="27" font-weight="700" fill="#171717">藏红花黄 + 墨绿</text>
+    <text x="34" y="466" font-family="Avenir Next, sans-serif" font-size="15" fill="#68645D">醒目、有行动感，小图标很清楚。</text>
+    <text x="34" y="494" font-family="Avenir Next, sans-serif" font-size="15" fill="#68645D">视觉强度最高。</text>
+  </g>
+</svg>

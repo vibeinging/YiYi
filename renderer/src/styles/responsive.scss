@@ -1,0 +1,179 @@
+/**
+ * 响应式适配基础设施
+ *
+ * 断点定义、响应式 mixin、设备检测、工具类
+ * 通过 vite additionalData 全局注入，所有 .vue 文件可直接使用 mixin
+ * 工具类通过 index.scss 引入，全局可用
+ */
+
+// ========================================
+// 断点定义
+// ========================================
+$breakpoint-mobile: 768px;
+$breakpoint-tablet: 1024px;
+$breakpoint-desktop: 1200px;
+$breakpoint-wide: 1440px;
+
+// ========================================
+// 响应式 mixin
+// ========================================
+
+// 移动端: < 768px
+@mixin mobile {
+  @media (max-width: #{$breakpoint-mobile - 1px}) {
+    @content;
+  }
+}
+
+// 平板端: 768px ~ 1023px
+@mixin tablet {
+  @media (min-width: #{$breakpoint-mobile}) and (max-width: #{$breakpoint-tablet - 1px}) {
+    @content;
+  }
+}
+
+// 平板及以下: < 1024px
+@mixin tablet-and-below {
+  @media (max-width: #{$breakpoint-tablet - 1px}) {
+    @content;
+  }
+}
+
+// 桌面端: >= 1024px
+@mixin desktop {
+  @media (min-width: #{$breakpoint-tablet}) {
+    @content;
+  }
+}
+
+// 宽屏: >= 1440px
+@mixin wide {
+  @media (min-width: #{$breakpoint-wide}) {
+    @content;
+  }
+}
+
+// 触控设备检测
+@mixin touch-device {
+  @media (hover: none) and (pointer: coarse) {
+    @content;
+  }
+}
+
+// 横屏检测 (移动/平板)
+@mixin landscape {
+  @media (orientation: landscape) and (max-width: #{$breakpoint-tablet - 1px}) {
+    @content;
+  }
+}
+
+// ========================================
+// 工具类 - 按设备显示/隐藏
+// ========================================
+
+.hide-on-mobile {
+  @include mobile { display: none !important; }
+}
+
+.hide-on-tablet {
+  @include tablet { display: none !important; }
+}
+
+.hide-on-desktop {
+  @include desktop { display: none !important; }
+}
+
+.show-on-mobile {
+  display: none !important;
+  @include mobile { display: block !important; }
+}
+
+.show-on-tablet {
+  display: none !important;
+  @include tablet { display: block !important; }
+}
+
+// ========================================
+// 触控友好
+// ========================================
+
+.touch-target {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+// ========================================
+// 移动端 Element Plus 适配
+// ========================================
+
+@media (max-width: #{$breakpoint-mobile - 1px}) {
+  // 对话框移动端全屏化
+  .el-dialog {
+    --el-dialog-width: 92vw !important;
+    margin-top: 5vh !important;
+  }
+
+  // Teleport 后的对话框：限制不超出视口 + 底栏按钮纵向全宽（项目内大量 el-dialog 未单独适配）
+  .el-overlay-dialog .el-dialog {
+    max-width: calc(100vw - 16px) !important;
+    box-sizing: border-box;
+  }
+
+  .el-overlay-dialog .el-dialog__footer {
+    display: flex;
+    flex-direction: column-reverse;
+    align-items: stretch;
+    gap: 10px;
+    flex-wrap: nowrap;
+  }
+
+  .el-overlay-dialog .el-dialog__footer .el-button + .el-button {
+    margin-left: 0 !important;
+  }
+
+  .el-overlay-dialog .el-dialog__footer .el-button {
+    width: 100%;
+    margin: 0 !important;
+    min-height: 44px;
+  }
+
+  .el-message-box {
+    width: min(92vw, 400px) !important;
+    max-width: calc(100vw - 24px) !important;
+    box-sizing: border-box;
+  }
+
+  .el-message-box__btns {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 10px;
+  }
+
+  .el-message-box__btns .el-button {
+    width: 100%;
+    margin: 0 !important;
+    min-height: 44px;
+  }
+
+  // 表单项移动端全宽
+  .el-form--inline .el-form-item {
+    width: 100%;
+    margin-right: 0;
+  }
+
+  // 消息提示适配
+  .el-message {
+    min-width: auto !important;
+    max-width: 90vw !important;
+  }
+
+  // 下拉菜单适配
+  .el-dropdown-menu {
+    max-width: 90vw;
+  }
+
+  .el-drawer__body {
+    padding: 16px;
+    -webkit-overflow-scrolling: touch;
+  }
+}

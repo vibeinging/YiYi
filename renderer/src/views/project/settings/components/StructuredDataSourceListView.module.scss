@@ -1,0 +1,248 @@
+
+/* 使用全局样式: ad-page-list, ad-page-toolbar, ad-card-grid, ad-grid-card, ad-create-view 等 */
+
+/* 创建表单样式 */
+.createContent {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.createFormCard {
+  width: 100%;
+  max-width: 600px;
+  margin: 0 auto;
+  background: var(--yiw-surface, #fff);
+  border-radius: 16px;
+  padding: 40px 48px;
+}
+
+.formIcon {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 24px;
+
+  .iconCircle {
+    width: 64px;
+    height: 64px;
+    border-radius: 16px;
+    background: linear-gradient(135deg, #10b981, #34d399);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 8px 20px rgba(16, 185, 129, 0.25);
+    color: #fff;
+  }
+}
+
+.formHeader {
+  text-align: center;
+  margin-bottom: 32px;
+
+  h3 {
+    margin: 0 0 8px;
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--yiw-text, #1e293b);
+  }
+
+  p {
+    margin: 0;
+    font-size: 14px;
+    color: var(--yiw-muted, #64748b);
+  }
+}
+
+.businessForm {
+  // 表单项标签样式（对齐原 :deep(.el-form-item__label)）
+  :global(.mantine-InputWrapper-label) {
+    font-weight: 500;
+    color: var(--yiw-text-soft, #475569);
+    margin-bottom: 8px;
+    font-size: 14px;
+  }
+
+  // 输入框聚焦边框（对齐原 #10b981 focus inset）
+  :global(.mantine-TextInput-input),
+  :global(.mantine-Textarea-input),
+  :global(.mantine-Select-input) {
+    border-radius: 8px;
+    border-color: var(--yiw-border, #e2e8f0);
+    transition: all 0.2s;
+
+    &:hover {
+      border-color: var(--yiw-border, #cbd5e1);
+    }
+
+    &:focus,
+    &:focus-within {
+      border-color: #10b981;
+      box-shadow: 0 0 0 1px #10b981 inset;
+    }
+  }
+}
+
+.formActions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 28px;
+
+  button {
+    min-width: 120px;
+  }
+}
+
+/* 组件特有样式：结构化数据源图标颜色 */
+.iconStructured {
+  font-size: 18px;
+  color: #10b981;
+}
+
+/* 灰色斜体文本 */
+.textMuted {
+  color: var(--yiw-faint, #94a3b8);
+  font-style: italic;
+}
+
+/* 自定义空状态 */
+.structuredEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+
+  .emptyIllustration {
+    margin-bottom: 32px;
+
+    .illustrationContainer {
+      position: relative;
+      width: 160px;
+      height: 100px;
+
+      .fileIcon {
+        position: absolute;
+        width: 48px;
+        height: 48px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 22px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+
+        &.xlsx {
+          top: 0;
+          left: 10px;
+          background: linear-gradient(135deg, #dcfce7, #bbf7d0);
+          color: #22c55e;
+        }
+
+        &.csv {
+          top: 0;
+          right: 10px;
+          background: linear-gradient(135deg, #dbeafe, #bfdbfe);
+          color: #3b82f6;
+        }
+      }
+
+      .centerHub {
+        position: absolute;
+        bottom: 0;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 56px;
+        height: 56px;
+        border-radius: 16px;
+        background: linear-gradient(135deg, #10b981, #059669);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 26px;
+        color: #fff;
+        box-shadow: 0 8px 24px rgba(16, 185, 129, 0.3);
+      }
+    }
+  }
+
+  .emptyContent {
+    text-align: center;
+
+    .emptyTitle {
+      margin: 0 0 12px 0;
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--yiw-text, #1e293b);
+    }
+
+    .emptyDesc {
+      margin: 0 0 24px 0;
+      font-size: 14px;
+      color: var(--yiw-muted, #64748b);
+      line-height: 1.8;
+    }
+
+    .emptyFeatures {
+      display: flex;
+      justify-content: center;
+      gap: 28px;
+      margin-bottom: 28px;
+
+      .featureItem {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+        color: var(--yiw-text-soft, #475569);
+      }
+    }
+  }
+}
+
+@include mobile {
+  .createContent {
+    padding: 16px 12px 24px;
+  }
+
+  .createFormCard {
+    padding: 24px 16px;
+    border-radius: 12px;
+    max-width: 100%;
+  }
+
+  .formHeader {
+    margin-bottom: 24px;
+
+    h3 {
+      font-size: 20px;
+    }
+
+    p {
+      font-size: 13px;
+      line-height: 1.5;
+    }
+  }
+
+  .formIcon .iconCircle {
+    width: 56px;
+    height: 56px;
+  }
+
+  .formActions {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    margin-top: 20px;
+
+    button {
+      width: 100%;
+      min-width: 0 !important;
+      min-height: 44px;
+    }
+  }
+
+  .structuredEmpty .emptyFeatures {
+    flex-direction: column;
+    gap: 12px;
+    align-items: center;
+  }
+}

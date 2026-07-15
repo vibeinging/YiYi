@@ -1,0 +1,103 @@
+.editor-page { padding: 16px; }
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  gap: 12px;
+}
+.toolbar-left { display: flex; align-items: center; gap: 12px; }
+.title { font-size: 18px; font-weight: 700; }
+.toolbar-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.base-form-card {
+  margin-bottom: 16px;
+}
+.base-form-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) 220px minmax(320px, 1.2fr);
+  gap: 16px;
+  align-items: start;
+}
+.description-item {
+  grid-column: span 1;
+}
+.editor-layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr) 340px;
+  gap: 16px;
+  align-items: start;
+}
+.center-column {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.palette-panel {
+  height: fit-content;
+}
+.right-column {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.canvas-panel { min-height: 620px; }
+.panel-header { display: flex; justify-content: space-between; align-items: center; }
+.bottom-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.status-banner {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.status-banner.success {
+  background: #ecfdf3;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+}
+.status-banner.warning {
+  background: #fff7ed;
+  color: #9a3412;
+  border: 1px solid #fed7aa;
+}
+.status-banner.muted {
+  background: var(--yiw-code-bg, #f3f4f6);
+  color: var(--yiw-text-soft, #4b5563);
+  border: 1px solid var(--yiw-border, #e5e7eb);
+}
+.panel-hint {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--yiw-muted, #6b7280);
+  line-height: 1.6;
+}
+.preview-frame {
+  border: 1px solid var(--yiw-border, #e5e7eb);
+  border-radius: 12px;
+  overflow: hidden;
+  min-height: 360px;
+}
+.preview-iframe {
+  width: 100%;
+  min-height: 640px;
+  border: 0;
+  background: var(--yiw-surface, #fff);
+}
+.empty-preview {
+  min-height: 320px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--yiw-muted, #6b7280);
+}
+@media (max-width: 1200px) {
+  .base-form-grid {
+    grid-template-columns: 1fr;
+  }
+  .editor-layout { grid-template-columns: 1fr; }
+}

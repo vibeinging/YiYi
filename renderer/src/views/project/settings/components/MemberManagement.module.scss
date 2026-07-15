@@ -1,0 +1,210 @@
+.memberManagement {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+
+  @media (max-width: 767px) {
+    :global(.mantine-Modal-content) {
+      width: 92% !important;
+      max-width: 92%;
+    }
+  }
+}
+
+.sectionBody {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.inviteCreateSection {
+  margin-bottom: 24px;
+
+  h4 {
+    margin: 0 0 16px 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--yiw-text, #1e293b);
+  }
+}
+
+.inviteForm {
+  .inviteFormRow {
+    display: flex;
+    gap: 16px;
+
+    .formItem {
+      flex: 1;
+    }
+  }
+
+  @media (max-width: 767px) {
+    .inviteFormRow {
+      flex-direction: column;
+      gap: 0;
+
+      .formItem {
+        width: 100%;
+      }
+    }
+  }
+}
+
+.generatedLinkSection {
+  margin-top: 20px;
+  padding: 16px;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  border-radius: 8px;
+
+  .linkLabel {
+    font-size: 13px;
+    font-weight: 500;
+    color: #0369a1;
+    margin-bottom: 8px;
+  }
+
+  .linkBox {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+
+    .linkInput {
+      flex: 1;
+      min-width: 0;
+
+      :global(.mantine-Input-input) {
+        background: var(--yiw-surface, #fff);
+      }
+    }
+
+    .linkCopyBtn {
+      flex-shrink: 0;
+    }
+  }
+
+  @media (max-width: 767px) {
+    .linkBox {
+      flex-direction: column;
+
+      .linkCopyBtn {
+        width: 100%;
+        min-height: 44px;
+      }
+    }
+  }
+
+  .linkHint {
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--yiw-muted, #64748b);
+  }
+}
+
+.inviteLinksManage {
+  position: relative;
+
+  .tableView {
+    display: block;
+  }
+
+  .cardView {
+    display: none;
+  }
+
+  @media (max-width: 767px) {
+    .tableView {
+      display: none;
+    }
+    .cardView {
+      display: block;
+    }
+  }
+
+  .linkRole {
+    font-weight: 500;
+    color: var(--yiw-text, #1e293b);
+  }
+
+  .linkMeta {
+    font-size: 13px;
+    color: var(--yiw-muted, #64748b);
+  }
+
+  .emptyTip {
+    text-align: center;
+    color: var(--yiw-muted, #909399);
+    font-size: 14px;
+    padding: 30px 0;
+  }
+
+  .mobileCardList {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+
+    .mobileCard {
+      background: var(--yiw-surface, #fff);
+      border: 1px solid var(--yiw-border, #eaeef3);
+      border-radius: 10px;
+      padding: 14px 16px;
+
+      .cardHeader {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 10px;
+
+        .cardTitle {
+          font-size: 15px;
+          font-weight: 600;
+          color: var(--yiw-text, #17211d);
+          flex: 1;
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+      }
+
+      .cardBody {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+
+        .cardField {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          font-size: 13px;
+
+          .fieldLabel {
+            color: var(--yiw-muted, #8c8c8c);
+            flex-shrink: 0;
+          }
+
+          .fieldValue {
+            color: var(--yiw-text, #333);
+            text-align: right;
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            margin-left: 12px;
+          }
+        }
+      }
+
+      .cardFooter {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px solid var(--yiw-border-soft, #f0f0f0);
+      }
+    }
+  }
+}

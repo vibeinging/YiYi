@@ -1,0 +1,484 @@
+
+.agent-settings {
+  height: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+/* Agent 卡片网格 - 响应式两栏布局 */
+.agent-card-grid {
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  position: relative;
+}
+
+.agent-card {
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 10px;
+  padding: 16px;
+  background: var(--yiw-surface, #fff);
+  /* 覆盖全局样式 */
+  flex: none;
+  min-width: 0;
+  max-width: none;
+}
+
+.agent-card:hover {
+  border-color: var(--el-color-primary);
+  box-shadow: 0 4px 12px rgba(23, 72, 62, 0.15);
+}
+
+.agent-card .grid-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.agent-card .grid-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.agent-card .agent-icon {
+  font-size: 18px;
+  color: var(--el-color-primary);
+  display: inline-flex;
+  align-items: center;
+}
+
+.agent-card .arrow-icon {
+  font-size: 16px;
+  color: var(--el-text-color-secondary);
+  transition: transform 0.2s;
+  display: inline-flex;
+  align-items: center;
+}
+
+.agent-card:hover .arrow-icon {
+  transform: translateX(4px);
+  color: var(--el-color-primary);
+}
+
+.agent-card .grid-card-body {
+  padding-top: 8px;
+}
+
+.agent-card .grid-card-desc {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.6;
+  /* 允许多行显示 */
+  white-space: normal;
+  word-break: break-word;
+}
+
+/* 详情视图 */
+.ad-detail-view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.ad-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  flex-shrink: 0;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.header-back-btn {
+  padding: 8px;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.model-select {
+  width: 200px;
+}
+
+.header-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  flex: 1;
+  min-width: 0;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.ad-detail-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.model-label {
+  color: var(--el-text-color-secondary);
+  font-size: 14px;
+}
+
+/* 配置表单 */
+.config-form {
+  display: flex;
+  flex-direction: column;
+}
+
+.form-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.form-item-label {
+  font-weight: 600;
+}
+
+/* 高级设置折叠 */
+.advanced-settings {
+  margin-top: 24px;
+  border: none;
+}
+
+.collapse-title {
+  font-weight: 500;
+  font-size: 14px;
+  color: var(--el-text-color-secondary);
+}
+
+.prompt-section {
+  margin-bottom: 20px;
+}
+
+.prompt-section:last-child {
+  margin-bottom: 0;
+}
+
+.prompt-section .prompt-label {
+  margin-bottom: 8px;
+}
+
+.prompt-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+/* 预览框样式 */
+.preview-box {
+  width: 100%;
+  height: 180px;
+  position: relative;
+  cursor: pointer;
+  background: var(--yiw-code-bg, #f9f9f9);
+  border-radius: 10px;
+  overflow: hidden;
+  transition: border-color 0.2s;
+  border: 1px solid transparent;
+}
+
+.preview-box:hover {
+  border-color: var(--el-color-primary);
+}
+
+/* 业务规则框 */
+.preview-box.rules-box {
+  height: 380px;
+}
+
+/* 业务规则空状态 */
+.rules-empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  text-align: center;
+}
+
+.rules-empty .empty-icon {
+  font-size: 32px;
+  color: var(--el-text-color-placeholder);
+  margin-bottom: 12px;
+  display: inline-flex;
+}
+
+.rules-empty .empty-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 8px;
+}
+
+.rules-empty .empty-desc {
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+  line-height: 1.8;
+  white-space: pre-line;
+  text-align: left;
+  max-width: 300px;
+}
+
+.rules-empty .empty-action {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--el-color-primary);
+}
+
+.preview-content {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--el-text-color-regular);
+  height: 100%;
+  overflow: auto;
+}
+
+.preview-content.is-empty {
+  color: var(--el-text-color-placeholder);
+  font-style: italic;
+}
+
+.edit-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(64, 158, 255, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  color: var(--el-color-primary);
+  font-size: 14px;
+  pointer-events: none;
+}
+
+.preview-box:hover .edit-overlay {
+  opacity: 1;
+}
+
+@include mobile {
+  .preview-box:hover .edit-overlay {
+    opacity: 0.92;
+  }
+}
+
+.edit-overlay .icon {
+  font-size: 18px;
+  display: inline-flex;
+}
+
+/* Label with tip 样式 */
+.label-with-tip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tip-icon {
+  font-size: 14px;
+  color: var(--el-text-color-secondary);
+  cursor: help;
+  display: inline-flex;
+}
+
+.tip-icon:hover {
+  color: var(--el-color-primary);
+}
+
+/* 模板选择下拉 */
+.prompt-actions {
+  display: flex;
+  align-items: center;
+}
+
+.reset-dropdown-btn {
+  color: var(--el-text-color-regular) !important;
+}
+
+.reset-dropdown-btn:hover {
+  color: var(--el-color-primary) !important;
+}
+
+/* 模板下拉菜单项（原 .template-dropdown-popper 全局样式内联到此） */
+.template-option {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px 4px;
+}
+
+.template-option-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.template-option-desc {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.4;
+  white-space: normal;
+  word-break: break-word;
+}
+
+/* 编辑弹窗 textarea（原 .prompt-editor-dialog 全局样式内联到此） */
+.editor-textarea-wrapper {
+  height: 78vh;
+}
+
+.editor-textarea {
+  width: 100%;
+  height: 100%;
+  padding: 12px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+  resize: none;
+  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+  font-size: 14px;
+  line-height: 1.6;
+  box-sizing: border-box;
+  outline: none;
+}
+
+.editor-textarea:focus {
+  border-color: var(--el-color-primary);
+}
+
+@include mobile {
+  .agent-card-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .ad-detail-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--el-border-color-lighter);
+  }
+
+  .header-left {
+    min-width: 0;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .header-back-btn {
+    padding: 6px;
+    min-height: 40px;
+    min-width: 40px;
+  }
+
+  .header-title {
+    font-size: 16px;
+  }
+
+  .header-right {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+
+  .model-label {
+    font-size: 13px;
+    color: var(--el-text-color-regular);
+  }
+
+  .model-select {
+    width: 100% !important;
+  }
+
+  .agent-settings {
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  .ad-detail-content {
+    padding-bottom: 8px;
+  }
+
+  .prompt-label {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .preview-box {
+    height: 140px;
+  }
+
+  .preview-box.rules-box {
+    height: auto;
+    min-height: 220px;
+    max-height: 320px;
+  }
+
+  .rules-empty {
+    padding: 16px 12px;
+    justify-content: flex-start;
+    padding-top: 24px;
+
+    .empty-desc {
+      max-width: none;
+      text-align: left;
+      font-size: 13px;
+    }
+
+    .empty-title {
+      font-size: 15px;
+    }
+  }
+
+  .advanced-settings {
+    margin-top: 16px;
+  }
+
+  .prompt-section {
+    margin-bottom: 16px;
+  }
+
+  .prompt-section .prompt-label {
+    margin-bottom: 8px;
+  }
+
+  .editor-textarea-wrapper {
+    height: min(70vh, 520px);
+  }
+}

@@ -1,0 +1,41 @@
+
+.businessFormContainer {
+  padding: 20px;
+  background-color: white;
+  border-radius: 8px;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+
+  .form {
+    max-width: 600px;
+  }
+
+  // 对应原 :deep(.el-form-item:last-child .el-form-item__content)
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+}
+
+@include mobile {
+  .businessFormContainer {
+    padding: 12px;
+
+    .form {
+      max-width: 100%;
+    }
+
+    .actions {
+      flex-direction: column;
+    }
+
+    // 对应原 :deep(.el-button)：移动端按钮占满宽度
+    :global(.mantine-Button-root) {
+      width: 100%;
+      min-height: 44px;
+      margin-left: 0 !important;
+    }
+  }
+}

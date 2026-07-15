@@ -1,0 +1,209 @@
+
+.setup-guide {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  // 跟随主题:暗色下整体走 yiw 底色,不再是固定浅灰(亮色 fallback 保留给 cloud)
+  background: var(--yiw-bg, #f8f9fa);
+  color: var(--yiw-text, #303133);
+}
+
+.guide-close-header {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 12px 16px;
+  background: var(--yiw-surface, #fff);
+  border-bottom: 1px solid var(--yiw-border, #e4e7ed);
+
+  // 原 el-button link 降级成裸 <button>,需补回:去原生 chrome + 指针 + 过渡 + 焦点环
+  .close-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    line-height: 0;
+    color: var(--yiw-text-soft, #909399);
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    padding: 4px;
+    cursor: pointer;
+    transition: color 0.18s ease, background 0.18s ease;
+
+    &:hover {
+      color: var(--yiw-text, #303133);
+      background: var(--yiw-hover, transparent);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--yiw-accent, #276354);
+      outline-offset: 2px;
+    }
+  }
+}
+
+.guide-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 24px 32px;
+  background: var(--yiw-surface, #fff);
+  border-bottom: 1px solid var(--yiw-border, #e4e7ed);
+}
+
+.guide-steps {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.step-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: default;
+  transition: all 0.3s;
+
+  &.clickable {
+    cursor: pointer;
+
+    &:hover {
+      opacity: 0.8;
+
+      .step-number {
+        transform: scale(1.05);
+      }
+    }
+  }
+
+  // 已完成:实心强调色圆 + 勾,标签用常规文字色(比当前步略弱,不与 active 抢)
+  &.completed {
+    .step-number {
+      background: var(--yiw-accent, #276354);
+      border-color: var(--yiw-accent, #276354);
+      color: var(--yiw-on-accent, #fff);
+    }
+
+    .step-label {
+      color: var(--yiw-text-soft, #606266);
+    }
+  }
+
+  // 未到达(含 locked):只用「空心 + 中性灰」表示「还没到」,保持可读;
+  // 不再叠 opacity:0.6 + faint(暗色下会糊成一团看不清)。locked 仅多个禁用光标。
+  &.locked {
+    cursor: not-allowed;
+  }
+
+  &.active {
+    .step-number {
+      background: var(--yiw-accent, #276354);
+      border-color: var(--yiw-accent, #276354);
+      color: var(--yiw-on-accent, #fff);
+      box-shadow: var(--yiw-active-shadow, 0 2px 8px rgba(39, 99, 84, 0.3));
+    }
+
+    .step-label {
+      color: var(--yiw-text, #303133);
+      font-weight: 600;
+    }
+  }
+}
+
+.step-number {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2px solid var(--yiw-border, #dcdfe6);
+  // 圆底用比 header 明显更亮的中性底(暗色 #202a25 / 亮色浅灰),圆圈不再与背景同色而隐形;
+  // 数字用中性灰,清晰可读
+  background: var(--yiw-bg, #eef1f5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--yiw-muted, #909399);
+  transition: all 0.3s;
+}
+
+.step-label {
+  font-size: 14px;
+  color: var(--yiw-text-soft, #909399);
+  white-space: nowrap;
+  transition: all 0.3s;
+}
+
+.step-connector {
+  width: 40px;
+  height: 2px;
+  background: var(--yiw-border, #dcdfe6);
+  margin: 0 12px;
+}
+
+.guide-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px 32px;
+}
+
+@include mobile {
+  .setup-guide {
+    min-width: 0;
+    background: var(--yiw-surface, #fff);
+  }
+
+  .guide-close-header {
+    padding: 8px 12px;
+  }
+
+  .guide-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    padding: 12px 14px;
+  }
+
+  .guide-steps {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px;
+    margin: 0 -4px;
+    padding-left: 4px;
+    padding-right: 4px;
+  }
+
+  .step-connector {
+    width: 20px;
+    margin: 0 8px;
+    flex-shrink: 0;
+  }
+
+  .step-label {
+    font-size: 12px;
+    max-width: 7em;
+    white-space: normal;
+    line-height: 1.25;
+  }
+
+  .step-number {
+    width: 28px;
+    height: 28px;
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+
+  .guide-actions {
+    justify-content: flex-end;
+  }
+
+  .guide-content {
+    padding: 12px 12px 16px;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+}

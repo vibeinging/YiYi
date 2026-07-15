@@ -1,0 +1,217 @@
+.documentTableExpand {
+  padding: 20px;
+  background: var(--ad-bg-white);
+  border-radius: 4px;
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+// 空状态
+.emptyState {
+  padding: 40px 20px;
+  text-align: center;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+// 表描述区域
+.tableDescriptionSection {
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--ad-border);
+
+  .descriptionHeader {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+
+    .label {
+      font-weight: 500;
+      color: #303133;
+      white-space: nowrap;
+      padding-top: 4px;
+      font-size: 14px;
+    }
+
+    .descriptionInput {
+      flex: 1;
+      max-width: 800px;
+    }
+
+    .descriptionDisplay {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      padding: 6px 10px;
+      border-radius: 4px;
+      transition: all 0.2s ease;
+      min-height: 32px;
+
+      &:hover {
+        background-color: #f5f7fa;
+
+        .editIcon {
+          opacity: 1;
+        }
+      }
+
+      .descriptionText {
+        color: #303133;
+        flex: 1;
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      .descriptionPlaceholder {
+        color: #909399;
+        flex: 1;
+        font-style: italic;
+        font-size: 14px;
+      }
+
+      .editIcon {
+        display: inline-flex;
+        align-items: center;
+        opacity: 0;
+        color: #909399;
+        transition: opacity 0.2s ease;
+        font-size: 16px;
+      }
+    }
+  }
+}
+
+// 操作按钮区域
+.actionButtonsSection {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--ad-border);
+  flex-wrap: wrap;
+
+  .actionBtn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+}
+
+// 列信息区域
+.columnsSection {
+  .searchBar {
+    margin-bottom: 16px;
+
+    .searchInput {
+      max-width: 300px;
+      transition: all 0.3s ease;
+
+      &:focus-within {
+        max-width: 400px;
+      }
+    }
+  }
+
+  .columnsTable {
+    :global(thead th) {
+      background-color: var(--ad-bg-gray);
+      font-weight: 500;
+    }
+
+    :global(tbody tr) {
+      transition: background-color 0.2s ease;
+
+      &:hover {
+        background-color: #f5f7fa;
+      }
+    }
+  }
+
+  .emptyTableText {
+    color: #909399;
+    text-align: center;
+    padding: 12px 0;
+  }
+
+  .emptyText {
+    color: #c0c4cc;
+    font-style: italic;
+  }
+}
+
+// 响应式布局 - 平板
+@media (min-width: 768px) and (max-width: 1023px) {
+  .documentTableExpand {
+    padding: 16px;
+  }
+
+  .actionButtonsSection {
+    .actionBtn {
+      font-size: 12px;
+      padding: 6px 12px;
+    }
+  }
+}
+
+// 响应式布局 - 移动端
+@media (max-width: 767px) {
+  .documentTableExpand {
+    padding: 12px;
+  }
+
+  .actionButtonsSection {
+    flex-direction: column;
+
+    .actionBtn {
+      width: 100%;
+      justify-content: center;
+      min-height: 36px;
+    }
+  }
+
+  .searchBar {
+    .searchInput {
+      max-width: 100%;
+
+      &:focus-within {
+        max-width: 100%;
+      }
+    }
+  }
+
+  .tableDescriptionSection {
+    .descriptionHeader {
+      flex-direction: column;
+      gap: 8px;
+
+      .label {
+        padding-top: 0;
+      }
+
+      .descriptionInput {
+        max-width: 100%;
+      }
+    }
+  }
+
+  // 列信息表格水平滚动
+  .columnsSection {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+
+    .columnsTable {
+      min-width: 650px;
+    }
+  }
+}

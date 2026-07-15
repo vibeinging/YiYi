@@ -1,0 +1,209 @@
+// 源：views/models/index.vue <style scoped> + 全局 <style>（el-switch 调整）
+// CSS Modules：本组件自有类名走局部作用域；element-plus 内部类名（.el-tabs__* / .el-switch*）
+// 是第三方/全局渲染结构，需用 :global(...) 包裹，避免被 hash 改名后选不中。
+
+// ===== 全局：el-switch label/容器（源非 scoped 的 <style>）=====
+:global(.el-switch__label) {
+  line-height: 32px !important;
+  height: 32px !important;
+}
+:global(.el-switch) {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  margin-right: 10px;
+}
+
+.model-management {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 20px 12px;
+  background: #f8fafc;
+  overflow: hidden;
+}
+
+// 嵌入项目设置页（showHeader=false）：独立页那套 flex:1 + min-height:0 + overflow:hidden
+// 的高度链是为 height:100% 全屏设计的；嵌入时根改 height:auto 后没有确定高度可分配，
+// tab 与 panel 会重叠。这里回归普通文档流——块级堆叠，tab 在上、表单在下，自然不重叠。
+.model-management.is-embedded {
+  height: auto;
+  padding: 0;
+  background: transparent;
+  overflow: visible;
+
+  .content-wrapper,
+  .tab-panel {
+    display: block;
+    flex: none;
+    min-height: auto;
+    overflow: visible;
+  }
+}
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 16px;
+  flex-shrink: 0;
+
+  .header-left {
+    h1 {
+      margin: 0 0 4px 0;
+      font-size: 22px;
+      font-weight: 600;
+      color: #1e293b;
+      letter-spacing: -0.2px;
+    }
+
+    p {
+      margin: 0;
+      font-size: 13px;
+      color: #64748b;
+      line-height: 1.5;
+    }
+  }
+}
+
+// ===== 内容区：tabs 在顶部，tab-panel 接管剩余高度（panel 透明，让 ModelForm 接管视觉）=====
+.content-wrapper {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+
+  // 源 :deep(.model-tabs)：ScrollableTabs 透传 tabsClass="model-tabs"。
+  // 迁移后底层是 Mantine Tabs（非 el-tabs），但保留这组样式契约以对齐视觉；
+  // element-plus 内部选择器用 :global 包裹防止被改名。
+  :global(.model-tabs) {
+    flex-shrink: 0;
+
+    :global(.el-tabs__header) {
+      margin: 0 0 16px 0;
+      border: none;
+
+      :global(.el-tabs__nav-wrap) {
+        &::after {
+          // 浅 divider，从 tab 头部下贯穿
+          background: linear-gradient(90deg, transparent 0%, #e2e8f0 12%, #e2e8f0 88%, transparent 100%);
+          height: 1px;
+        }
+      }
+
+      :global(.el-tabs__nav) {
+        border: none;
+      }
+
+      :global(.el-tabs__active-bar) {
+        display: none; // 我们自己用 ::after 画活动指示
+      }
+
+      :global(.el-tabs__item) {
+        border: none !important;
+        padding: 0 18px;
+        height: 40px;
+        line-height: 40px;
+        font-size: 14px;
+        font-weight: 500;
+        color: #64748b;
+        background: transparent;
+        margin-right: 4px;
+        position: relative;
+        transition: color 0.15s ease;
+
+        &:hover {
+          color: #475569;
+        }
+
+        // 选中态：单色 yiw 下划线（无渐变无阴影）
+        &:global(.is-active) {
+          color: #17483e;
+
+          &::after {
+            content: '';
+            position: absolute;
+            left: 18px;
+            right: 18px;
+            bottom: -1px;
+            height: 2px;
+            background: #17483e;
+          }
+        }
+      }
+    }
+
+    // 单槽设计：tab 内容由外部 .tab-panel 接管，el-tabs 内部 content 不需要
+    :global(.el-tabs__content) {
+      display: none;
+    }
+  }
+}
+
+// tab-panel：纯容器，让 ModelForm 内部的渐变背景 + 圆角直接显示
+.tab-panel {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Tablet */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .model-management {
+    padding: 20px 14px 10px;
+  }
+
+  .page-header {
+    flex-direction: column;
+    gap: 12px;
+    align-items: flex-start;
+
+    .header-left h1 {
+      font-size: 24px;
+    }
+  }
+}
+
+/* Mobile */
+@media (max-width: 767px) {
+  .model-management {
+    padding: 14px 10px 8px;
+  }
+
+  .page-header {
+    flex-direction: column;
+    gap: 8px;
+    align-items: flex-start;
+    margin-bottom: 14px;
+
+    .header-left {
+      h1 {
+        font-size: 22px;
+      }
+
+      p {
+        font-size: 13px;
+      }
+    }
+  }
+
+  .content-wrapper {
+    :global(.model-tabs) {
+      :global(.el-tabs__header) {
+        margin-bottom: 12px;
+
+        :global(.el-tabs__item) {
+          padding: 0 14px;
+          font-size: 14px;
+
+          &:global(.is-active)::after {
+            left: 14px;
+            right: 14px;
+          }
+        }
+      }
+    }
+  }
+}

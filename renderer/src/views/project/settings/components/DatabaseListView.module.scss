@@ -1,0 +1,133 @@
+/* 使用全局样式: ad-page-list, ad-page-toolbar, ad-card-grid, ad-grid-card, ad-create-view 等(见 styles/components.scss) */
+
+/* 向导 Dialog 样式(对应原 :deep(.guide-dialog))
+   Mantine Modal 上挂 className={styles.guideDialog}，内部结构用 :global 命中 */
+.guideDialog {
+  // 弹窗整体跟随主题:内容卡用 yiw 表面色(暗色下不再是白卡),弹层 token 由
+  // yiw-theme.scss 的 :root[data-mantine-color-scheme] 作用域提供(传送门也能取到)
+  :global(.mantine-Modal-content) {
+    background: var(--yiw-surface, #fff);
+    color: var(--yiw-text, #1e293b);
+  }
+
+  :global(.mantine-Modal-body) {
+    padding: 0;
+    height: calc(94vh - 6vh);
+    overflow: hidden;
+  }
+}
+
+@media (max-width: 767px) {
+  .guideDialog {
+    :global(.mantine-Modal-content) {
+      width: calc(100vw - 16px) !important;
+      max-width: 100%;
+      margin: 8px auto !important;
+    }
+
+    :global(.mantine-Modal-body) {
+      height: min(88dvh, 640px);
+      max-height: 88dvh;
+      overflow: hidden;
+      box-sizing: border-box;
+    }
+  }
+}
+
+/* 数据库空状态 */
+.databaseEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+
+  .emptyIllustration {
+    margin-bottom: 32px;
+
+    .illustrationContainer {
+      position: relative;
+      width: 160px;
+      height: 100px;
+
+      .dbIcon {
+        position: absolute;
+        width: 48px;
+        height: 48px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+
+        .dbLabel {
+          font-size: 11px;
+          font-weight: 700;
+          letter-spacing: -0.5px;
+        }
+
+        &.mysql {
+          top: 0;
+          left: 10px;
+          background: linear-gradient(135deg, #dbeafe, #bfdbfe);
+          color: #2563eb;
+        }
+
+        &.pg {
+          top: 0;
+          right: 10px;
+          background: linear-gradient(135deg, #dce8e2, #dce8e2);
+          color: #22594c;
+        }
+      }
+
+      .centerHub {
+        position: absolute;
+        bottom: 0;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 56px;
+        height: 56px;
+        border-radius: 16px;
+        background: #17483e;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 26px;
+        color: #fff;
+        box-shadow: 0 8px 24px rgba(23, 72, 62, 0.3);
+      }
+    }
+  }
+
+  .emptyContent {
+    text-align: center;
+
+    .emptyTitle {
+      margin: 0 0 12px 0;
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--yiw-text, #1e293b);
+    }
+
+    .emptyDesc {
+      margin: 0 0 24px 0;
+      font-size: 14px;
+      color: var(--yiw-muted, #64748b);
+      line-height: 1.8;
+    }
+
+    .emptyFeatures {
+      display: flex;
+      justify-content: center;
+      gap: 28px;
+      margin-bottom: 28px;
+
+      .featureItem {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+        color: var(--yiw-text-soft, #475569);
+      }
+    }
+  }
+}

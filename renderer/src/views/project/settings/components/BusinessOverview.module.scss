@@ -1,0 +1,378 @@
+
+/* 使用全局样式: ad-page-list, ad-page-toolbar, ad-card-grid, ad-grid-card 等 */
+
+/* 组件特有样式 */
+.iconBusiness {
+  font-size: 18px;
+  color: var(--yiw-accent, #17483e);
+}
+
+.textMuted {
+  color: var(--yiw-faint, #94a3b8);
+  font-style: italic;
+  font-size: 12px;
+}
+
+/* 业务卡片描述样式覆盖 */
+.gridCardDesc {
+  line-height: 1.6;
+  margin-bottom: 12px;
+}
+
+/* 空状态自定义插画 */
+.businessEmpty {
+  flex-direction: column;
+  align-items: center;
+
+  .emptyIllustration {
+    margin-bottom: 32px;
+
+    .illustrationContainer {
+      position: relative;
+      width: 200px;
+      height: 120px;
+
+      .dataSource {
+        position: absolute;
+        width: 44px;
+        height: 44px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 20px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+
+        &.db {
+          top: 0;
+          left: 18px;
+          background: linear-gradient(135deg, #dbeafe, #bfdbfe);
+          color: #3b82f6;
+        }
+
+        &.doc {
+          top: 0;
+          right: 18px;
+          background: linear-gradient(135deg, #dcfce7, #bbf7d0);
+          color: #22c55e;
+        }
+
+        &.file {
+          bottom: -22px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: linear-gradient(135deg, #fef3c7, #fde68a);
+          color: #f59e0b;
+        }
+      }
+
+      .centerHub {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 56px;
+        height: 56px;
+        border-radius: 16px;
+        background: #17483e;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 24px;
+        color: #fff;
+        box-shadow: 0 8px 24px rgba(23, 72, 62, 0.3);
+        z-index: 1;
+      }
+
+      .connectionLines {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+      }
+    }
+  }
+
+  .emptyContent {
+    text-align: center;
+
+    .emptyTitle {
+      margin: 14px 0;
+      font-size: 22px;
+      font-weight: 600;
+      color: var(--yiw-text, #1e293b);
+    }
+
+    .emptyDesc {
+      margin: 0 0 24px;
+      font-size: 14px;
+      color: var(--yiw-muted, #64748b);
+      line-height: 1.8;
+    }
+
+    .emptyFeatures {
+      display: flex;
+      justify-content: center;
+      gap: 32px;
+      margin-bottom: 28px;
+
+      .featureItem {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+        color: var(--yiw-text-soft, #475569);
+
+        svg {
+          font-size: 16px;
+          color: var(--yiw-accent, #17483e);
+        }
+      }
+    }
+  }
+}
+
+/* 详情/编辑视图 - 使用全局样式 ad-detail-page */
+.detailView {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.detailHeader {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-top: 10px;
+  gap: 10px;
+
+  .headerTitle {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--yiw-text, #1e293b);
+  }
+}
+
+.createContent {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+
+  .createFormCard {
+    width: 100%;
+    max-width: 600px;
+    margin: 0 auto;
+    background: var(--yiw-surface, #fff);
+    border-radius: 16px;
+    padding: 40px 48px;
+
+    .formIcon {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 24px;
+
+      .iconCircle {
+        width: 64px;
+        height: 64px;
+        border-radius: 16px;
+        background: #17483e;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 8px 20px rgba(23, 72, 62, 0.25);
+
+        svg {
+          font-size: 30px;
+          color: #fff;
+        }
+      }
+    }
+
+    .formHeader {
+      text-align: center;
+      margin-bottom: 32px;
+
+      h3 {
+        margin: 0 0 8px;
+        font-size: 22px;
+        font-weight: 600;
+        color: var(--yiw-text, #1e293b);
+      }
+
+      p {
+        margin: 0;
+        font-size: 14px;
+        color: var(--yiw-muted, #64748b);
+      }
+    }
+
+    .formActions {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      margin-top: 28px;
+
+      button {
+        min-width: 120px;
+      }
+    }
+  }
+}
+
+.detailContent {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* 使用全局样式 ad-detail-tabs */
+.businessTabs {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.tabLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settingsContent {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+
+  .settingsCard {
+    margin-bottom: 20px;
+    border: 1px solid var(--el-border-color-light);
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+
+    .cardHeader {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--el-text-color-primary);
+      background-color: var(--el-fill-color-lighter);
+      border-bottom: 1px solid var(--el-border-color-light);
+      padding: 12px 20px;
+    }
+
+    .cardBody {
+      padding: 20px;
+    }
+  }
+
+  .dangerCard {
+    border-color: var(--el-color-danger-light-7);
+
+    .cardHeader {
+      background-color: var(--el-color-danger-light-9);
+      border-bottom-color: var(--el-color-danger-light-7);
+      color: var(--el-color-danger);
+    }
+  }
+
+  .dangerZoneContent {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 20px;
+
+    .dangerInfo {
+      flex: 1;
+
+      .dangerTitle {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--el-text-color-primary);
+        margin-bottom: 8px;
+      }
+
+      .dangerDesc {
+        font-size: 13px;
+        color: var(--el-text-color-secondary);
+        line-height: 1.6;
+      }
+    }
+
+    button {
+      flex-shrink: 0;
+    }
+  }
+}
+
+/* 业务配置：与项目设置移动端体验对齐 */
+@include mobile {
+  .detailHeader {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-right: 4px;
+    margin-top: 4px;
+    margin-bottom: 4px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--el-border-color-lighter);
+
+    .headerTitle {
+      font-size: 16px;
+      line-height: 1.35;
+      word-break: break-word;
+      flex: 1;
+      min-width: 0;
+    }
+  }
+
+  .createContent {
+    padding: 12px;
+
+    .createFormCard {
+      padding: 24px 16px;
+      border-radius: 12px;
+
+      .formHeader h3 {
+        font-size: 18px;
+      }
+
+      .formActions {
+        flex-direction: column;
+
+        button {
+          width: 100%;
+          min-height: 44px;
+          min-width: 0 !important;
+        }
+      }
+    }
+  }
+
+  .settingsContent {
+    padding: 12px;
+
+    .cardBody {
+      padding: 14px;
+    }
+
+    .dangerZoneContent {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 12px;
+
+      button {
+        width: 100%;
+        min-height: 44px;
+      }
+    }
+  }
+
+  .businessEmpty .emptyFeatures {
+    flex-direction: column;
+    gap: 14px !important;
+    align-items: center;
+  }
+}

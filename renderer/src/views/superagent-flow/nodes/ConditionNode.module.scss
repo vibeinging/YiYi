@@ -1,0 +1,171 @@
+.conditionDiamond {
+  position: relative;
+  width: 160px;
+  height: 160px;
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+// SVG 菱形(铺满 wrapper,真实菱形顶点 = wrapper 边中点)
+.diamondSvg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.05));
+  transition: filter 0.15s;
+  pointer-events: none; // 让 handle 不被 SVG 拦截
+}
+.conditionDiamond:hover .diamondSvg {
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.08));
+}
+.conditionDiamond.selected .diamondSvg {
+  filter: drop-shadow(0 4px 14px rgba(245, 158, 11, 0.3));
+}
+
+// 文本居中区域(菱形内接正方形,padding 后约 80×80 安全区)
+.diamondContent {
+  position: absolute;
+  inset: 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  pointer-events: none;
+  gap: 2px;
+}
+
+.diamondIcon {
+  font-size: 18px;
+  color: #d97706;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.diamondTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: #92400e;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  max-width: 100%;
+}
+
+.diamondExpr {
+  font-size: 10px;
+  color: #6b7280;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 92%;
+  padding: 1px 4px;
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 3px;
+}
+
+.diamondError {
+  font-size: 10px;
+  color: #b91c1c;
+  font-weight: 500;
+}
+
+// 分支标签(true 在右、false 在下,正好对应 handle 位置)
+.branchLabel {
+  position: absolute;
+  font-size: 10px;
+  background: #fff;
+  padding: 1px 5px;
+  border-radius: 3px;
+  pointer-events: none;
+  font-weight: 600;
+  border: 1px solid #e5e7eb;
+  z-index: 2;
+}
+.branchLabelTrue {
+  // 紧贴右顶点右侧
+  right: -34px;
+  top: calc(50% - 9px);
+  color: #059669;
+  border-color: #a7f3d0;
+}
+.branchLabelFalse {
+  // 紧贴下顶点下方
+  bottom: -22px;
+  left: calc(50% - 16px);
+  color: #dc2626;
+  border-color: #fecaca;
+}
+
+.nodeId {
+  position: absolute;
+  bottom: -16px;
+  right: 4px;
+  font-size: 10px;
+  color: #9ca3af;
+  font-family: monospace;
+}
+
+// reactflow handle 视觉(原 vue-flow__handle)
+.conditionDiamond :global(.react-flow__handle) {
+  width: 12px !important;
+  height: 12px !important;
+  border: 2px solid #fff !important;
+  background: #94a3b8 !important;
+  z-index: 3;
+}
+.conditionDiamond :global(.react-flow__handle.wf-handle-true) {
+  background: #10b981 !important;
+}
+.conditionDiamond :global(.react-flow__handle.wf-handle-false) {
+  background: #ef4444 !important;
+}
+
+/* Run 状态色块(2026-05-28 节点状态机 · 加 paused 4 态 2026-05-29)*/
+.conditionDiamond.runSkipped {
+  opacity: 0.55;
+}
+.conditionDiamond.runFail .diamondSvg {
+  filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.5));
+}
+.conditionDiamond.runOk .diamondSvg {
+  filter: drop-shadow(0 0 8px rgba(34, 197, 94, 0.4));
+}
+.conditionDiamond.runPaused .diamondSvg {
+  filter: drop-shadow(0 0 8px rgba(245, 158, 11, 0.55));
+}
+
+.runStatusBadge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+  z-index: 4;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+.runStatusBadge.badgeOk {
+  background: #22c55e;
+}
+.runStatusBadge.badgeFail {
+  background: #ef4444;
+}
+.runStatusBadge.badgeSkipped {
+  background: #9ca3af;
+}
+.runStatusBadge.badgePaused {
+  background: #f59e0b;
+}

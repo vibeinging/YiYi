@@ -1,0 +1,203 @@
+.single-edit-structure {
+  .form-item {
+    display: flex;
+    align-items: flex-start;
+    margin-bottom: 22px;
+  }
+
+  .form-label {
+    width: 120px;
+    flex-shrink: 0;
+    text-align: right;
+    padding-right: 12px;
+    line-height: 32px;
+    color: var(--yiw-text-soft, #606266);
+    font-size: 14px;
+  }
+
+  .form-content {
+    flex: 1;
+    min-width: 0;
+  }
+}
+
+// AI生成区域样式
+.ai-generate-section {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  width: 100%;
+
+  .ai-notes-input {
+    flex: 1;
+  }
+
+  button {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+}
+
+// 列工具栏
+.column-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+
+  .column-count {
+    font-size: 13px;
+    color: var(--yiw-muted, #909399);
+  }
+}
+
+.column-table {
+  width: 100%;
+}
+
+// 列分页
+.column-pagination {
+  margin-top: 12px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+}
+
+.dialog-footer {
+  margin-top: 16px;
+
+  button {
+    background: transparent;
+    border: 1px solid var(--yiw-border, #dcdfe6);
+
+    &:hover {
+      background: transparent;
+      border-color: #409eff;
+      color: #409eff;
+    }
+  }
+}
+
+// 可编辑字段样式
+.editable-field {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  border: 1px dashed var(--yiw-border, #dcdfe6);
+  gap: 8px;
+  transition: all 0.2s;
+
+  &:hover {
+    border-color: #409eff;
+    background: var(--yiw-hover, #f5f7fa);
+  }
+
+  .field-value {
+    color: var(--yiw-text-soft, #606266);
+    font-size: 13px;
+
+    &.truncate {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  .placeholder {
+    color: var(--yiw-faint, #c0c4cc);
+    font-size: 13px;
+  }
+
+  .count-badge {
+    background: #409eff;
+    color: #fff;
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    flex-shrink: 0;
+  }
+
+  &:hover {
+    .placeholder {
+      color: #409eff;
+    }
+  }
+}
+
+// 编辑器弹窗样式
+.field-editor {
+  .editor-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    font-weight: 500;
+    color: var(--yiw-text, #303133);
+
+    .editor-tip {
+      font-weight: normal;
+      font-size: 12px;
+      color: var(--yiw-muted, #909399);
+    }
+  }
+
+  .editor-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 12px;
+
+    .json-error {
+      font-size: 12px;
+      color: #f56c6c;
+    }
+
+    .footer-buttons {
+      display: flex;
+      gap: 8px;
+      margin-left: auto;
+    }
+  }
+}
+
+/* ===== Mobile ===== */
+@media (max-width: 768px) {
+  .single-edit-structure {
+    // 表单标签顶部对齐
+    .form-item {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .form-label {
+      width: auto;
+      text-align: left;
+    }
+  }
+
+  // AI 生成区域垂直排列
+  .ai-generate-section {
+    flex-direction: column;
+
+    button {
+      width: 100%;
+      min-height: 36px;
+    }
+  }
+
+  // 列工具栏垂直排列
+  .column-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  // 表格水平滚动
+  .column-table {
+    min-width: 700px;
+  }
+}

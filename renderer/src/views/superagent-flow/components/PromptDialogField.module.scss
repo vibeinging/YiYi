@@ -1,0 +1,148 @@
+/* 预览态:截断只读框 */
+.pfPreview {
+  position: relative;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+  padding: 6px 8px 18px;
+  min-height: 48px;
+  cursor: pointer;
+  background: #fff;
+  transition: border-color 0.2s, background 0.2s;
+}
+.pfPreview:hover {
+  border-color: #409eff;
+  background: #f5f9ff;
+}
+.pfPreviewText {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #303133;
+}
+.pfPreviewPlaceholder {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #c0c4cc;
+}
+.pfEditBadge {
+  position: absolute;
+  right: 6px;
+  bottom: 3px;
+  font-size: 10px;
+  color: #909399;
+  pointer-events: none;
+}
+.pfPreview:hover .pfEditBadge {
+  color: #409eff;
+}
+
+/* 弹窗内 textarea:等宽字体 + 占满 body 剩余高度 */
+.pfTextarea {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.pfTextarea :global(.mantine-Textarea-wrapper),
+.pfTextarea :global(.mantine-InputWrapper-wrapper) {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+.pfTextarea :global(textarea) {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* 以下样式从 editor.vue 搬来,保证弹窗内 chip / 示例风格一致 */
+.refBar {
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  border-radius: 4px;
+  padding: 8px;
+  margin-bottom: 10px;
+}
+.refBarTitle {
+  font-size: 11px;
+  color: #64748b;
+  margin-bottom: 6px;
+}
+.refBarTags {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+.refTag {
+  cursor: pointer;
+  font-size: 11px;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  text-transform: none;
+}
+.refTag :global(.mantine-Badge-label) {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.refTag:hover {
+  background: #dbeafe;
+}
+
+.exampleBar {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  font-size: 11px;
+}
+.exampleLabel {
+  color: #64748b;
+}
+
+.hintDesc {
+  color: #909399;
+  font-size: 11px;
+  margin-top: 6px;
+  line-height: 1.4;
+}
+
+/* footer:右对齐取消/确定 */
+.dialogFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* el-dialog 的右下角 resize + 尺寸约束(配合 module.scss 给 Modal content 用) */
+.promptDialog {
+  resize: both;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-width: 480px;
+  min-height: 360px;
+  max-width: 95vw;
+  max-height: 90vh;
+}
+/* body 填充剩余高,让 textarea 跟随弹窗伸缩 */
+.promptDialogBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}

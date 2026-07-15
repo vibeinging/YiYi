@@ -1,0 +1,263 @@
+.apiKeyManagement {
+  padding: 0;
+}
+
+.actionBar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+
+  .batchActions {
+    display: flex;
+    gap: 8px;
+  }
+}
+
+.keysContainer {
+  min-height: 200px;
+  position: relative;
+}
+
+.keysList {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.keyCard {
+  .keyHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+
+    .keyTitle {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+
+      h3 {
+        font-size: 18px;
+        font-weight: 600;
+        margin: 0;
+      }
+    }
+
+    .keyActions {
+      display: flex;
+      gap: 8px;
+
+      .deleteBtn {
+        color: var(--el-color-danger);
+
+        &:hover:not(:disabled) {
+          color: var(--el-color-danger-light-3);
+        }
+
+        &:disabled {
+          color: var(--el-text-color-disabled);
+        }
+      }
+    }
+  }
+
+  .keyBody {
+    .keyDesc {
+      color: var(--el-text-color-secondary);
+      margin-bottom: 16px;
+    }
+
+    .keyDisplay {
+      margin-bottom: 16px;
+
+      label {
+        display: block;
+        font-size: 14px;
+        font-weight: 500;
+        margin-bottom: 8px;
+      }
+
+      .keyValue {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 8px 12px;
+        background: var(--el-fill-color-lighter);
+        border-radius: 4px;
+
+        .keyText {
+          flex: 1;
+          font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+          font-size: 13px;
+          color: var(--el-text-color-primary);
+          word-break: break-all;
+        }
+      }
+
+      .keyWarning {
+        margin-top: 8px;
+      }
+    }
+
+    .keyInfo {
+      display: flex;
+      gap: 24px;
+      margin-bottom: 12px;
+      padding: 12px;
+      background: var(--el-fill-color-lighter);
+      border-radius: 4px;
+
+      .infoItem {
+        .label {
+          font-size: 12px;
+          color: var(--el-text-color-secondary);
+          margin-right: 4px;
+        }
+
+        .value {
+          font-size: 14px;
+          font-weight: 500;
+        }
+      }
+    }
+
+    .keyValidity {
+      font-size: 14px;
+
+      .label {
+        color: var(--el-text-color-secondary);
+        margin-right: 8px;
+      }
+    }
+  }
+}
+
+.formTip {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.ml2 {
+  margin-left: 8px;
+}
+
+.mb4 {
+  margin-bottom: 16px;
+}
+
+// 媒体查询：移动端（对齐原 @include mobile，约 768px）
+@media (max-width: 768px) {
+  .apiKeyManagement {
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  .actionBar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+
+    .batchActions {
+      flex-direction: column;
+      width: 100%;
+
+      button {
+        width: 100%;
+        min-height: 44px;
+        margin: 0;
+      }
+    }
+
+    > button {
+      width: 100%;
+      min-height: 44px;
+    }
+  }
+
+  .keyCard .keyHeader {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+
+    .keyActions {
+      flex-wrap: wrap;
+      width: 100%;
+      justify-content: flex-start;
+      gap: 4px 12px;
+
+      button {
+        min-height: 40px;
+      }
+    }
+  }
+
+  .keyCard .keyBody .keyInfo {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .createdKeySection .keyDisplayBox .keyInputWrapper .copyBtn {
+    position: static;
+    margin-top: 8px;
+    width: 100%;
+  }
+}
+
+.createdKeySection {
+  .keyDisplayBox {
+    margin-bottom: 16px;
+
+    .keyInputWrapper {
+      position: relative;
+
+      .keyInput {
+        width: 100%;
+
+        textarea {
+          font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+          font-size: 13px;
+          line-height: 1.6;
+          background-color: var(--el-fill-color-lighter);
+          padding-right: 80px;
+          word-break: break-all;
+        }
+      }
+
+      .copyBtn {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        z-index: 1;
+      }
+    }
+  }
+
+  .keyInfoBox {
+    padding: 16px;
+    background: var(--el-fill-color-lighter);
+    border-radius: 4px;
+
+    .infoRow {
+      display: flex;
+      margin-bottom: 8px;
+
+      &:last-child {
+        margin-bottom: 0;
+      }
+
+      .label {
+        font-size: 14px;
+        color: var(--el-text-color-secondary);
+        min-width: 100px;
+      }
+
+      .value {
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--el-text-color-primary);
+      }
+    }
+  }
+}

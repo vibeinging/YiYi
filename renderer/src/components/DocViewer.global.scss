@@ -1,0 +1,16 @@
+/* 非 scoped 全局样式：对齐原 Vue 版的 .markdown-drawer 抽屉外观覆盖。
+   原 Element Plus 选择器 (.el-drawer / __header / __body) 在 Mantine 下
+   改为针对 Mantine Drawer 的内部结构,通过 .markdown-drawer 容器限定作用域。 */
+.markdown-drawer .mantine-Drawer-content {
+  background: #f8fafc;
+}
+
+.markdown-drawer .mantine-Drawer-header {
+  margin-bottom: 0;
+  padding: 20px 24px 0;
+  background: #f8fafc;
+}
+
+.markdown-drawer .mantine-Drawer-body {
+  padding: 20px 24px 24px;
+}

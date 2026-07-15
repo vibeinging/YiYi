@@ -1,0 +1,108 @@
+.actionGroup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  row-gap: 12px;
+
+  &.rightActions {
+    margin-left: auto;
+  }
+}
+
+.batchDeleteContent {
+  .tableSelection {
+    .selectionHeader {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+      font-weight: 500;
+      color: #303133;
+
+      .selectAllBtn {
+        margin-left: 12px;
+      }
+    }
+
+    .tableCheckboxGroup {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      max-height: 400px;
+      overflow-y: auto;
+      padding: 12px;
+      background: #f8f9fa;
+      border-radius: 8px;
+
+      .tableCheckbox {
+        margin: 0;
+        padding: 8px 12px;
+        background: var(--ad-bg-white);
+        border-radius: 6px;
+        transition: all 0.2s;
+        flex: 0 0 auto;
+
+        &:hover {
+          background: #f0f9ff;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        }
+      }
+    }
+  }
+}
+
+.dialogFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+// 移动端适配(原 @include mobile)
+@media (max-width: 767px) {
+  .actionGroup.rightActions {
+    margin-left: 0;
+    width: 100%;
+    justify-content: stretch;
+
+    .batchActionBtn {
+      flex: 1;
+      min-width: 0;
+      min-height: 44px;
+    }
+  }
+
+  .batchDeleteContent .tableSelection {
+    .selectionHeader {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 10px;
+
+      .selectAllBtn {
+        margin-left: 0;
+        width: 100%;
+        min-height: 40px;
+      }
+    }
+
+    .tableCheckboxGroup {
+      max-height: 50dvh;
+      flex-direction: column;
+
+      .tableCheckbox {
+        width: 100%;
+        flex: none;
+      }
+    }
+  }
+
+  .dialogFooter {
+    flex-direction: column-reverse;
+    align-items: stretch;
+
+    button {
+      width: 100%;
+      margin: 0 !important;
+      min-height: 44px;
+    }
+  }
+}

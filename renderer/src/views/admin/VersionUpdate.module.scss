@@ -1,0 +1,309 @@
+/* ── 色彩体系 ── */
+$ink:       #1a1d23;
+$ink-soft:  #4a4f5c;
+$ink-muted: #8b8f9a;
+$surface:   #f7f7f8;
+$line:      #e4e5e8;
+
+$feat-accent:  #1a7a4c;
+$feat-bg:      #e8f5ee;
+$fix-accent:   #b45309;
+$fix-bg:       #fef3e2;
+$imp-accent:   #3b5bdb;
+$imp-bg:       #edf2ff;
+
+/* ── 入场动画 ── */
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── 页面容器 ── */
+.versionPage {
+  height: 100%;
+  background: $surface;
+  display: flex;
+  flex-direction: column;
+}
+
+.versionScroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 40px 48px 80px;
+  max-width: 100%;
+}
+
+/* ── 顶部版本标识 ── */
+.versionMasthead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 32px;
+  padding-bottom: 24px;
+  border-bottom: 2px solid $ink;
+
+  .mastheadLeft {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+  }
+
+  .productName {
+    font-size: 22px;
+    font-weight: 700;
+    color: $ink;
+    letter-spacing: -0.3px;
+  }
+
+  .versionTag {
+    font-size: 13px;
+    font-weight: 600;
+    color: $ink-muted;
+    background: $line;
+    padding: 3px 10px;
+    border-radius: 4px;
+    letter-spacing: 0.3px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .releaseDate {
+    font-size: 13px;
+    color: $ink-muted;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* ── 统计概览 ── */
+.statsRow {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 44px;
+}
+
+.statChip {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 18px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+
+  .statCount {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .statLabel {
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.2px;
+  }
+
+  &.feature {
+    background: $feat-bg;
+    border-color: rgba($feat-accent, 0.15);
+    .statCount { color: $feat-accent; }
+    .statLabel { color: $feat-accent; }
+  }
+
+  &.fix {
+    background: $fix-bg;
+    border-color: rgba($fix-accent, 0.15);
+    .statCount { color: $fix-accent; }
+    .statLabel { color: $fix-accent; }
+  }
+
+  &.improve {
+    background: $imp-bg;
+    border-color: rgba($imp-accent, 0.15);
+    .statCount { color: $imp-accent; }
+    .statLabel { color: $imp-accent; }
+  }
+}
+
+/* ── 时间线 ── */
+.timeline {
+  position: relative;
+  padding-left: 0;
+}
+
+/* 分类分组容器(对应 Vue <template v-for>，不产生额外盒模型) */
+.timelineGroup {
+  display: contents;
+}
+
+/* 分类标记 */
+.timelineSectionLabel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+  margin-top: 8px;
+
+  /* 仅第一个分类的标签去掉上边距(对应原 .timeline > :first-child)；
+     因分组容器用 display:contents，这里精确匹配第一个分组的标签 */
+  .timelineGroup:first-child & {
+    margin-top: 0;
+  }
+
+  .sectionLine {
+    width: 32px;
+    height: 2px;
+    border-radius: 1px;
+  }
+
+  .sectionText {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+  }
+
+  &.feature {
+    .sectionLine { background: $feat-accent; }
+    .sectionText { color: $feat-accent; }
+  }
+
+  &.fix {
+    .sectionLine { background: $fix-accent; }
+    .sectionText { color: $fix-accent; }
+  }
+
+  &.improve {
+    .sectionLine { background: $imp-accent; }
+    .sectionText { color: $imp-accent; }
+  }
+}
+
+/* 时间线条目 */
+.timelineItem {
+  display: flex;
+  gap: 20px;
+  animation: slideIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: var(--delay);
+
+  .timelineTrack {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 12px;
+    flex-shrink: 0;
+    padding-top: 7px;
+  }
+
+  .timelineNode {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    border: 2px solid;
+    background: $surface;
+    position: relative;
+    z-index: 1;
+  }
+
+  .timelineRail {
+    width: 1.5px;
+    flex: 1;
+    min-height: 16px;
+  }
+
+  .timelineBody {
+    flex: 1;
+    padding-bottom: 24px;
+  }
+
+  .itemText {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.65;
+    color: $ink-soft;
+  }
+
+  /* 分类着色 */
+  &.feature {
+    .timelineNode { border-color: $feat-accent; }
+    .timelineRail { background: rgba($feat-accent, 0.18); }
+  }
+
+  &.fix {
+    .timelineNode { border-color: $fix-accent; }
+    .timelineRail { background: rgba($fix-accent, 0.18); }
+  }
+
+  &.improve {
+    .timelineNode { border-color: $imp-accent; }
+    .timelineRail { background: rgba($imp-accent, 0.18); }
+  }
+}
+
+/* 终点标记 */
+.timelineEnd {
+  display: flex;
+  justify-content: flex-start;
+  padding-left: 2px;
+
+  .endDot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: $line;
+  }
+}
+
+/* ── 平板适配 ── */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .versionScroll {
+    padding: 32px 32px 60px;
+  }
+}
+
+/* ── 移动端适配 ── */
+@media (max-width: 767px) {
+  .versionScroll {
+    padding: 20px 16px 60px;
+    max-width: 100%;
+  }
+
+  .versionMasthead {
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 24px;
+    padding-bottom: 20px;
+
+    .productName {
+      font-size: 19px;
+    }
+  }
+
+  .statsRow {
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 32px;
+
+    .statChip {
+      padding: 8px 14px;
+      .statCount { font-size: 17px; }
+    }
+  }
+
+  .timelineItem {
+    gap: 14px;
+
+    .timelineBody {
+      padding-bottom: 18px;
+    }
+
+    .itemText {
+      font-size: 13px;
+    }
+  }
+}

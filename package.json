@@ -1,0 +1,18 @@
+{
+  "name": "yiw-desktop",
+  "private": true,
+  "version": "0.0.1",
+  "productName": "YiW",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build:icons": "electron/node_modules/.bin/electron scripts/generate-icons.cjs",
+    "dev:renderer": "node scripts/native-npm.mjs --prefix renderer run dev -- --host 127.0.0.1",
+    "dev:electron": "node scripts/native-npm.mjs --prefix electron run dev",
+    "typecheck": "node scripts/native-npm.mjs --prefix renderer run typecheck",
+    "test:renderer": "node scripts/native-npm.mjs --prefix renderer test",
+    "ensure:server-pi": "node scripts/native-npm.mjs --prefix server run ensure:pi",
+    "build:renderer": "npm run ensure:server-pi && node scripts/native-npm.mjs --prefix renderer run build:desktop",
+    "build:server-pi": "node scripts/native-npm.mjs --prefix server run build:pi"
+  }
+}

@@ -1,0 +1,326 @@
+.sessionBrowser {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  background: var(--el-bg-color);
+}
+
+.filterBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  flex-shrink: 0;
+
+  .titleSection {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+
+    h2 {
+      margin: 0;
+      font-size: 20px;
+      color: #2c3e50;
+    }
+
+    .totalCount {
+      color: #666;
+      font-size: 13px;
+    }
+  }
+
+  .filters {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+  }
+}
+
+.mainArea {
+  flex: 1;
+  display: flex;
+  gap: 16px;
+  min-height: 0;
+}
+
+// 左侧面板
+.sessionListPanel {
+  width: 300px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.loadingSection {
+  padding: 16px;
+}
+
+.emptyState {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 40px;
+}
+
+// 会话列表 - 复用 history 页面样式
+.historyList {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 4px;
+
+  .historyItem {
+    background: white;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+    border: 2px solid #f0f0f0;
+    cursor: pointer;
+    transition: all 0.2s ease;
+
+    &:hover {
+      box-shadow: 0 3px 12px rgba(0, 0, 0, 0.1);
+      border-color: var(--el-color-primary-light-5);
+    }
+
+    &.active {
+      border-color: var(--el-color-primary);
+      background: var(--el-color-primary-light-9);
+    }
+
+    .itemHeader {
+      .leftInfo {
+        .title {
+          margin: 0 0 8px 0;
+          color: #2c3e50;
+          font-size: 14px;
+          font-weight: 600;
+          line-height: 1.4;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .metaInfo {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          color: #666;
+          font-size: 12px;
+          flex-wrap: wrap;
+
+          > span {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+            white-space: nowrap;
+
+            .el-icon {
+              font-size: 12px;
+            }
+          }
+
+          .userTag {
+            color: #409eff;
+            font-weight: 500;
+          }
+
+          .actionType {
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+
+            .actionTypeIcon {
+              font-size: 11px;
+            }
+          }
+
+          .actionTypeSmartQuery {
+            background-color: #f0f4ff;
+            color: #39739d;
+          }
+
+          .actionTypeRootCause {
+            background-color: #fff3e0;
+            color: #ec8828;
+          }
+
+          .actionTypeDeepResearch {
+            background-color: #f5f5f5;
+            color: #909399;
+          }
+
+          .actionTypeDataClaw {
+            background-color: #e8f5e9;
+            color: #4caf50;
+          }
+
+          .actionTypeNl2sql {
+            background-color: #e3f2fd;
+            color: #1976d2;
+          }
+
+          .actionTypeDataScience {
+            background-color: #fce4ec;
+            color: #e91e63;
+          }
+        }
+      }
+    }
+  }
+}
+
+.listPagination {
+  padding: 8px 4px;
+  display: flex;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+// 右侧消息面板 - 复用 session 详情页样式
+.messagePanel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: white;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.sessionDetail {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.sessionHeader {
+  background: white;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 16px 24px;
+  flex-shrink: 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+
+  .sessionTitle {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #1e293b;
+    margin: 0 0 4px;
+  }
+
+  .sessionMeta {
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+  }
+}
+
+.sessionContent {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: #f8fafc;
+}
+
+.messagesContainer {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.messageSelectWrapper {
+  display: flex;
+  align-items: flex-start;
+
+  > :global(.message-item) {
+    flex: 1;
+    min-width: 0;
+  }
+}
+
+/* ==================== 响应式适配 ==================== */
+
+/* 平板适配 */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .sessionBrowser {
+    padding: 12px;
+  }
+
+  .sessionListPanel {
+    width: 280px;
+  }
+}
+
+/* 移动端适配 */
+@media (max-width: 767px) {
+  .sessionBrowser {
+    padding: 8px;
+  }
+
+  .filterBar {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+
+    h2 {
+      font-size: 16px;
+    }
+
+    .filters {
+      width: 100%;
+      flex-wrap: wrap;
+
+      :global(.el-select) {
+        width: 100% !important;
+        flex: 1;
+      }
+
+      .el-button {
+        min-height: 44px;
+      }
+    }
+  }
+
+  .mainArea {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .sessionListPanel {
+    width: 100%;
+    max-height: 35vh;
+    flex-shrink: 0;
+  }
+
+  .sessionCard {
+    padding: 10px;
+    min-height: 44px;
+  }
+
+  .messagePanel {
+    flex: 1;
+    min-height: 300px;
+  }
+
+  .messagesList {
+    padding: 8px;
+  }
+
+  .listPagination {
+    :global(.mantine-Pagination-root) {
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+  }
+}

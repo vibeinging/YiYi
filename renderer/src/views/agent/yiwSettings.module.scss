@@ -1,0 +1,526 @@
+/* yiw-agent 设置页 —— 整窗两栏(左导航 + 主面板)。
+   复用 .yiw-root 的 --yiw-* token,亮/暗自动切换;视觉语言对齐对话壳
+   (暖灰/灰黑全局底 + 浮起卡片 + YiW 深绿/中性灰强调)。 */
+
+/* 布局壳(.wrap / .side / .back / .nav / .navItem / .navSep / .main)已抽到
+   SettingsShell(settingsShell.module.scss)统一管理 —— App 设置与项目设置共用同一份,
+   保证返回键位置/侧栏宽度/内容卡一致。本文件只保留 App 设置自有的内容样式。 */
+
+.bootBtn {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 11px;
+  border: 1px solid var(--yiw-border);
+  background: transparent;
+  border-radius: var(--yiw-r-el);
+  color: var(--yiw-text-soft);
+  font-size: 13.5px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+.bootBtn svg {
+  flex: none;
+  color: var(--yiw-accent);
+}
+.bootBtn:hover {
+  border-color: var(--yiw-accent-soft);
+  color: var(--yiw-text);
+}
+.bootBtnActive {
+  border-color: var(--yiw-accent-soft);
+  color: var(--yiw-accent);
+}
+
+/* ── 主面板内容(卡片本体 .main 由 SettingsShell 提供) ── */
+.mainInner {
+  min-height: 100%;
+  padding: 26px 30px 34px;
+  box-sizing: border-box;
+}
+.mainInnerFixed {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.pageTitle {
+  margin: 0 0 14px;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--yiw-text);
+}
+.pageLead {
+  max-width: 620px;
+  margin: -4px 0 22px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--yiw-muted);
+}
+.badges {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 22px;
+}
+.badge {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--yiw-text-soft);
+  background: var(--yiw-chip-bg);
+  border: 1px solid var(--yiw-border-soft);
+  border-radius: 7px;
+  padding: 3px 11px;
+}
+
+/* ── 分组卡:浮起卡上的浅一档面板 ── */
+.section {
+  margin: 0 0 18px;
+}
+.sectionHead {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 2px 8px;
+}
+.sectionTitle {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.35;
+  font-weight: 700;
+  color: var(--yiw-text);
+}
+.sectionDesc {
+  margin: 3px 0 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--yiw-muted);
+}
+.group {
+  background: color-mix(in srgb, var(--yiw-bg) 72%, var(--yiw-surface));
+  border: 1px solid color-mix(in srgb, var(--yiw-border) 82%, transparent);
+  border-radius: var(--yiw-r-el);
+  box-shadow: none;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+.section .group {
+  margin-bottom: 0;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 17px 20px;
+  min-height: 76px;
+  box-sizing: border-box;
+  transition:
+    background 0.14s ease,
+    opacity 0.14s ease;
+}
+.row + .row {
+  border-top: 1px solid var(--yiw-border-soft);
+}
+.row:hover {
+  background: color-mix(in srgb, var(--yiw-hover) 42%, transparent);
+}
+.rowStacked {
+  display: block;
+}
+.rowIcon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid color-mix(in srgb, var(--yiw-border) 70%, transparent);
+  border-radius: var(--yiw-r-sm);
+  background: color-mix(in srgb, var(--yiw-surface) 70%, transparent);
+  color: var(--yiw-text-soft);
+}
+.rowText {
+  flex: 1;
+  min-width: 0;
+}
+.rowHeadLine {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.rowLabel {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--yiw-text);
+}
+.rowDesc {
+  margin-top: 4px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--yiw-muted);
+}
+.rowCtrl {
+  flex: none;
+}
+.rowDisabled {
+  opacity: 0.58;
+}
+.rowDisabled:hover {
+  background: transparent;
+}
+
+/* ── 下拉 ── */
+.select {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 150px;
+  background: var(--yiw-code-bg);
+  border: 1px solid var(--yiw-border);
+  border-radius: var(--yiw-r-el);
+  transition:
+    border-color 0.14s ease,
+    box-shadow 0.14s ease;
+}
+.select:focus-within {
+  border-color: var(--yiw-accent-soft);
+  box-shadow: var(--yiw-ring);
+}
+.selectIcon {
+  position: absolute;
+  left: 11px;
+  display: inline-flex;
+  color: var(--yiw-muted);
+  pointer-events: none;
+}
+.select select {
+  appearance: none;
+  width: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--yiw-text);
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  padding: 8px 32px 8px 13px;
+  cursor: pointer;
+}
+.controlDisabled {
+  opacity: 0.76;
+}
+.controlDisabled select {
+  cursor: not-allowed;
+}
+.select:has(.selectIcon) select {
+  padding-left: 33px;
+}
+.select select option {
+  color: #17211d;
+}
+.selectChevron {
+  position: absolute;
+  right: 10px;
+  color: var(--yiw-faint);
+  pointer-events: none;
+}
+
+/* ── 分段选择 ── */
+.seg {
+  display: inline-flex;
+  background: var(--yiw-chip-bg);
+  border-radius: var(--yiw-r-el);
+  padding: 3px;
+  gap: 2px;
+}
+.segBtn {
+  border: none;
+  background: transparent;
+  color: var(--yiw-muted);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 5px 15px;
+  border-radius: calc(var(--yiw-r-el) - 3px);
+  cursor: pointer;
+  transition:
+    color 0.12s ease,
+    background 0.12s ease;
+}
+.segBtn:hover {
+  color: var(--yiw-text-soft);
+}
+.segBtnActive,
+.segBtnActive:hover {
+  background: var(--yiw-surface);
+  color: var(--yiw-accent);
+  font-weight: 600;
+  box-shadow: var(--yiw-active-shadow);
+}
+
+/* ── 开关 ── */
+.toggle {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid var(--yiw-border);
+  background: var(--yiw-chip-bg);
+  cursor: pointer;
+  padding: 0;
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease;
+}
+.toggle:disabled {
+  cursor: not-allowed;
+}
+.toggleKnob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--yiw-faint);
+  transition:
+    transform 0.16s ease,
+    background 0.16s ease;
+}
+.toggleOn {
+  background: var(--yiw-accent);
+  border-color: transparent;
+}
+.toggleOn .toggleKnob {
+  transform: translateX(16px);
+  background: var(--yiw-on-accent);
+}
+
+/* ── 文本输入行 ── */
+.saveBtn {
+  flex: none;
+  border: 1px solid var(--yiw-border);
+  background: var(--yiw-chip-bg);
+  color: var(--yiw-text-soft);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 5px 14px;
+  border-radius: var(--yiw-r-sm);
+  cursor: pointer;
+  transition:
+    filter 0.12s ease,
+    opacity 0.12s ease;
+}
+.saveBtn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.saveBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.actionBtn {
+  flex: none;
+  border: 1px solid color-mix(in srgb, var(--yiw-border) 82%, transparent);
+  background: color-mix(in srgb, var(--yiw-chip-bg) 58%, transparent);
+  color: var(--yiw-text-soft);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 650;
+  padding: 7px 14px;
+  border-radius: var(--yiw-r-sm);
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease,
+    color 0.12s ease;
+}
+.actionBtn:hover {
+  border-color: color-mix(in srgb, var(--yiw-amber) 52%, var(--yiw-border));
+  background: color-mix(in srgb, var(--yiw-amber-bg) 42%, var(--yiw-chip-bg));
+  color: var(--yiw-text);
+}
+.textInput {
+  width: 100%;
+  margin-top: 12px;
+  background: var(--yiw-code-bg);
+  border: 1px solid var(--yiw-border);
+  border-radius: var(--yiw-r-el);
+  color: var(--yiw-text);
+  font-family: var(--yiw-mono);
+  font-size: 12.5px;
+  padding: 9px 13px;
+  outline: none;
+  box-sizing: border-box;
+  transition:
+    border-color 0.14s ease,
+    box-shadow 0.14s ease;
+}
+.textInput::placeholder {
+  color: var(--yiw-faint);
+  font-family: var(--yiw-mono);
+}
+.textInput:focus {
+  border-color: var(--yiw-accent-soft);
+  box-shadow: var(--yiw-ring);
+}
+
+.pathRow {
+  align-items: flex-start;
+}
+.pathEdit {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) 34px auto;
+  gap: 8px;
+  margin-top: 12px;
+}
+.pathInput {
+  min-width: 0;
+  width: 100%;
+  background: var(--yiw-code-bg);
+  border: 1px solid var(--yiw-border);
+  border-radius: var(--yiw-r-el);
+  color: var(--yiw-text);
+  font-family: var(--yiw-mono);
+  font-size: 12.5px;
+  padding: 9px 12px;
+  outline: none;
+  box-sizing: border-box;
+  transition:
+    border-color 0.14s ease,
+    box-shadow 0.14s ease;
+}
+.pathInput::placeholder {
+  color: var(--yiw-faint);
+  font-family: var(--yiw-sans);
+}
+.pathInput:focus {
+  border-color: color-mix(in srgb, var(--yiw-amber) 58%, var(--yiw-border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--yiw-amber) 12%, transparent);
+}
+.iconBtn {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--yiw-border);
+  border-radius: var(--yiw-r-sm);
+  background: var(--yiw-chip-bg);
+  color: var(--yiw-text-soft);
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease,
+    color 0.12s ease;
+}
+.iconBtn:hover {
+  border-color: color-mix(in srgb, var(--yiw-amber) 52%, var(--yiw-border));
+  background: color-mix(in srgb, var(--yiw-amber-bg) 42%, var(--yiw-chip-bg));
+  color: var(--yiw-text);
+}
+
+/* ── 内嵌问数页(模型设置等):仅留间距,内部自带样式 ── */
+.embed {
+  margin-top: 4px;
+  /* 外层表单卡去掉边框 → 激活 tab 与卡片之间不再有那条分隔线,完全咬合 */
+  --md-card-border: transparent;
+
+  /* 模型设置 tab:Chrome 页签式——激活项是填充的圆角顶 tab,底边压住卡片顶边
+     与下方表单卡「咬合」成一体;非激活项透明、hover 微亮。切换时背景/文字平滑过渡
+     形成淡入淡出动画。颜色全用 --yiw-* / --md-surface,亮暗自适应。 */
+  :global(.model-tabs .mantine-Tabs-list) {
+    --tabs-list-border-width: 0;
+    flex-wrap: nowrap;
+    gap: 4px;
+    border-bottom: none;
+    margin-bottom: 0;
+    margin-left: 10px;
+    padding: 0 6px;
+    position: relative;
+    z-index: 1;
+  }
+  :global(.model-tabs .mantine-Tabs-tab) {
+    border: 1px solid transparent;
+    background: transparent;
+    border-radius: 10px 10px 0 0;
+    margin-bottom: -1px;
+    padding: 9px 20px;
+    font-size: 13.5px;
+    font-weight: 500;
+    color: var(--yiw-muted);
+    position: relative;
+    transition:
+      background-color 0.2s ease,
+      color 0.2s ease,
+      border-color 0.2s ease;
+  }
+  :global(.model-tabs .mantine-Tabs-tab:hover:not([data-active])) {
+    background: var(--yiw-nav-hover);
+    color: var(--yiw-text-soft);
+  }
+  /* 激活 tab:与卡片同底色 + 同边框,底边透明 → 视觉上与卡片连成一片(Chrome 咬合) */
+  :global(.model-tabs .mantine-Tabs-tab[data-active]) {
+    background: var(--md-surface, #fff);
+    color: var(--yiw-accent);
+    font-weight: 600;
+    border-color: var(--md-border, #e2e8f0);
+    border-bottom-color: var(--md-surface, #fff);
+    z-index: 2;
+  }
+}
+.embedFixed {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+
+  > :global(*) {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+}
+/* 暗色:把内嵌问数页(硬编码浅色 → 已改为 --md-* 变量)重映射到 yiw 暗色 token。
+   浅色主题下不覆盖,内嵌页用各自默认浅色值,与面板自然融合。
+   注:布局壳外移到 SettingsShell 后,这里改用全局 .yiw-root[data-theme] 作锚(原 .wrap 已非本模块)。 */
+:global(.yiw-root[data-theme='dark']) .embed {
+  --md-surface: var(--yiw-bg);
+  --md-subtle: var(--yiw-code-bg);
+  --md-border: var(--yiw-border);
+  --md-border-soft: var(--yiw-border-soft);
+  --md-border-strong: var(--yiw-border);
+  --md-text: var(--yiw-text);
+  --md-text-2: var(--yiw-text-soft);
+  --md-muted: var(--yiw-muted);
+  --md-faint: var(--yiw-faint);
+  /* 内嵌表单里直接用到的 element-plus 文本变量(暗色未被全局重映射,这里补) */
+  --el-text-color-primary: var(--yiw-text);
+  --el-text-color-secondary: var(--yiw-muted);
+}
+
+/* ── 占位骨架 ── */
+.placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 90px 20px;
+  color: var(--yiw-faint);
+}
+.placeholderText {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--yiw-text-soft);
+}
+.placeholderSub {
+  font-size: 13px;
+  color: var(--yiw-muted);
+}

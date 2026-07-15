@@ -1,0 +1,61 @@
+/* 使用全局样式: ad-detail-page, ad-detail-page-header, ad-detail-page-content, ad-detail-tabs, ad-tab-label */
+/* 源 Vue 无额外自定义样式，仅依赖全局类，这里在 module 内补齐高度链与布局以对齐全局行为 */
+
+.ad-detail-page {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ad-detail-page-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+
+  .header-title {
+    font-size: 16px;
+    font-weight: 600;
+  }
+}
+
+.ad-detail-page-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* tabs 高度链 */
+.ad-detail-tabs {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+
+  :global(.mantine-Tabs-list) {
+    flex-shrink: 0;
+  }
+
+  :global(.mantine-Tabs-panel) {
+    flex: 1;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+}
+
+/* tab 标签：图标 + 文字 */
+.ad-tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}

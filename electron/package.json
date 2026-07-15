@@ -1,0 +1,17 @@
+{
+  "name": "yiw-electron",
+  "productName": "YiW",
+  "version": "0.1.0",
+  "description": "YiW 桌面壳，基于 Electron 承载 React 渲染层与本地 Node 后端",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "prestart": "npm --prefix ../server run ensure:pi",
+    "start": "electron .",
+    "predev": "npm --prefix ../server run ensure:pi",
+    "dev": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^42.4.1"
+  }
+}

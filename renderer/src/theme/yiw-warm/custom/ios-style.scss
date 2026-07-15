@@ -1,0 +1,493 @@
+/* iOS Style Global Variables and Components */
+html.yiw-warm {
+
+  /* ===== iOS Border Radius Variables ===== */
+  --ios-radius-small: 8px;
+  --ios-radius-medium: 10px;
+  --ios-radius-large: 12px;
+  --ios-radius-xlarge: 16px;
+
+  /* ===== iOS Shadow Variables ===== */
+  --ios-shadow-small: 0 1px 3px rgba(0, 0, 0, 0.16);
+  --ios-shadow-medium: 0 4px 12px rgba(0, 0, 0, 0.1);
+  --ios-shadow-large: 0 8px 24px rgba(0, 0, 0, 0.15);
+
+  /* ===== iOS Background Colors ===== */
+  --ios-bg-primary: #ffffff;
+  --ios-bg-secondary: #f5f7fa;
+  --ios-bg-tertiary: #f8f9fa;
+  --ios-bg-overlay: rgba(0, 0, 0, 0.04);
+
+  /* ===== iOS Transition ===== */
+  --ios-transition-fast: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  --ios-transition-normal: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  --ios-transition-slow: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* ===== Override Element Plus Button for iOS style ===== */
+  .el-button {
+    border-radius: var(--ios-radius-medium) !important;
+    font-weight: 500;
+    transition: all var(--ios-transition-normal);
+
+    &:active {
+      transform: scale(0.98);
+    }
+  }
+
+  /* ===== iOS Style Input ===== */
+  .el-input__wrapper {
+    border-radius: var(--ios-radius-medium) !important;
+    transition: all var(--ios-transition-normal);
+    box-shadow: var(--ios-shadow-small) !important;
+
+    &:hover {
+      box-shadow: var(--ios-shadow-medium) !important;
+    }
+
+    &.is-focus {
+      box-shadow: 0 0 0 4px rgba(23, 72, 62, 0.1) !important;
+    }
+  }
+
+  /* Search input with suffix icon */
+  .search-input {
+    .el-input__suffix {
+      display: flex;
+      align-items: center;
+      padding-right: 8px;
+
+      .search-icon {
+        cursor: pointer;
+        font-size: 26px;
+        color: #909399;
+        padding: 6px;
+        border-radius: var(--ios-radius-small);
+        transition: all var(--ios-transition-fast);
+
+        &:hover {
+          color: #17483e;
+          background-color: rgba(23, 72, 62, 0.06);
+        }
+
+        &:active {
+          transform: scale(0.95);
+        }
+      }
+    }
+  }
+
+  .el-textarea__inner {
+    border-radius: var(--ios-radius-medium) !important;
+    transition: all var(--ios-transition-normal);
+
+    &:focus {
+      box-shadow: 0 0 0 4px rgba(23, 72, 62, 0.1) !important;
+    }
+  }
+
+  /* ===== iOS Style Input Group ===== */
+  .el-input-group {
+    display: inline-flex;
+    width: 100%;
+    align-items: stretch;
+
+    .el-input__wrapper {
+      border-radius: 0 !important;
+    }
+
+    /* First element */
+    &__prepend,
+    &:not(.el-input-group--append) .el-input__wrapper {
+      border-top-left-radius: var(--ios-radius-medium) !important;
+      border-bottom-left-radius: var(--ios-radius-medium) !important;
+    }
+
+    /* Last element */
+    &__append,
+    &:not(.el-input-group--prepend) .el-input__wrapper {
+      border-top-right-radius: var(--ios-radius-medium) !important;
+      border-bottom-right-radius: var(--ios-radius-medium) !important;
+    }
+
+    /* Prepend & Append */
+    &__prepend,
+    &__append {
+      background-color: var(--ios-bg-tertiary) !important;
+      border: 1px solid #dcdfe6 !important;
+      padding: 0 12px;
+      white-space: nowrap;
+      transition: all var(--ios-transition-normal);
+
+      .el-button {
+        margin: 0;
+        border-radius: var(--ios-radius-small) !important;
+
+        &:hover {
+          background-color: var(--ios-bg-overlay) !important;
+        }
+      }
+    }
+
+    &__prepend {
+      border-right: none !important;
+    }
+
+    &__append {
+      border-left: none !important;
+    }
+
+    /* When has both prepend and append */
+    &.el-input-group--prepend.el-input-group--append {
+      .el-input__wrapper {
+        border-radius: 0 !important;
+      }
+    }
+  }
+
+  /* Search input specific style */
+  .el-input-group {
+    &__append {
+      background-color: #ffffff !important;
+      border: 1px solid #dcdfe6 !important;
+
+      .el-button {
+        background: transparent !important;
+        border: none !important;
+        color: #909399 !important;
+        padding: 8px 12px !important;
+
+        &:hover {
+          color: #17483e !important;
+          background-color: rgba(23, 72, 62, 0.06) !important;
+        }
+
+        &:active {
+          transform: scale(0.95);
+        }
+
+        .el-icon {
+          font-size: 16px;
+        }
+      }
+    }
+
+    /* Alternative: Integrated search style (no visible separator) */
+    &.search-integrated {
+      .el-input__wrapper {
+        border-top-right-radius: var(--ios-radius-medium) !important;
+        border-bottom-right-radius: var(--ios-radius-medium) !important;
+        padding-right: 40px;
+      }
+
+      .el-input-group__append {
+        position: absolute;
+        right: 8px;
+        top: 50%;
+        transform: translateY(-50%);
+        background: transparent !important;
+        border: none !important;
+        padding: 0 !important;
+
+        .el-button {
+          width: 32px;
+          height: 32px;
+          padding: 0 !important;
+          border-radius: 6px !important;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+      }
+    }
+  }
+
+  /* ===== iOS Style Select ===== */
+  .el-select__wrapper {
+    border-radius: var(--ios-radius-medium) !important;
+    transition: all var(--ios-transition-normal);
+    box-shadow: var(--ios-shadow-small) !important;
+
+    &:hover {
+      box-shadow: var(--ios-shadow-medium) !important;
+    }
+
+    &.is-focus {
+      box-shadow: 0 0 0 4px rgba(23, 72, 62, 0.1) !important;
+    }
+  }
+
+  /* ===== iOS Style Card ===== */
+  .el-card {
+    border-radius: var(--ios-radius-large) !important;
+    border: none !important;
+    box-shadow: var(--ios-shadow-small) !important;
+    transition: all var(--ios-transition-normal);
+
+    &:hover {
+      box-shadow: var(--ios-shadow-medium) !important;
+      transform: translateY(-2px);
+    }
+
+    .el-card__header {
+      border-bottom: 1px solid #f1f3f5 !important;
+      padding: 16px 20px;
+    }
+
+    .el-card__body {
+      padding: 20px;
+    }
+  }
+
+  /* ===== iOS Style Dialog ===== */
+  .el-dialog {
+    border-radius: var(--ios-radius-xlarge) !important;
+    box-shadow: var(--ios-shadow-large) !important;
+
+    .el-dialog__header {
+      padding: 10px 12px 10px;
+    }
+
+    .el-dialog__body {
+      padding: 10px 12px;
+    }
+
+    .el-dialog__footer {
+      padding: 10px 12px 10px;
+    }
+  }
+
+  /* ===== iOS Style Dropdown ===== */
+  .el-dropdown-menu {
+    border-radius: var(--ios-radius-large) !important;
+    border: none !important;
+    box-shadow: var(--ios-shadow-large) !important;
+    padding: 8px !important;
+
+    .el-dropdown-menu__item {
+      border-radius: var(--ios-radius-small) !important;
+      margin: 2px 0;
+      padding: 8px 12px;
+      transition: all var(--ios-transition-fast);
+
+      &:hover {
+        background-color: var(--ios-bg-overlay) !important;
+      }
+    }
+  }
+
+  /* ===== iOS Style Popover ===== */
+  .el-popover {
+    border-radius: var(--ios-radius-large) !important;
+    border: none !important;
+    box-shadow: var(--ios-shadow-large) !important;
+  }
+
+  /* ===== iOS Style Message Box ===== */
+  .el-message-box {
+    border-radius: var(--ios-radius-xlarge) !important;
+    border: none !important;
+    box-shadow: var(--ios-shadow-large) !important;
+
+    .el-message-box__header {
+      padding: 20px 24px 12px;
+    }
+
+    .el-message-box__content {
+      padding: 12px 24px;
+    }
+
+    .el-message-box__btns {
+      padding: 12px 24px 20px;
+    }
+  }
+
+  /* ===== iOS Style Pagination ===== */
+  .el-pagination {
+    background-color: #ffffff !important;
+    padding: 12px 16px;
+    border-radius: var(--ios-radius-large);
+
+    .el-pager li {
+      background-color: transparent !important;
+      border: none !important;
+      border-radius: 0 !important;
+      color: #5c5f66 !important;
+      min-width: 32px;
+      height: 32px;
+      line-height: 32px;
+      margin: 0 2px;
+      transition: all var(--ios-transition-fast);
+      font-weight: 500;
+
+      &:hover:not(.is-active) {
+        color: #17483e !important;
+        background-color: rgba(23, 72, 62, 0.06) !important;
+        border-radius: var(--ios-radius-small) !important;
+      }
+
+      &.is-active {
+        background: #17483e !important;
+        border-color: transparent !important;
+        color: #ffffff !important;
+        border-radius: var(--ios-radius-small) !important;
+        box-shadow:
+          0 2px 6px -2px rgba(23, 72, 62, 0.3),
+          0 4px 12px -4px rgba(23, 72, 62, 0.2);
+      }
+
+      &.is-disabled {
+        color: #c0c4cc !important;
+        cursor: not-allowed !important;
+      }
+    }
+
+    .btn-prev,
+    .btn-next {
+      background-color: transparent !important;
+      border: none !important;
+      border-radius: var(--ios-radius-small) !important;
+      color: #5c5f66 !important;
+      min-width: 32px;
+      height: 32px;
+      padding: 0 8px;
+      transition: all var(--ios-transition-fast);
+
+      &:hover:not(:disabled) {
+        color: #17483e !important;
+        background-color: rgba(23, 72, 62, 0.06) !important;
+      }
+
+      &:disabled {
+        color: #c0c4cc !important;
+        cursor: not-allowed !important;
+      }
+    }
+
+    .el-pagination__total,
+    .el-pagination__jump {
+      color: #5c5f66;
+      font-weight: 500;
+    }
+
+    .el-select .el-input__wrapper {
+      box-shadow: none !important;
+    }
+  }
+
+  /* ===== iOS Style Switch ===== */
+  .el-switch {
+    --el-switch-on-color: #17483e;
+
+    .el-switch__core {
+      border-radius: 20px !important;
+      transition: all var(--ios-transition-normal);
+    }
+  }
+
+  /* ===== iOS Style Checkbox & Radio ===== */
+  .el-checkbox__inner,
+  .el-radio__inner {
+    border-radius: var(--ios-radius-small) !important;
+    transition: all var(--ios-transition-fast);
+  }
+
+  .el-radio__inner {
+    border-radius: 50% !important;
+  }
+
+  /* ===== iOS Style Tag ===== */
+  .el-tag {
+    border-radius: var(--ios-radius-medium) !important;
+    border: none !important;
+    padding: 4px 12px;
+    font-weight: 500;
+  }
+
+  /* ===== iOS Style Badge ===== */
+  .el-badge__content {
+    border-radius: 10px !important;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  }
+
+  /* ===== iOS Style Scrollbar ===== */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+    border-radius: 10px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.1);
+    border-radius: 10px;
+    transition: all var(--ios-transition-fast);
+
+    &:hover {
+      background: rgba(0, 0, 0, 0.2);
+    }
+  }
+
+  /* ===== iOS Style Table ===== */
+  .el-table {
+    border-radius: var(--ios-radius-large) !important;
+    overflow: hidden;
+
+    th.el-table__cell {
+      background-color: var(--ios-bg-tertiary) !important;
+      font-weight: 600;
+    }
+
+    .el-button + .el-button {
+      margin-left: 10px !important;
+    }
+
+    .el-table__body tr:hover > td {
+      background-color: var(--ios-bg-overlay) !important;
+    }
+  }
+
+  /* ===== iOS Style Resizable Elements ===== */
+  /* 可拖动调整大小的元素样式 */
+  [style*="resize"],
+  .resizable {
+    position: relative;
+
+    &::after {
+      content: '';
+      position: absolute;
+      right: 4px;
+      bottom: 4px;
+      width: 12px;
+      height: 12px;
+      background:
+        linear-gradient(135deg, transparent 40%, #c0c4cc 40%, #c0c4cc 50%, transparent 50%),
+        linear-gradient(135deg, transparent 40%, #c0c4cc 40%, #c0c4cc 50%, transparent 50%),
+        linear-gradient(135deg, transparent 40%, #c0c4cc 40%, #c0c4cc 50%, transparent 50%);
+      background-size: 6px 6px;
+      background-position: bottom right, bottom 6px right 6px, bottom 12px right 12px;
+      background-repeat: no-repeat;
+      pointer-events: none;
+      opacity: 0.8;
+      transition: opacity var(--ios-transition-fast);
+    }
+
+    &:hover::after {
+      opacity: 1;
+      background:
+        linear-gradient(135deg, transparent 40%, #909399 40%, #909399 50%, transparent 50%),
+        linear-gradient(135deg, transparent 40%, #909399 40%, #909399 50%, transparent 50%),
+        linear-gradient(135deg, transparent 40%, #909399 40%, #909399 50%, transparent 50%);
+      background-size: 6px 6px;
+      background-position: bottom right, bottom 6px right 6px, bottom 12px right 12px;
+      background-repeat: no-repeat;
+    }
+  }
+
+  /* Webkit resizer 增强 */
+  ::-webkit-resizer {
+    background-color: transparent;
+  }
+}

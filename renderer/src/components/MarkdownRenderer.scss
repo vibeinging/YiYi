@@ -1,0 +1,70 @@
+// Mermaid 放大模态框样式（全局，因为 portal 到 body）
+.mermaid-zoom-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.85);
+  z-index: 9999;
+  cursor: grab;
+  overflow: hidden;
+
+  &:active {
+    cursor: grabbing;
+  }
+}
+
+.mermaid-zoom-content {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  max-width: 95vw;
+  max-height: 90vh;
+  overflow: visible;
+  background: transparent;
+  padding: 40px;
+  cursor: inherit;
+}
+
+.mermaid-zoom-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.15);
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.25);
+  }
+}
+
+.mermaid-zoom-svg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  svg {
+    width: auto;
+    height: auto;
+    max-width: 90vw;
+    max-height: 85vh;
+    min-width: 800px;
+    min-height: 600px;
+  }
+
+  // 强制文字为白色
+  text, tspan {
+    fill: #ffffff !important;
+  }
+}

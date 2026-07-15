@@ -1,0 +1,1342 @@
+/**
+ * 公共组件样式
+ *
+ * 本文件包含项目中常用的UI组件样式模式
+ * 使用方式: 在组件中直接使用类名，无需额外导入
+ */
+
+/* ========================================
+   颜色变量
+   ======================================== */
+:root {
+  // 主色调
+  --ad-primary: #17483e;
+  --ad-primary-light: rgba(23, 72, 62, 0.08);
+  --ad-primary-lighter: rgba(23, 72, 62, 0.04);
+
+  // 文本颜色
+  --ad-text-primary: #1e293b;
+  --ad-text-secondary: #64748b;
+  --ad-text-muted: #94a3b8;
+
+  // 边框颜色
+  --ad-border: #e2e8f0;
+  --ad-border-light: #f1f5f9;
+
+  // 背景颜色
+  --ad-bg-white: #ffffff;
+  --ad-bg-gray: #f8fafc;
+  --ad-bg-hover: #f1f5f9;
+
+  // 危险色
+  --ad-danger: #ef4444;
+  --ad-danger-light: rgba(239, 68, 68, 0.08);
+
+  // 成功色
+  --ad-success: #10b981;
+
+  // 警告色
+  --ad-warning: #f59e0b;
+
+  // 间距
+  --ad-spacing-xs: 4px;
+  --ad-spacing-sm: 8px;
+  --ad-spacing-md: 16px;
+  --ad-spacing-lg: 24px;
+  --ad-spacing-xl: 32px;
+
+  // 圆角
+  --ad-radius-sm: 6px;
+  --ad-radius-md: 8px;
+  --ad-radius-lg: 12px;
+  --ad-radius-xl: 16px;
+
+  // 阴影
+  --ad-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --ad-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --ad-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+/* ========================================
+   详情视图布局 (Detail View Layout)
+   用于: 数据源详情、业务详情、文档详情等
+   ======================================== */
+
+// 详情视图容器
+.ad-detail-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--ad-bg-white);
+  border-radius: var(--ad-radius-lg);
+  overflow: hidden;
+}
+
+// 详情头部 - 带返回按钮和标题
+.ad-detail-header {
+  display: flex;
+  align-items: center;
+  gap: var(--ad-spacing-sm);
+  padding: var(--ad-spacing-md) var(--ad-spacing-lg);
+  border-bottom: 1px solid var(--ad-border-light);
+  background: var(--ad-bg-white);
+  flex-shrink: 0;
+
+  .header-back-btn {
+    color: var(--ad-text-secondary);
+    padding: var(--ad-spacing-xs);
+
+    &:hover {
+      color: var(--ad-primary);
+    }
+  }
+
+  .header-title {
+    flex: 1;
+    min-width: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--ad-text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .header-actions {
+    margin-left: auto;
+    display: flex;
+    gap: var(--ad-spacing-sm);
+    flex-shrink: 0;
+  }
+}
+
+// 详情内容区
+.ad-detail-content {
+  flex: 1;
+  overflow: auto;
+  padding: var(--ad-spacing-lg);
+}
+
+// 详情标签页
+// 注意：全局样式中不能使用 :deep()，它只在 Vue SFC scoped style 中有效
+.ad-detail-tabs {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+
+  .el-tabs__header {
+    margin: 0;
+    padding: 0 var(--ad-spacing-lg);
+    border-bottom: none;
+  }
+
+  .el-tabs__nav {
+    border-right: none;
+  }
+
+  .el-tabs__nav-wrap::after {
+    display: none;
+  }
+
+  .el-tabs__item {
+    height: 48px;
+    line-height: 48px;
+    font-size: 14px;
+    color: var(--ad-text-secondary);
+
+    &.is-active {
+      color: var(--ad-primary);
+      font-weight: 500;
+    }
+  }
+
+  .el-tabs__content {
+    flex: 1;
+    overflow: auto;
+    padding: var(--ad-spacing-lg);
+  }
+
+  .el-tab-pane {
+    height: 100%;
+  }
+}
+
+/* ========================================
+   列表视图 (List View)
+   用于: 侧边栏列表、数据源列表、文档列表等
+   ======================================== */
+
+// 列表工具栏
+.ad-list-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--ad-spacing-md);
+  border-bottom: 1px solid var(--ad-border-light);
+  gap: var(--ad-spacing-md);
+
+  .toolbar-title {
+    flex: 1;
+    min-width: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ad-text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .toolbar-actions {
+    display: flex;
+    gap: var(--ad-spacing-sm);
+    flex-shrink: 0;
+  }
+}
+
+// 列表容器
+.ad-list-container {
+  flex: 1;
+  overflow: auto;
+  padding: var(--ad-spacing-sm);
+}
+
+// 列表项
+.ad-list-item {
+  display: flex;
+  align-items: center;
+  padding: var(--ad-spacing-md);
+  border-radius: var(--ad-radius-md);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-bottom: var(--ad-spacing-xs);
+
+  &:hover {
+    background: var(--ad-bg-hover);
+  }
+
+  &.is-active {
+    background: var(--ad-primary-light);
+
+    .item-name {
+      color: var(--ad-primary);
+    }
+  }
+
+  .item-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: var(--ad-radius-md);
+    background: var(--ad-primary-lighter);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ad-primary);
+    margin-right: var(--ad-spacing-md);
+    flex-shrink: 0;
+  }
+
+  .item-content {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .item-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--ad-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .item-desc {
+    font-size: 12px;
+    color: var(--ad-text-muted);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .item-actions {
+    opacity: 0;
+    transition: opacity 0.2s;
+    display: flex;
+    gap: var(--ad-spacing-xs);
+  }
+
+  &:hover .item-actions {
+    opacity: 1;
+  }
+}
+
+/* ========================================
+   卡片组件 (Card Components)
+   用于: 内容卡片、操作卡片等
+   ======================================== */
+
+// 基础卡片
+.ad-card {
+  background: var(--ad-bg-white);
+  border-radius: var(--ad-radius-lg);
+  padding: var(--ad-spacing-lg);
+
+  &.ad-card--bordered {
+    border: 1px solid var(--ad-border);
+  }
+
+  &.ad-card--shadow {
+    box-shadow: var(--ad-shadow-sm);
+  }
+}
+
+// 卡片头部
+.ad-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--ad-spacing-md);
+
+  .card-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--ad-text-primary);
+  }
+
+  .card-desc {
+    font-size: 13px;
+    color: var(--ad-text-secondary);
+    margin-top: var(--ad-spacing-xs);
+  }
+}
+
+// 卡片内容
+.ad-card-body {
+  // 默认无特殊样式
+}
+
+// 卡片底部
+.ad-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--ad-spacing-sm);
+  margin-top: var(--ad-spacing-lg);
+  padding-top: var(--ad-spacing-md);
+  border-top: 1px solid var(--ad-border-light);
+}
+
+/* ========================================
+   空状态 (Empty State)
+   用于: 无数据时的占位展示
+   ======================================== */
+
+.ad-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--ad-spacing-xl) var(--ad-spacing-lg);
+  text-align: center;
+
+  .empty-illustration {
+    margin-bottom: var(--ad-spacing-lg);
+    // 插图容器，具体插图由组件实现
+  }
+
+  .empty-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--ad-text-primary);
+    margin-bottom: var(--ad-spacing-sm);
+  }
+
+  .empty-desc {
+    font-size: 14px;
+    color: var(--ad-text-secondary);
+    max-width: 320px;
+    line-height: 1.6;
+    margin-bottom: var(--ad-spacing-lg);
+  }
+
+  .empty-features {
+    display: flex;
+    gap: var(--ad-spacing-sm);
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-bottom: var(--ad-spacing-lg);
+  }
+
+  .empty-action {
+    // 操作按钮区域
+  }
+}
+
+/* ========================================
+   危险操作区 (Danger Zone)
+   用于: 删除、重置等危险操作
+   ======================================== */
+
+.ad-danger-zone {
+  border: 1px solid var(--ad-danger);
+  border-radius: var(--ad-radius-lg);
+  padding: var(--ad-spacing-lg);
+  background: var(--ad-danger-light);
+
+  .danger-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ad-danger);
+    margin-bottom: var(--ad-spacing-sm);
+  }
+
+  .danger-desc {
+    font-size: 13px;
+    color: var(--ad-text-secondary);
+    margin-bottom: var(--ad-spacing-md);
+  }
+
+  .danger-action {
+    display: flex;
+    justify-content: flex-end;
+  }
+}
+
+/* ========================================
+   表单区块 (Form Section)
+   用于: 设置表单、编辑表单等
+   ======================================== */
+
+.ad-form-section {
+  margin-bottom: var(--ad-spacing-lg);
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+
+  .section-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ad-text-primary);
+    margin-bottom: var(--ad-spacing-md);
+    padding-bottom: var(--ad-spacing-sm);
+    border-bottom: 1px solid var(--ad-border-light);
+  }
+
+  .section-content {
+    // 表单内容区
+  }
+}
+
+/* ========================================
+   分隔线 (Divider)
+   ======================================== */
+
+.ad-divider {
+  height: 1px;
+  background: var(--ad-border-light);
+  margin: var(--ad-spacing-lg) 0;
+
+  &.ad-divider--sm {
+    margin: var(--ad-spacing-md) 0;
+  }
+}
+
+/* ========================================
+   标签 (Tags)
+   ======================================== */
+
+.ad-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: var(--ad-radius-sm);
+  background: var(--ad-primary-light);
+  color: var(--ad-primary);
+
+  &.ad-tag--success {
+    background: rgba(16, 185, 129, 0.1);
+    color: var(--ad-success);
+  }
+
+  &.ad-tag--warning {
+    background: rgba(245, 158, 11, 0.1);
+    color: var(--ad-warning);
+  }
+
+  &.ad-tag--danger {
+    background: var(--ad-danger-light);
+    color: var(--ad-danger);
+  }
+
+  &.ad-tag--gray {
+    background: var(--ad-bg-gray);
+    color: var(--ad-text-secondary);
+  }
+}
+
+/* ========================================
+   侧边栏布局 (Sidebar Layout)
+   用于: 左侧列表 + 右侧详情的布局
+   ======================================== */
+
+.ad-sidebar-layout {
+  display: flex;
+  height: 100%;
+  gap: var(--ad-spacing-md);
+
+  .sidebar-panel {
+    width: 280px;
+    flex-shrink: 0;
+    background: var(--ad-bg-white);
+    border-radius: var(--ad-radius-lg);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    transition: width 0.3s ease;
+
+    &.is-collapsed {
+      width: 0;
+      padding: 0;
+      overflow: hidden;
+    }
+  }
+
+  .main-panel {
+    flex: 1;
+    min-width: 0;
+    background: var(--ad-bg-white);
+    border-radius: var(--ad-radius-lg);
+    overflow: hidden;
+  }
+
+  .collapse-btn {
+    position: absolute;
+    left: 280px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 20px;
+    height: 40px;
+    background: var(--ad-bg-white);
+    border: 1px solid var(--ad-border);
+    border-left: none;
+    border-radius: 0 var(--ad-radius-sm) var(--ad-radius-sm) 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 10;
+    transition: left 0.3s ease;
+
+    &:hover {
+      background: var(--ad-bg-hover);
+    }
+  }
+}
+
+/* ========================================
+   卡片网格布局 (Card Grid)
+   用于: 数据源列表、业务列表等卡片网格展示
+   ======================================== */
+
+// 卡片网格容器
+.ad-card-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ad-spacing-md);
+  align-content: flex-start;
+}
+
+// 卡片网格项 - 响应式三栏布局
+.ad-grid-card {
+  flex: 1 1 calc(33.333% - 11px);
+  min-width: 360px;
+  max-width: calc(33.333% - 11px);
+  background: var(--ad-bg-white);
+  border: 1px solid var(--ad-border);
+  border-radius: var(--ad-radius-lg);
+  overflow: hidden;
+  transition: all 0.2s;
+  cursor: pointer;
+
+  &:hover {
+    border-color: #dce8e2;
+    box-shadow: 0 4px 12px rgba(23, 72, 62, 0.08);
+  }
+
+  .grid-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 18px;
+    background: var(--ad-bg-hover);
+    border-bottom: 1px solid var(--ad-border-light);
+  }
+
+  .grid-card-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--ad-text-primary);
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .grid-card-actions {
+    display: flex;
+    gap: 8px;
+
+    .el-button {
+      padding: 6px 12px;
+    }
+  }
+
+  .grid-card-body {
+    padding: 14px 18px;
+  }
+
+  .grid-card-info {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 8px;
+
+    .info-tag {
+      font-size: 13px;
+      color: var(--ad-text-secondary);
+      background: var(--ad-bg-hover);
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+  }
+
+  .grid-card-desc {
+    font-size: 13px;
+    color: var(--ad-text-secondary);
+    line-height: 1.5;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    word-break: break-word;
+
+    &.is-empty {
+      color: var(--ad-text-muted);
+      font-style: italic;
+    }
+  }
+
+  .grid-card-footer {
+    padding: 12px 18px;
+    border-top: 1px solid var(--ad-border-light);
+    background: var(--ad-bg-hover);
+    font-size: 12px;
+    color: var(--ad-text-muted);
+  }
+}
+
+// 响应式断点
+@media (max-width: 1200px) {
+  .ad-grid-card {
+    flex: 1 1 calc(50% - 8px);
+    max-width: calc(50% - 8px);
+  }
+}
+
+@media (max-width: 768px) {
+  .ad-grid-card {
+    flex: 1 1 100%;
+    max-width: 100%;
+    min-width: auto;
+  }
+}
+
+/* ========================================
+   创建视图 (Create View)
+   用于: 创建数据源、创建业务等表单页面
+   ======================================== */
+
+.ad-create-view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.ad-create-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: var(--ad-spacing-md);
+  border-bottom: 1px solid #e5e7eb;
+  margin-bottom: 20px;
+  flex-shrink: 0;
+
+  .header-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--ad-text-primary);
+  }
+}
+
+.ad-create-content {
+  flex: 1;
+  overflow-y: auto;
+
+  .create-form {
+    max-width: 600px;
+  }
+}
+
+/* ========================================
+   页面级列表视图 (Page List View)
+   用于: 数据源列表页、业务列表页等完整页面
+   ======================================== */
+
+.ad-page-list {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.ad-page-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--ad-spacing-md);
+  flex-shrink: 0;
+
+  .toolbar-count {
+    flex: 1;
+    min-width: 0;
+    font-size: 14px;
+    color: var(--ad-text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .toolbar-actions {
+    display: flex;
+    gap: var(--ad-spacing-sm);
+    flex-shrink: 0;
+  }
+}
+
+.ad-page-content {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.ad-page-empty {
+  width: 100%;
+  // 空状态整体下移一些(原 60px 顶部偏高、下方留白过多):顶部留白随视口自适应,
+  // 至少 96px、约 16vh,最多 200px,视觉更居中。内容区可滚动,不怕溢出。
+  padding: clamp(96px, 16vh, 200px) 20px 56px;
+  display: flex;
+  justify-content: center;
+}
+
+/* ========================================
+   标签页图标标签 (Tab Label with Icon)
+   用于: 详情页的 Tabs 标签
+   ======================================== */
+
+.ad-tab-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ========================================
+   详情页布局 (Detail Page Layout)
+   用于: 数据库详情、数据源详情等页面
+   ======================================== */
+
+// 详情页容器
+.ad-detail-page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+// 详情页头部 - 返回按钮 + 标题
+.ad-detail-page-header {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-top: 10px;
+  margin-bottom: 12px;
+  gap: 10px;
+
+  .header-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--ad-text-primary);
+  }
+}
+
+// 详情页内容区
+.ad-detail-page-content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+// 详情页标签页 - 全高度标签页布局
+// 注意：全局样式中不能使用 :deep()，它只在 Vue SFC scoped style 中有效
+.ad-detail-tabs {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+
+  .el-tabs__header {
+    margin-bottom: 0;
+    flex-shrink: 0;
+  }
+
+  .el-tabs__content {
+    flex: 1;
+    overflow: auto;
+    padding: 0;
+  }
+
+  .el-tab-pane {
+    height: 100%;
+    padding: 0 5px 10px 5px;
+  }
+}
+
+// Border-card 类型的详情页标签页
+// 注意：全局样式中不能使用 :deep()，它只在 Vue SFC scoped style 中有效
+.ad-detail-tabs-bordered {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+
+  .el-tabs__header {
+    border-bottom: none;
+    flex-shrink: 0;
+  }
+
+  .el-tabs__nav {
+    border-right: none;
+  }
+
+  .el-tabs__content {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    padding: 0;
+  }
+
+  .el-tab-pane {
+    height: 100%;
+    padding: 0 5px 10px 5px;
+  }
+}
+
+/* ========================================
+   信息展示区 (Info Display)
+   用于: 项目信息、元数据展示等
+   ======================================== */
+
+.ad-info-display {
+  padding: 20px;
+  background: var(--ad-bg-gray);
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+
+  .info-item {
+    display: flex;
+    align-items: center;
+    padding: 10px 0;
+
+    &:not(:last-child) {
+      border-bottom: 1px solid #e5e7eb;
+    }
+  }
+
+  .info-label {
+    width: 100px;
+    font-size: 13px;
+    color: var(--ad-text-secondary);
+    flex-shrink: 0;
+  }
+
+  .info-value {
+    font-size: 13px;
+    color: var(--ad-text-primary);
+    font-family: 'SF Mono', Monaco, monospace;
+  }
+}
+
+/* ========================================
+   工具类 (Utilities)
+   ======================================== */
+
+// 文本溢出省略
+.ad-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// 多行文本溢出
+.ad-line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.ad-line-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+// 禁用选择
+.ad-no-select {
+  user-select: none;
+}
+
+// 点击样式
+.ad-clickable {
+  cursor: pointer;
+  transition: opacity 0.2s;
+
+  &:hover {
+    opacity: 0.8;
+  }
+
+  &:active {
+    opacity: 0.6;
+  }
+}
+
+// 隐藏滚动条但保持可滚动
+.ad-hide-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* ========================================
+   响应式适配 (Mobile / Tablet)
+   ======================================== */
+
+// 卡片网格移动端单列
+@media (max-width: 767px) {
+  .ad-card-grid {
+    gap: var(--ad-spacing-sm);
+  }
+
+  .ad-grid-card {
+    flex: 1 1 100%;
+    max-width: 100%;
+    min-width: 0;
+
+    .grid-card-header {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 10px;
+      padding: 12px 14px;
+    }
+
+    .grid-card-title {
+      white-space: normal;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      row-gap: 6px;
+      min-width: 0;
+
+      > span {
+        word-break: break-word;
+      }
+
+      .el-tag {
+        flex-shrink: 0;
+      }
+    }
+
+    .grid-card-actions {
+      width: 100%;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+      gap: 4px 8px;
+
+      .el-button {
+        min-height: 40px;
+        padding: 6px 10px;
+      }
+    }
+
+    .grid-card-body {
+      padding: 12px 14px;
+    }
+
+    .grid-card-footer {
+      padding: 10px 14px;
+    }
+  }
+}
+
+// 详情视图移动端减少 padding
+@media (max-width: 767px) {
+  .ad-detail-view {
+    border-radius: 0;
+  }
+
+  .ad-detail-header {
+    padding: var(--ad-spacing-sm) var(--ad-spacing-md);
+
+    .header-title {
+      font-size: 15px;
+    }
+  }
+
+  .ad-detail-content {
+    padding: var(--ad-spacing-md);
+  }
+
+  .ad-detail-tabs {
+    :deep(.el-tabs__header) {
+      padding: 0 var(--ad-spacing-md);
+    }
+
+    :deep(.el-tabs__content) {
+      padding: var(--ad-spacing-md);
+    }
+  }
+}
+
+// 表单区块移动端全宽
+@media (max-width: 767px) {
+  .ad-form-section {
+    margin-bottom: var(--ad-spacing-md);
+
+    .section-title {
+      font-size: 13px;
+    }
+  }
+
+  .ad-create-content {
+    .create-form {
+      max-width: 100%;
+    }
+  }
+
+  .ad-create-header {
+    .header-title {
+      font-size: 16px;
+    }
+  }
+}
+
+// 列表容器移动端减少间距
+@media (max-width: 767px) {
+  .ad-list-container {
+    padding: var(--ad-spacing-xs);
+  }
+
+  .ad-list-item {
+    padding: var(--ad-spacing-sm) var(--ad-spacing-md);
+
+    .item-icon {
+      width: 32px;
+      height: 32px;
+      margin-right: var(--ad-spacing-sm);
+    }
+
+    // 移动端始终显示操作按钮
+    .item-actions {
+      opacity: 1;
+    }
+  }
+
+  .ad-list-toolbar {
+    padding: var(--ad-spacing-sm) var(--ad-spacing-md);
+    gap: var(--ad-spacing-sm);
+  }
+}
+
+// 侧边栏布局移动端竖排
+@media (max-width: 767px) {
+  .ad-sidebar-layout {
+    flex-direction: column;
+
+    .sidebar-panel {
+      width: 100%;
+      max-height: 40vh;
+      border-radius: var(--ad-radius-md);
+    }
+
+    .collapse-btn {
+      display: none;
+    }
+  }
+}
+
+// 表格移动端水平滚动
+@media (max-width: 767px) {
+  .el-table {
+    width: 100%;
+    overflow-x: auto;
+
+    &__body-wrapper {
+      overflow-x: auto;
+    }
+  }
+}
+
+// 信息展示区移动端适配
+@media (max-width: 767px) {
+  .ad-info-display {
+    padding: var(--ad-spacing-md);
+
+    .info-item {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 4px;
+    }
+
+    .info-label {
+      width: auto;
+    }
+  }
+}
+
+// 页面级列表视图移动端适配
+@media (max-width: 767px) {
+  .ad-page-list {
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  .ad-page-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--ad-spacing-sm);
+
+    .toolbar-count {
+      white-space: normal;
+    }
+
+    .toolbar-actions {
+      width: 100%;
+      flex-direction: column;
+      align-items: stretch;
+
+      .el-button {
+        width: 100%;
+        min-height: 44px;
+        margin: 0;
+      }
+    }
+  }
+
+  .ad-page-empty {
+    padding: clamp(56px, 10vh, 120px) 16px 40px;
+  }
+
+  .ad-create-view {
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  .ad-create-header {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .ad-create-content {
+    padding-bottom: 16px;
+  }
+
+  /* 详情页顶栏：返回 + 标题一行，操作按钮次行全宽 */
+  .ad-detail-page {
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  .ad-detail-page-header {
+    flex-wrap: wrap;
+    align-items: center;
+    margin-top: 6px;
+    margin-bottom: 10px;
+    gap: 8px;
+
+    > .el-tag {
+      flex-shrink: 0;
+    }
+
+    .header-title {
+      flex: 1;
+      min-width: 0;
+      font-size: 16px;
+      line-height: 1.35;
+      word-break: break-word;
+      white-space: normal;
+    }
+
+    .header-actions {
+      flex-basis: 100%;
+      width: 100%;
+      margin-left: 0 !important;
+      justify-content: stretch;
+      flex-wrap: wrap;
+      gap: 8px;
+
+      .el-button {
+        flex: 1;
+        min-width: 0;
+        min-height: 44px;
+      }
+    }
+  }
+
+  .ad-detail-page-content {
+    min-width: 0;
+  }
+
+  .ad-detail-tabs,
+  .ad-detail-tabs-bordered {
+    .el-tabs__nav-wrap {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      padding: 0 6px;
+    }
+
+    .el-tabs__nav {
+      flex-wrap: nowrap;
+    }
+
+    .el-tabs__item {
+      flex-shrink: 0;
+      padding: 0 12px;
+      font-size: 13px;
+    }
+
+    .el-tabs__content {
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior-y: contain;
+      padding-left: 8px;
+      padding-right: 10px;
+      box-sizing: border-box;
+    }
+
+    .el-tab-pane {
+      padding: 0 0 12px;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+  }
+}
+
+// 危险操作区移动端适配
+@media (max-width: 767px) {
+  .ad-danger-zone {
+    padding: var(--ad-spacing-md);
+  }
+}
+
+// 空状态移动端适配
+@media (max-width: 767px) {
+  .ad-empty-state {
+    padding: var(--ad-spacing-lg) var(--ad-spacing-md);
+
+    .empty-desc {
+      max-width: 100%;
+    }
+  }
+}
+
+// 侧栏「个人资料 / 修改密码」等弹窗（Teleport 到 body，需全局选择器）
+@media (max-width: 767px) {
+  .layout-user-dialog.el-dialog {
+    width: min(100%, calc(100vw - 24px)) !important;
+    max-width: calc(100vw - 16px);
+    margin: 12px auto !important;
+    box-sizing: border-box;
+  }
+
+  .layout-user-dialog .el-dialog__header {
+    padding: 16px 16px 8px;
+    margin-right: 0;
+  }
+
+  .layout-user-dialog .el-dialog__body {
+    padding: 8px 16px 16px;
+    max-height: min(70vh, 520px);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .layout-user-dialog .el-dialog__footer {
+    display: flex;
+    flex-direction: column-reverse;
+    align-items: stretch;
+    gap: 10px;
+    padding: 12px 16px 16px;
+  }
+
+  .layout-user-dialog .el-dialog__footer .el-button {
+    width: 100%;
+    margin: 0 !important;
+    min-height: 44px;
+  }
+
+  .layout-user-dialog .el-dialog__body .el-form-item .el-button {
+    width: 100%;
+    min-height: 44px;
+  }
+}
+
+// 触控设备 - 悬停效果替代
+@media (hover: none) and (pointer: coarse) {
+  .ad-list-item {
+    .item-actions {
+      opacity: 1;
+    }
+  }
+
+  .ad-grid-card:hover {
+    transform: none;
+  }
+}
+
+/* ========================================
+   Workflow Run 失败通知(对应原 editor.vue 全局 <style>)
+   notifications 弹在 body 下,不受 module 限制
+   ======================================== */
+.workflow-run-notify .mantine-Notification-description {
+  white-space: pre-line;
+  font-size: 12px;
+  line-height: 1.5;
+  max-width: 360px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+/* YiW 模型未配置提示：用品牌黄表达待处理状态，深色模式下保持醒目。 */
+.yiw-model-warning-notify {
+  --notification-color: #ffd34e !important;
+
+  border: 1px solid color-mix(in srgb, #ffd34e 24%, transparent);
+}
+
+.yiw-model-warning-notify::before {
+  width: calc(0.5rem * var(--mantine-scale));
+  box-shadow: 0 0 0 3px color-mix(in srgb, #ffd34e 13%, transparent);
+}

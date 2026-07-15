@@ -1,0 +1,678 @@
+/* Page 骨架 ad-page-list / ad-page-toolbar / ad-page-content / ad-card-grid /
+   ad-grid-card / ad-page-empty 等全部来自 src/styles/components.scss ——
+   本组件仅补 MCP 特有的卡片细节与空状态插画。 */
+
+/* ---------- MCP 卡片 ---------- */
+
+.mcpCard {
+  .iconMcp {
+    color: var(--ad-primary, #17483e);
+    font-size: 16px;
+  }
+
+  &.isDisabled {
+    opacity: 0.72;
+    :global(.grid-card-title) > span:first-of-type {
+      color: var(--ad-text-secondary);
+    }
+  }
+}
+
+.mcpCommand {
+  font-family: 'Menlo', 'Courier New', monospace;
+  font-size: 12.5px;
+  color: var(--ad-text-primary);
+  background: var(--yiw-code-bg, #f5f7fa);
+  padding: 8px 10px;
+  border-radius: 4px;
+  margin-bottom: 10px;
+  display: block;
+  -webkit-line-clamp: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mcpCard :global(.grid-card-info) .infoTag.isWarning {
+  background: #fdf5e6;
+  color: #b37400;
+}
+
+.infoTag {
+  /* 与 components.scss 的 .info-tag 对齐(此处仅保证存在以承载 is-warning 复合) */
+}
+
+/* ---------- 空状态插画 ---------- */
+
+.mcpEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+
+  .emptyIllustration {
+    margin-bottom: 32px;
+  }
+
+  .emptyContent {
+    text-align: center;
+    max-width: 520px;
+  }
+
+  .emptyTitle {
+    margin: 0 0 10px;
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--ad-text-primary);
+  }
+
+  .emptyDesc {
+    margin: 0 0 24px;
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--ad-text-secondary);
+  }
+
+  .emptyFeatures {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 24px;
+    margin-bottom: 28px;
+
+    .featureItem {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--ad-text-secondary);
+
+      :global(.el-icon),
+      svg {
+        color: var(--ad-primary, #17483e);
+        font-size: 15px;
+      }
+    }
+  }
+
+  .illustrationContainer {
+    position: relative;
+    width: 200px;
+    height: 180px;
+    margin: 0 auto;
+  }
+
+  .connectLines {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    stroke: #d4c3e3;
+    stroke-width: 1.5;
+    stroke-dasharray: 4 4;
+    fill: none;
+    pointer-events: none;
+  }
+
+  .mcpSatellite {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    width: 48px;
+    padding: 8px 4px;
+    background: var(--ad-bg-white);
+    border: 1px solid #e4e7ed;
+    border-radius: 8px;
+    box-shadow: 0 2px 6px rgba(23, 72, 62, 0.05);
+    animation: orbit-fade 6s ease-in-out infinite;
+
+    :global(.el-icon),
+    svg {
+      color: var(--ad-text-secondary);
+      font-size: 18px;
+    }
+
+    .satLabel {
+      font-size: 10px;
+      color: var(--ad-text-muted);
+      letter-spacing: 0.02em;
+    }
+
+    &.left {
+      top: 118px;
+      left: 8px;
+      animation-delay: 0s;
+    }
+    &.right {
+      top: 118px;
+      right: 8px;
+      animation-delay: 2s;
+    }
+    &.top {
+      top: 6px;
+      left: 76px;
+      animation-delay: 1s;
+    }
+  }
+
+  @keyframes orbit-fade {
+    0%, 100% { transform: translateY(0); opacity: 1; }
+    50%      { transform: translateY(-2px); opacity: 0.85; }
+  }
+
+  .centerHub {
+    position: absolute;
+    top: 72px;
+    left: 76px;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: var(--ad-primary, #17483e);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow:
+      0 0 0 4px rgba(23, 72, 62, 0.12),
+      0 6px 16px rgba(23, 72, 62, 0.2);
+
+    :global(.el-icon),
+    svg {
+      color: #fff;
+      font-size: 22px;
+    }
+  }
+}
+
+.envEyeIcon {
+  color: var(--ad-text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  &:hover { color: var(--ad-primary, #17483e); }
+}
+
+/* =============================================
+ * Wizard Dialog — 对齐 DatabaseSetupGuide 样式
+ * ============================================= */
+
+.setupGuide {
+  display: flex;
+  flex-direction: column;
+  background: var(--yiw-bg, #f8f9fa);
+  min-height: 60vh;
+  max-height: 85vh;
+}
+
+.guideCloseHeader {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 12px 16px;
+  background: var(--yiw-surface, #fff);
+  border-bottom: 1px solid var(--yiw-border, #e4e7ed);
+
+  .closeButton {
+    font-size: 18px;
+    color: var(--yiw-muted, #909399);
+    padding: 4px;
+    cursor: pointer;
+    background: none;
+    border: none;
+    display: inline-flex;
+    align-items: center;
+    &:hover { color: var(--yiw-text, #303133); }
+  }
+}
+
+.guideHeader {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 24px 32px;
+  background: var(--yiw-surface, #fff);
+  border-bottom: 1px solid var(--yiw-border, #e4e7ed);
+}
+
+.guideSteps {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.stepItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: default;
+  transition: all 0.3s;
+
+  &.clickable {
+    cursor: pointer;
+    &:hover {
+      opacity: 0.85;
+      .stepNumber { transform: scale(1.05); }
+    }
+  }
+
+  &.completed {
+    .stepNumber {
+      background: var(--yiw-accent, #17483e);
+      border-color: var(--yiw-accent, #17483e);
+      color: var(--yiw-on-accent, #fff);
+    }
+    .stepLabel { color: var(--yiw-accent, #17483e); }
+  }
+
+  &.active {
+    .stepNumber {
+      background: var(--yiw-accent, #17483e);
+      border-color: var(--yiw-accent, #17483e);
+      color: var(--yiw-on-accent, #fff);
+      box-shadow: 0 2px 8px var(--yiw-accent-tint, rgba(23, 72, 62, 0.3));
+    }
+    .stepLabel {
+      color: var(--yiw-text, #303133);
+      font-weight: 600;
+    }
+  }
+}
+
+.stepNumber {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2px solid var(--yiw-border, #dcdfe6);
+  background: var(--yiw-surface, #fff);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--yiw-muted, #909399);
+  transition: all 0.3s;
+}
+
+.stepLabel {
+  font-size: 14px;
+  color: var(--yiw-muted, #909399);
+  white-space: nowrap;
+  transition: all 0.3s;
+}
+
+.stepConnector {
+  width: 40px;
+  height: 2px;
+  background: var(--yiw-border, #dcdfe6);
+  margin: 0 12px;
+}
+
+.guideContent {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px 32px;
+  background: var(--yiw-bg, #f8f9fa);
+}
+
+/* ---------- Step panels ---------- */
+
+.stepPanel {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.stepIntro {
+  margin-bottom: 24px;
+
+  &__title {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--yiw-text, #303133);
+    margin: 0 0 6px;
+  }
+
+  &__desc {
+    font-size: 13px;
+    color: var(--yiw-text-soft, #606266);
+    line-height: 1.6;
+    margin: 0;
+  }
+}
+
+.formItem {
+  margin-bottom: 18px;
+}
+
+.formLabel {
+  display: block;
+  font-size: 14px;
+  color: var(--yiw-text, #303133);
+  margin-bottom: 6px;
+  font-weight: 500;
+}
+
+.fieldHint {
+  font-size: 12px;
+  color: var(--yiw-muted, #909399);
+  line-height: 1.5;
+  margin-top: 4px;
+}
+
+.fieldError {
+  font-size: 12px;
+  color: #f56c6c;
+  line-height: 1.5;
+  margin-top: 4px;
+}
+
+.selectEmptyHint {
+  padding: 8px 12px;
+  color: var(--yiw-muted, #909399);
+  font-size: 12px;
+}
+
+.commandPreview {
+  margin-top: 16px;
+  padding: 12px 14px;
+  background: var(--yiw-surface, #fff);
+  border: 1px solid var(--yiw-border, #e4e7ed);
+  border-left: 3px solid var(--yiw-accent, #17483e);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+
+  &__label {
+    font-size: 12px;
+    color: var(--yiw-muted, #909399);
+  }
+
+  &__code {
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    color: var(--yiw-text, #303133);
+    word-break: break-all;
+  }
+
+  &__note {
+    font-size: 12px;
+    color: var(--yiw-accent, #17483e);
+  }
+}
+
+/* ---------- Step 2 env editor ---------- */
+
+.envEditor {
+  background: var(--yiw-surface, #fff);
+  border: 1px solid var(--yiw-border, #e4e7ed);
+  border-radius: 4px;
+  padding: 16px;
+}
+
+.envEditorHead {
+  display: grid;
+  grid-template-columns: 220px 1fr 40px;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--yiw-muted, #909399);
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--yiw-border, #e4e7ed);
+  margin-bottom: 8px;
+}
+
+.envEditorRow {
+  display: grid;
+  grid-template-columns: 220px 1fr 40px;
+  gap: 12px;
+  align-items: center;
+  padding: 6px 0;
+}
+
+.envCol {
+  /* 表头列(envCol--key / --val / --act 原样;此处仅占位) */
+}
+
+.envInput input {
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+}
+
+/* 简洁的 env 空状态，不再用 el-empty */
+.envEmpty {
+  padding: 24px 20px;
+  background: var(--yiw-surface, #fff);
+  border: 1px dashed var(--yiw-border, #e4e7ed);
+  border-radius: 4px;
+  text-align: center;
+
+  &__line {
+    font-size: 14px;
+    color: var(--ad-text-secondary);
+    margin: 0 0 4px;
+  }
+  &__hint {
+    font-size: 12px;
+    color: var(--ad-text-muted);
+    margin: 0;
+  }
+}
+
+.btnAddRow {
+  height: auto;
+  padding: 6px 10px;
+  margin-top: 8px;
+  gap: 4px;
+  border-radius: 4px;
+  transition: background-color 160ms ease;
+  &:hover {
+    background: var(--yiw-accent-tint, rgba(23, 72, 62, 0.06));
+  }
+}
+
+/* ---------- Args editor (row-based) ---------- */
+
+.argsEditor {
+  background: var(--yiw-surface, #fff);
+  border: 1px solid var(--yiw-border, #e4e7ed);
+  border-radius: 4px;
+  padding: 12px;
+}
+
+.argsEditorHead {
+  display: grid;
+  grid-template-columns: 180px 1fr 40px;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--yiw-muted, #909399);
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--yiw-border, #e4e7ed);
+  margin-bottom: 8px;
+}
+
+.argsEditorRow {
+  display: grid;
+  grid-template-columns: 180px 1fr 40px;
+  gap: 12px;
+  align-items: center;
+  padding: 4px 0;
+}
+
+.argsInput input {
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+}
+
+.iconBtnDanger {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #f56c6c;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  &:hover { opacity: 0.8; }
+}
+
+/* ---------- Step 3 test stage ---------- */
+
+.configRecap {
+  margin-bottom: 20px;
+  background: var(--yiw-surface, #fff);
+  border: 1px solid var(--yiw-border, #e4e7ed);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.recapRow {
+  display: flex;
+  border-bottom: 1px solid var(--yiw-border, #e4e7ed);
+  font-size: 13px;
+  &:last-child { border-bottom: none; }
+}
+
+.recapLabel {
+  width: 140px;
+  flex-shrink: 0;
+  padding: 8px 12px;
+  background: var(--yiw-code-bg, #fafafa);
+  color: var(--yiw-text-soft, #606266);
+  border-right: 1px solid var(--yiw-border, #e4e7ed);
+  font-weight: 500;
+}
+
+.recapValue {
+  flex: 1;
+  padding: 8px 12px;
+  color: var(--yiw-text, #303133);
+}
+
+.codeInline {
+  font-family: 'Courier New', monospace;
+  font-size: 12.5px;
+  background: var(--yiw-code-bg, #f4f4f5);
+  padding: 2px 6px;
+  border-radius: 3px;
+  color: var(--yiw-text, #303133);
+  word-break: break-all;
+}
+
+.testStage {
+  background: var(--yiw-surface, #fff);
+  border: 1px solid var(--yiw-border, #e4e7ed);
+  border-radius: 4px;
+  padding: 20px;
+}
+
+.testStageIdle,
+.testStageRunning {
+  text-align: center;
+  padding: 32px 16px;
+
+  .stageIcon {
+    color: var(--yiw-accent, #17483e);
+    margin-bottom: 12px;
+
+    &--spin { animation: rotate 1s linear infinite; }
+  }
+
+  h4 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--yiw-text, #303133);
+    margin: 0 0 6px;
+  }
+
+  .stageSub {
+    font-size: 13px;
+    color: var(--yiw-text-soft, #606266);
+    margin: 0 0 16px;
+  }
+}
+
+.stageIconSpin {
+  animation: rotate 1s linear infinite;
+}
+
+@keyframes rotate { to { transform: rotate(360deg); } }
+
+.alertBody {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.toolListTable {
+  margin-top: 12px;
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+
+  th {
+    text-align: left;
+    color: var(--yiw-muted, #909399);
+    font-weight: 500;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--yiw-border, #e4e7ed);
+  }
+  td {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--yiw-border-soft, #f0f0f0);
+    vertical-align: top;
+  }
+  .descText {
+    font-size: 13px;
+    color: var(--yiw-text-soft, #606266);
+  }
+}
+
+.failDetail {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  background: #fef0f0;
+  border: 1px solid #fde2e2;
+  border-radius: 4px;
+  font-family: 'Courier New', monospace;
+  font-size: 12.5px;
+  color: #f56c6c;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow: auto;
+}
+
+/* ---------- Footer ---------- */
+
+.guideFooter {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 32px;
+  background: var(--yiw-surface, #fff);
+  border-top: 1px solid var(--yiw-border, #e4e7ed);
+}
+
+.footerSpacer {
+  flex: 1;
+  text-align: right;
+}
+
+.footerNote {
+  font-size: 12px;
+  color: var(--yiw-muted, #909399);
+}
+
+/* ---------- Responsive ---------- */
+
+@media (max-width: 768px) {
+  .guideHeader { padding: 16px; }
+  .guideContent { padding: 16px; }
+  .guideFooter { padding: 12px 16px; }
+  .stepLabel { display: none; }
+  .stepConnector { width: 24px; margin: 0 6px; }
+  .envEditorHead,
+  .envEditorRow { grid-template-columns: 120px 1fr 36px; gap: 8px; }
+}

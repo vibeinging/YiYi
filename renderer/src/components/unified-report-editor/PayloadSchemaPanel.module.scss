@@ -1,0 +1,69 @@
+.payloadSchemaPanel {
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  background: #fff;
+  padding: 16px;
+}
+.panelHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+.panelTitle {
+  font-size: 14px;
+  font-weight: 700;
+  color: #111827;
+}
+.panelDesc {
+  font-size: 12px;
+  color: #6b7280;
+}
+.schemaGroups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.schemaGroup {
+  padding: 12px;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+.groupName {
+  margin-bottom: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #374151;
+}
+.groupList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fieldChip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.fieldChip:hover {
+  border-color: #dce8e2;
+  transform: translateY(-1px);
+}
+.fieldPath {
+  font-size: 12px;
+  font-weight: 600;
+  color: #111827;
+}
+.fieldExample {
+  font-size: 12px;
+  color: #6b7280;
+}

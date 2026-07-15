@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="720" viewBox="0 0 2000 720">
+  <rect width="2000" height="720" fill="#E9E7E1"/>
+  <text x="54" y="58" font-family="Avenir Next, sans-serif" font-size="30" font-weight="700" fill="#171717">YiW Color Directions</text>
+  <text x="54" y="90" font-family="Avenir Next, sans-serif" font-size="16" fill="#69665F">固定完整 YiW 标记，只比较颜色 · 平面色 · 无紫色 / 蓝色 / 渐变</text>
+
+  <g transform="translate(50 120)">
+    <rect width="440" height="540" rx="28" fill="#F8F6F1"/>
+    <g transform="translate(70 38)">
+      <rect width="300" height="300" rx="72" fill="#F2B134"/>
+      <g fill="none" stroke="#171717" stroke-width="25" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M30 80L78 138L126 80M78 138V230"/>
+        <path d="M150 132V230"/>
+        <path d="M180 90L206 230L236 160L266 230L286 90"/>
+      </g>
+      <circle cx="150" cy="84" r="14" fill="#FFF8E7"/>
+    </g>
+    <text x="34" y="390" font-family="Avenir Next, sans-serif" font-size="13" font-weight="700" letter-spacing="2" fill="#9A6810">A · SAFFRON</text>
+    <text x="34" y="430" font-family="Avenir Next, sans-serif" font-size="27" font-weight="700" fill="#171717">藏红花黄</text>
+    <text x="34" y="466" font-family="Avenir Next, sans-serif" font-size="15" fill="#68645D">有行动感，明亮但不轻浮。</text>
+    <text x="34" y="494" font-family="Avenir Next, sans-serif" font-size="15" fill="#68645D">小尺寸最醒目。</text>
+  </g>
+
+  <g transform="translate(540 120)">
+    <rect width="440" height="540" rx="28" fill="#F8F6F1"/>
+    <g transform="translate(70 38)">
+      <rect width="300" height="300" rx="72" fill="#16463C"/>
+      <g fill="none" stroke="#F4EBDD" stroke-width="25" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M30 80L78 138L126 80M78 138V230"/>
+        <path d="M150 132V230"/>
+        <path d="M180 90L206 230L236 160L266 230L286 90"/>
+      </g>
+      <circle cx="150" cy="84" r="14" fill="#E7C64A"/>
+    </g>
+    <text x="34" y="390" font-family="Avenir Next, sans-serif" font-size="13" font-weight="700" letter-spacing="2" fill="#16463C">B · FOREST</text>
+    <text x="34" y="430" font-family="Avenir Next, sans-serif" font-size="27" font-weight="700" fill="#171717">深森林绿</text>
+    <text x="34" y="466" font-family="Avenir Next, sans-serif" font-size="15" fill="#68645D">稳、安静，适合长时间工作。</text>
+    <text x="34" y="494" font-family="Avenir Next, sans-serif" font-size="15" fill="#68645D">更像成熟工作平台。</text>
+  </g>
+
+  <g transform="translate(1030 120)">
+    <rect width="440" height="540" rx="28" fill="#F8F6F1"/>
+    <g transform="translate(70 38)">
+      <rect width="300" height="300" rx="72" fill="#151515"/>
+      <g fill="none" stroke="#F7F2E8" stroke-width="25" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M30 80L78 138L126 80M78 138V230"/>
+        <path d="M150 132V230"/>
+        <path d="M180 90L206 230L236 160L266 230L286 90"/>
+      </g>
+      <circle cx="150" cy="84" r="14" fill="#B9F227"/>
+    </g>
+    <text x="34" y="390" font-family="Avenir Next, sans-serif" font-size="13" font-weight="700" letter-spacing="2" fill="#5C7F00">C · SIGNAL LIME</text>
+    <text x="34" y="430" font-family="Avenir Next, sans-serif" font-size="27" font-weight="700" fill="#171717">墨黑 + 信号绿</text>
+    <text x="34" y="466" font-family="Avenir Next, sans-serif" font-size="15" fill="#68645D">主体克制，只让 i 的圆点发声。</text>
+    <text x="34" y="494" font-family="Avenir Next, sans-serif" font-size="15" fill="#68645D">识别度强，适合扩展工作台体系。</text>
+    <rect x="334" y="392" width="72" height="32" rx="16" fill="#171717"/>
+    <text x="370" y="414" text-anchor="middle" font-family="Avenir Next, sans-serif" font-size="13" font-weight="700" fill="#F7F2E8">推荐</text>
+  </g>
+
+  <g transform="translate(1520 120)">
+    <rect width="430" height="540" rx="28" fill="#F8F6F1"/>
+    <g transform="translate(65 38)">
+      <rect width="300" height="300" rx="72" fill="#F3EFE6" stroke="#D7D1C5" stroke-width="2"/>
+      <g fill="none" stroke="#181818" stroke-width="25" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M30 80L78 138L126 80M78 138V230"/>
+        <path d="M150 132V230"/>
+        <path d="M180 90L206 230L236 160L266 230L286 90"/>
+      </g>
+      <circle cx="150" cy="84" r="14" fill="#D94A32"/>
+    </g>
+    <text x="34" y="390" font-family="Avenir Next, sans-serif" font-size="13" font-weight="700" letter-spacing="2" fill="#A53625">D · PORCELAIN</text>
+    <text x="34" y="430" font-family="Avenir Next, sans-serif" font-size="27" font-weight="700" fill="#171717">暖白 + 墨黑</text>
+    <text x="34" y="466" font-family="Avenir Next, sans-serif" font-size="15" fill="#68645D">最轻、最通用，红点保留个性。</text>
+    <text x="34" y="494" font-family="Avenir Next, sans-serif" font-size="15" fill="#68645D">风险是接近普通黑白工具。</text>
+  </g>
+</svg>

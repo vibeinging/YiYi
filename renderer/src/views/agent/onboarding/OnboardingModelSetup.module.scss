@@ -1,0 +1,798 @@
+.modelSetup {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 198px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.roleRail,
+.formPanel {
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--yiw-border-soft);
+  border-radius: var(--yiw-r-el);
+  background: var(--yiw-surface);
+}
+
+.roleRail {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.roleRailHeader {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 42px;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--yiw-border-soft);
+  color: var(--yiw-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.iconButton,
+.secondaryButton,
+.primaryButton {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border-radius: var(--yiw-r-sm);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 650;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease,
+    filter 0.12s ease,
+    opacity 0.12s ease;
+}
+
+.iconButton {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--yiw-border);
+  background: transparent;
+  color: var(--yiw-muted);
+}
+
+.iconButton:hover,
+.secondaryButton:hover {
+  background: var(--yiw-nav-hover);
+  color: var(--yiw-text);
+}
+
+.roleList {
+  flex: none;
+  display: grid;
+  gap: 4px;
+  padding: 7px;
+}
+
+.roleButton {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 7px;
+  border: 1px solid transparent;
+  border-radius: var(--yiw-r-sm);
+  background: transparent;
+  color: var(--yiw-text-soft);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.roleButton:hover,
+.roleButton[data-active='true'] {
+  background: var(--yiw-nav-hover);
+  color: var(--yiw-text);
+}
+
+.roleButton[data-active='true'] {
+  border-color: var(--yiw-border-soft);
+}
+
+.roleIcon {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--yiw-muted);
+}
+
+.roleText,
+.roleText span,
+.roleText small {
+  display: block;
+  min-width: 0;
+}
+
+.roleText span {
+  color: var(--yiw-text);
+  font-size: 13px;
+  font-weight: 680;
+}
+
+.roleText em {
+  margin-left: 5px;
+  color: var(--yiw-accent);
+  font-size: 10.5px;
+  font-style: normal;
+  font-weight: 760;
+}
+
+.roleText small {
+  margin-top: 2px;
+  color: var(--yiw-muted);
+  font-size: 11.5px;
+}
+
+.roleState {
+  display: inline-grid;
+  place-items: center;
+  color: var(--yiw-amber);
+}
+
+.roleState[data-ready='true'] {
+  color: var(--yiw-ok);
+}
+
+.requirementBox {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 2px 7px 7px;
+  padding: 10px;
+  border-top: 1px solid var(--yiw-border-soft);
+  color: var(--yiw-muted);
+}
+
+.requirementBox strong,
+.requirementBox span,
+.requirementBox small {
+  display: block;
+}
+
+.requirementBox strong {
+  color: var(--yiw-text);
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.requirementBox[data-ready='true'] strong {
+  color: var(--yiw-ok);
+}
+
+.requirementBox span,
+.requirementBox small {
+  margin-top: 7px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.requirementBox small {
+  color: var(--yiw-amber);
+}
+
+.formPanel {
+  display: grid;
+  grid-template-rows: 54px minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.formHeader {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--yiw-border-soft);
+}
+
+.formHeaderTitle {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.formHeaderIcon {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--yiw-accent);
+}
+
+.formHeaderTitle strong,
+.formHeaderTitle small {
+  display: block;
+  min-width: 0;
+}
+
+.formHeaderTitle strong {
+  color: var(--yiw-text);
+  font-size: 14px;
+  font-weight: 720;
+}
+
+.formHeaderTitle small {
+  margin-top: 2px;
+  color: var(--yiw-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.formActions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.secondaryButton,
+.primaryButton {
+  min-height: 30px;
+  padding: 6px 11px;
+}
+
+.secondaryButton {
+  border: 1px solid var(--yiw-border);
+  background: transparent;
+  color: var(--yiw-text-soft);
+}
+
+.primaryButton {
+  border: 1px solid transparent;
+  background: var(--yiw-accent);
+  color: var(--yiw-on-accent);
+}
+
+.primaryButton:hover {
+  filter: brightness(1.05);
+}
+
+.iconButton:disabled,
+.secondaryButton:disabled,
+.primaryButton:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+  filter: none;
+}
+
+.formBody {
+  min-width: 0;
+  min-height: 0;
+  padding: 12px;
+  overflow: auto;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(150px, 1fr));
+  gap: 11px 12px;
+  align-items: start;
+}
+
+.embeddingBody {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+}
+
+.formSection {
+  display: grid;
+  gap: 10px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--yiw-border-soft);
+}
+
+.formSection:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.sectionHeader {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.sectionHeader strong {
+  flex: none;
+  color: var(--yiw-text);
+  font-size: 13px;
+  font-weight: 740;
+}
+
+.sectionHeader span {
+  min-width: 0;
+  color: var(--yiw-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: right;
+}
+
+.embeddingConnectionGrid {
+  grid-template-columns: minmax(240px, 1.25fr) minmax(180px, 0.75fr) minmax(250px, 1fr);
+}
+
+.embeddingParamGrid {
+  grid-template-columns: minmax(145px, 1fr) minmax(145px, 1fr) minmax(140px, 0.9fr) minmax(130px, 0.85fr) minmax(130px, 0.85fr);
+}
+
+.advancedJsonGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(240px, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+
+.jsonField {
+  min-width: 0;
+  display: grid;
+  border: 1px solid var(--yiw-border-soft);
+  border-radius: var(--yiw-r-sm);
+  background: color-mix(in srgb, var(--yiw-bg) 74%, var(--yiw-surface));
+  overflow: hidden;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.jsonField:focus-within {
+  border-color: color-mix(in srgb, var(--yiw-accent) 48%, var(--yiw-border));
+  background: var(--yiw-bg);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--yiw-accent) 10%, transparent);
+}
+
+.jsonFieldHeader {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--yiw-border-soft);
+}
+
+.jsonFieldHeader span,
+.jsonFieldHeader b,
+.jsonFieldHeader small {
+  display: block;
+  min-width: 0;
+}
+
+.jsonFieldHeader b {
+  color: var(--yiw-text);
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.jsonFieldHeader small {
+  margin-top: 2px;
+  color: var(--yiw-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.jsonFieldHeader em {
+  flex: none;
+  margin-top: 1px;
+  padding: 2px 6px;
+  border: 1px solid var(--yiw-border-soft);
+  border-radius: 999px;
+  background: var(--yiw-chip-bg);
+  color: var(--yiw-faint);
+  font-family: var(--yiw-mono);
+  font-size: 9.5px;
+  font-style: normal;
+  font-weight: 760;
+  letter-spacing: 0.04em;
+}
+
+.jsonTextarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 112px;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 0;
+  background: var(--yiw-code-bg, var(--yiw-bg));
+  color: var(--yiw-code-text, var(--yiw-text));
+  font-family: var(--yiw-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  outline: none;
+  padding: 10px;
+  resize: vertical;
+}
+
+.jsonTextarea::placeholder {
+  color: color-mix(in srgb, var(--yiw-faint) 76%, transparent);
+}
+
+.advancedSettings {
+  display: grid;
+  gap: 10px;
+}
+
+.advancedToggle {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 1px solid var(--yiw-border-soft);
+  border-radius: var(--yiw-r-sm);
+  background: var(--yiw-bg);
+  color: var(--yiw-text-soft);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+
+.advancedToggle:hover {
+  border-color: var(--yiw-border);
+  background: var(--yiw-nav-hover);
+  color: var(--yiw-text);
+}
+
+.advancedToggle span,
+.advancedToggle strong,
+.advancedToggle small {
+  display: block;
+  min-width: 0;
+}
+
+.advancedToggle strong {
+  color: var(--yiw-text);
+  font-size: 12.5px;
+  font-weight: 720;
+}
+
+.advancedToggle small {
+  margin-top: 2px;
+  color: var(--yiw-muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.advancedToggle svg {
+  flex: none;
+  color: var(--yiw-muted);
+  transition: transform 0.14s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.advancedSettings[data-open='true'] .advancedToggle svg {
+  transform: rotate(180deg);
+}
+
+.advancedContent {
+  display: grid;
+  gap: 14px;
+}
+
+.embeddingBody .textarea {
+  min-height: 94px;
+}
+
+.field {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.fieldSpanone {
+  grid-column: span 1;
+}
+
+.fieldSpantwo {
+  grid-column: span 2;
+}
+
+.fieldSpanfull {
+  grid-column: 1 / -1;
+}
+
+.fieldLabel {
+  color: var(--yiw-text-soft);
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.field small {
+  color: var(--yiw-muted);
+  font-size: 11.5px;
+  line-height: 1.42;
+}
+
+.fieldEmphasis .fieldLabel {
+  color: color-mix(in srgb, var(--yiw-amber) 76%, var(--yiw-text));
+}
+
+.fieldEmphasis .fieldLabel::after {
+  content: '';
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--yiw-amber);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--yiw-amber) 15%, transparent);
+  vertical-align: 2px;
+}
+
+.fieldEmphasis small {
+  color: color-mix(in srgb, var(--yiw-amber) 48%, var(--yiw-muted));
+}
+
+.input,
+.textarea {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--yiw-border);
+  border-radius: var(--yiw-r-sm);
+  background: var(--yiw-bg);
+  color: var(--yiw-text);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.fieldEmphasis .input:not([readonly]),
+.fieldEmphasis .textarea {
+  border-color: color-mix(in srgb, var(--yiw-amber) 62%, var(--yiw-border));
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--yiw-amber) 10%, transparent),
+      color-mix(in srgb, var(--yiw-amber) 4%, transparent)
+    ),
+    var(--yiw-bg);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--yiw-amber) 9%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--yiw-amber) 8%, transparent);
+}
+
+.input {
+  height: 34px;
+  padding: 0 10px;
+}
+
+.textarea {
+  min-height: 82px;
+  resize: vertical;
+  padding: 9px 10px;
+  line-height: 1.5;
+}
+
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--yiw-faint);
+}
+
+.fieldEmphasis .input::placeholder,
+.fieldEmphasis .textarea::placeholder {
+  color: color-mix(in srgb, var(--yiw-amber) 44%, var(--yiw-faint));
+}
+
+.input:focus,
+.textarea:focus {
+  border-color: color-mix(in srgb, var(--yiw-accent) 52%, var(--yiw-border));
+  background: var(--yiw-surface);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--yiw-accent) 12%, transparent);
+}
+
+.fieldEmphasis .input:not([readonly]):focus,
+.fieldEmphasis .textarea:focus {
+  border-color: color-mix(in srgb, var(--yiw-amber) 86%, var(--yiw-border));
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--yiw-amber) 13%, transparent),
+      color-mix(in srgb, var(--yiw-amber) 5%, transparent)
+    ),
+    var(--yiw-surface);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--yiw-amber) 21%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--yiw-amber) 13%, transparent);
+}
+
+.input[readonly] {
+  color: var(--yiw-muted);
+  cursor: default;
+}
+
+.toggleField {
+  min-height: 58px;
+  align-content: start;
+}
+
+.toggleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+}
+
+.toggleRow input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.switchTrack {
+  position: relative;
+  display: inline-block;
+  width: 34px;
+  height: 19px;
+  border-radius: 999px;
+  background: var(--yiw-border);
+  transition: background 0.12s ease;
+}
+
+.switchTrack::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--yiw-surface);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+  transition: transform 0.12s ease;
+}
+
+.toggleRow input:checked + .switchTrack {
+  background: var(--yiw-accent);
+}
+
+.toggleRow input:checked + .switchTrack::after {
+  transform: translateX(15px);
+}
+
+.toggleText {
+  color: var(--yiw-text-soft);
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.testResult {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--yiw-amber) 24%, transparent);
+  border-radius: var(--yiw-r-sm);
+  color: var(--yiw-amber);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.testResult[data-success='true'] {
+  border-color: color-mix(in srgb, var(--yiw-ok) 22%, transparent);
+  color: var(--yiw-ok);
+}
+
+.loadingBox {
+  min-height: 220px;
+  display: grid;
+  place-content: center;
+  gap: 10px;
+  color: var(--yiw-muted);
+  font-size: 13px;
+}
+
+.spin {
+  animation: spin 0.85s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 1120px) {
+  .modelSetup {
+    grid-template-columns: 188px minmax(0, 1fr);
+  }
+
+  .formGrid {
+    grid-template-columns: repeat(2, minmax(150px, 1fr));
+  }
+
+  .advancedJsonGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .fieldSpantwo {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 820px) {
+  .modelSetup {
+    grid-template-columns: 1fr;
+    overflow: auto;
+  }
+
+  .roleRail {
+    min-height: auto;
+  }
+
+  .roleList {
+    grid-template-columns: repeat(3, minmax(180px, 1fr));
+    overflow-x: auto;
+  }
+
+  .requirementBox {
+    flex: none;
+  }
+
+  .formPanel {
+    min-height: 640px;
+  }
+
+  .formHeader {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .formActions {
+    flex-wrap: wrap;
+  }
+
+  .formGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .sectionHeader {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .sectionHeader span {
+    text-align: left;
+  }
+
+  .fieldSpanone,
+  .fieldSpantwo,
+  .fieldSpanfull {
+    grid-column: 1 / -1;
+  }
+}

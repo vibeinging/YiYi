@@ -1,0 +1,151 @@
+// 对应原 .connection-form scoped 样式 + 全局 <style>（开关对齐）的迁移
+.connectionForm {
+  padding: 16px;
+
+  // 增加描述字段 textarea 的高度（原 :deep(.el-textarea__inner)）
+  :global(.mantine-Textarea-input) {
+    min-height: 120px;
+    padding: 12px 15px;
+  }
+}
+
+.sqliteAttachContainer {
+  width: 100%;
+}
+
+.attachDbItem {
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid var(--yiw-border, #e4e7ed);
+  border-radius: 6px;
+  background-color: var(--yiw-code-bg, #fafafa);
+
+  &:hover {
+    border-color: var(--yiw-accent-soft, #c0c4cc);
+  }
+}
+
+.formItemTip {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--yiw-muted, #909399);
+  line-height: 1.3;
+}
+
+// 路径输入 + 上传按钮
+.pathWithUpload {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  align-items: flex-start;
+
+  .pathInput {
+    flex: 1;
+  }
+}
+
+.inlineUpload {
+  flex-shrink: 0;
+}
+
+// 召回模式
+.retrievalModeContainer {
+  width: 100%;
+}
+
+.retrievalModeGroup {
+  width: 100%;
+  display: flex;
+  gap: 16px;
+}
+
+.retrievalRadioCard {
+  flex: 1;
+  min-height: 80px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  border: 2px solid var(--yiw-border, #dcdfe6);
+  transition: all 0.3s;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+
+  &:hover {
+    border-color: var(--yiw-accent, #17483e);
+    box-shadow: var(--yiw-ring, 0 2px 8px rgba(23, 72, 62, 0.1));
+  }
+
+  &.checked {
+    border-color: var(--yiw-accent, #17483e);
+    background: var(--yiw-accent-tint, rgba(23, 72, 62, 0.05));
+  }
+}
+
+.radioContent {
+  width: 100%;
+}
+
+.radioTitle {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--yiw-text, #303133);
+  margin-bottom: 6px;
+}
+
+.radioDesc {
+  font-size: 12px;
+  color: var(--yiw-muted, #909399);
+  line-height: 1.5;
+}
+
+.retrievalModeTip {
+  display: flex;
+  align-items: center;
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--yiw-code-bg, #f5f7fa);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--yiw-text-soft, #606266);
+}
+
+.schemaTag {
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.2s;
+  margin-right: 8px;
+  margin-bottom: 8px;
+
+  &:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  }
+
+  &:active {
+    transform: translateY(0);
+  }
+}
+
+.formActions {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 20px;
+  width: 100%;
+}
+
+.formActionsRight {
+  display: flex;
+  gap: 10px;
+}
+
+.dividerLabel {
+  font-size: 14px;
+  color: var(--yiw-muted, #909399);
+}
+
+.spinIcon {
+  width: 14px;
+  height: 14px;
+  margin-right: 4px;
+}

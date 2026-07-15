@@ -1,0 +1,49 @@
+{
+  "task_id": "task_zszq_tiny_no_knowledge",
+  "difficulty": "medium",
+  "language": "zh",
+  "questions": [
+    "截止2024年12月31日，浙商证券股份有限公司总盈亏、业务规模、资金成本、净盈亏、增值税后收入各是多少",
+    "截止2024年12月31日，基金总持仓市值是多少",
+    "截止2024年12月31日，总盈亏最多基金是哪只，赚了多少",
+    "截止2024年12月31日，互换便利的可供户投资组合持有标的有哪些",
+    "截止2024年12月31日，投资研究部持仓总盈亏最多基金是哪只，赚了多少"
+  ],
+  "_intent": "zszq 5题小Benchmark。复制自 task_zszq_daly_pl；删除 context/knowledge.md；删除 entity_columns；只保留4张必要CSV；schema_descriptions 只提供弱表/列名描述，用于验证 Benchmark Step0 自动优化能否从 gold solve/trace 中补规则并提升到80%。",
+  "timeout": 2400,
+  "assertions": [
+    {
+      "type": "has_sql"
+    },
+    {
+      "type": "per_turn",
+      "pass_ratio": 0.8,
+      "expected": [
+        [
+          "328852.67",
+          "7030304.74",
+          "72683.61",
+          "256169.06",
+          "319779.75"
+        ],
+        "3703592846.64",
+        [
+          "基金109",
+          "96935334.84"
+        ],
+        [
+          "股票107",
+          "基金103"
+        ],
+        [
+          "基金102",
+          "375.50"
+        ]
+      ]
+    },
+    {
+      "type": "response_time",
+      "max_seconds": 2400
+    }
+  ]
+}

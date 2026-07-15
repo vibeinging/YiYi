@@ -1,0 +1,156 @@
+/* 设置页通用布局壳 —— App 设置(YiWSettings)与项目设置(ProjectSettings 桌面整窗)共用。
+   整窗两栏:左导航(透明,露出全局底)+ 右主面板(浮起圆角卡)。
+   颜色全走 .yiw-root 的 --yiw-* token,亮/暗自动切换。
+   这是「布局唯一真相源」——两个设置页的返回键位置/侧栏宽度/内容卡完全一致,靠复用而非各自 CSS 模仿。 */
+
+.wrap {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 5px;
+  padding: 10px;
+  box-sizing: border-box;
+  background: var(--yiw-bg);
+  color: var(--yiw-text);
+  font-family: var(--yiw-sans);
+}
+
+/* ── 左栏(透明,与对话壳左栏一致) ── */
+.side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 16px 6px 6px;
+}
+.back {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 4px 14px;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  border-radius: var(--yiw-r-sm);
+  color: var(--yiw-muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    color 0.12s ease,
+    background 0.12s ease;
+}
+.back:hover {
+  color: var(--yiw-text);
+  background: var(--yiw-nav-hover);
+}
+.back svg {
+  flex: none;
+}
+
+.nav {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 2px;
+  scrollbar-width: thin;
+}
+.navItem {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 11px;
+  border: none;
+  background: transparent;
+  border-radius: var(--yiw-r-el);
+  color: var(--yiw-text-soft);
+  font-size: 13.5px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+.navItem:hover {
+  background: var(--yiw-nav-hover);
+  color: var(--yiw-text);
+}
+.navIcon {
+  flex: none;
+  color: var(--yiw-faint);
+}
+.navItemActive,
+.navItemActive:hover {
+  background: var(--yiw-nav-active);
+  color: var(--yiw-accent);
+  font-weight: 600;
+  box-shadow: var(--yiw-active-shadow);
+}
+.navItemActive .navIcon {
+  color: var(--yiw-accent);
+}
+
+.navSep {
+  flex: 0 0 auto;
+  height: 1px;
+  margin: 10px 8px;
+  background: var(--yiw-border-soft);
+}
+
+/* ── 可折叠分组标题 ── */
+.groupHeader {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 14px 10px 4px;
+  padding: 4px 6px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+.groupHeader:hover .groupLabel {
+  color: var(--yiw-muted);
+}
+.groupLabel {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--yiw-faint);
+  transition: color 0.12s ease;
+}
+.groupChev {
+  flex: none;
+  color: var(--yiw-faint);
+  transition: transform 0.15s ease;
+}
+.groupChevCollapsed {
+  transform: rotate(-90deg);
+}
+
+/* ── 右主面板:浮起圆角卡(与对话壳中区同风格) ── */
+.main {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: var(--yiw-surface);
+  border-radius: var(--yiw-r-card);
+  box-shadow: var(--yiw-card-shadow);
+}
+
+.mainFixed {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+
+  > * {
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+  }
+}

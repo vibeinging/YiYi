@@ -1,0 +1,94 @@
+sections:
+  - title: "核心架构"
+    path: "/docs/developer/core"
+    order: 1
+    icon: "🏗️"
+    children:
+      - title: "BaseAgent 框架"
+        path: "/docs/developer/core/BaseAgent"
+        file: "core/BaseAgent.md"
+        order: 1
+      - title: "流式通信协议"
+        path: "/docs/developer/core/流式通信协议"
+        file: "core/流式通信协议.md"
+        order: 2
+      - title: "统一数据源架构"
+        path: "/docs/developer/core/统一数据源"
+        file: "core/统一数据源.md"
+        order: 3
+
+  - title: "Agent 系统"
+    path: "/docs/developer/agents"
+    order: 2
+    icon: "🤖"
+    children:
+      - title: "Agent 系统概览"
+        path: "/docs/developer/agents/overview"
+        file: "agents/overview.md"
+        order: 1
+      - title: "智能问数 Agent"
+        path: "/docs/developer/agents/智能问数"
+        file: "agents/智能问数.md"
+        order: 2
+      - title: "实体处理 Agent"
+        path: "/docs/developer/agents/实体处理"
+        file: "agents/实体处理.md"
+        order: 3
+      - title: "归因分析 Agent"
+        path: "/docs/developer/agents/归因分析"
+        file: "agents/归因分析.md"
+        order: 4
+      - title: "深度研究 Agent"
+        path: "/docs/developer/agents/DeepResearch"
+        file: "agents/DeepResearch.md"
+        order: 5
+      - title: "数据科学 Agent"
+        path: "/docs/developer/agents/数据科学"
+        file: "agents/数据科学.md"
+        order: 6
+      - title: "配置系统设计"
+        path: "/docs/developer/agents/配置系统设计"
+        file: "agents/配置系统设计.md"
+        order: 7
+      - title: "配置系统使用"
+        path: "/docs/developer/agents/配置系统使用"
+        file: "agents/配置系统使用.md"
+        order: 8
+
+  - title: "后端基础设施"
+    path: "/docs/developer/infrastructure"
+    order: 3
+    icon: "⚙️"
+    children:
+      - title: "API 约定规范"
+        path: "/docs/developer/infrastructure/API约定"
+        file: "infrastructure/API约定.md"
+        order: 1
+      - title: "权限管理系统"
+        path: "/docs/developer/infrastructure/权限管理"
+        file: "infrastructure/权限管理.md"
+        order: 2
+      - title: "ARQ 异步任务队列"
+        path: "/docs/developer/infrastructure/ARQ任务队列"
+        file: "infrastructure/ARQ任务队列.md"
+        order: 3
+      - title: "数据库 ORM"
+        path: "/docs/developer/infrastructure/数据库ORM"
+        file: "infrastructure/数据库ORM.md"
+        order: 4
+      - title: "LLM 集成"
+        path: "/docs/developer/infrastructure/LLM集成"
+        file: "infrastructure/LLM集成.md"
+        order: 5
+      - title: "任务服务"
+        path: "/docs/developer/infrastructure/任务服务"
+        file: "infrastructure/任务服务.md"
+        order: 6
+      - title: "业务语义管理"
+        path: "/docs/developer/infrastructure/业务语义"
+        file: "infrastructure/业务语义.md"
+        order: 7
+      - title: "后端脚本"
+        path: "/docs/developer/infrastructure/后端脚本"
+        file: "infrastructure/后端脚本.md"
+        order: 8

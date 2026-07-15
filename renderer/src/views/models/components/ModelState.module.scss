@@ -1,0 +1,87 @@
+// 空状态样式
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 20px;
+  text-align: center;
+  min-height: 400px;
+
+  .empty-icon {
+    margin-bottom: 24px;
+    opacity: 0.6;
+    animation: float 3s ease-in-out infinite;
+  }
+
+  .empty-title {
+    font-size: 20px;
+    font-weight: 500;
+    color: var(--el-text-color-primary);
+    margin-bottom: 12px;
+  }
+
+  .empty-description {
+    font-size: 14px;
+    color: var(--el-text-color-regular);
+    margin-bottom: 32px;
+    line-height: 1.6;
+    max-width: 400px;
+  }
+
+  .empty-action {
+    padding: 12px 24px;
+    font-size: 14px;
+    border-radius: 8px;
+    transition: all 0.3s ease;
+
+    &:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(64, 158, 255, 0.3);
+    }
+  }
+}
+
+// 加载状态样式
+.loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 20px;
+  text-align: center;
+  min-height: 400px;
+
+  // 原 el-icon.is-loading 的旋转动画
+  .is-loading {
+    margin-bottom: 16px;
+    line-height: 0;
+    animation: rotating 2s linear infinite;
+  }
+
+  .loading-text {
+    font-size: 14px;
+    color: var(--el-text-color-regular);
+  }
+}
+
+// 浮动动画
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+// 旋转动画(替代 Element Plus is-loading)
+@keyframes rotating {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}

@@ -1,0 +1,254 @@
+/* iOS Style Tabs - Pill/Capsule Design */
+html.yiw-warm {
+  /* Remove border from border-card style tabs */
+  .el-tabs--border-card {
+    border: none !important;
+    box-shadow: none !important;
+
+    > .el-tabs__header {
+      border: none !important;
+      background: transparent !important;
+    }
+  }
+
+  /* Tabs with class 'datasource-tabs' or 'ios-tabs' will use iOS style */
+  .datasource-tabs.el-tabs,
+  .ios-tabs.el-tabs {
+    border: none !important;
+    background: transparent !important;
+
+    /* Header - Use parent background */
+    .el-tabs__header {
+      margin: 0 !important;
+      background: transparent !important;
+      padding: 16px 5px 0 5px !important;
+      border: none !important;
+      position: relative !important;
+      z-index: 1 !important;
+      display: flex !important;
+      align-items: center !important;
+      gap: 8px !important;
+    }
+
+    /* Nav wrapper - Gray rounded container (iOS segmented control style) */
+    .el-tabs__nav-wrap {
+      border-radius: 12px !important;
+      flex: 1 !important;
+      min-width: 0 !important;
+      overflow: hidden;
+
+      /* Hide default bottom border */
+      &::after {
+        display: none !important;
+      }
+    }
+
+    /* Make nav wrapper fit content but not overflow */
+    .el-tabs__nav-scroll {
+      display: flex !important;
+      align-items: center;
+      overflow-x: auto;
+      scrollbar-width: none; /* Firefox */
+      -ms-overflow-style: none; /* IE 10+ */
+      scroll-behavior: smooth !important; /* Smooth scrolling */
+      scroll-padding: 0 20px !important; /* Padding when scrolling */
+
+      /* Hide scrollbar in webkit browsers */
+      &::-webkit-scrollbar {
+        display: none;
+      }
+    }
+
+    /* Nav container */
+    .el-tabs__nav {
+      display: flex !important;
+      gap: 6px;
+      border: none !important;
+      float: none !important;
+      flex-wrap: nowrap;
+    }
+
+    /* Individual tab items */
+    .el-tabs__item {
+      height: 40px !important;
+      line-height: 40px !important;
+      padding: 0 20px !important;
+      margin: 0 !important;
+      color: #5c5f66 !important;
+      border: none !important;
+      border-radius: 10px !important;
+      font-size: 14px !important;
+      font-weight: 500 !important;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+      background: transparent !important;
+      position: relative;
+      white-space: nowrap;
+      flex-shrink: 0;
+
+      /* Hover state for inactive tabs */
+      &:hover:not(.is-active) {
+        color: #343a40 !important;
+        background: var(--el-color-primary-light-9) !important;
+      }
+
+      /* 选中项使用暖黄底和深绿文字。 */
+      &.is-active {
+        color: #17483e !important;
+        background: #fff1b8 !important;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08) !important;
+        font-weight: 600 !important;
+
+        /* Subtle icon scale */
+        .el-icon,
+        .tab-label .el-icon {
+          transform: scale(1.05);
+          color: #17483e !important;
+        }
+      }
+    }
+
+    /* Hide navigation buttons (prev/next) - Use drag/swipe instead */
+    .el-tabs__nav-prev,
+    .el-tabs__nav-next {
+      display: none !important;
+    }
+
+    /* Hide default active bar */
+    .el-tabs__active-bar {
+      display: none !important;
+    }
+
+    /* Content area - Use parent background */
+    .el-tabs__content {
+      background: transparent !important;
+    }
+  }
+
+  /* Tab label with icon */
+  .tab-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    .el-icon {
+      font-size: 16px;
+      transition: transform 0.25s ease;
+    }
+  }
+
+  /* Alternative: Card style tabs (optional) */
+  .card-tabs.el-tabs {
+    border: none !important;
+
+    .el-tabs__header {
+      margin: 0 !important;
+      background: transparent !important;
+      padding: 0 20px 16px !important;
+      border: none !important;
+    }
+
+    .el-tabs__nav-wrap {
+      background: transparent !important;
+
+      &::after {
+        display: none !important;
+      }
+    }
+
+    .el-tabs__nav {
+      display: flex !important;
+      gap: 12px;
+      border: none !important;
+    }
+
+    .el-tabs__item {
+      height: 44px !important;
+      line-height: 44px !important;
+      padding: 0 24px !important;
+      margin: 0 !important;
+      color: #5c5f66 !important;
+      border: 1px solid #e6e6e6 !important;
+      border-radius: 8px !important;
+      font-size: 14px !important;
+      font-weight: 500 !important;
+      transition: all 0.3s ease !important;
+      background: #ffffff !important;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05) !important;
+
+      &:hover:not(.is-active) {
+        border-color: #17483e !important;
+        transform: translateY(-2px) !important;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1) !important;
+      }
+
+      &.is-active {
+        color: #ffffff !important;
+        background: #17483e !important;
+        border-color: transparent !important;
+        box-shadow: 0 4px 16px rgba(23, 72, 62, 0.4) !important;
+        transform: translateY(-2px) !important;
+      }
+    }
+
+    .el-tabs__active-bar {
+      display: none !important;
+    }
+  }
+
+  /* Minimal line style tabs (Material Design-like) */
+  .line-tabs.el-tabs {
+    border: none !important;
+
+    .el-tabs__header {
+      margin: 0 !important;
+      background: #ffffff !important;
+      padding: 0 20px !important;
+      border-bottom: 1px solid #e6e6e6 !important;
+    }
+
+    .el-tabs__nav-wrap {
+      background: transparent !important;
+      padding: 0 !important;
+
+      &::after {
+        display: none !important;
+      }
+    }
+
+    .el-tabs__nav {
+      display: flex !important;
+      gap: 32px;
+      border: none !important;
+    }
+
+    .el-tabs__item {
+      height: 48px !important;
+      line-height: 48px !important;
+      padding: 0 4px !important;
+      margin: 0 !important;
+      color: #5c5f66 !important;
+      border: none !important;
+      font-size: 14px !important;
+      font-weight: 500 !important;
+      transition: all 0.3s ease !important;
+      background: transparent !important;
+      position: relative;
+
+      &:hover:not(.is-active) {
+        color: #17483e !important;
+      }
+
+      &.is-active {
+        color: #17483e !important;
+      }
+    }
+
+    .el-tabs__active-bar {
+      display: block !important;
+      height: 3px !important;
+      background: linear-gradient(90deg, #17483e 0%, #2f6f60 100%) !important;
+      border-radius: 2px !important;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    }
+  }
+}

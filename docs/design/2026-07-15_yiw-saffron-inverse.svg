@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="700" viewBox="0 0 1280 700">
+  <rect width="1280" height="700" fill="#EAE8E2"/>
+  <text x="60" y="62" font-family="Avenir Next, sans-serif" font-size="30" font-weight="700" fill="#171717">YiW Saffron · Original / Inverse</text>
+  <text x="60" y="94" font-family="Avenir Next, sans-serif" font-size="16" fill="#69665F">第四版原色与反色对比</text>
+
+  <g transform="translate(60 125)">
+    <rect width="550" height="515" rx="28" fill="#F8F6F1"/>
+    <g transform="translate(125 35)">
+      <rect width="300" height="300" rx="72" fill="#F1B434"/>
+      <rect x="51" y="53" width="87" height="98" rx="19" fill="#17211D"/>
+      <rect x="154" y="53" width="96" height="44" rx="15" fill="#17211D"/>
+      <rect x="154" y="114" width="96" height="136" rx="19" fill="#17211D"/>
+      <rect x="51" y="168" width="87" height="82" rx="19" fill="#FFF4D4"/>
+    </g>
+    <text x="44" y="390" font-family="Avenir Next, sans-serif" font-size="13" font-weight="700" letter-spacing="2" fill="#9A6A12">ORIGINAL</text>
+    <text x="44" y="432" font-family="Avenir Next, sans-serif" font-size="27" font-weight="700" fill="#171717">藏红花黄做底</text>
+    <text x="44" y="468" font-family="Avenir Next, sans-serif" font-size="16" fill="#68645D">更亮、更活跃。</text>
+  </g>
+
+  <g transform="translate(670 125)">
+    <rect width="550" height="515" rx="28" fill="#F8F6F1"/>
+    <g transform="translate(125 35)">
+      <rect width="300" height="300" rx="72" fill="#17211D"/>
+      <rect x="51" y="53" width="87" height="98" rx="19" fill="#F1B434"/>
+      <rect x="154" y="53" width="96" height="44" rx="15" fill="#F1B434"/>
+      <rect x="154" y="114" width="96" height="136" rx="19" fill="#F1B434"/>
+      <rect x="51" y="168" width="87" height="82" rx="19" fill="#FFF4D4"/>
+    </g>
+    <text x="44" y="390" font-family="Avenir Next, sans-serif" font-size="13" font-weight="700" letter-spacing="2" fill="#17483E">INVERSE</text>
+    <text x="44" y="432" font-family="Avenir Next, sans-serif" font-size="27" font-weight="700" fill="#171717">墨绿做底</text>
+    <text x="44" y="468" font-family="Avenir Next, sans-serif" font-size="16" fill="#68645D">更稳、更像长期使用的工作平台。</text>
+    <rect x="438" y="392" width="72" height="32" rx="16" fill="#171717"/>
+    <text x="474" y="414" text-anchor="middle" font-family="Avenir Next, sans-serif" font-size="13" font-weight="700" fill="#F5F0E6">推荐</text>
+  </g>
+</svg>

@@ -1,0 +1,18 @@
+.list-item {
+  padding: 8px;
+  background: #f8fafc;
+  border-radius: 10px;
+  margin-bottom: 8px;
+}
+.list-row {
+  display: grid;
+  gap: 8px;
+}
+.table-row {
+  grid-template-columns: 1fr 1fr auto;
+}
+.field-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #6b7280;
+}

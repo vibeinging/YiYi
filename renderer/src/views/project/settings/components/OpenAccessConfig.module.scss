@@ -1,0 +1,236 @@
+.openAccessConfig {
+  .sectionBody {
+    max-width: 100%;
+  }
+
+  .openToggle {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 20px;
+    background: var(--yiw-code-bg, #f8fafc);
+    border-radius: 10px;
+    margin-bottom: 28px;
+
+    .toggleInfo {
+      flex: 1;
+      margin-right: 16px;
+
+      h3 {
+        margin: 0 0 6px 0;
+        font-size: 16px;
+        font-weight: 600;
+        color: var(--yiw-text, #1e293b);
+      }
+
+      .toggleDesc {
+        margin: 0;
+        font-size: 13px;
+        color: var(--yiw-muted, #64748b);
+        line-height: 1.5;
+      }
+    }
+  }
+
+  .permissionsSection {
+    margin-bottom: 24px;
+
+    .sectionHeader {
+      margin-bottom: 16px;
+
+      h4 {
+        margin: 0 0 6px 0;
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--yiw-text-soft, #334155);
+      }
+
+      .permissionsDesc {
+        margin: 0;
+        font-size: 13px;
+        color: var(--yiw-faint, #94a3b8);
+      }
+    }
+  }
+
+  .permissionCards {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+  }
+
+  .permCard {
+    position: relative;
+    padding: 16px;
+    border: 1.5px solid var(--yiw-border, #e2e8f0);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    background: var(--yiw-surface, #fff);
+
+    &:hover {
+      border-color: var(--yiw-border, #cbd5e1);
+      box-shadow: var(--yiw-card-shadow, 0 2px 8px rgba(0, 0, 0, 0.04));
+    }
+
+    &.locked {
+      cursor: default;
+    }
+
+    &.checked {
+      border-color: var(--yiw-accent, #17483e);
+      background: var(--yiw-accent-tint, #fcfaf5);
+      box-shadow: 0 0 0 1px var(--yiw-accent, #17483e);
+
+      .permIconWrap {
+        opacity: 1;
+      }
+
+      .permName {
+        color: var(--yiw-accent, #17483e);
+      }
+    }
+
+    .permCardHeader {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 12px;
+    }
+
+    .permIconWrap {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      opacity: 0.75;
+      transition: opacity 0.2s;
+
+      &.ask_data {
+        background: linear-gradient(135deg, #3b82f6, #2563eb);
+      }
+      &.data_manage {
+        background: linear-gradient(135deg, #f59e0b, #d97706);
+      }
+      &.model_service_manage {
+        background: linear-gradient(135deg, #2f6f60, #22594c);
+      }
+      &.report_manage {
+        background: linear-gradient(135deg, #10b981, #059669);
+      }
+      &.member_manage {
+        background: linear-gradient(135deg, #ec4899, #db2777);
+      }
+    }
+
+    .permCardBody {
+      .permName {
+        margin: 0 0 4px 0;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--yiw-text-soft, #334155);
+        transition: color 0.2s;
+      }
+
+      .permDesc {
+        margin: 0;
+        font-size: 12px;
+        color: var(--yiw-faint, #94a3b8);
+        line-height: 1.5;
+      }
+    }
+  }
+
+  .actionBar {
+    padding-top: 20px;
+    border-top: 1px solid var(--yiw-border-soft, #f1f5f9);
+  }
+}
+
+.closeOptionsSection {
+  margin-bottom: 24px;
+
+  .sectionHeader {
+    margin-bottom: 16px;
+
+    h4 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--yiw-text-soft, #334155);
+    }
+  }
+
+  .closeOptions {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+
+  .closeOptionCard {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 18px;
+    border: 1.5px solid var(--yiw-border, #e2e8f0);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: var(--yiw-surface, #fff);
+
+    &:hover {
+      border-color: var(--yiw-border, #cbd5e1);
+    }
+
+    &.active {
+      border-color: var(--yiw-accent, #17483e);
+      background: var(--yiw-accent-tint, #fcfaf5);
+      box-shadow: 0 0 0 1px var(--yiw-accent, #17483e);
+    }
+
+    .optionIcon {
+      flex-shrink: 0;
+      width: 40px;
+      height: 40px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+
+      &.keep {
+        background: linear-gradient(135deg, #3b82f6, #2563eb);
+      }
+      &.remove {
+        background: linear-gradient(135deg, #f43f5e, #e11d48);
+      }
+    }
+
+    .optionContent {
+      flex: 1;
+
+      h5 {
+        margin: 0 0 4px 0;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--yiw-text-soft, #334155);
+      }
+
+      p {
+        margin: 0;
+        font-size: 12px;
+        color: var(--yiw-faint, #94a3b8);
+        line-height: 1.5;
+      }
+    }
+  }
+}
+
+@media (max-width: 520px) {
+  .openAccessConfig .permissionCards {
+    grid-template-columns: 1fr;
+  }
+}

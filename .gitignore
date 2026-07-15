@@ -1,115 +1,22 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# 依赖(各级 node_modules)
+**/node_modules/
 
-# dependencies
-/.pnp
-.pnp.js
-node_modules/
-sessions_mount_dir/
+# 前端构建产物
+renderer/dist/
 
-# testing
-/coverage
+# Electron 打包产物
+release/
 
-# cookbook
-cookbook/_build
-
-# production
-/build
-dist/
-# Console frontend build (generated in Docker/CI, do not commit)
-src/yicaw/console/dist/
-
-# frontend (website)
-website/node_modules/
-website/.vite/
-website/tsconfig.tsbuildinfo
-website/dist/
-
-# misc
-.env
-.env.*
-providers.json
-envs.json
-!.env.example
-!.env.template
-__pycache__/
+# 本地数据库 / 日志 / 临时
+*.log
 *.db
-*.rdb
-*.egg-info/
-*.zip
-config.json
-
-# IDEs and editors
-.idea/
-.vscode/
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-
-# Logs
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-openapi-ts*.log
-
-# MacOS
+*.db-wal
+*.db-shm
+!eval/datasets/functional/input/task_多轮对话/context/db/trade_dist.sqlite
 .DS_Store
 
-# Windows
-Thumbs.db
-ehthumbs.db
-Desktop.ini
+# app/eval 运行输出
+eval/results/
 
-# Linux
-*~
-
-# Python
-*.py[cod]
-*$py.class
-uv.lock
-venv/
-.venv/
-providers.json
-
-# Logs
-logs/
-*.log
-
-# Electron desktop app (build artifacts)
-electron/resources/
-electron/dist/
-electron/node_modules/
-
-# Internal docs (local only) — research / playbooks / reviews / etc.
-# 所有 docs/ 下内容都视为本地工作笔记，不入库；
-# 例外：README 引用的截图必须留在 git 里，否则 GitHub 上图全裂。
-docs/*
-!docs/screenshots/
-
-# Binary / generated reports
-*.pptx
-
-# Security: certificates & keys
-*.pem
-*.key
-*.p12
-*.pfx
-
-# vibe coding
-# .claude/ and CLAUDE.md are local-only — per-machine tool state and notes.
-# /AGENTS.md is NOT ignored: it's the project-level onboarding doc for
-# Claude Code / Cursor / other coding AIs (Hermes / OpenAI convention).
-.claude
-openspec
-CLAUDE.md
-*.tmp
-app/src-tauri/libs/
-
-# Rust build outputs
-target/
-app/target/
-app/src-tauri/target/
-
-# Test coverage outputs
-app/coverage/
+# vendored pi 的编译产物(build:pi 可再生,不入库)
+server/vendor/pi/**/dist/

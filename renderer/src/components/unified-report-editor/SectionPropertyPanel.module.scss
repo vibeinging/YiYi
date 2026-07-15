@@ -1,0 +1,37 @@
+.section-property-panel {
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  background: #fff;
+  padding: 16px;
+}
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.panel-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #111827;
+}
+// 表单项间距(原 :deep(.el-form-item)),改为统一作用于面板内表单容器的子项
+.form-item {
+  margin-bottom: 14px;
+}
+.field-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #6b7280;
+}
+.empty-panel {
+  min-height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6b7280;
+  border: 1px dashed #d1d5db;
+  border-radius: 16px;
+  background: #fff;
+}

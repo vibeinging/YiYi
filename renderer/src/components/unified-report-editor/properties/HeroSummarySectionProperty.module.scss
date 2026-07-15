@@ -1,0 +1,8 @@
+// 源无 scoped 样式,此处仅补齐 el-form-item 的默认间距,使表单项垂直分隔
+.form-item {
+  margin-bottom: 18px;
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+}

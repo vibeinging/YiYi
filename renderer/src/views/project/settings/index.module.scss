@@ -1,0 +1,467 @@
+// 项目设置页样式（源：views/project/settings/index.vue 的 <style scoped>）
+// TODO(migration): 源基于 el-tabs（左侧/顶部导航），React 版用 Mantine Tabs（orientation
+//   desktop=vertical / mobile=horizontal）。选择器从 .el-tabs__* 改为 Mantine 的
+//   .mantine-Tabs-list / [role="tab"]，视觉与交互对齐源逻辑。
+
+.projectSettings {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 12px;
+  // 默认沿用原配色;嵌入 yiw 时由外层把 --ps-* 接到主题 token(亮/暗自适应)
+  background: var(--ps-bg, #f5f7fa);
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+
+  &.mobile {
+    padding: 12px 8px;
+    overflow-x: hidden;
+
+    .pageHeader {
+      flex-direction: column;
+      gap: 8px;
+      padding-left: 48px;
+      padding-right: 4px;
+
+      .headerLeft h1 {
+        font-size: 20px;
+      }
+
+      .headerRight .projectInfo {
+        max-width: 100%;
+        padding: 8px 12px;
+        min-width: 0;
+
+        span {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+      }
+    }
+
+    .settingsPanel {
+      border-radius: 8px;
+      min-width: 0;
+    }
+
+    .tabContentWrapper {
+      padding: 8px;
+    }
+  }
+}
+
+.pageHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-shrink: 0;
+
+  .headerLeft {
+    h1 {
+      margin: 0 0 6px 0;
+      font-size: 26px;
+      font-weight: 600;
+      color: var(--ps-text, #1e293b);
+      letter-spacing: -0.5px;
+    }
+
+    p {
+      margin: 0;
+      font-size: 14px;
+      color: var(--ps-muted, #64748b);
+    }
+  }
+
+  .headerRight {
+    .projectInfo {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 16px;
+      border-radius: 8px;
+      font-weight: 500;
+      color: var(--ps-text, #1e293b);
+
+      .projectInfoIcon {
+        color: var(--ps-accent, #17483e);
+        font-size: 18px;
+        display: inline-flex;
+      }
+    }
+  }
+}
+
+.contentWrapper {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.settingsPanel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--ps-panel, #fff);
+  border-radius: 12px;
+  box-shadow: var(--ps-panel-shadow, 0 1px 3px rgba(0, 0, 0, 0.04));
+  overflow: hidden;
+
+  &.settingsPanelEmpty {
+    align-items: center;
+    justify-content: center;
+  }
+}
+
+.settingsTabs {
+  height: 100%;
+  min-width: 0;
+  // 左栏与内容之间的分隔线(.mantine-Tabs-list::before,用 --tab-border-color):
+  // 保留,但改成主题里最淡的边框色(比默认灰 #dee2e6 淡、随亮/暗主题走)。
+  // 需 !important:Mantine 自身同特异性且后加载,否则覆盖不掉。
+  --tab-border-color: var(--yiw-border-soft, #eef1f4) !important;
+
+  // Mantine Tabs 根（vertical 时为左侧导航 + 内容横向排列）
+  :global(.mantine-Tabs-root) {
+    height: 100%;
+    min-height: 0;
+    min-width: 0;
+  }
+
+  // 桌面：左侧垂直导航（tab 多时纵向滚动，避免底部看不到）
+  &:not(.settingsTabsMobile) {
+    :global(.mantine-Tabs-list) {
+      flex-shrink: 0;
+      flex-wrap: nowrap; // 关键:Mantine 默认 wrap → tab 多时会折成多列而非纵向溢出;改 nowrap 才能滚动
+      align-self: stretch;
+      max-height: 100%;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      scrollbar-width: thin;
+      border-right: none;
+      gap: 0;
+      padding-top: 10px;
+      padding-bottom: 10px;
+
+      [role='tab'] {
+        flex: 0 0 auto; // 不被压缩 → 超出时整体溢出滚动,而不是把每个 tab 压扁
+        height: 42px;
+        line-height: 42px;
+        padding: 0 24px;
+        text-align: left;
+        justify-content: flex-start;
+        font-size: 14px;
+        color: var(--ps-muted, #64748b);
+        border-radius: 8px;
+        border: none;
+        margin: 3px 12px;
+        transition: all 0.2s;
+
+        &:hover {
+          color: var(--ps-accent, #17483e);
+          background: var(--ps-accent-bg-weak, rgba(23, 72, 62, 0.05));
+        }
+
+        &[data-active] {
+          color: var(--ps-accent, #17483e);
+          background: var(--ps-accent-bg, rgba(23, 72, 62, 0.1));
+          font-weight: 500;
+        }
+
+        // 分组分割线（disabled 的 tab）
+        &:disabled,
+        &[data-disabled] {
+          padding: 0;
+          height: auto;
+          margin: 16px 12px 8px;
+          pointer-events: none;
+          opacity: 1;
+          background: transparent;
+        }
+      }
+    }
+  }
+
+  // 移动端：顶部横向滚动导航
+  &.settingsTabsMobile {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    min-width: 0;
+
+    :global(.mantine-Tabs-root) {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      min-height: 0;
+      min-width: 0;
+    }
+
+    :global(.mantine-Tabs-list) {
+      flex-shrink: 0;
+      margin: 0;
+      width: 100%;
+      border-bottom: 1px solid var(--ps-border, #e5e7eb);
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: thin;
+      padding: 8px 6px 0;
+      box-sizing: border-box;
+
+      [role='tab'] {
+        flex-shrink: 0;
+        height: 36px;
+        line-height: 36px;
+        padding: 0 12px;
+        margin: 0 2px 8px;
+        font-size: 13px;
+        color: var(--ps-muted, #64748b);
+        border-radius: 8px;
+        border: none;
+        white-space: nowrap;
+        transition: all 0.2s;
+
+        &:hover {
+          color: var(--ps-accent, #17483e);
+          background: var(--ps-accent-bg-weak, rgba(23, 72, 62, 0.05));
+        }
+
+        &[data-active] {
+          color: var(--ps-accent, #17483e);
+          background: var(--ps-accent-bg, rgba(23, 72, 62, 0.1));
+          font-weight: 500;
+        }
+      }
+    }
+  }
+
+  // 内容区
+  :global(.mantine-Tabs-panel) {
+    flex: 1;
+    padding: 0;
+    min-height: 0;
+    height: 100%;
+    overflow: auto;
+  }
+}
+
+// 可折叠分组标题(普通 button,自带间距;chevron 旋转表示展开/收起)
+.groupHeader {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: auto;
+  margin: 14px 12px 4px;
+  padding: 4px 6px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+  font: inherit;
+  text-align: left;
+  transition: background 0.12s ease;
+
+  &:hover {
+    background: var(--ps-accent-bg-weak, rgba(23, 72, 62, 0.05));
+  }
+}
+.groupLabel {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ps-divider-text, #94a3b8);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.groupChevOn,
+.groupChevOff {
+  flex: none;
+  color: var(--ps-divider-text, #94a3b8);
+  transition: transform 0.15s ease;
+}
+.groupChevOff {
+  transform: rotate(-90deg);
+}
+
+// ── 桌面整窗模式:内容区(嵌入 SettingsShell 的 .main 白卡内)── //
+// 布局壳(返回键/侧栏/内容卡)由 SettingsShell 提供;这里只负责:
+//   ① --ps-* → yiw 主题映射(BasicInfo 等内容跟随亮/暗);② 内容统一内边距。
+.shellContent {
+  --ps-bg: var(--yiw-bg);
+  --ps-panel: var(--yiw-surface);
+  --ps-panel-shadow: var(--yiw-card-shadow);
+  --ps-text: var(--yiw-text);
+  --ps-muted: var(--yiw-text-soft);
+  --ps-accent: var(--yiw-accent);
+  --ps-accent-bg: var(--yiw-chip-bg);
+  --ps-accent-bg-weak: var(--yiw-hover);
+  --ps-border: var(--yiw-border);
+  --ps-divider-text: var(--yiw-faint);
+  --ps-inset: var(--yiw-bg);
+  --ps-hover: var(--yiw-hover);
+  --ps-accent-on: var(--yiw-on-accent);
+  --ps-accent-tint: var(--yiw-accent-tint);
+
+  box-sizing: border-box;
+  min-height: 100%;
+  padding: 30px 36px;
+}
+
+.shellContentFixed {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+
+  > :global(*) {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+}
+
+.navComingSoonLabel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.navSoonBadge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--yiw-chip-bg);
+  color: var(--yiw-muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.comingSoonPanel {
+  min-height: calc(100vh - 160px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  color: var(--yiw-text);
+}
+
+.comingSoonBadge {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--yiw-chip-bg);
+  color: var(--yiw-accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.comingSoonPanel h2 {
+  margin: 4px 0 0;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.comingSoonPanel p {
+  max-width: 420px;
+  margin: 0;
+  color: var(--yiw-text-soft);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+// 暗色:内容里用 --md-*(业务管理组件)/ element-plus 设计令牌的子页(指标/视图/实体/数据源等),
+// 重映射到 yiw 暗色 token,否则它们用各自浅色默认值 → 暗色下出现白卡。亮色不覆盖,用默认浅色自然融合。
+// (与 YiWSettings 内嵌页 .wrap[data-theme='dark'] .embed 同款映射)
+:global(.yiw-root[data-theme='dark']) .shellContent {
+  --md-surface: var(--yiw-bg);
+  --md-subtle: var(--yiw-code-bg);
+  --md-border: var(--yiw-border);
+  --md-border-soft: var(--yiw-border-soft);
+  --md-border-strong: var(--yiw-border);
+  --md-text: var(--yiw-text);
+  --md-text-2: var(--yiw-text-soft);
+  --md-muted: var(--yiw-muted);
+  --md-faint: var(--yiw-faint);
+
+  // Element Plus token(从 webui Vue 端口大量沿用 --el-*):暗色下重映射常用色 token,
+  // 否则 el 边框/主色/填充落回浅色默认值或未定义 → 暗色里边框消失、主色发蓝、卡片融为一体。
+  // 语义色(danger/success/warning/info)与 *-rgb 三元组不动(rgba() 里用,且暗色本就可读)。
+  --el-text-color-primary: var(--yiw-text);
+  --el-text-color-regular: var(--yiw-text-soft);
+  --el-text-color-secondary: var(--yiw-muted);
+  --el-text-color-placeholder: var(--yiw-faint);
+  --el-text-color-disabled: var(--yiw-faint);
+  --el-border-color: var(--yiw-border);
+  --el-border-color-light: var(--yiw-border);
+  --el-border-color-lighter: var(--yiw-border-soft);
+  --el-border-color-extra-light: var(--yiw-border-soft);
+  --el-color-primary: var(--yiw-accent);
+  --el-color-primary-light-5: var(--yiw-accent-soft);
+  --el-color-primary-light-9: var(--yiw-accent-tint);
+  --el-fill-color-light: var(--yiw-hover);
+  --el-fill-color-lighter: var(--yiw-code-bg);
+  --el-fill-color-blank: var(--yiw-surface);
+  --el-bg-color: var(--yiw-surface);
+  --el-bg-color-overlay: var(--yiw-surface);
+  --el-bg-color-page: var(--yiw-bg);
+
+  // ad-page 设计系统(styles/components.scss 的 --ad-*,全是浅色)在 yiw 暗色下重映射,
+  // 否则用 --ad-* 的子页(空状态标题/卡片/列表/MCP 等)在暗色里仍是浅色 token → 文字发灰看不清。
+  // 语义色(danger/success/warning)不动,暗色下本就可读。
+  --ad-primary: var(--yiw-accent);
+  --ad-primary-light: var(--yiw-chip-bg);
+  --ad-primary-lighter: var(--yiw-hover);
+  --ad-text-primary: var(--yiw-text);
+  --ad-text-secondary: var(--yiw-text-soft);
+  --ad-text-muted: var(--yiw-muted);
+  --ad-border: var(--yiw-border);
+  --ad-border-light: var(--yiw-border-soft);
+  --ad-bg-white: var(--yiw-surface);
+  --ad-bg-gray: var(--yiw-bg);
+  --ad-bg-hover: var(--yiw-hover);
+}
+
+.tabContentWrapper {
+  height: 100%;
+  padding: 12px;
+  overflow: auto;
+
+  // Skill 管理嵌入 settings 时隐藏独立页面的标题和背景，按钮跟随 tabs 同行
+  :global(.skill-management) {
+    padding: 0 !important;
+    background: transparent !important;
+
+    > :global(.page-header) {
+      display: none !important;
+    }
+  }
+}
+
+// Tablet
+@media (min-width: 768px) and (max-width: 1023px) {
+  .projectSettings {
+    padding: 16px 8px;
+  }
+
+  .settingsTabs {
+    :global(.mantine-Tabs-list) {
+      [role='tab'] {
+        padding: 0 16px;
+        font-size: 13px;
+      }
+    }
+  }
+}

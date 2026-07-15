@@ -1,0 +1,140 @@
+// 语义层统一空状态样式 —— 对齐数据库/结构化空状态(插画 + 标题 + 描述 + 特性标签 + 按钮)。
+.wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: clamp(56px, 12vh, 140px) 20px 56px;
+  text-align: center;
+}
+
+.content {
+  max-width: 640px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+// ── 顶部图标插画(中心 hub + 两侧小图标),复刻数据库空状态的 illustration ── //
+.illustration {
+  margin-bottom: 28px;
+}
+.illoContainer {
+  position: relative;
+  width: 160px;
+  height: 96px;
+}
+.hub {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #5f8a78, #276354); // 品牌深绿(装饰),两主题可读
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  box-shadow: 0 8px 24px rgba(47, 111, 96, 0.3);
+
+  :global(svg) {
+    width: 26px;
+    height: 26px;
+  }
+}
+.sat {
+  position: absolute;
+  top: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--yiw-chip-bg, #eef1f8);
+  color: var(--yiw-accent, #276354);
+  box-shadow: var(--yiw-card-shadow, 0 4px 12px rgba(0, 0, 0, 0.08));
+
+  :global(svg) {
+    width: 20px;
+    height: 20px;
+  }
+}
+.satLeft {
+  left: 6px;
+}
+.satRight {
+  right: 6px;
+}
+
+// ── 标题 / 描述 ── //
+.intro {
+  margin-bottom: 24px;
+
+  h3 {
+    margin: 0 0 10px 0;
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--yiw-text, #1e293b);
+  }
+
+  p {
+    margin: 0;
+    font-size: 14px;
+    color: var(--yiw-text-soft, #64748b);
+    line-height: 1.7;
+  }
+}
+
+// ── 特性标签行(图标 + 短文字),复刻数据库空状态的 emptyFeatures ── //
+.features {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 24px;
+  margin-bottom: 28px;
+}
+.featureItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--yiw-text-soft, #475569);
+}
+.featureIcon {
+  display: inline-flex;
+  color: var(--yiw-accent, #276354);
+}
+
+// ── 操作按钮(居中) ── //
+.actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+
+  > button {
+    min-width: 140px;
+  }
+}
+
+@media (max-width: 767px) {
+  .wrap {
+    padding: clamp(40px, 9vh, 96px) 12px 40px;
+  }
+  .features {
+    gap: 16px;
+  }
+  .actions {
+    flex-direction: column;
+
+    > button {
+      width: 100%;
+      min-height: 44px;
+    }
+  }
+}

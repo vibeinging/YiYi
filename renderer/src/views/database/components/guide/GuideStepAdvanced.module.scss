@@ -1,0 +1,383 @@
+// ─── Variables (aligned with GuideStepMetadata) ───
+$brand: var(--yiw-accent, #17483e);
+$brand-light: var(--yiw-accent-tint, rgba(23, 72, 62, 0.08));
+$brand-mid: var(--yiw-accent-tint, rgba(23, 72, 62, 0.18));
+$brand-border: var(--yiw-accent-tint, rgba(23, 72, 62, 0.2));
+$done: #10b981;
+$done-light: rgba(16, 185, 129, 0.1);
+$text-primary: var(--yiw-text, #17211d);
+$text-secondary: var(--yiw-text-soft, #66716b);
+$text-muted: var(--yiw-muted, #9494a8);
+$text-placeholder: var(--yiw-faint, #c0c0d0);
+$border: var(--yiw-border, #e8e8f0);
+$surface: var(--yiw-surface, #fafafa);
+$white: var(--yiw-surface, #ffffff);
+
+.guideStepAdvanced {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: $surface;
+}
+
+// ─── Top ───
+.pageTop {
+  flex-shrink: 0;
+  padding: 0 0 16px 0;
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pageTitle {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: $text-primary;
+  letter-spacing: -0.02em;
+}
+
+.titleBadges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  color: $text-secondary;
+  padding: 3px 10px;
+  border-radius: 20px;
+  background: $surface;
+  transition: all 0.3s ease;
+
+  .dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: $text-placeholder;
+    transition: all 0.3s ease;
+  }
+
+  &.done {
+    color: $brand;
+    background: $brand-light;
+
+    .dot {
+      background: $brand;
+    }
+  }
+}
+
+.oneclickBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, $brand-light 0%, rgba(255, 201, 67, 0.04) 100%);
+  border: 1px solid $brand-border;
+  border-radius: 10px;
+}
+
+.bannerLeft {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.bannerIcon {
+  color: $brand;
+  font-size: 22px;
+}
+
+.bannerText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+
+  strong {
+    font-size: 13px;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  .bannerSub {
+    font-size: 11px;
+    color: $text-secondary;
+  }
+}
+
+.oneclickBtn {
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+// ─── Body ───
+.pageBody {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-bottom: 8px;
+}
+
+// ─── Panel ───
+.panel {
+  background: $surface;
+  border-radius: 10px;
+  border: 1px solid $border;
+  overflow: hidden;
+}
+
+.panelHeader {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 16px;
+  background: $surface;
+  border-bottom: 1px solid $border;
+  flex-wrap: wrap;
+}
+
+.panelLabel {
+  font-size: 13px;
+  font-weight: 700;
+  color: $text-primary;
+  letter-spacing: 0.02em;
+}
+
+.panelHint {
+  font-size: 12px;
+  color: $text-secondary;
+  font-weight: 400;
+}
+
+.panelHeaderBetween {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+
+  .panelHeaderLeft {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+}
+
+.panelHeaderBtn {
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+.panelHeaderActions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.panelBody {
+  padding: 16px;
+}
+
+// Entity panel accent
+.panelEntity {
+  border-color: $brand-border;
+
+  .panelHeader {
+    background: $brand-light;
+    border-bottom-color: $brand-border;
+  }
+
+  .panelLabel {
+    color: $brand;
+  }
+}
+
+// ─── Sync bar ───
+.syncBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: $text-secondary;
+  padding: 8px 12px;
+  background: $surface;
+  border-radius: 6px;
+  margin-bottom: 12px;
+
+  :global(.el-icon) {
+    color: $text-placeholder;
+  }
+}
+
+// ─── Vector combined ───
+.vectorCombined {
+  padding: 16px;
+  border-radius: 8px;
+  background: $surface;
+  border: 1px solid transparent;
+  transition: all 0.25s ease;
+
+  &.active {
+    border-color: $brand-border;
+    background: $brand-light;
+  }
+
+  &.completed {
+    border-color: rgba($done, 0.2);
+    background: rgba($done, 0.04);
+  }
+}
+
+.vcTop {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.vcIcon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: $brand-light;
+  color: $brand;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+
+  &.completed {
+    background: $done-light;
+    color: $done;
+  }
+}
+
+.vcInfo {
+  flex: 1;
+  min-width: 0;
+}
+
+.vcTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: $text-primary;
+}
+
+.vcDesc {
+  font-size: 12px;
+  color: $text-secondary;
+  margin-top: 2px;
+}
+
+.vcAction {
+  flex-shrink: 0;
+}
+
+.vcProgressGroup {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.vcProgressRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.vcProgressLabel {
+  font-size: 11px;
+  color: $text-secondary;
+  width: 40px;
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.vcBar {
+  flex: 1;
+}
+
+.vcProgressNum {
+  font-size: 12px;
+  font-weight: 600;
+  color: $text-secondary;
+  font-variant-numeric: tabular-nums;
+  min-width: 46px;
+  text-align: right;
+
+  &.done {
+    color: $done;
+  }
+}
+
+// ─── Relationship row ───
+.relRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.relInfo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.relIcon {
+  color: $text-secondary;
+}
+
+.relCount {
+  font-size: 13px;
+  color: $text-secondary;
+
+  &.done {
+    color: $brand;
+    font-weight: 600;
+  }
+}
+
+// ─── Footer ───
+.pageFooter {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 16px;
+  margin-top: 8px;
+  border-top: 1px solid $border;
+}
+
+// ─── Dialog ───
+.relationshipDialogBody {
+  height: 70vh;
+  overflow: hidden;
+}
+
+@media (max-width: 768px) {
+  .guideStepAdvanced {
+    min-width: 0;
+  }
+
+  .relationshipDialogBody {
+    height: min(75dvh, 520px);
+    max-height: 80dvh;
+  }
+}

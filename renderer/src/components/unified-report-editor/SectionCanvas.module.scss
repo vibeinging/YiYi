@@ -1,0 +1,35 @@
+.section-canvas {
+  min-height: 100%;
+  border: 1px dashed #d1d5db;
+  border-radius: 16px;
+  background: #f8fafc;
+  padding: 14px;
+}
+.canvas-empty {
+  min-height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6b7280;
+  font-size: 13px;
+}
+.canvas-list { display: flex; flex-direction: column; gap: 10px; }
+.canvas-row { display: flex; flex-direction: column; gap: 8px; }
+.drop-indicator {
+  height: 6px;
+  border-radius: 999px;
+  background: transparent;
+  transition: background .15s ease;
+}
+.drop-indicator.active { background: #f2c849; }
+.canvas-tail-drop {
+  padding: 10px 0;
+  text-align: center;
+  color: #9ca3af;
+  font-size: 12px;
+  border-radius: 10px;
+}
+.canvas-tail-drop.active {
+  background: rgba(220, 232, 226, 0.25);
+  color: #22594c;
+}

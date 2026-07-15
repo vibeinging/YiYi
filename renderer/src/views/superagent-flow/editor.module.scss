@@ -1,0 +1,387 @@
+.workflowEditor {
+  height: calc(100vh - 60px);
+  display: flex;
+  flex-direction: column;
+}
+
+.toolbar {
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #ebeef5;
+  align-items: center;
+  background: #fff;
+}
+
+.toolbarRight {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #606266;
+  margin-right: 4px;
+}
+
+.bcItem {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bcCurrent {
+  color: #303133;
+  font-weight: 600;
+}
+
+.bcSep {
+  font-size: 10px;
+  color: #c0c4cc;
+  display: inline-flex;
+  align-items: center;
+}
+
+.editorBody {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.canvas {
+  flex: 1;
+  background: #f7f8fa;
+  position: relative;
+}
+
+.canvasEmpty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: #9ca3af;
+  pointer-events: none;
+}
+
+.propertyPanel {
+  width: 320px;
+  padding: 16px;
+  border-left: 1px solid #ebeef5;
+  overflow-y: auto;
+  background: #fff;
+  flex-shrink: 0;
+
+  h3 {
+    margin: 0 0 12px;
+    font-size: 14px;
+    color: #303133;
+  }
+}
+
+.empty {
+  color: #909399;
+  padding: 24px 0;
+  text-align: center;
+  font-size: 13px;
+}
+
+/* 节点 IO 契约面板(独立第 3 列,P19) */
+.ioContractPanel {
+  width: 320px;
+  padding: 16px;
+  border-left: 1px solid #ebeef5;
+  overflow-y: auto;
+  background: #fafbfc;
+  flex-shrink: 0;
+
+  h3 {
+    margin: 0 0 12px;
+    font-size: 14px;
+    color: #303133;
+  }
+}
+
+.ioSection {
+  margin-bottom: 18px;
+}
+
+.ioSectionTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: #475569;
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px dashed #d4d4d8;
+}
+
+.panelNodeHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  background: #f9fafb;
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+
+.panelIcon {
+  font-size: 20px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+}
+
+.panelNodeMeta {
+  flex: 1;
+  min-width: 0;
+}
+
+.panelNodeName {
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.panelNodeTech {
+  font-family: monospace;
+  font-size: 11px;
+  color: #9ca3af;
+  margin-top: 2px;
+}
+
+.hintDesc {
+  color: #909399;
+  font-size: 11px;
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+.costPanel {
+  background: #fef3c7;
+  padding: 8px 10px;
+  border-radius: 4px;
+  margin: 12px 0;
+  font-size: 12px;
+  color: #92400e;
+}
+
+.costSuggestion {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #b45309;
+}
+
+/* Condition 节点提示(P26)*/
+.condHint {
+  padding: 8px 10px;
+  margin: 0 0 12px;
+  background: #eff6ff;
+  border-left: 3px solid #3b82f6;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #1e40af;
+  line-height: 1.5;
+
+  strong {
+    color: #1d4ed8;
+  }
+}
+
+/* condition/agent_condition 出边分支标识(P27) */
+.edgeBranchBadge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  margin-right: 6px;
+}
+
+.branchTrue {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.branchFalse {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.branchNone {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+/* IO 契约区(P18) */
+.ioPort {
+  padding: 8px 10px;
+  margin: 6px 0;
+  background: #f8fafc;
+  border-radius: 4px;
+  border-left: 3px solid #93c5fd;
+}
+
+.ioPortHead {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.ioPortName {
+  font-size: 13px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.ioPortType {
+  font-size: 11px;
+  color: #64748b;
+  background: #e2e8f0;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.ioPortRequired {
+  font-size: 11px;
+  color: #b91c1c;
+  background: #fee2e2;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.ioPortSource {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.sourceUser {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.sourceUpstream {
+  color: #be185d;
+  background: #fce7f3;
+}
+
+.sourceSchema {
+  color: #475569;
+  background: #e2e8f0;
+}
+
+.sourceCtx {
+  color: #047857;
+  background: #d1fae5;
+}
+
+.ioFlowNote {
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+
+.ioPortNonserial {
+  font-size: 11px;
+  color: #92400e;
+  background: #fef3c7;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.ioPortDesc {
+  font-size: 12px;
+  color: #475569;
+  margin-bottom: 4px;
+  line-height: 1.5;
+}
+
+.ioPortDefault,
+.ioPortRef {
+  font-size: 11px;
+  color: #475569;
+  margin: 4px 0;
+
+  code {
+    background: #f1f5f9;
+    padding: 1px 4px;
+    border-radius: 3px;
+    color: #0f172a;
+  }
+}
+
+.ioPortSuppliers,
+.ioPortConsumers {
+  font-size: 11px;
+  margin-top: 6px;
+}
+
+.ioPortTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.ioPortSupliersLabel {
+  color: #64748b;
+}
+
+.ioTag {
+  font-size: 11px;
+}
+
+.ioTagHint {
+  margin-left: 4px;
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.ioEmpty,
+.ioEmptyInline {
+  color: #94a3b8;
+  font-size: 12px;
+  padding: 4px 0;
+}
+
+.operatorNote {
+  color: #b91c1c;
+  font-size: 13px;
+  padding: 10px;
+  background: #fef2f2;
+  border-radius: 4px;
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+.sectionTitle {
+  margin-top: 20px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: #606266;
+}
+
+.edgeItem {
+  display: flex;
+  align-items: center;
+  margin: 4px 0;
+  font-size: 13px;
+}
+
+.addEdgeRow {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}

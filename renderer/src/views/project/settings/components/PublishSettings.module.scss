@@ -1,0 +1,334 @@
+.publishSettings {
+  padding: 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.pageHeader {
+  margin-bottom: 24px;
+
+  h2 {
+    font-size: 24px;
+    font-weight: 600;
+    margin: 0 0 8px 0;
+    color: var(--el-text-color-primary);
+  }
+
+  .description {
+    font-size: 14px;
+    color: var(--el-text-color-secondary);
+    margin: 0;
+  }
+}
+
+.card {
+  margin-bottom: 20px;
+  border-radius: 8px;
+}
+
+.rowBC {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.cardTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 16px;
+}
+
+// 状态卡片
+.statusContent {
+  .alert {
+    margin-bottom: 16px;
+  }
+
+  .statsRow {
+    display: flex;
+    gap: 32px;
+    margin-top: 16px;
+
+    .statItem {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+
+      .statLabel {
+        font-size: 12px;
+        color: var(--el-text-color-secondary);
+      }
+
+      .statValue {
+        font-size: 18px;
+        font-weight: 600;
+        color: var(--el-color-primary);
+      }
+    }
+  }
+}
+
+// 表单提示
+.formTip {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-top: 4px;
+}
+
+.ml2 {
+  margin-left: 8px;
+}
+
+// API Key
+.apiKeyContent {
+  .keyDisplay {
+    margin-bottom: 16px;
+
+    .keyLabel {
+      display: block;
+      font-size: 14px;
+      font-weight: 500;
+      margin-bottom: 8px;
+      color: var(--el-text-color-regular);
+    }
+
+    .keyInput {
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+    }
+  }
+
+  .mt3 {
+    margin-top: 16px;
+  }
+}
+
+// 使用指南
+.guideContent {
+  padding: 16px 0;
+
+  h3 {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 24px 0 16px 0;
+    color: var(--el-text-color-primary);
+
+    &:first-child {
+      margin-top: 0;
+    }
+  }
+
+  h4 {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 16px 0 12px 0;
+    color: var(--el-text-color-primary);
+  }
+
+  .guideText {
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--el-text-color-regular);
+    margin: 0 0 16px 0;
+  }
+
+  code {
+    padding: 2px 6px;
+    background: var(--el-fill-color-light);
+    border-radius: 4px;
+    font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+    font-size: 13px;
+    color: var(--el-color-danger);
+  }
+}
+
+// 步骤
+.steps {
+  .step {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 32px;
+
+    .stepNumber {
+      flex-shrink: 0;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--el-color-primary);
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+    }
+
+    .stepContent {
+      flex: 1;
+
+      h4 {
+        margin-top: 4px;
+      }
+
+      p {
+        font-size: 14px;
+        color: var(--el-text-color-regular);
+        line-height: 1.6;
+      }
+    }
+  }
+}
+
+// 聊天示例
+.chatExample {
+  margin-top: 16px;
+  padding: 16px;
+  background: var(--el-fill-color-lighter);
+  border-radius: 8px;
+
+  .chatBubble {
+    padding: 12px 16px;
+    border-radius: 12px;
+    margin-bottom: 12px;
+    max-width: 80%;
+    font-size: 14px;
+    line-height: 1.6;
+
+    &.user {
+      background: var(--el-color-primary);
+      color: white;
+      margin-left: auto;
+    }
+
+    &.assistant {
+      background: white;
+      border: 1px solid var(--el-border-color);
+      color: var(--el-text-color-regular);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+
+      .loadingIcon {
+        display: inline-flex;
+        animation: rotate 1s linear infinite;
+      }
+    }
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+}
+
+@keyframes rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+// 端点列表
+.endpointList {
+  .endpointItem {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    background: var(--el-fill-color-lighter);
+    border-radius: 6px;
+    margin-bottom: 8px;
+    font-size: 14px;
+
+    .method {
+      flex-shrink: 0;
+      padding: 2px 8px;
+      background: var(--el-color-primary);
+      color: white;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    code {
+      flex: 1;
+      background: transparent;
+      color: var(--el-text-color-primary);
+    }
+
+    .desc {
+      color: var(--el-text-color-secondary);
+      font-size: 13px;
+    }
+  }
+}
+
+// API 区域
+.apiSection {
+  margin-bottom: 32px;
+
+  .mt3 {
+    margin-top: 16px;
+  }
+}
+
+.codeTabs {
+  margin-top: 16px;
+}
+
+@media (max-width: 768px) {
+  .publishSettings {
+    padding: 12px;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .pageHeader {
+    margin-bottom: 16px;
+
+    h2 {
+      font-size: 18px;
+    }
+  }
+
+  .rowBC {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 12px;
+  }
+
+  .statusContent .statsRow {
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .endpointList .endpointItem {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+
+    code {
+      width: 100%;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      word-break: break-all;
+    }
+  }
+
+  .steps .step {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .chatExample .chatBubble {
+    max-width: 100%;
+  }
+
+  .guideContent code {
+    max-width: 100%;
+    overflow-x: auto;
+    display: inline-block;
+    vertical-align: top;
+  }
+}

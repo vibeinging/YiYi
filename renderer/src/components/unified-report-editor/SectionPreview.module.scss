@@ -1,0 +1,100 @@
+.section-preview {
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  background: #fff;
+  padding: 16px;
+}
+.preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.preview-title { font-size: 14px; font-weight: 700; color: #111827; }
+.preview-notice {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.preview-notice.success {
+  background: #ecfdf3;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+}
+.preview-notice.warning {
+  background: #fff7ed;
+  color: #9a3412;
+  border: 1px solid #fed7aa;
+}
+.preview-notice.muted {
+  background: #f3f4f6;
+  color: #4b5563;
+  border: 1px solid #e5e7eb;
+}
+.preview-body { color: #111827; }
+.hidden-preview {
+  border: 1px dashed #d1d5db;
+  border-radius: 12px;
+  padding: 16px;
+  color: #6b7280;
+  line-height: 1.6;
+  background: #f9fafb;
+}
+.heading-preview { margin: 0; }
+.hero-preview {
+  padding: 16px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #f8fbff 0%, #f3f6fb 100%);
+  border: 1px solid #e5e7eb;
+}
+.hero-title, .section-block-title { font-size: 15px; font-weight: 700; margin-bottom: 10px; }
+.hero-content, .markdown-preview { line-height: 1.7; white-space: pre-wrap; color: #374151; }
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+}
+.metric-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 12px;
+  background: #fafafa;
+}
+.metric-label { font-size: 12px; color: #6b7280; }
+.metric-value { margin-top: 6px; font-size: 22px; font-weight: 700; }
+.metric-trend { margin-top: 4px; font-size: 12px; color: #2563eb; }
+.table-wrap { overflow-x: auto; }
+.preview-table { width: 100%; border-collapse: collapse; }
+.preview-table th, .preview-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #e5e7eb;
+  text-align: left;
+  font-size: 13px;
+}
+.preview-table th { background: #f8fafc; }
+.chart-summary {
+  padding: 12px;
+  border-radius: 12px;
+  background: #f8fafc;
+  color: #374151;
+  line-height: 1.8;
+}
+.preview-list {
+  margin: 0;
+  padding-left: 18px;
+  line-height: 1.8;
+}
+.divider-preview { border: none; border-top: 1px solid #d1d5db; }
+.html-preview :global(*) { max-width: 100%; }
+.empty-preview {
+  min-height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6b7280;
+  border: 1px dashed #d1d5db;
+  border-radius: 16px;
+  background: #fff;
+}
